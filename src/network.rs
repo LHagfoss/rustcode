@@ -187,7 +187,9 @@ pub async fn process_queue_orchestrator(
         if let Err(e) = stream_result {
             let mut s = state.lock().await;
             s.history.push(ChatMessage::new(
-                "assistant", format!("Connection error to Apple FM Serve: {e}")));
+                "assistant", format!("Error from Apple FM Serve: {e}")));
+            s.current_response.clear();
+            s.current_token_usage = None;
             s.status = AppStatus::Idle;
         } else {
             let final_content = stream_buffer.lock().await.content.clone();
@@ -209,7 +211,9 @@ pub async fn process_queue_orchestrator(
                 let usage = estimate_token_usage(&history_before, &final_content).await;
                 state.lock().await.current_token_usage = usage;
             } else {
-                state.lock().await.status = AppStatus::Idle;
+                let mut s = state.lock().await;
+                s.status = AppStatus::Idle;
+                s.current_token_usage = None;
             }
         }
 

@@ -170,6 +170,8 @@ async fn handle_enter(
                 s.history.clear();
                 s.current_response.clear();
                 s.pending_queue.clear();
+                s.current_token_usage = None;
+                s.response_time = None;
                 s.status = AppStatus::Idle;
                 false
             }
