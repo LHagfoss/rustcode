@@ -51,27 +51,32 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
     let input_inner = chunks[1].inner(Margin { vertical: 1, horizontal: 2 });
     f.render_widget(input_block, chunks[1]);
 
-    // If there's a completion suffix to show, render it separately.
-    if let Some(suffix) = state.get_command_suggestion() {
-        let suggestion_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC);
-        f.render_widget(Paragraph::new(state.input_buffer.as_str()), input_inner);
-
-        let mut offset_inner = input_inner;
-        offset_inner.x = offset_inner.x.saturating_add(state.input_buffer.len() as u16);
-        f.render_widget(Paragraph::new(suffix).style(suggestion_style), offset_inner);
+    let text_style = if state.input_buffer.starts_with('/') {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
-        let text_style = if state.input_buffer.starts_with('/') {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Reset)
-        };
-        f.render_widget(Paragraph::new(state.input_buffer.as_str()).style(text_style), input_inner);
-    }
+        Style::default().fg(Color::Reset)
+    };
+
+    let paragraph = if let Some(suffix) = state.get_command_suggestion() {
+        let suggestion_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC);
+        Paragraph::new(Line::from(vec![
+            Span::styled(state.input_buffer.as_str(), text_style),
+            Span::styled(suffix, suggestion_style),
+        ]))
+    } else {
+        Paragraph::new(state.input_buffer.as_str()).style(text_style)
+    };
+
+    let wrapped_paragraph = paragraph.wrap(Wrap { trim: false });
+    f.render_widget(wrapped_paragraph, input_inner);
 
     // Place cursor at the user's position in the buffer.
-    let cursor_x = input_inner.x + state.cursor_position as u16;
-    let cursor_y = input_inner.y;
-    f.set_cursor_position((cursor_x, cursor_y));
+    let inner_width = input_inner.width as usize;
+    if inner_width > 0 {
+        let cursor_dx = (state.cursor_position % inner_width) as u16;
+        let cursor_dy = (state.cursor_position / inner_width) as u16;
+        f.set_cursor_position((input_inner.x + cursor_dx, input_inner.y + cursor_dy));
+    }
 }
 
 /// Render the main conversation area with proper line wrapping and auto-scroll.
@@ -173,12 +178,18 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
 /// Main render function called by the TUI event loop.
 pub fn render(f: &mut Frame, state: &AppState) {
+    // Determine dynamic input area height based on input buffer length and terminal width.
+    // Inner input width is terminal width minus margins and borders (6 characters).
+    let inner_width = f.area().width.saturating_sub(6).max(1);
+    let input_lines = (state.input_buffer.len() as u16).div_ceil(inner_width).max(1);
+    let input_height = input_lines + 2;
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Min(3),  // conversation area (grows).
-            Constraint::Length(3), // input.
+            Constraint::Min(3),  // conversation area (grows/shrinks dynamically).
+            Constraint::Length(input_height), // input area.
             Constraint::Length(1), // footer.
         ])
         .split(f.area());
