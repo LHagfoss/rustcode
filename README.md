@@ -1,5 +1,7 @@
 # fmr
 
+<img src="./image.png" alt="fmr screenshot" />
+
 `fmr` is a lightweight Terminal User Interface (TUI) harness for testing Apple's on-device Foundation Models via `fm serve`.
 
 ## Features
