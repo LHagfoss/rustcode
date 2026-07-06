@@ -49,6 +49,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 match key.code {
                     KeyCode::Esc => handle_escape(&app_state, &mut current_cancel_token).await,
+                    KeyCode::Up => {
+                        let mut s = app_state.lock().await;
+                        s.history_up();
+                    }
+                    KeyCode::Down => {
+                        let mut s = app_state.lock().await;
+                        s.history_down();
+                    }
                     KeyCode::Tab => {
                         let mut s = app_state.lock().await;
                         s.cycle_suggestion();
