@@ -1,4 +1,4 @@
-//! Network layer: SSE streaming, tool-calling agent loop, CLI tokenizer.
+//! Network layer: SSE streaming, direct completion, CLI tokenizer.
 
 use crate::app::{AppStatus, AppState, ChatMessage, TokenUsage};
 use std::sync::Arc;
@@ -6,28 +6,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use futures_util::StreamExt;
 use tokio_util::io::StreamReader;
-
-// ── Tool execution (delegated to the config registry) ────────────────
-
-fn execute_tool(name: &str, tools: &[crate::config::ToolDef]) -> String {
-    let Some(tool) = tools.iter().find(|t| t.name == name) else {
-        return format!("Unknown tool: {name}");
-    };
-    match std::process::Command::new(tool.command[0]).args(&tool.command[1..]).output() {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        Err(e) => format!("Error running `{name}`: {e}"),
-    }
-}
-
-/// Look for a [TOOL: name] marker in text. Returns the tool name if found.
-fn parse_tool_call(text: &str) -> Option<String> {
-    const PREFIX: &str = "[TOOL: ";
-    text.find(PREFIX).and_then(|start| {
-        let rest = &text[start + PREFIX.len()..];
-        rest.find(']')
-            .map(|end| rest[..end].trim().to_string())
-    })
-}
 
 // ── CLI tokenizer (runs fm token-count --quiet in a blocking task) ──
 
@@ -46,7 +24,7 @@ async fn count_tokens(text: &str) -> Option<u32> {
 async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Option<TokenUsage> {
     let mut prompt_text = String::new();
     for msg in history_before {
-        if matches!(msg.role.as_str(), "user" | "assistant" | "tool_call" | "tool_output") {
+        if matches!(msg.role.as_str(), "user" | "assistant") {
             prompt_text.push_str(&msg.content);
             prompt_text.push('\n');
         }
@@ -161,9 +139,6 @@ pub async fn process_queue_orchestrator(
     state: Arc<Mutex<AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
 ) {
-    let tools = crate::config::TOOLS;
-    let system_prompt = crate::config::TOOLS_SYSTEM_PROMPT.to_string();
-
     loop {
         // Pop next queued prompt.
         let next_prompt = {
@@ -187,76 +162,35 @@ pub async fn process_queue_orchestrator(
         }
 
         let prompt_start_time = std::time::Instant::now();
-        let mut tool_iterations: usize = 0;
 
-        // Inner agent loop.
-        loop {
-            if cancel_token.is_cancelled() { break; }
+        // Build request payload: filter out local system messages.
+        let history_snapshot: Vec<ChatMessage> = {
+            let s = state.lock().await;
+            s.history.iter()
+                .filter(|m| matches!(m.role.as_str(), "user" | "assistant"))
+                .cloned()
+                .collect()
+        };
 
-            if tool_iterations >= crate::config::MAX_AGENT_ITERATIONS {
-                state.lock().await.history.push(ChatMessage::new(
-                    "assistant",
-                    format!("Stopped after {} agent iterations (tool-calling loop guard).", crate::config::MAX_AGENT_ITERATIONS),
-                ));
-                state.lock().await.status = AppStatus::Idle;
-                break;
-            }
+        let msgs: Vec<serde_json::Value> = history_snapshot
+            .into_iter()
+            .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+            .collect();
 
-            // Build request payload: filter out local system messages.
-            let history_snapshot: Vec<ChatMessage> = {
-                let s = state.lock().await;
-                s.history.iter()
-                    .filter(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool_call" | "tool_output"))
-                    .cloned()
-                    .collect()
-            };
+        // Clear current response buffer for this stream iteration
+        state.lock().await.current_response.clear();
+        stream_buffer.lock().await.content.clear();
 
-            let mut msgs: Vec<serde_json::Value> = history_snapshot
-                .into_iter()
-                .map(|m| {
-                    let mapped_role = match m.role.as_str() {
-                        "tool_call" => "assistant",
-                        "tool_output" => "user",
-                        r => r,
-                    };
-                    serde_json::json!({"role": mapped_role, "content": m.content})
-                })
-                .collect();
-            // Prepend the tool-aware system prompt.
-            msgs.insert(0, serde_json::json!({"role": "system", "content": &system_prompt}));
+        let stream_result = stream_request(&client, Arc::clone(&state), cancel_token.clone(),
+            crate::config::API_BASE_URL, crate::config::MODEL_NAME, &msgs, Arc::clone(&stream_buffer)).await;
 
-            // Clear current response buffer for this stream iteration
-            state.lock().await.current_response.clear();
-            stream_buffer.lock().await.content.clear();
-
-            let stream_result = stream_request(&client, Arc::clone(&state), cancel_token.clone(),
-                crate::config::API_BASE_URL, crate::config::MODEL_NAME, &msgs, Arc::clone(&stream_buffer)).await;
-
-            if let Err(e) = stream_result {
-                state.lock().await.history.push(ChatMessage::new(
-                    "assistant", format!("Connection error to Apple FM Serve: {e}")));
-                state.lock().await.status = AppStatus::Idle;
-                break; // fatal - stop processing queue.
-            }
-
+        if let Err(e) = stream_result {
+            state.lock().await.history.push(ChatMessage::new(
+                "assistant", format!("Connection error to Apple FM Serve: {e}")));
+        } else {
             let final_content = stream_buffer.lock().await.content.clone();
 
-            if final_content.is_empty() {
-                state.lock().await.status = AppStatus::Idle;
-                break;
-            }
-
-            // Detect tool call
-            if let Some(tool_name) = parse_tool_call(&final_content) {
-                // Push tool call to history
-                state.lock().await.history.push(ChatMessage::new("tool_call", final_content.clone()));
-                // Execute the tool and loop back
-                let output = execute_tool(&tool_name, tools);
-                state.lock().await.history.push(ChatMessage::new(
-                    "tool_output", format!("Tool Output ({tool_name}): {output}")));
-                tool_iterations += 1;
-            } else {
-                // Final assistant reply.
+            if !final_content.is_empty() {
                 let history_before = {
                     let s = state.lock().await;
                     s.history.clone()
@@ -267,7 +201,6 @@ pub async fn process_queue_orchestrator(
 
                 let usage = estimate_token_usage(&history_before, &final_content).await;
                 state.lock().await.current_token_usage = usage;
-                break; // done with this user prompt.
             }
         }
 
