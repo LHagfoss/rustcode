@@ -11,7 +11,7 @@ use ratatui::{
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
     let mut context_text = match state.current_token_usage {
         Some(ref usage) => format!("Context: {} / {} tokens", usage.total_tokens, crate::config::MAX_CONTEXT_TOKENS),
-        None => "Context: N/A".to_string(),
+        None => format!("Context: 0 / {} tokens", crate::config::MAX_CONTEXT_TOKENS),
     };
     if let Some(dur) = state.response_time {
         context_text.push_str(&format!(" ({:.1}s)", dur.as_secs_f32()));
@@ -90,12 +90,18 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     for msg in &state.history {
         if msg.role == "tool_call" {
-            let tool_name = msg.content
-                .trim_start_matches("[TOOL: ")
-                .trim_end_matches("]")
-                .trim();
+            let tool_name = if let Some(start) = msg.content.find("[TOOL: ") {
+                let rest = &msg.content[start + 7..];
+                if let Some(end) = rest.find(']') {
+                    &rest[..end]
+                } else {
+                    "unknown"
+                }
+            } else {
+                "unknown"
+            };
             lines.push(Line::from(vec![
-                Span::styled(format!("  Running {}()...", tool_name), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                Span::styled(format!("  ⚙️  Running {}()...", tool_name), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
             ]));
         } else if msg.role == "tool_output" {
             let mut display_content = msg.content.as_str();
