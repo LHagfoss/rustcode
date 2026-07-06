@@ -47,6 +47,8 @@ pub struct AppState {
     /// Command-suggestion cycling state (Tab/Enter keys).
     pub suggestion_cycle: crate::app::suggestion::SuggestionCycle,
     pub response_time: Option<std::time::Duration>,
+    pub history_index: Option<usize>,
+    pub temp_input: String,
 }
 
 impl AppState {
@@ -61,18 +63,23 @@ impl AppState {
             cursor_position: 0,
             suggestion_cycle: crate::app::suggestion::SuggestionCycle::new(),
             response_time: None,
+            history_index: None,
+            temp_input: String::new(),
         }
     }
 
     // ── Input editing ────────────────────────────────────────────────
 
     pub fn insert_char(&mut self, c: char) {
+        self.history_index = None;
         self.cursor_position = self.cursor_position.min(self.input_buffer.len());
         self.input_buffer.insert(self.cursor_position, c);
         self.cursor_position += 1;
     }
 
     pub fn delete_char_backspace(&mut self) {
+        self.history_index = None;
+        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
         if self.cursor_position > 0 {
             self.input_buffer.remove(self.cursor_position - 1);
             self.cursor_position -= 1;
@@ -80,6 +87,8 @@ impl AppState {
     }
 
     pub fn delete_char_delete(&mut self) {
+        self.history_index = None;
+        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
         if self.cursor_position < self.input_buffer.len() {
             self.input_buffer.remove(self.cursor_position);
         }
@@ -147,19 +156,67 @@ impl AppState {
     }
 
     pub fn cycle_suggestion(&mut self) {
-        let input = self.input_buffer.clone();
-        if self.suggestion_cycle.cycle(&input) {
-            // Replace buffer with the current match from get_completion_suffix.
-            if let Some(suffix) = self.suggestion_cycle.get_completion_suffix(&self.input_buffer) {
-                self.input_buffer.truncate(self.input_buffer.len() - suffix.len());
-                // We need to reset and re-cycle because get_completion_suffix uses original_prefix.
-                self.suggestion_cycle.reset();
-                let _ = self.suggestion_cycle.cycle(&self.input_buffer);
+        if self.suggestion_cycle.cycle(&self.input_buffer) {
+            let prefix = self.suggestion_cycle.original_prefix.as_deref().unwrap_or(&self.input_buffer);
+            let matches: Vec<&str> = crate::app::suggestion::COMMANDS
+                .iter()
+                .copied()
+                .filter(|c| c.starts_with(prefix))
+                .collect();
+            if let Some(idx) = self.suggestion_cycle.suggestion_index {
+                if idx < matches.len() {
+                    self.input_buffer = matches[idx].to_string();
+                    self.cursor_position = self.input_buffer.len();
+                }
             }
         }
     }
 
     pub fn reset_suggestion_cycle(&mut self) {
         self.suggestion_cycle.reset();
+    }
+
+    // ── History navigation ───────────────────────────────────────────
+
+    pub fn history_up(&mut self) {
+        let user_msgs: Vec<String> = self.history.iter()
+            .filter(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .collect();
+        if user_msgs.is_empty() { return; }
+
+        let next_idx = match self.history_index {
+            None => {
+                self.temp_input = self.input_buffer.clone();
+                user_msgs.len() - 1
+            }
+            Some(idx) => {
+                if idx > 0 { idx - 1 } else { 0 }
+            }
+        };
+
+        self.history_index = Some(next_idx);
+        self.input_buffer = user_msgs[next_idx].clone();
+        self.cursor_position = self.input_buffer.len();
+    }
+
+    pub fn history_down(&mut self) {
+        let user_msgs: Vec<String> = self.history.iter()
+            .filter(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .collect();
+        if user_msgs.is_empty() { return; }
+
+        if let Some(idx) = self.history_index {
+            if idx + 1 < user_msgs.len() {
+                self.history_index = Some(idx + 1);
+                self.input_buffer = user_msgs[idx + 1].clone();
+                self.cursor_position = self.input_buffer.len();
+            } else {
+                self.history_index = None;
+                self.input_buffer = self.temp_input.clone();
+                self.cursor_position = self.input_buffer.len();
+            }
+        }
     }
 }

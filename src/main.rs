@@ -49,6 +49,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 match key.code {
                     KeyCode::Esc => handle_escape(&app_state, &mut current_cancel_token).await,
+                    KeyCode::Up => {
+                        let mut s = app_state.lock().await;
+                        s.history_up();
+                    }
+                    KeyCode::Down => {
+                        let mut s = app_state.lock().await;
+                        s.history_down();
+                    }
                     KeyCode::Tab => {
                         let mut s = app_state.lock().await;
                         s.cycle_suggestion();
@@ -122,10 +130,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Escape: cancel active stream / dequeue next queued prompt.
+/// Escape: cancel active stream / dequeue next queued prompt, and clear input field.
 async fn handle_escape(state: &Arc<Mutex<AppState>>, cancel_token: &mut tokio_util::sync::CancellationToken) {
     let mut s = state.lock().await;
     s.reset_suggestion_cycle();
+    s.input_buffer.clear();
+    s.cursor_position = 0;
+    
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
 
