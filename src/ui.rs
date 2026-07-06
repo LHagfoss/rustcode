@@ -235,7 +235,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     for line in &lines {
         match line.width() {
             0 => total_wrapped_lines += 1,
-            w => total_wrapped_lines += (w as u16).div_ceil(inner_area.height),
+            w => total_wrapped_lines += (w as u16).div_ceil(inner_area.width),
         }
     }
     let scroll_offset = total_wrapped_lines.saturating_sub(inner_area.height);
