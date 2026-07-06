@@ -1,3 +1,5 @@
+//! UI layer: terminal layout, rendering widgets, custom prompt prefix, footer.
+
 use crate::app::{AppStatus, AppState};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
@@ -9,9 +11,20 @@ use ratatui::{
 
 /// Format the footer status bar.
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
+    let turns = state.history.iter().filter(|m| m.role == "user").count();
+
     let mut context_text = match state.current_token_usage {
-        Some(ref usage) => format!("Context: {} / {} tokens", usage.total_tokens, crate::config::MAX_CONTEXT_TOKENS),
-        None => format!("Context: 0 / {} tokens", crate::config::MAX_CONTEXT_TOKENS),
+        Some(ref usage) => {
+            let percentage = (usage.total_tokens as f32 / crate::config::MAX_CONTEXT_TOKENS as f32) * 100.0;
+            format!(
+                "Context: {} / {} tokens ({:.1}% used) | Turns: {}",
+                usage.total_tokens,
+                crate::config::MAX_CONTEXT_TOKENS,
+                percentage,
+                turns
+            )
+        }
+        None => format!("Context: 0 / {} tokens (0.0% used) | Turns: {}", crate::config::MAX_CONTEXT_TOKENS, turns),
     };
     if let Some(dur) = state.response_time {
         context_text.push_str(&format!(" ({:.1}s)", dur.as_secs_f32()));
@@ -19,7 +32,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 
     let footer_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(chunks[2]);
 
     let context_paragraph = Paragraph::new(Span::styled(
@@ -46,10 +59,14 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
     let input_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray)) // Grayed out border
         .title(input_title);
 
     let input_inner = chunks[1].inner(Margin { vertical: 1, horizontal: 2 });
     f.render_widget(input_block, chunks[1]);
+
+    let prompt_prefix = "> ";
+    let prefix_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
 
     let text_style = if state.input_buffer.starts_with('/') {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
@@ -60,21 +77,26 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
     let paragraph = if let Some(suffix) = state.get_command_suggestion() {
         let suggestion_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC);
         Paragraph::new(Line::from(vec![
+            Span::styled(prompt_prefix, prefix_style),
             Span::styled(state.input_buffer.as_str(), text_style),
             Span::styled(suffix, suggestion_style),
         ]))
     } else {
-        Paragraph::new(state.input_buffer.as_str()).style(text_style)
+        Paragraph::new(Line::from(vec![
+            Span::styled(prompt_prefix, prefix_style),
+            Span::styled(state.input_buffer.as_str(), text_style),
+        ]))
     };
 
     let wrapped_paragraph = paragraph.wrap(Wrap { trim: false });
     f.render_widget(wrapped_paragraph, input_inner);
 
-    // Place cursor at the user's position in the buffer.
+    // Place cursor relative to state.cursor_position + prefix length.
     let inner_width = input_inner.width as usize;
     if inner_width > 0 {
-        let cursor_dx = (state.cursor_position % inner_width) as u16;
-        let cursor_dy = (state.cursor_position / inner_width) as u16;
+        let virtual_pos = state.cursor_position + prompt_prefix.len();
+        let cursor_dx = (virtual_pos % inner_width) as u16;
+        let cursor_dy = (virtual_pos / inner_width) as u16;
         f.set_cursor_position((input_inner.x + cursor_dx, input_inner.y + cursor_dy));
     }
 }
@@ -88,7 +110,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         .title(" Conversation ");
 
     let inner_area = chunks[0].inner(Margin { vertical: 1, horizontal: 2 });
-    let _width = inner_area.width as usize;
 
     // Build wrapped display lines.
     let mut lines: Vec<Line> = Vec::new();
@@ -107,30 +128,21 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             for raw_line in msg.content.lines() {
                 lines.push(if first {
                     Line::from(vec![
-                        Span::styled("You: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                         Span::styled(raw_line, Style::default().fg(Color::Cyan)),
                     ])
                 } else {
                     Line::from(Span::styled(
-                        format!("{:>4}", ""), // 4 spaces indent for alignment.
+                        format!("{:>2}", ""), // 2 spaces indent.
                         Style::default(),
                     ))
                 });
                 first = false;
             }
         } else if msg.role == "assistant" {
-            let content = &msg.content;
-            let mut first = true;
-            for raw_line in content.lines() {
-                lines.push(if first {
-                    Line::from(vec![
-                        Span::styled("Apple FM: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::styled(raw_line, Style::default().fg(Color::White)),
-                    ])
-                } else {
-                    Line::from(Span::raw(format!("{:>4}", "")))
-                });
-                first = false;
+            // No "Apple FM: " prefix - display text directly.
+            for raw_line in msg.content.lines() {
+                lines.push(Line::from(Span::styled(raw_line, Style::default().fg(Color::White))));
             }
         }
 
@@ -138,23 +150,36 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     }
 
     // Streaming / thinking message (latest response still being built).
-    if !state.current_response.is_empty() || state.status == AppStatus::Streaming {
-        let content = if state.current_response.is_empty() { "Thinking..." } else { &state.current_response };
-        let mut first = true;
-        for raw_line in content.lines() {
-            lines.push(if first {
-                Line::from(vec![
-                    Span::styled("Apple FM: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    if state.current_response.is_empty() {
-                        Span::styled(raw_line, Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
-                    } else {
-                        Span::styled(raw_line, Style::default().fg(Color::White))
-                    },
-                ])
-            } else {
-                Line::from(Span::raw(format!("{:>4}", "")))
-            });
-            first = false;
+    if state.status == AppStatus::Streaming {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+        let frame_idx = ((millis / 80) % spinner_frames.len() as u128) as usize;
+        let spinner = spinner_frames[frame_idx];
+
+        if state.current_response.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", spinner), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled("Thinking...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            ]));
+        } else {
+            let mut lines_to_add: Vec<String> = state.current_response.lines().map(String::from).collect();
+            if lines_to_add.is_empty() {
+                lines_to_add.push(String::new());
+            }
+            let last_idx = lines_to_add.len() - 1;
+            for (idx, raw_line) in lines_to_add.iter().enumerate() {
+                if idx == last_idx {
+                    lines.push(Line::from(vec![
+                        Span::styled(raw_line.clone(), Style::default().fg(Color::White)),
+                        Span::styled(format!(" {}", spinner), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    ]));
+                } else {
+                    lines.push(Line::from(Span::styled(raw_line.clone(), Style::default().fg(Color::White))));
+                }
+            }
         }
     }
 
@@ -181,7 +206,7 @@ pub fn render(f: &mut Frame, state: &AppState) {
     // Determine dynamic input area height based on input buffer length and terminal width.
     // Inner input width is terminal width minus margins and borders (6 characters).
     let inner_width = f.area().width.saturating_sub(6).max(1);
-    let input_lines = (state.input_buffer.len() as u16).div_ceil(inner_width).max(1);
+    let input_lines = (state.input_buffer.len() as u16 + 2).div_ceil(inner_width).max(1);
     let input_height = input_lines + 2;
 
     let chunks = Layout::default()
