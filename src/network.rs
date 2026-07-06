@@ -185,8 +185,10 @@ pub async fn process_queue_orchestrator(
             crate::config::API_BASE_URL, crate::config::MODEL_NAME, &msgs, Arc::clone(&stream_buffer)).await;
 
         if let Err(e) = stream_result {
-            state.lock().await.history.push(ChatMessage::new(
+            let mut s = state.lock().await;
+            s.history.push(ChatMessage::new(
                 "assistant", format!("Connection error to Apple FM Serve: {e}")));
+            s.status = AppStatus::Idle;
         } else {
             let final_content = stream_buffer.lock().await.content.clone();
 
@@ -196,17 +198,20 @@ pub async fn process_queue_orchestrator(
                     s.history.clone()
                 };
 
-                state.lock().await.history.push(ChatMessage::new("assistant", final_content.clone()));
-                state.lock().await.current_response.clear();
+                let mut s = state.lock().await;
+                s.history.push(ChatMessage::new("assistant", final_content.clone()));
+                s.current_response.clear();
+                s.status = AppStatus::Idle;
+                s.response_time = Some(prompt_start_time.elapsed());
+                drop(s);
 
+                // Run token estimation in the background while TUI has already transitioned to Idle.
                 let usage = estimate_token_usage(&history_before, &final_content).await;
                 state.lock().await.current_token_usage = usage;
+            } else {
+                state.lock().await.status = AppStatus::Idle;
             }
         }
-
-        // Record total elapsed response duration
-        state.lock().await.response_time = Some(prompt_start_time.elapsed());
-        state.lock().await.status = AppStatus::Idle;
 
         if cancel_token.is_cancelled() { break; }
     }
