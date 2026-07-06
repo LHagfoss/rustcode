@@ -75,7 +75,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::End => {
                         app_state.lock().await.move_cursor_to_end();
                     }
-                    KeyCode::Enter => handle_enter(&app_state, &client, &mut current_cancel_token).await,
+                    KeyCode::Enter => {
+                        if handle_enter(&app_state, &client, &mut current_cancel_token).await {
+                            break;
+                        }
+                    }
                     KeyCode::Char(c) => {
                         let mut s = app_state.lock().await;
                         // macOS Option+Left/Right → b/f with ALT modifier.
@@ -138,17 +142,17 @@ async fn handle_enter(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
     cancel_token: &mut tokio_util::sync::CancellationToken,
-) {
+) -> bool {
     let mut s = state.lock().await;
     s.reset_suggestion_cycle();
     let raw_input = s.input_buffer.trim().to_string();
 
     if raw_input.is_empty() {
-        return;
+        return false;
     }
 
     if raw_input.starts_with('/') {
-        match raw_input.as_str() {
+        let should_exit = match raw_input.as_str() {
             "/clear" | "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
@@ -156,25 +160,26 @@ async fn handle_enter(
                 s.current_response.clear();
                 s.pending_queue.clear();
                 s.status = AppStatus::Idle;
+                false
             }
             "/cancel" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
+                false
             }
             "/help" => {
-                s.input_buffer.clear();
-                s.cursor_position = 0;
                 s.history.push(app::ChatMessage::new(
                     "system",
                     "Available commands:\n  /help   - Show this help message\n  /clear  - Clear conversation history\n  /new    - Start a new conversation\n  /cancel - Cancel active streaming or queued prompt\n  /exit   - Quit the application\n  /quit   - Quit the application",
                 ));
+                false
             }
-            "/exit" | "/quit" => std::process::exit(0),
-            _ => {
-                // Unknown command — clear input.
-            }
-        }
-        return;
+            "/exit" | "/quit" => true,
+            _ => false,
+        };
+        s.input_buffer.clear();
+        s.cursor_position = 0;
+        return should_exit;
     }
 
     // Append to queue and launch streaming if idle.
@@ -193,4 +198,5 @@ async fn handle_enter(
             network::process_queue_orchestrator(client_clone, state_clone, token_clone).await;
         });
     }
+    false
 }
