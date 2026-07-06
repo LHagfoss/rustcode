@@ -7,9 +7,9 @@ pub const COMMANDS: &[&str] = &["/help", "/clear", "/new", "/cancel", "/exit", "
 #[derive(Debug, Default)]
 pub struct SuggestionCycle {
     /// Original prefix the user typed before cycling started.
-    original_prefix: Option<String>,
+    pub original_prefix: Option<String>,
     /// Current index into the filtered match list (None = no active cycle).
-    suggestion_index: Option<usize>,
+    pub suggestion_index: Option<usize>,
 }
 
 impl SuggestionCycle {

@@ -73,6 +73,7 @@ impl AppState {
     }
 
     pub fn delete_char_backspace(&mut self) {
+        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
         if self.cursor_position > 0 {
             self.input_buffer.remove(self.cursor_position - 1);
             self.cursor_position -= 1;
@@ -80,6 +81,7 @@ impl AppState {
     }
 
     pub fn delete_char_delete(&mut self) {
+        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
         if self.cursor_position < self.input_buffer.len() {
             self.input_buffer.remove(self.cursor_position);
         }
@@ -147,14 +149,18 @@ impl AppState {
     }
 
     pub fn cycle_suggestion(&mut self) {
-        let input = self.input_buffer.clone();
-        if self.suggestion_cycle.cycle(&input) {
-            // Replace buffer with the current match from get_completion_suffix.
-            if let Some(suffix) = self.suggestion_cycle.get_completion_suffix(&self.input_buffer) {
-                self.input_buffer.truncate(self.input_buffer.len() - suffix.len());
-                // We need to reset and re-cycle because get_completion_suffix uses original_prefix.
-                self.suggestion_cycle.reset();
-                let _ = self.suggestion_cycle.cycle(&self.input_buffer);
+        if self.suggestion_cycle.cycle(&self.input_buffer) {
+            let prefix = self.suggestion_cycle.original_prefix.as_deref().unwrap_or(&self.input_buffer);
+            let matches: Vec<&str> = crate::app::suggestion::COMMANDS
+                .iter()
+                .copied()
+                .filter(|c| c.starts_with(prefix))
+                .collect();
+            if let Some(idx) = self.suggestion_cycle.suggestion_index {
+                if idx < matches.len() {
+                    self.input_buffer = matches[idx].to_string();
+                    self.cursor_position = self.input_buffer.len();
+                }
             }
         }
     }
