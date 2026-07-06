@@ -89,33 +89,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     let mut lines: Vec<Line> = Vec::new();
 
     for msg in &state.history {
-        if msg.role == "tool_call" {
-            let tool_name = if let Some(start) = msg.content.find("[TOOL: ") {
-                let rest = &msg.content[start + 7..];
-                if let Some(end) = rest.find(']') {
-                    &rest[..end]
-                } else {
-                    "unknown"
-                }
-            } else {
-                "unknown"
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("  ⚙️  Running {}()...", tool_name), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
-            ]));
-        } else if msg.role == "tool_output" {
-            let mut display_content = msg.content.as_str();
-            // Strip the "Tool Output (name): " prefix for clean display.
-            if let Some(pos) = msg.content.find("): ") {
-                display_content = &msg.content[pos + 3..];
-            }
-            for raw_line in display_content.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled(" ↳ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(raw_line, Style::default().fg(Color::DarkGray)),
-                ]));
-            }
-        } else if msg.role == "system" {
+        if msg.role == "system" {
             // Local helper messages (e.g. /help output).
             for raw_line in msg.content.lines() {
                 lines.push(Line::from(vec![
