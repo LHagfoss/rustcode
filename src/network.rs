@@ -7,6 +7,22 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
 
+/// Debug log to /tmp/rustcode-debug.log (TUI can't use stdout).
+/// Run `tail -f /tmp/rustcode-debug.log` in another terminal to watch.
+macro_rules! dbg_log {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/rustcode-debug.log")
+        {
+            let now = chrono::Local::now().format("%H:%M:%S%.3f");
+            let _ = writeln!(f, "[{now}] {}", format!($($arg)*));
+        }
+    }};
+}
+
 // ── CLI tokenizer (runs fm token-count --quiet in a blocking task) ──
 
 async fn count_tokens(text: &str) -> Option<u32> {
@@ -79,6 +95,7 @@ async fn stream_request(
     messages: &[serde_json::Value],
     buffer: Arc<Mutex<StreamBuffer>>,
 ) -> Result<(), String> {
+    dbg_log!("stream_request: Sending POST request to {}", url);
     let response = client
         .post(url)
         .json(&serde_json::json!({
@@ -102,9 +119,19 @@ async fn stream_request(
             msg
         })?;
 
+    dbg_log!(
+        "stream_request: Received response status: {}",
+        response.status()
+    );
+
     if !response.status().is_success() {
         let status = response.status();
         let err_body = response.text().await.unwrap_or_default();
+        dbg_log!(
+            "stream_request: Request failed with status {}. Body: {}",
+            status,
+            err_body
+        );
         return Err(format!("{status} - {err_body}"));
     }
 
@@ -114,18 +141,29 @@ async fn stream_request(
     let wrapped = StreamReader::new(stream);
     let mut reader = BufReader::with_capacity(4096, wrapped);
     let mut line_buf = String::with_capacity(4096);
+    let mut line_count = 0;
 
+    dbg_log!("stream_request: Starting SSE stream read loop");
     loop {
         if cancel_token.is_cancelled() {
+            dbg_log!("stream_request: Stream reading cancelled via token");
             return Ok(());
         }
 
         tokio::select! {
             r = reader.read_line(&mut line_buf) => {
                 match r {
-                    Ok(0) => break, // EOF.
-                    Ok(_) => {
+                    Ok(0) => {
+                        dbg_log!("stream_request: SSE stream read EOF (0 bytes)");
+                        break;
+                    }
+                    Ok(n) => {
+                        line_count += 1;
                         let trimmed = line_buf.trim();
+                        if line_count % 50 == 0 || trimmed.starts_with("data:") || trimmed.is_empty() {
+                            // Don't spam too much, but log significant SSE elements
+                            dbg_log!("stream_request: Read SSE line {} ({} bytes): '{}'", line_count, n, trimmed);
+                        }
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
@@ -149,14 +187,22 @@ async fn stream_request(
                                         });
                                     }
                                 }
+                            } else {
+                                dbg_log!("stream_request: Failed to parse JSON from data payload: '{}'", json_str);
                             }
                         }
                         line_buf.clear();
                     }
-                    Err(_) => break, // stream error -> EOF.
+                    Err(e) => {
+                        dbg_log!("stream_request: SSE read error: {}", e);
+                        break;
+                    }
                 }
             }
-            _ = cancel_token.cancelled() => return Ok(()),
+            _ = cancel_token.cancelled() => {
+                dbg_log!("stream_request: Cancelled via select branch");
+                return Ok(());
+            }
         }
     }
 
@@ -166,6 +212,10 @@ async fn stream_request(
         .content
         .trim_end_matches(char::is_whitespace)
         .to_string();
+    dbg_log!(
+        "stream_request: Stream request loop ended. Total content: {} chars",
+        buf.content.len()
+    );
     Ok(())
 }
 
@@ -176,16 +226,20 @@ pub async fn process_queue_orchestrator(
     state: Arc<Mutex<AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
 ) {
+    dbg_log!("Orchestrator started");
     loop {
         // Pop next queued prompt.
         let next_prompt = {
             let mut s = state.lock().await;
             if s.pending_queue.is_empty() {
+                dbg_log!("Pending queue empty, setting status to Idle");
                 s.status = AppStatus::Idle;
                 break;
             }
             s.status = AppStatus::Streaming;
-            s.pending_queue.remove(0)
+            let prompt = s.pending_queue.remove(0);
+            dbg_log!("Popped prompt from queue: '{}'", prompt);
+            prompt
         };
 
         // Record user message and reset streaming buffer.
@@ -206,6 +260,7 @@ pub async fn process_queue_orchestrator(
         // Agent loop: request → (tool call → execute → request again)* → reply.
         let mut tool_rounds = 0;
         loop {
+            dbg_log!("Starting agent loop round {}", tool_rounds);
             // Build request payload: tool context first, then the conversation.
             // Local system notices are filtered out; tool results are wrapped
             // and sent as user turns since not every backend accepts role=tool.
@@ -243,6 +298,11 @@ pub async fn process_queue_orchestrator(
                 (s.api_base_url.clone(), s.model_name.clone())
             };
 
+            dbg_log!(
+                "Sending request to {} for model {}",
+                api_base_url,
+                model_name
+            );
             let stream_result = stream_request(
                 &client,
                 Arc::clone(&state),
@@ -255,6 +315,7 @@ pub async fn process_queue_orchestrator(
             .await;
 
             if let Err(e) = stream_result {
+                dbg_log!("Stream request failed: {}", e);
                 let mut s = state.lock().await;
                 // Role "system": local error notices must never be replayed to the
                 // model as assistant turns, or small models parrot them back.
@@ -270,8 +331,13 @@ pub async fn process_queue_orchestrator(
             }
 
             let final_content = stream_buffer.lock().await.content.clone();
+            dbg_log!(
+                "Stream completed successfully. Content length: {} chars",
+                final_content.len()
+            );
 
             if final_content.is_empty() {
+                dbg_log!("Stream returned empty content, finishing");
                 let mut s = state.lock().await;
                 s.status = AppStatus::Idle;
                 s.current_token_usage = None;
@@ -280,11 +346,13 @@ pub async fn process_queue_orchestrator(
 
             // Model asked for a tool: execute it, record both turns, go again.
             if let Some((name, args)) = crate::tools::parse_tool_call(&final_content) {
+                dbg_log!("Parsed tool call request: '{}' with args: {:?}", name, args);
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
                     tool_rounds += 1;
 
                     // Destructive tools need the user to say yes first.
                     let result = if crate::tools::needs_confirmation(&name) {
+                        dbg_log!("Tool '{}' requires confirmation", name);
                         let path = args
                             .get("path")
                             .and_then(|p| p.as_str())
@@ -305,14 +373,31 @@ pub async fn process_queue_orchestrator(
                             s.tool_confirmation_response = Some(tx);
                             s.status = AppStatus::AwaitingToolConfirmation;
                         }
+                        dbg_log!("Awaiting user confirmation for '{}'", name);
                         // Park here until the user presses Y or N in the TUI.
                         match rx.await {
-                            Ok(true) => crate::tools::execute(&name, &args),
-                            Ok(false) => "error: user denied this tool call".to_string(),
-                            Err(_) => "error: confirmation channel closed".to_string(),
+                            Ok(true) => {
+                                dbg_log!("User approved tool call '{}', executing...", name);
+                                crate::tools::execute(&name, &args)
+                            }
+                            Ok(false) => {
+                                dbg_log!("User denied tool call '{}'", name);
+                                "error: user denied this tool call".to_string()
+                            }
+                            Err(_) => {
+                                dbg_log!("Confirmation channel closed for '{}'", name);
+                                "error: confirmation channel closed".to_string()
+                            }
                         }
                     } else {
-                        crate::tools::execute(&name, &args)
+                        dbg_log!("Executing tool '{}' immediately...", name);
+                        let execute_result = crate::tools::execute(&name, &args);
+                        dbg_log!(
+                            "Tool '{}' execution finished with length: {} chars",
+                            name,
+                            execute_result.len()
+                        );
+                        execute_result
                     };
 
                     let mut s = state.lock().await;
@@ -325,11 +410,15 @@ pub async fn process_queue_orchestrator(
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
                     drop(s);
+                    dbg_log!("Tool round finished, looping back");
                     continue;
+                } else {
+                    dbg_log!("Tool rounds exceeded MAX_TOOL_ROUNDS or cancelled");
                 }
             }
 
             // Plain reply (or tool budget exhausted): finish normally.
+            dbg_log!("Finishing agent loop, writing final assistant reply");
             let history_before = {
                 let s = state.lock().await;
                 s.history.clone()
@@ -346,13 +435,17 @@ pub async fn process_queue_orchestrator(
             drop(s);
 
             // Run token estimation in the background while TUI has already transitioned to Idle.
+            dbg_log!("Estimating token usage...");
             let usage = estimate_token_usage(&history_before, &final_content).await;
+            dbg_log!("Token usage estimation result: {:?}", usage);
             state.lock().await.current_token_usage = usage;
             break;
         }
 
         if cancel_token.is_cancelled() {
+            dbg_log!("Cancel token is cancelled, exiting orchestrator loop");
             break;
         }
     }
+    dbg_log!("Orchestrator finished");
 }
