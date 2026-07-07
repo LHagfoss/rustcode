@@ -1493,6 +1493,9 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
     let action_label = match confirmation.tool_name.as_str() {
         "create_file" => "Create file",
         "write_file" => "Overwrite file",
+        "delete_file" => "Delete file",
+        "move_file" => "Move file",
+        "copy_file" => "Copy file",
         _ => "Execute tool",
     };
     let header_line = Line::from(vec![Span::styled(

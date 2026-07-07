@@ -54,6 +54,27 @@ pub const TOOLS: &[Tool] = &[
         handler: write_file,
         requires_confirmation: true,
     },
+    Tool {
+        name: "delete_file",
+        description: "Delete a file from the filesystem",
+        arguments: "{\"path\": \"file to delete\"}",
+        handler: delete_file,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "move_file",
+        description: "Move or rename a file or directory to a new path",
+        arguments: "{\"src\": \"source path\", \"dest\": \"destination path\"}",
+        handler: move_file,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "copy_file",
+        description: "Copy a file to a new path",
+        arguments: "{\"src\": \"source path to copy\", \"dest\": \"destination path\"}",
+        handler: copy_file,
+        requires_confirmation: true,
+    },
 ];
 
 /// Maximum tool-call rounds per user prompt, so a confused model
@@ -227,6 +248,71 @@ fn write_file(args: &Value) -> Result<String, String> {
         "wrote '{path}' ({lines} lines, {} bytes)",
         content.len()
     ))
+}
+
+fn delete_file(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("'{path}' does not exist"));
+    }
+    if p.is_dir() {
+        return Err(format!(
+            "'{path}' is a directory — use delete_dir if needed (not supported yet)"
+        ));
+    }
+    std::fs::remove_file(p).map_err(|e| format!("cannot delete '{path}': {e}"))?;
+    Ok(format!("deleted '{path}'"))
+}
+
+fn move_file(args: &Value) -> Result<String, String> {
+    let src = args
+        .get("src")
+        .and_then(|s| s.as_str())
+        .ok_or("missing 'src' argument")?;
+    let dest = args
+        .get("dest")
+        .and_then(|d| d.as_str())
+        .ok_or("missing 'dest' argument")?;
+    let src_path = std::path::Path::new(src);
+    if !src_path.exists() {
+        return Err(format!("source '{src}' does not exist"));
+    }
+    if let Some(parent) = std::path::Path::new(dest).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directories for '{dest}': {e}"))?;
+    }
+    std::fs::rename(src, dest).map_err(|e| format!("cannot move '{src}' to '{dest}': {e}"))?;
+    Ok(format!("moved '{src}' to '{dest}'"))
+}
+
+fn copy_file(args: &Value) -> Result<String, String> {
+    let src = args
+        .get("src")
+        .and_then(|s| s.as_str())
+        .ok_or("missing 'src' argument")?;
+    let dest = args
+        .get("dest")
+        .and_then(|d| d.as_str())
+        .ok_or("missing 'dest' argument")?;
+    let src_path = std::path::Path::new(src);
+    if !src_path.exists() {
+        return Err(format!("source '{src}' does not exist"));
+    }
+    if src_path.is_dir() {
+        return Err(format!(
+            "source '{src}' is a directory — copy_file only supports copying files"
+        ));
+    }
+    if let Some(parent) = std::path::Path::new(dest).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directories for '{dest}': {e}"))?;
+    }
+    std::fs::copy(src, dest).map_err(|e| format!("cannot copy '{src}' to '{dest}': {e}"))?;
+    Ok(format!("copied '{src}' to '{dest}'"))
 }
 
 pub fn tool_system_prompt() -> String {
@@ -450,12 +536,69 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_file() {
+        let path = std::env::temp_dir().join(format!("rustcode-delete-{}", std::process::id()));
+        std::fs::write(&path, "temp content").unwrap();
+        assert!(path.exists());
+        let out = execute(
+            "delete_file",
+            &serde_json::json!({"path": path.to_str().unwrap()}),
+        );
+        assert!(out.contains("deleted"));
+        assert!(!path.exists());
+        // Try deleting non-existent
+        let out = execute(
+            "delete_file",
+            &serde_json::json!({"path": path.to_str().unwrap()}),
+        );
+        assert!(out.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_move_file() {
+        let src = std::env::temp_dir().join(format!("rustcode-move-src-{}", std::process::id()));
+        let dest = std::env::temp_dir().join(format!("rustcode-move-dest-{}", std::process::id()));
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dest);
+        std::fs::write(&src, "move content").unwrap();
+        let out = execute(
+            "move_file",
+            &serde_json::json!({"src": src.to_str().unwrap(), "dest": dest.to_str().unwrap()}),
+        );
+        assert!(out.contains("moved"));
+        assert!(!src.exists());
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "move content");
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn test_copy_file() {
+        let src = std::env::temp_dir().join(format!("rustcode-copy-src-{}", std::process::id()));
+        let dest = std::env::temp_dir().join(format!("rustcode-copy-dest-{}", std::process::id()));
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dest);
+        std::fs::write(&src, "copy content").unwrap();
+        let out = execute(
+            "copy_file",
+            &serde_json::json!({"src": src.to_str().unwrap(), "dest": dest.to_str().unwrap()}),
+        );
+        assert!(out.contains("copied"));
+        assert!(src.exists());
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "copy content");
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
     fn test_needs_confirmation() {
         assert!(!needs_confirmation("get_time"));
         assert!(!needs_confirmation("list_directory"));
         assert!(!needs_confirmation("read_file"));
         assert!(needs_confirmation("create_file"));
         assert!(needs_confirmation("write_file"));
+        assert!(needs_confirmation("delete_file"));
+        assert!(needs_confirmation("move_file"));
+        assert!(needs_confirmation("copy_file"));
         assert!(!needs_confirmation("nonexistent"));
     }
 }
