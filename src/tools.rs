@@ -318,39 +318,86 @@ fn copy_file(args: &Value) -> Result<String, String> {
 pub fn tool_system_prompt() -> String {
     let mut p = String::from(
         "You have access to tools. When you need to check files, list directories, \
-         or modify the filesystem, you must call a tool by outputting a tool call block \
-         in this exact format:\n\
-         <tool_call>{\"name\": \"tool_name\", \"arguments\": {}}</tool_call>\n\n\
+         or modify the filesystem, you must output a tool call block outside of any thinking tags. \
+         Do NOT include the tool call block inside thinking tags. Output it after the thinking tags are closed.\n\n\
+         The tool call block must be in this exact format, in a markdown code block with the 'tool' language:\n\
+         ```tool\n\
+         {\"name\": \"tool_name\", \"arguments\": {}}\n\
+         ```\n\n\
          Available tools:\n",
     );
     for t in TOOLS {
         p.push_str(&format!(
-            "- {}: {}. Arguments: {}\n",
+            "- {}: {}. Arguments schema: {}\n",
             t.name, t.description, t.arguments
         ));
     }
     p.push_str(
-        "\nIMPORTANT: You must output the actual <tool_call> block to run the tool. \
+        "\nIMPORTANT: You must write the actual tool call block to trigger the action. \
          The tool result will be sent back to you in a <tool_result> block. \
          After receiving it, you will continue your analysis or answer the user.\n\n\
          Example:\n\
          User: What files are in the current directory?\n\
-         Assistant: <think>\nI need to check the files in this directory.\n</think>\n\
-         <tool_call>{\"name\": \"list_directory\", \"arguments\": {}}</tool_call>\n",
+         Assistant: (thought: I need to check the files in this directory to understand the project structure)\n\
+         ```tool\n\
+         {\"name\": \"list_directory\", \"arguments\": {}}\n\
+         ```\n",
     );
     p
 }
 
-pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
-    let start = text.find("<tool_call>")? + "<tool_call>".len();
-    let end = text[start..].find("</tool_call>")? + start;
-    let json: Value = serde_json::from_str(text[start..end].trim()).ok()?;
+fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     let name = json.get("name")?.as_str()?.to_string();
     let args = json
         .get("arguments")
         .cloned()
         .unwrap_or(Value::Object(Default::default()));
     Some((name, args))
+}
+
+pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
+    let search_start = text.find("</think>").map(|idx| idx + "</think>".len()).unwrap_or(0);
+    let search_text = &text[search_start..];
+
+    for marker in &["```tool", "```json"] {
+        if let Some(start_code_idx) = search_text.find(marker) {
+            let start = start_code_idx + marker.len();
+            if let Some(end_code_offset) = search_text[start..].find("```") {
+                let end = start + end_code_offset;
+                if let Ok(json) = serde_json::from_str::<Value>(search_text[start..end].trim()) {
+                    if let Some(res) = extract_tool_call(&json) {
+                        return Some(res);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(start_tag_idx) = text.find("<tool_call>") {
+        let start = start_tag_idx + "<tool_call>".len();
+        if let Some(end_tag_offset) = text[start..].find("</tool_call>") {
+            let end = start + end_tag_offset;
+            if let Ok(json) = serde_json::from_str::<Value>(text[start..end].trim()) {
+                if let Some(res) = extract_tool_call(&json) {
+                    return Some(res);
+                }
+            }
+        }
+    }
+
+    if let Some(first_brace) = search_text.find('{') {
+        if let Some(last_brace) = search_text.rfind('}') {
+            if last_brace > first_brace {
+                if let Ok(json) = serde_json::from_str::<Value>(search_text[first_brace..=last_brace].trim()) {
+                    if let Some(res) = extract_tool_call(&json) {
+                        return Some(res);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 pub fn execute(name: &str, args: &Value) -> String {
@@ -395,9 +442,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_tool_call_fallbacks() {
+        let text = "<think>some thought</think>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"README.md\"}}";
+        let (name, args) = parse_tool_call(text).unwrap();
+        assert_eq!(name, "read_file");
+        assert_eq!(args.get("path").unwrap().as_str().unwrap(), "README.md");
+
+        let text = "Use this tool:\n```json\n{\"name\": \"delete_file\", \"arguments\": {\"path\": \"/tmp/test\"}}\n```";
+        let (name, args) = parse_tool_call(text).unwrap();
+        assert_eq!(name, "delete_file");
+        assert_eq!(args.get("path").unwrap().as_str().unwrap(), "/tmp/test");
+    }
+
+    #[test]
     fn test_parse_rejects_plain_text() {
         assert!(parse_tool_call("just a normal reply").is_none());
         assert!(parse_tool_call("<tool_call>not json</tool_call>").is_none());
+        assert!(parse_tool_call("<think>{\"name\": \"get_time\"}</think>").is_none());
     }
 
     #[test]
@@ -549,7 +610,6 @@ mod tests {
         );
         assert!(out.contains("deleted"));
         assert!(!path.exists());
-        // Try deleting non-existent
         let out = execute(
             "delete_file",
             &serde_json::json!({"path": path.to_str().unwrap()}),

@@ -1,6 +1,7 @@
 # rustcode
 
-<img src="./image.png" alt="rustcode screenshot" />
+<img src="./image-1.png" alt="rustcode screenshot 1" />
+<img src="./image-2.png" alt="rustcode screenshot 2" />
 
 ## initial
 `fmr` now `rustcode` is a lightweight Terminal User Interface (TUI) harness for testing Apple's on-device Foundation Models via `fm serve`. 

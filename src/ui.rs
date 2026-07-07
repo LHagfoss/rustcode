@@ -790,9 +790,19 @@ fn render_welcome_screen(
     let width = f.area().width;
     let height = f.area().height;
 
-    let logo_start_y = height.saturating_sub(17) / 2;
-
     let show_picker = state.show_model_picker || state.show_command_picker;
+
+    let box_width = 80u16.min(width.saturating_sub(6));
+    let inner_width = box_width.saturating_sub(5).max(1);
+
+    let input_lines = if state.input_buffer.is_empty() {
+        1
+    } else {
+        count_input_lines(&state.input_buffer, inner_width as usize)
+    };
+    let prompt_box_height = input_lines + 4;
+
+    let logo_start_y = height.saturating_sub(17).saturating_sub(input_lines - 1) / 2;
 
     let welcome_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -800,7 +810,7 @@ fn render_welcome_screen(
             Constraint::Length(logo_start_y),
             Constraint::Length(4),
             Constraint::Length(3),
-            Constraint::Length(5),
+            Constraint::Length(prompt_box_height),
             Constraint::Length(2),
             Constraint::Length(1),
             Constraint::Length(2),
@@ -841,7 +851,6 @@ fn render_welcome_screen(
         logo_area,
     );
 
-    let box_width = 80u16.min(width.saturating_sub(6));
     let box_padding = (width.saturating_sub(box_width) / 2) as u16;
     let box_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -871,6 +880,8 @@ fn render_welcome_screen(
     let solid_panel = Block::default().style(Style::default().bg(COLOR_PANEL));
 
     let mut box_lines = Vec::new();
+    let mut cursor_dx = 0u16;
+    let mut cursor_dy = 0u16;
 
     if state.input_buffer.is_empty() {
         box_lines.push(Line::from(Span::styled(
@@ -883,14 +894,80 @@ fn render_welcome_screen(
         } else {
             get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker)
         };
-        let mut spans = vec![Span::styled(state.input_buffer.clone(), text_style)];
+
+        let mut styled_chars: Vec<(char, Style)> = state
+            .input_buffer
+            .chars()
+            .map(|c| (c, text_style))
+            .collect();
+
         if let Some(suffix) = state.get_command_suggestion() {
-            spans.push(Span::styled(
-                suffix,
-                get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::ITALIC, show_picker),
-            ));
+            let suggestion_style =
+                get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::ITALIC, show_picker);
+            styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
-        box_lines.push(Line::from(spans));
+
+        let cursor_char_index = state.input_buffer
+            [..state.cursor_position.min(state.input_buffer.len())]
+            .chars()
+            .count();
+
+        let mut current_line_spans = Vec::new();
+        let mut current_run: Option<(Style, String)> = None;
+
+        let mut col = 0;
+        let mut row = 0;
+
+        let total_chars = styled_chars.len();
+        for (i, &(c, style)) in styled_chars.iter().enumerate() {
+            if i == cursor_char_index {
+                cursor_dx = col as u16;
+                cursor_dy = row as u16;
+            }
+
+            if c == '\n' {
+                if let Some((st, s)) = current_run.take() {
+                    current_line_spans.push(Span::styled(s, st));
+                }
+                box_lines.push(Line::from(current_line_spans.clone()));
+                current_line_spans.clear();
+                row += 1;
+                col = 0;
+            } else {
+                if col >= inner_width as usize {
+                    if let Some((st, s)) = current_run.take() {
+                        current_line_spans.push(Span::styled(s, st));
+                    }
+                    box_lines.push(Line::from(current_line_spans.clone()));
+                    current_line_spans.clear();
+                    row += 1;
+                    col = 0;
+                }
+
+                match current_run.as_mut() {
+                    Some((st, s)) if *st == style => {
+                        s.push(c);
+                    }
+                    _ => {
+                        if let Some((st, s)) = current_run.take() {
+                            current_line_spans.push(Span::styled(s, st));
+                        }
+                        current_run = Some((style, c.to_string()));
+                    }
+                }
+                col += 1;
+            }
+        }
+
+        if cursor_char_index == total_chars {
+            cursor_dx = col as u16;
+            cursor_dy = row as u16;
+        }
+
+        if let Some((st, s)) = current_run.take() {
+            current_line_spans.push(Span::styled(s, st));
+        }
+        box_lines.push(Line::from(current_line_spans));
     }
 
     box_lines.push(Line::from(""));
@@ -926,10 +1003,10 @@ fn render_welcome_screen(
     );
 
     if inner.width > 0 && !show_picker {
-        let cursor_col = state.input_buffer[..state.cursor_position.min(state.input_buffer.len())]
-            .chars()
-            .count() as u16;
-        f.set_cursor_position((inner.x + cursor_col, inner.y));
+        f.set_cursor_position(ratatui::layout::Position {
+            x: inner.x + cursor_dx.min(inner.width.saturating_sub(1)),
+            y: inner.y + cursor_dy,
+        });
     }
 
     let hint_area = welcome_chunks[4];
