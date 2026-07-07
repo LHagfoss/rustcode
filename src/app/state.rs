@@ -5,12 +5,10 @@ pub enum AppStatus {
     Idle,
     Streaming,
     Queued,
-    /// The agent loop is paused waiting for the user to approve/deny a
-    /// destructive tool call (write_file, create_file, etc.).
+
     AwaitingToolConfirmation,
 }
 
-/// A pending tool call that needs user approval before execution.
 #[derive(Debug, Clone)]
 pub struct ToolConfirmation {
     pub tool_name: String,
@@ -19,7 +17,6 @@ pub struct ToolConfirmation {
     pub content_bytes: usize,
 }
 
-/// Token-count snapshot for the status bar.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TokenUsage {
     pub prompt_tokens: u32,
@@ -31,7 +28,6 @@ fn current_timestamp() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
 
-/// A message in conversation history.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -45,7 +41,6 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
-    /// Create a message with no token-usage data.
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: role.into(),
@@ -57,7 +52,6 @@ impl ChatMessage {
     }
 }
 
-/// The single source of truth for the application's state.
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -66,44 +60,38 @@ pub struct AppState {
     pub pending_queue: Vec<String>,
     pub status: AppStatus,
     pub cursor_position: usize,
-    /// Command-suggestion cycling state (Tab/Enter keys).
+
     pub suggestion_cycle: crate::app::suggestion::SuggestionCycle,
     pub response_time: Option<std::time::Duration>,
     pub history_index: Option<usize>,
     pub temp_input: String,
 
-    // Dynamic config settings
     pub api_base_url: String,
     pub model_name: String,
     pub config: crate::config::AppConfig,
 
-    // Welcome screen details
     pub cwd_and_branch: String,
 
-    // Autocomplete menu index
     pub active_suggestion_index: Option<usize>,
 
-    // Model Picker Modal state
     pub show_model_picker: bool,
     pub model_picker_index: usize,
     pub model_picker_search: String,
 
-    // Command Picker Modal state
     pub show_command_picker: bool,
     pub command_picker_index: usize,
     pub command_picker_search: String,
 
-    // Tool confirmation gate: the agent loop parks here when a destructive
-    // tool needs user approval.
     pub pending_tool_confirmation: Option<ToolConfirmation>,
-    /// Sender half lives in main.rs; the agent loop (network.rs) holds the
-    /// receiver via a separate Arc and `.recv()`s on it.
+
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
-    // Scroll state
+    pub auto_confirm: bool,
+
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
     pub last_max_scroll: u16,
+    pub raw_cli_mode: bool,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -166,15 +154,13 @@ impl AppState {
             command_picker_search: String::new(),
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
+            auto_confirm: false,
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             last_max_scroll: 0,
+            raw_cli_mode: false,
         }
     }
-
-    // ── Input editing ────────────────────────────────────────────────
-    // `cursor_position` is a byte offset into `input_buffer`, always kept
-    // on a UTF-8 char boundary.
 
     fn clamp_cursor(&mut self) {
         self.cursor_position = self.cursor_position.min(self.input_buffer.len());
@@ -183,7 +169,6 @@ impl AppState {
         }
     }
 
-    /// Byte length of the char immediately before the cursor, if any.
     fn char_len_before_cursor(&self) -> Option<usize> {
         self.input_buffer[..self.cursor_position]
             .chars()
@@ -218,7 +203,6 @@ impl AppState {
         self.reset_suggestion_index();
     }
 
-    /// Delete the word before the cursor (readline Ctrl+W).
     pub fn delete_word_backspace(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
@@ -231,7 +215,6 @@ impl AppState {
         self.reset_suggestion_index();
     }
 
-    /// Delete from line start to the cursor (readline Ctrl+U).
     pub fn kill_line_to_start(&mut self) {
         self.history_index = None;
         self.clamp_cursor();
@@ -271,14 +254,14 @@ impl AppState {
     pub fn move_cursor_word_left(&mut self) {
         self.clamp_cursor();
         let mut pos = self.cursor_position;
-        // Skip trailing whitespace.
+
         while let Some(c) = self.input_buffer[..pos].chars().next_back() {
             if !c.is_whitespace() {
                 break;
             }
             pos -= c.len_utf8();
         }
-        // Skip the current word leftwards.
+
         while let Some(c) = self.input_buffer[..pos].chars().next_back() {
             if c.is_whitespace() {
                 break;
@@ -291,14 +274,14 @@ impl AppState {
     pub fn move_cursor_word_right(&mut self) {
         self.clamp_cursor();
         let mut pos = self.cursor_position;
-        // Skip current word.
+
         while let Some(c) = self.input_buffer[pos..].chars().next() {
             if c.is_whitespace() {
                 break;
             }
             pos += c.len_utf8();
         }
-        // Skip whitespace.
+
         while let Some(c) = self.input_buffer[pos..].chars().next() {
             if !c.is_whitespace() {
                 break;
@@ -315,8 +298,6 @@ impl AppState {
     pub fn move_cursor_to_end(&mut self) {
         self.cursor_position = self.input_buffer.len();
     }
-
-    // ── Suggestion helpers ───────────────────────────────────────────
 
     pub fn get_command_suggestion(&self) -> Option<String> {
         self.suggestion_cycle
@@ -347,8 +328,6 @@ impl AppState {
     pub fn reset_suggestion_cycle(&mut self) {
         self.suggestion_cycle.reset();
     }
-
-    // ── History navigation ───────────────────────────────────────────
 
     pub fn history_up(&mut self) {
         let user_msgs: Vec<String> = self
@@ -403,8 +382,6 @@ impl AppState {
             }
         }
     }
-
-    // ── Scrolling logic ──────────────────────────────────────────────
 
     pub fn scroll_up(&mut self, amount: u16) {
         self.is_scroll_locked_to_bottom = false;

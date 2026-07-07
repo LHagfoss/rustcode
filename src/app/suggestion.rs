@@ -1,14 +1,8 @@
-//! Slash-command definitions and suggestion cycling for the input buffer.
-//! When the user types `/`, Tab cycles through matching commands.
-
-/// A slash command: name plus short description for the autocomplete menu.
 pub struct CommandInfo {
     pub name: &'static str,
     pub desc: &'static str,
 }
 
-/// Single source of truth for every implemented slash command.
-/// Powers Tab-cycling, the autocomplete popup, and /help output.
 pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "/cancel",
