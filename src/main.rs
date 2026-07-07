@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod network;
+mod tools;
 mod ui;
 
 use crate::app::{AppState, AppStatus, ChatMessage};
@@ -526,6 +527,53 @@ async fn handle_enter(
             }
             "/resume" | "/history" => {
                 resume_history(&mut s);
+            }
+            "/usage" => {
+                let mut text = String::from("Session usage:");
+                let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
+                let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
+                let tool_calls = s.history.iter().filter(|m| m.role == "tool").count();
+                text.push_str(&format!(
+                    "\n  messages: {} user, {} assistant, {} tool calls",
+                    user_msgs, assistant_msgs, tool_calls
+                ));
+                match &s.current_token_usage {
+                    Some(u) => {
+                        text.push_str(&format!(
+                            "\n  last exchange: {} prompt + {} completion = {} tokens",
+                            u.prompt_tokens, u.completion_tokens, u.total_tokens
+                        ));
+                        if s.model_name == "system" {
+                            let pct = (u.total_tokens as f32
+                                / crate::config::MAX_CONTEXT_TOKENS as f32)
+                                * 100.0;
+                            text.push_str(&format!(
+                                "\n  context: {} / {} tokens ({:.0}%, apple-fm limit)",
+                                u.total_tokens,
+                                crate::config::MAX_CONTEXT_TOKENS,
+                                pct
+                            ));
+                        }
+                    }
+                    None => {
+                        text.push_str("\n  no token data yet - send a message first");
+                    }
+                }
+                if let Some(rt) = s.response_time {
+                    text.push_str(&format!("\n  last response time: {:.1}s", rt.as_secs_f32()));
+                }
+                s.history.push(ChatMessage::new("system", text));
+            }
+            "/tools" => {
+                let mut text = String::from("Available tools (model can call these):");
+                for t in crate::tools::TOOLS {
+                    text.push_str(&format!("\n  {} - {}", t.name, t.description));
+                }
+                text.push_str(&format!(
+                    "\n\nMax {} tool rounds per prompt. Add tools in src/tools.rs.",
+                    crate::tools::MAX_TOOL_ROUNDS
+                ));
+                s.history.push(ChatMessage::new("system", text));
             }
             "/model" => {
                 if tokens.len() < 2 {

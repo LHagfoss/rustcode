@@ -58,6 +58,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "/resume",
         desc: "Resume previous chat history",
     },
+    CommandInfo {
+        name: "/tools",
+        desc: "List available tools",
+    },
+    CommandInfo {
+        name: "/usage",
+        desc: "Show token usage and context stats",
+    },
 ];
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {
