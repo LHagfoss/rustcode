@@ -1,5 +1,3 @@
-//! Network layer: SSE streaming, direct completion, CLI tokenizer.
-
 use crate::app::{AppState, AppStatus, ChatMessage, TokenUsage, ToolConfirmation};
 use futures_util::StreamExt;
 use std::sync::Arc;
@@ -7,8 +5,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
 
-/// Debug log to /tmp/rustcode-debug.log (TUI can't use stdout).
-/// Run `tail -f /tmp/rustcode-debug.log` in another terminal to watch.
 macro_rules! dbg_log {
     ($($arg:tt)*) => {{
         use std::io::Write;
@@ -22,8 +18,6 @@ macro_rules! dbg_log {
         }
     }};
 }
-
-// ── CLI tokenizer (runs fm token-count --quiet in a blocking task) ──
 
 async fn count_tokens(text: &str) -> Option<u32> {
     if text.trim().is_empty() {
@@ -66,8 +60,6 @@ async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Op
     })
 }
 
-// ── SSE / JSON helpers ────────────────────────────────
-
 fn parse_sse_line(line: &str) -> Option<&str> {
     if let Some(s) = line.strip_prefix("data: ") {
         if s == "[DONE]" || s.is_empty() {
@@ -83,9 +75,6 @@ struct StreamBuffer {
     content: String,
 }
 
-// ── Streaming request ────────────────────────────────
-
-/// Perform a single streaming completion. Appends delta content to buffer.
 async fn stream_request(
     client: &reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -108,8 +97,6 @@ async fn stream_request(
         .send()
         .await
         .map_err(|e| {
-            // Include the source chain: reqwest's Display hides the useful
-            // part (connection refused / reset / timeout).
             let mut msg = format!("Request failed: {e}");
             let mut src = std::error::Error::source(&e);
             while let Some(cause) = src {
@@ -161,7 +148,7 @@ async fn stream_request(
                         line_count += 1;
                         let trimmed = line_buf.trim();
                         if line_count % 50 == 0 || trimmed.starts_with("data:") || trimmed.is_empty() {
-                            // Don't spam too much, but log significant SSE elements
+
                             dbg_log!("stream_request: Read SSE line {} ({} bytes): '{}'", line_count, n, trimmed);
                         }
                         if let Some(json_str) = parse_sse_line(trimmed) {
@@ -206,7 +193,6 @@ async fn stream_request(
         }
     }
 
-    // Trim trailing whitespace from the accumulated response.
     let mut buf = buffer.lock().await;
     buf.content = buf
         .content
@@ -219,8 +205,6 @@ async fn stream_request(
     Ok(())
 }
 
-// ── Queue orchestrator (the main work loop) ────────────────────────
-
 pub async fn process_queue_orchestrator(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -228,7 +212,6 @@ pub async fn process_queue_orchestrator(
 ) {
     dbg_log!("Orchestrator started");
     loop {
-        // Pop next queued prompt.
         let next_prompt = {
             let mut s = state.lock().await;
             if s.pending_queue.is_empty() {
@@ -242,7 +225,6 @@ pub async fn process_queue_orchestrator(
             prompt
         };
 
-        // Record user message and reset streaming buffer.
         let stream_buffer = Arc::new(Mutex::new(StreamBuffer {
             content: String::new(),
         }));
@@ -257,13 +239,10 @@ pub async fn process_queue_orchestrator(
 
         let prompt_start_time = std::time::Instant::now();
 
-        // Agent loop: request → (tool call → execute → request again)* → reply.
         let mut tool_rounds = 0;
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
-            // Build request payload: tool context first, then the conversation.
-            // Local system notices are filtered out; tool results are wrapped
-            // and sent as user turns since not every backend accepts role=tool.
+
             let history_snapshot: Vec<ChatMessage> = {
                 let s = state.lock().await;
                 s.history
@@ -288,11 +267,9 @@ pub async fn process_queue_orchestrator(
                 }
             }));
 
-            // Clear current response buffer for this stream iteration
             state.lock().await.current_response.clear();
             stream_buffer.lock().await.content.clear();
 
-            // Get dynamic endpoint URL and model name from State.
             let (api_base_url, model_name) = {
                 let s = state.lock().await;
                 (s.api_base_url.clone(), s.model_name.clone())
@@ -317,8 +294,7 @@ pub async fn process_queue_orchestrator(
             if let Err(e) = stream_result {
                 dbg_log!("Stream request failed: {}", e);
                 let mut s = state.lock().await;
-                // Role "system": local error notices must never be replayed to the
-                // model as assistant turns, or small models parrot them back.
+
                 s.history.push(ChatMessage::new(
                     "system",
                     format!("Error from LLM Provider: {e}"),
@@ -344,13 +320,11 @@ pub async fn process_queue_orchestrator(
                 break;
             }
 
-            // Model asked for a tool: execute it, record both turns, go again.
             if let Some((name, args)) = crate::tools::parse_tool_call(&final_content) {
                 dbg_log!("Parsed tool call request: '{}' with args: {:?}", name, args);
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
                     tool_rounds += 1;
 
-                    // Destructive tools need the user to say yes first.
                     let result = if crate::tools::needs_confirmation(&name) {
                         dbg_log!("Tool '{}' requires confirmation", name);
                         let path = args
@@ -374,7 +348,7 @@ pub async fn process_queue_orchestrator(
                             s.status = AppStatus::AwaitingToolConfirmation;
                         }
                         dbg_log!("Awaiting user confirmation for '{}'", name);
-                        // Park here until the user presses Y or N in the TUI.
+
                         match rx.await {
                             Ok(true) => {
                                 dbg_log!("User approved tool call '{}', executing...", name);
@@ -417,7 +391,6 @@ pub async fn process_queue_orchestrator(
                 }
             }
 
-            // Plain reply (or tool budget exhausted): finish normally.
             dbg_log!("Finishing agent loop, writing final assistant reply");
             let history_before = {
                 let s = state.lock().await;
@@ -434,7 +407,6 @@ pub async fn process_queue_orchestrator(
             s.status = AppStatus::Idle;
             drop(s);
 
-            // Run token estimation in the background while TUI has already transitioned to Idle.
             dbg_log!("Estimating token usage...");
             let usage = estimate_token_usage(&history_before, &final_content).await;
             dbg_log!("Token usage estimation result: {:?}", usage);
