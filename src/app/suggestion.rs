@@ -36,11 +36,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/model",
-        desc: "Switch model profile or override model",
-    },
-    CommandInfo {
-        name: "/models",
-        desc: "Open the model picker",
+        desc: "Open model picker, switch profile, or override model",
     },
     CommandInfo {
         name: "/new",

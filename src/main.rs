@@ -505,7 +505,7 @@ async fn handle_enter(
             "/resume" | "/history" => {
                 resume_history(&mut s);
             }
-            "/model" | "/models" => {
+            "/model" => {
                 if tokens.len() < 2 {
                     s.show_model_picker = true;
                     s.model_picker_index = 0;

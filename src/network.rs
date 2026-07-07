@@ -90,7 +90,17 @@ async fn stream_request(
         }))
         .send()
         .await
-        .map_err(|e| format!("Request failed: {e}"))?;
+        .map_err(|e| {
+            // Include the source chain: reqwest's Display hides the useful
+            // part (connection refused / reset / timeout).
+            let mut msg = format!("Request failed: {e}");
+            let mut src = std::error::Error::source(&e);
+            while let Some(cause) = src {
+                msg.push_str(&format!(": {cause}"));
+                src = cause.source();
+            }
+            msg
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -231,8 +241,10 @@ pub async fn process_queue_orchestrator(
 
         if let Err(e) = stream_result {
             let mut s = state.lock().await;
+            // Role "system": local error notices must never be replayed to the
+            // model as assistant turns, or small models parrot them back.
             s.history.push(ChatMessage::new(
-                "assistant",
+                "system",
                 format!("Error from LLM Provider: {e}"),
             ));
             crate::config::save_history(&s.history);
