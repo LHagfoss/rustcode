@@ -107,6 +107,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
 
+                    // ── Tool confirmation modal (Y / N / Esc) ──────────
+                    {
+                        let s = app_state.lock().await;
+                        if s.status == AppStatus::AwaitingToolConfirmation {
+                            drop(s);
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                    let mut s = app_state.lock().await;
+                                    if let Some(tx) = s.tool_confirmation_response.take() {
+                                        let _ = tx.send(true);
+                                    }
+                                    s.pending_tool_confirmation = None;
+                                }
+                                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                    let mut s = app_state.lock().await;
+                                    if let Some(tx) = s.tool_confirmation_response.take() {
+                                        let _ = tx.send(false);
+                                    }
+                                    s.pending_tool_confirmation = None;
+                                }
+                                _ => {} // ignore other keys while modal is up
+                            }
+                            continue;
+                        }
+                    }
+
                     let mut s = app_state.lock().await;
                     if s.show_model_picker {
                         match key.code {

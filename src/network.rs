@@ -1,6 +1,6 @@
 //! Network layer: SSE streaming, direct completion, CLI tokenizer.
 
-use crate::app::{AppState, AppStatus, ChatMessage, TokenUsage};
+use crate::app::{AppState, AppStatus, ChatMessage, TokenUsage, ToolConfirmation};
 use futures_util::StreamExt;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -282,8 +282,42 @@ pub async fn process_queue_orchestrator(
             if let Some((name, args)) = crate::tools::parse_tool_call(&final_content) {
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
                     tool_rounds += 1;
-                    let result = crate::tools::execute(&name, &args);
+
+                    // Destructive tools need the user to say yes first.
+                    let result = if crate::tools::needs_confirmation(&name) {
+                        let path = args
+                            .get("path")
+                            .and_then(|p| p.as_str())
+                            .unwrap_or("?")
+                            .to_string();
+                        let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                        let preview: String =
+                            content.lines().take(6).collect::<Vec<_>>().join("\n");
+                        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+                        {
+                            let mut s = state.lock().await;
+                            s.pending_tool_confirmation = Some(ToolConfirmation {
+                                tool_name: name.clone(),
+                                path: path.clone(),
+                                content_preview: preview,
+                                content_bytes: content.len(),
+                            });
+                            s.tool_confirmation_response = Some(tx);
+                            s.status = AppStatus::AwaitingToolConfirmation;
+                        }
+                        // Park here until the user presses Y or N in the TUI.
+                        match rx.await {
+                            Ok(true) => crate::tools::execute(&name, &args),
+                            Ok(false) => "error: user denied this tool call".to_string(),
+                            Err(_) => "error: confirmation channel closed".to_string(),
+                        }
+                    } else {
+                        crate::tools::execute(&name, &args)
+                    };
+
                     let mut s = state.lock().await;
+                    s.pending_tool_confirmation = None;
+                    s.status = AppStatus::Streaming;
                     s.history
                         .push(ChatMessage::new("assistant", &final_content));
                     s.history
