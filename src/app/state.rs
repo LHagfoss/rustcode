@@ -91,6 +91,7 @@ pub struct AppState {
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
     pub last_max_scroll: u16,
+    pub raw_cli_mode: bool,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -157,6 +158,7 @@ impl AppState {
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             last_max_scroll: 0,
+            raw_cli_mode: false,
         }
     }
 

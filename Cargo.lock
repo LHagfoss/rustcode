@@ -1828,6 +1828,7 @@ dependencies = [
 name = "rustcode"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "crossterm",
  "futures-util",

@@ -73,11 +73,11 @@ fn parse_sse_line(line: &str) -> Option<&str> {
     }
 }
 
-struct StreamBuffer {
-    content: String,
+pub struct StreamBuffer {
+    pub content: String,
 }
 
-async fn stream_request(
+pub async fn stream_request(
     client: &reqwest::Client,
     state: Arc<Mutex<AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
@@ -86,16 +86,18 @@ async fn stream_request(
     messages: &[serde_json::Value],
     buffer: Arc<Mutex<StreamBuffer>>,
 ) -> Result<(), String> {
-    dbg_log!("stream_request: Sending POST request to {}", url);
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "temperature": 0.7,
+        "max_tokens": 4096,
+    });
+    dbg_log!("stream_request: Request payload: {}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+
     let response = client
         .post(url)
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": messages,
-            "stream": true,
-            "temperature": 0.7,
-            "max_tokens": 4096,
-        }))
+        .json(&payload)
         .send()
         .await
         .map_err(|e| {
@@ -174,17 +176,37 @@ async fn stream_request(
                                                 in_reasoning = true;
                                                 buf.content.push_str("<think>\n");
                                                 s.current_response.push_str("<think>\n");
+                                                if s.raw_cli_mode {
+                                                    use std::io::Write;
+                                                    print!("<think>\n");
+                                                    let _ = std::io::stdout().flush();
+                                                }
                                             }
                                             buf.content.push_str(r_token);
                                             s.current_response.push_str(r_token);
+                                            if s.raw_cli_mode {
+                                                use std::io::Write;
+                                                print!("{}", r_token);
+                                                let _ = std::io::stdout().flush();
+                                            }
                                         } else if let Some(c_token) = content {
                                             if in_reasoning {
                                                 in_reasoning = false;
                                                 buf.content.push_str("\n</think>\n\n");
                                                 s.current_response.push_str("\n</think>\n\n");
+                                                if s.raw_cli_mode {
+                                                    use std::io::Write;
+                                                    print!("\n</think>\n\n");
+                                                    let _ = std::io::stdout().flush();
+                                                }
                                             }
                                             buf.content.push_str(c_token);
                                             s.current_response.push_str(c_token);
+                                            if s.raw_cli_mode {
+                                                use std::io::Write;
+                                                print!("{}", c_token);
+                                                let _ = std::io::stdout().flush();
+                                            }
                                         }
                                     }
                                 }
@@ -225,6 +247,11 @@ async fn stream_request(
         let mut s = state.lock().await;
         buf.content.push_str("\n</think>\n\n");
         s.current_response.push_str("\n</think>\n\n");
+        if s.raw_cli_mode {
+            use std::io::Write;
+            print!("\n</think>\n\n");
+            let _ = std::io::stdout().flush();
+        }
     }
 
     let mut buf = buffer.lock().await;
@@ -305,7 +332,12 @@ pub async fn process_queue_orchestrator(
                     first_user = false;
                     serde_json::json!({
                         "role": "user",
-                        "content": format!("System Instructions:\n{}\n\nUser request: {}", system_prompt, m.content),
+                        "content": parse_multimodal_content(&m.content),
+                    })
+                } else if m.role == "user" {
+                    serde_json::json!({
+                        "role": "user",
+                        "content": parse_multimodal_content(&m.content),
                     })
                 } else {
                     serde_json::json!({"role": m.role, "content": m.content})
@@ -473,4 +505,90 @@ pub async fn process_queue_orchestrator(
         }
     }
     dbg_log!("Orchestrator finished");
+}
+
+pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
+    if !text.contains("![image](file://") {
+        return serde_json::Value::String(text.to_string());
+    }
+
+    let mut parts: Vec<serde_json::Value> = Vec::new();
+    let mut remaining = text;
+
+    while let Some(start_idx) = remaining.find("![image](file://") {
+        let text_part = &remaining[..start_idx];
+        if !text_part.is_empty() {
+            parts.push(serde_json::json!({
+                "type": "text",
+                "text": text_part.to_string(),
+            }));
+        }
+
+        let path_start = start_idx + "![image](file://".len();
+        let rest = &remaining[path_start..];
+        if let Some(end_idx) = rest.find(')') {
+            let path_str = &rest[..end_idx];
+            if let Ok(bytes) = std::fs::read(path_str) {
+                use base64::{Engine as _, engine::general_purpose};
+                let base64_str = general_purpose::STANDARD.encode(bytes);
+                let mime = if path_str.ends_with(".jpg") || path_str.ends_with(".jpeg") {
+                    "image/jpeg"
+                } else if path_str.ends_with(".gif") {
+                    "image/gif"
+                } else if path_str.ends_with(".webp") {
+                    "image/webp"
+                } else {
+                    "image/png"
+                };
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{};base64,{}", mime, base64_str),
+                    }
+                }));
+            } else {
+                parts.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("![image](file://{})", path_str),
+                }));
+            }
+            remaining = &rest[end_idx + 1..];
+        } else {
+            break;
+        }
+    }
+
+    if !remaining.is_empty() {
+        parts.push(serde_json::json!({
+            "type": "text",
+            "text": remaining.to_string(),
+        }));
+    }
+
+    serde_json::Value::Array(parts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_multimodal_content_plain() {
+        let val = parse_multimodal_content("Hello world");
+        assert_eq!(val, serde_json::Value::String("Hello world".to_string()));
+    }
+
+    #[test]
+    fn test_parse_multimodal_content_with_image_nonexistent() {
+        let val = parse_multimodal_content("Look at this: ![image](file:///nonexistent/path.png) interesting!");
+        assert!(val.is_array());
+        let arr = val.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "Look at this: ");
+        assert_eq!(arr[1]["type"], "text");
+        assert_eq!(arr[1]["text"], "![image](file:///nonexistent/path.png)");
+        assert_eq!(arr[2]["type"], "text");
+        assert_eq!(arr[2]["text"], " interesting!");
+    }
 }
