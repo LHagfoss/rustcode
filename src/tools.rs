@@ -1,20 +1,9 @@
-//! Tool system: registry, system-prompt context, call parsing, execution.
-//!
-//! Tool calling is prompt-based (the model is instructed to emit a
-//! `<tool_call>{...}</tool_call>` block) rather than using the OpenAI
-//! `tools` API parameter, so it works with any backend — including
-//! Apple FM's `fm serve`, which has no native tool support.
-//!
-//! To add a tool: write a handler `fn(&serde_json::Value) -> Result<String, String>`
-//! and append one `Tool` entry to `TOOLS`. Everything else (prompt context,
-//! parsing, execution, the agent loop) picks it up automatically.
-
 use serde_json::Value;
 
 pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
-    /// Human-readable arguments spec shown to the model, e.g. `{"path": "file to read"}`.
+
     pub arguments: &'static str,
     pub handler: fn(&Value) -> Result<String, String>,
     /// If true, the agent loop will pause and show a Y/N confirmation modal
@@ -65,13 +54,39 @@ pub const TOOLS: &[Tool] = &[
         handler: write_file,
         requires_confirmation: true,
     },
+    Tool {
+        name: "delete_file",
+        description: "Delete a file from the filesystem",
+        arguments: "{\"path\": \"file to delete\"}",
+        handler: delete_file,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "move_file",
+        description: "Move or rename a file or directory to a new path",
+        arguments: "{\"src\": \"source path\", \"dest\": \"destination path\"}",
+        handler: move_file,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "copy_file",
+        description: "Copy a file to a new path",
+        arguments: "{\"src\": \"source path to copy\", \"dest\": \"destination path\"}",
+        handler: copy_file,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "run_command",
+        description: "Run any terminal/bash command on the system, such as cargo build, git diff, npm test, etc.",
+        arguments: "{\"command\": \"the full shell command string to run\"}",
+        handler: run_command,
+        requires_confirmation: true,
+    },
 ];
 
 /// Maximum tool-call rounds per user prompt, so a confused model
 /// can't loop forever.
 pub const MAX_TOOL_ROUNDS: usize = 4;
-
-// ── Handlers ─────────────────────────────────────────────────────────
 
 fn get_time(_args: &Value) -> Result<String, String> {
     Ok(chrono::Local::now()
@@ -81,7 +96,7 @@ fn get_time(_args: &Value) -> Result<String, String> {
 
 fn list_directory(args: &Value) -> Result<String, String> {
     let path = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-    // Redirect a common small-model mistake instead of dead-ending it.
+
     if std::path::Path::new(path).is_file() {
         return Err(format!(
             "'{path}' is a file, not a directory - use the read_file tool instead"
@@ -106,8 +121,6 @@ fn list_directory(args: &Value) -> Result<String, String> {
     }
 }
 
-// Context budget guards for read_file: apple-fm has a 2048-token window,
-// so tool output must stay small enough to leave room for the answer.
 const MAX_READ_LINES: usize = 40;
 const MAX_SEARCH_HITS: usize = 8;
 const SEARCH_CONTEXT_LINES: usize = 2;
@@ -132,8 +145,6 @@ fn read_file(args: &Value) -> Result<String, String> {
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
 
-    // Search mode: only matching lines, numbered so the model can page
-    // to the right spot with start_line afterwards.
     if let Some(query) = args.get("search").and_then(|s| s.as_str()) {
         let needle = query.to_lowercase();
         let hit_indices: Vec<usize> = lines
@@ -154,9 +165,8 @@ fn read_file(args: &Value) -> Result<String, String> {
             out.push_str(&format!(", showing first {shown}"));
         }
         out.push('\n');
-        // Each hit gets a couple of trailing context lines so section
-        // headers ([dependencies], fn signatures) carry their body.
-        let mut printed_up_to = 0usize; // 1-based line number already printed
+
+        let mut printed_up_to = 0usize;
         for &idx in &hit_indices[..shown] {
             let end = (idx + SEARCH_CONTEXT_LINES).min(total - 1);
             for i in idx..=end {
@@ -169,7 +179,6 @@ fn read_file(args: &Value) -> Result<String, String> {
         return Ok(out.trim_end().to_string());
     }
 
-    // Chunked read mode.
     let start = args
         .get("start_line")
         .and_then(|v| v.as_u64())
@@ -208,7 +217,7 @@ fn create_file(args: &Value) -> Result<String, String> {
             "'{path}' already exists — use write_file to overwrite it"
         ));
     }
-    // Create parent directories if needed.
+
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
@@ -248,39 +257,103 @@ fn write_file(args: &Value) -> Result<String, String> {
     ))
 }
 
-// ── Prompt context ───────────────────────────────────────────────────
+fn delete_file(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("'{path}' does not exist"));
+    }
+    if p.is_dir() {
+        return Err(format!(
+            "'{path}' is a directory — use delete_dir if needed (not supported yet)"
+        ));
+    }
+    std::fs::remove_file(p).map_err(|e| format!("cannot delete '{path}': {e}"))?;
+    Ok(format!("deleted '{path}'"))
+}
 
-/// System prompt telling the model which tools exist and how to call them.
+fn move_file(args: &Value) -> Result<String, String> {
+    let src = args
+        .get("src")
+        .and_then(|s| s.as_str())
+        .ok_or("missing 'src' argument")?;
+    let dest = args
+        .get("dest")
+        .and_then(|d| d.as_str())
+        .ok_or("missing 'dest' argument")?;
+    let src_path = std::path::Path::new(src);
+    if !src_path.exists() {
+        return Err(format!("source '{src}' does not exist"));
+    }
+    if let Some(parent) = std::path::Path::new(dest).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directories for '{dest}': {e}"))?;
+    }
+    std::fs::rename(src, dest).map_err(|e| format!("cannot move '{src}' to '{dest}': {e}"))?;
+    Ok(format!("moved '{src}' to '{dest}'"))
+}
+
+fn copy_file(args: &Value) -> Result<String, String> {
+    let src = args
+        .get("src")
+        .and_then(|s| s.as_str())
+        .ok_or("missing 'src' argument")?;
+    let dest = args
+        .get("dest")
+        .and_then(|d| d.as_str())
+        .ok_or("missing 'dest' argument")?;
+    let src_path = std::path::Path::new(src);
+    if !src_path.exists() {
+        return Err(format!("source '{src}' does not exist"));
+    }
+    if src_path.is_dir() {
+        return Err(format!(
+            "source '{src}' is a directory — copy_file only supports copying files"
+        ));
+    }
+    if let Some(parent) = std::path::Path::new(dest).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directories for '{dest}': {e}"))?;
+    }
+    std::fs::copy(src, dest).map_err(|e| format!("cannot copy '{src}' to '{dest}': {e}"))?;
+    Ok(format!("copied '{src}' to '{dest}'"))
+}
+
 pub fn tool_system_prompt() -> String {
     let mut p = String::from(
-        "You have access to tools. To use one, reply with ONLY a tool call in \
-         this exact format, nothing else:\n\
-         <tool_call>{\"name\": \"tool_name\", \"arguments\": {}}</tool_call>\n\n\
+        "You have access to tools. When you need to check files, list directories, \
+         or modify the filesystem, you must output a tool call block outside of any thinking tags. \
+         Do NOT include the tool call block inside thinking tags. Output it after the thinking tags are closed.\n\n\
+         The tool call block must be in this exact format, in a markdown code block with the 'tool' language:\n\
+         ```tool\n\
+         {\"name\": \"tool_name\", \"arguments\": {}}\n\
+         ```\n\n\
          Available tools:\n",
     );
     for t in TOOLS {
         p.push_str(&format!(
-            "- {}: {}. Arguments: {}\n",
+            "- {}: {}. Arguments schema: {}\n",
             t.name, t.description, t.arguments
         ));
     }
     p.push_str(
-        "\nThe tool result will be sent back to you in a <tool_result> block. \
-         After receiving it, answer the user normally in plain text. \
-         Only call a tool when it is actually needed to answer. \
-         If a tool returns an error, retry with corrected arguments or a \
-         more suitable tool instead of giving up.",
+        "\nIMPORTANT: You must write the actual tool call block to trigger the action. \
+         The tool result will be sent back to you in a <tool_result> block. \
+         After receiving it, you will continue your analysis or answer the user.\n\n\
+         Example:\n\
+         User: What files are in the current directory?\n\
+         Assistant: (thought: I need to check the files in this directory to understand the project structure)\n\
+         ```tool\n\
+         {\"name\": \"list_directory\", \"arguments\": {}}\n\
+         ```\n",
     );
     p
 }
 
-// ── Parsing and execution ────────────────────────────────────────────
-
-/// Extract a tool call from a model reply, if present.
-pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
-    let start = text.find("<tool_call>")? + "<tool_call>".len();
-    let end = text[start..].find("</tool_call>")? + start;
-    let json: Value = serde_json::from_str(text[start..end].trim()).ok()?;
+fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     let name = json.get("name")?.as_str()?.to_string();
     let args = json
         .get("arguments")
@@ -289,8 +362,51 @@ pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
     Some((name, args))
 }
 
-/// Run a tool by name. Errors come back as strings so the model can
-/// read them and recover.
+pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
+    let search_start = text.find("</think>").map(|idx| idx + "</think>".len()).unwrap_or(0);
+    let search_text = &text[search_start..];
+
+    for marker in &["```tool", "```json"] {
+        if let Some(start_code_idx) = search_text.find(marker) {
+            let start = start_code_idx + marker.len();
+            if let Some(end_code_offset) = search_text[start..].find("```") {
+                let end = start + end_code_offset;
+                if let Ok(json) = serde_json::from_str::<Value>(search_text[start..end].trim()) {
+                    if let Some(res) = extract_tool_call(&json) {
+                        return Some(res);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(start_tag_idx) = text.find("<tool_call>") {
+        let start = start_tag_idx + "<tool_call>".len();
+        if let Some(end_tag_offset) = text[start..].find("</tool_call>") {
+            let end = start + end_tag_offset;
+            if let Ok(json) = serde_json::from_str::<Value>(text[start..end].trim()) {
+                if let Some(res) = extract_tool_call(&json) {
+                    return Some(res);
+                }
+            }
+        }
+    }
+
+    if let Some(first_brace) = search_text.find('{') {
+        if let Some(last_brace) = search_text.rfind('}') {
+            if last_brace > first_brace {
+                if let Ok(json) = serde_json::from_str::<Value>(search_text[first_brace..=last_brace].trim()) {
+                    if let Some(res) = extract_tool_call(&json) {
+                        return Some(res);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn execute(name: &str, args: &Value) -> String {
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
@@ -304,13 +420,50 @@ pub fn execute(name: &str, args: &Value) -> String {
     }
 }
 
-/// Check if a tool requires user confirmation before execution.
 pub fn needs_confirmation(name: &str) -> bool {
     TOOLS
         .iter()
         .find(|t| t.name == name)
         .map(|t| t.requires_confirmation)
         .unwrap_or(false)
+}
+
+fn run_command(args: &Value) -> Result<String, String> {
+    let command_str = args
+        .get("command")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| "missing 'command' argument".to_string())?;
+
+    let output = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", command_str])
+            .output()
+            .map_err(|e| format!("failed to start process: {e}"))?
+    } else {
+        std::process::Command::new("sh")
+            .args(["-c", command_str])
+            .output()
+            .map_err(|e| format!("failed to start process: {e}"))?
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let mut result = String::new();
+    if !stdout.is_empty() {
+        result.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str("stderr:\n");
+        result.push_str(&stderr);
+    }
+    if result.is_empty() {
+        result.push_str(&format!("command exited with status {}", output.status));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -334,9 +487,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_tool_call_fallbacks() {
+        let text = "<think>some thought</think>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"README.md\"}}";
+        let (name, args) = parse_tool_call(text).unwrap();
+        assert_eq!(name, "read_file");
+        assert_eq!(args.get("path").unwrap().as_str().unwrap(), "README.md");
+
+        let text = "Use this tool:\n```json\n{\"name\": \"delete_file\", \"arguments\": {\"path\": \"/tmp/test\"}}\n```";
+        let (name, args) = parse_tool_call(text).unwrap();
+        assert_eq!(name, "delete_file");
+        assert_eq!(args.get("path").unwrap().as_str().unwrap(), "/tmp/test");
+    }
+
+    #[test]
     fn test_parse_rejects_plain_text() {
         assert!(parse_tool_call("just a normal reply").is_none());
         assert!(parse_tool_call("<tool_call>not json</tool_call>").is_none());
+        assert!(parse_tool_call("<think>{\"name\": \"get_time\"}</think>").is_none());
     }
 
     #[test]
@@ -422,7 +589,7 @@ mod tests {
         );
         assert!(out.contains("created"), "got: {out}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world\n");
-        // Second call should fail (file already exists).
+
         let out = execute(
             "create_file",
             &serde_json::json!({"path": path.to_str().unwrap(), "content": "nope"}),
@@ -478,12 +645,78 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_file() {
+        let path = std::env::temp_dir().join(format!("rustcode-delete-{}", std::process::id()));
+        std::fs::write(&path, "temp content").unwrap();
+        assert!(path.exists());
+        let out = execute(
+            "delete_file",
+            &serde_json::json!({"path": path.to_str().unwrap()}),
+        );
+        assert!(out.contains("deleted"));
+        assert!(!path.exists());
+        let out = execute(
+            "delete_file",
+            &serde_json::json!({"path": path.to_str().unwrap()}),
+        );
+        assert!(out.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_move_file() {
+        let src = std::env::temp_dir().join(format!("rustcode-move-src-{}", std::process::id()));
+        let dest = std::env::temp_dir().join(format!("rustcode-move-dest-{}", std::process::id()));
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dest);
+        std::fs::write(&src, "move content").unwrap();
+        let out = execute(
+            "move_file",
+            &serde_json::json!({"src": src.to_str().unwrap(), "dest": dest.to_str().unwrap()}),
+        );
+        assert!(out.contains("moved"));
+        assert!(!src.exists());
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "move content");
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn test_copy_file() {
+        let src = std::env::temp_dir().join(format!("rustcode-copy-src-{}", std::process::id()));
+        let dest = std::env::temp_dir().join(format!("rustcode-copy-dest-{}", std::process::id()));
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dest);
+        std::fs::write(&src, "copy content").unwrap();
+        let out = execute(
+            "copy_file",
+            &serde_json::json!({"src": src.to_str().unwrap(), "dest": dest.to_str().unwrap()}),
+        );
+        assert!(out.contains("copied"));
+        assert!(src.exists());
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "copy content");
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn test_run_command() {
+        let out = execute(
+            "run_command",
+            &serde_json::json!({"command": "echo 'hello world'"}),
+        );
+        assert!(out.contains("hello world"));
+    }
+
+    #[test]
     fn test_needs_confirmation() {
         assert!(!needs_confirmation("get_time"));
         assert!(!needs_confirmation("list_directory"));
         assert!(!needs_confirmation("read_file"));
         assert!(needs_confirmation("create_file"));
         assert!(needs_confirmation("write_file"));
+        assert!(needs_confirmation("delete_file"));
+        assert!(needs_confirmation("move_file"));
+        assert!(needs_confirmation("copy_file"));
+        assert!(needs_confirmation("run_command"));
         assert!(!needs_confirmation("nonexistent"));
     }
 }
