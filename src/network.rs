@@ -1,24 +1,35 @@
 //! Network layer: SSE streaming, direct completion, CLI tokenizer.
 
-use crate::app::{AppStatus, AppState, ChatMessage, TokenUsage};
+use crate::app::{AppState, AppStatus, ChatMessage, TokenUsage};
+use futures_util::StreamExt;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
-use futures_util::StreamExt;
 use tokio_util::io::StreamReader;
 
 // ── CLI tokenizer (runs fm token-count --quiet in a blocking task) ──
 
 async fn count_tokens(text: &str) -> Option<u32> {
-    if text.trim().is_empty() { return Some(0); }
+    if text.trim().is_empty() {
+        return Some(0);
+    }
     let t = text.to_string();
     tokio::task::spawn_blocking(move || {
         let out = std::process::Command::new("fm")
-            .args(["token-count", "--quiet", &t]).output().ok()?;
-        if !out.status.success() { return None; }
-        std::str::from_utf8(&out.stdout).ok()?.trim().parse::<u32>().ok()
+            .args(["token-count", "--quiet", &t])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        std::str::from_utf8(&out.stdout)
+            .ok()?
+            .trim()
+            .parse::<u32>()
+            .ok()
     })
-    .await.ok()?
+    .await
+    .ok()?
 }
 
 async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Option<TokenUsage> {
@@ -43,12 +54,18 @@ async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Op
 
 fn parse_sse_line(line: &str) -> Option<&str> {
     if let Some(s) = line.strip_prefix("data: ") {
-        if s == "[DONE]" || s.is_empty() { return None; }
+        if s == "[DONE]" || s.is_empty() {
+            return None;
+        }
         Some(s)
-    } else { None }
+    } else {
+        None
+    }
 }
 
-struct StreamBuffer { content: String }
+struct StreamBuffer {
+    content: String,
+}
 
 // ── Streaming request ────────────────────────────────
 
@@ -57,10 +74,13 @@ async fn stream_request(
     client: &reqwest::Client,
     state: Arc<Mutex<AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
-    url: &str, model: &str, messages: &[serde_json::Value],
+    url: &str,
+    model: &str,
+    messages: &[serde_json::Value],
     buffer: Arc<Mutex<StreamBuffer>>,
 ) -> Result<(), String> {
-    let response = client.post(url)
+    let response = client
+        .post(url)
         .json(&serde_json::json!({
             "model": model,
             "messages": messages,
@@ -68,7 +88,9 @@ async fn stream_request(
             "temperature": 0.7,
             "max_tokens": 4096,
         }))
-        .send().await.map_err(|e| format!("Request failed: {e}"))?;
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {e}"))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -76,15 +98,17 @@ async fn stream_request(
         return Err(format!("{status} - {err_body}"));
     }
 
-    let stream = response.bytes_stream().map(|r| {
-        r.map_err(std::io::Error::other)
-    });
+    let stream = response
+        .bytes_stream()
+        .map(|r| r.map_err(std::io::Error::other));
     let wrapped = StreamReader::new(stream);
     let mut reader = BufReader::with_capacity(4096, wrapped);
     let mut line_buf = String::with_capacity(4096);
 
     loop {
-        if cancel_token.is_cancelled() { return Ok(()); }
+        if cancel_token.is_cancelled() {
+            return Ok(());
+        }
 
         tokio::select! {
             r = reader.read_line(&mut line_buf) => {
@@ -128,7 +152,10 @@ async fn stream_request(
 
     // Trim trailing whitespace from the accumulated response.
     let mut buf = buffer.lock().await;
-    buf.content = buf.content.trim_end_matches(char::is_whitespace).to_string();
+    buf.content = buf
+        .content
+        .trim_end_matches(char::is_whitespace)
+        .to_string();
     Ok(())
 }
 
@@ -152,10 +179,13 @@ pub async fn process_queue_orchestrator(
         };
 
         // Record user message and reset streaming buffer.
-        let stream_buffer = Arc::new(Mutex::new(StreamBuffer { content: String::new() }));
+        let stream_buffer = Arc::new(Mutex::new(StreamBuffer {
+            content: String::new(),
+        }));
         {
             let mut s = state.lock().await;
             s.history.push(ChatMessage::new("user", next_prompt));
+            crate::config::save_history(&s.history);
             s.current_response.clear();
             s.current_token_usage = None;
             s.response_time = None;
@@ -166,7 +196,8 @@ pub async fn process_queue_orchestrator(
         // Build request payload: filter out local system messages.
         let history_snapshot: Vec<ChatMessage> = {
             let s = state.lock().await;
-            s.history.iter()
+            s.history
+                .iter()
                 .filter(|m| matches!(m.role.as_str(), "user" | "assistant"))
                 .cloned()
                 .collect()
@@ -181,13 +212,30 @@ pub async fn process_queue_orchestrator(
         state.lock().await.current_response.clear();
         stream_buffer.lock().await.content.clear();
 
-        let stream_result = stream_request(&client, Arc::clone(&state), cancel_token.clone(),
-            crate::config::API_BASE_URL, crate::config::MODEL_NAME, &msgs, Arc::clone(&stream_buffer)).await;
+        // Get dynamic endpoint URL and model name from State.
+        let (api_base_url, model_name) = {
+            let s = state.lock().await;
+            (s.api_base_url.clone(), s.model_name.clone())
+        };
+
+        let stream_result = stream_request(
+            &client,
+            Arc::clone(&state),
+            cancel_token.clone(),
+            &api_base_url,
+            &model_name,
+            &msgs,
+            Arc::clone(&stream_buffer),
+        )
+        .await;
 
         if let Err(e) = stream_result {
             let mut s = state.lock().await;
             s.history.push(ChatMessage::new(
-                "assistant", format!("Error from Apple FM Serve: {e}")));
+                "assistant",
+                format!("Error from LLM Provider: {e}"),
+            ));
+            crate::config::save_history(&s.history);
             s.current_response.clear();
             s.current_token_usage = None;
             s.status = AppStatus::Idle;
@@ -201,10 +249,13 @@ pub async fn process_queue_orchestrator(
                 };
 
                 let mut s = state.lock().await;
-                s.history.push(ChatMessage::new("assistant", final_content.clone()));
+                s.response_time = Some(prompt_start_time.elapsed());
+                let mut msg = ChatMessage::new("assistant", final_content.clone());
+                msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
+                s.history.push(msg);
+                crate::config::save_history(&s.history);
                 s.current_response.clear();
                 s.status = AppStatus::Idle;
-                s.response_time = Some(prompt_start_time.elapsed());
                 drop(s);
 
                 // Run token estimation in the background while TUI has already transitioned to Idle.
@@ -217,6 +268,8 @@ pub async fn process_queue_orchestrator(
             }
         }
 
-        if cancel_token.is_cancelled() { break; }
+        if cancel_token.is_cancelled() {
+            break;
+        }
     }
 }
