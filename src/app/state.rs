@@ -86,6 +86,8 @@ pub struct AppState {
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
+    pub auto_confirm: bool,
+
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
     pub last_max_scroll: u16,
@@ -151,6 +153,7 @@ impl AppState {
             command_picker_search: String::new(),
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
+            auto_confirm: false,
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             last_max_scroll: 0,

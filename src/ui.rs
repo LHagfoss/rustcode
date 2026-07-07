@@ -1460,21 +1460,25 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         None => return,
     };
 
-    let modal_area = centered_rect_fixed(60, 14, f.area());
+    let modal_area = centered_rect_fixed(60, 16, f.area());
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL));
+    let modal_block = Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(COLOR_BORDER))
+        .style(Style::default().bg(COLOR_PANEL));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -1539,11 +1543,29 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         modal_chunks[4],
     );
 
+    let auto_confirm_status = if state.auto_confirm {
+        "[x] Auto-confirm future tool calls"
+    } else {
+        "[ ] Auto-confirm future tool calls"
+    };
+    let auto_confirm_line = Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            auto_confirm_status,
+            Style::default().fg(COLOR_TIP).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" (Tab to toggle)", Style::default().fg(COLOR_MUTED)),
+    ]);
+    f.render_widget(
+        Paragraph::new(auto_confirm_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[5],
+    );
+
     if !confirmation.content_preview.is_empty() {
         let preview_lines: Vec<Line> = confirmation
             .content_preview
             .lines()
-            .take(modal_chunks[6].height as usize)
+            .take(modal_chunks[7].height as usize)
             .map(|l| {
                 let display: String = l.chars().take(inner_area.width as usize - 4).collect();
                 Line::from(Span::styled(
@@ -1558,13 +1580,13 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
             Paragraph::new(preview_lines)
                 .style(Style::default().bg(COLOR_ELEMENT))
                 .wrap(Wrap { trim: false }),
-            modal_chunks[6],
+            modal_chunks[7],
         );
     }
 
     let footer_line = Line::from(vec![
         Span::styled(
-            "  y",
+            "  y / enter",
             Style::default()
                 .fg(COLOR_GREEN)
                 .add_modifier(Modifier::BOLD),
@@ -1578,6 +1600,11 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         ),
         Span::styled(" deny  ", Style::default().fg(COLOR_MUTED)),
         Span::styled(
+            "tab",
+            Style::default().fg(COLOR_TIP).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" toggle auto-confirm  ", Style::default().fg(COLOR_MUTED)),
+        Span::styled(
             "esc",
             Style::default()
                 .fg(COLOR_PRIMARY)
@@ -1587,6 +1614,6 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
     ]);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[7],
+        modal_chunks[8],
     );
 }

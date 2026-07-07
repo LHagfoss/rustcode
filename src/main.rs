@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if s.status == AppStatus::AwaitingToolConfirmation {
                             drop(s);
                             match key.code {
-                                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                                     let mut s = app_state.lock().await;
                                     if let Some(tx) = s.tool_confirmation_response.take() {
                                         let _ = tx.send(true);
@@ -114,6 +114,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let _ = tx.send(false);
                                     }
                                     s.pending_tool_confirmation = None;
+                                }
+                                KeyCode::Tab => {
+                                    let mut s = app_state.lock().await;
+                                    s.auto_confirm = !s.auto_confirm;
                                 }
                                 _ => {}
                             }
@@ -496,7 +500,6 @@ async fn handle_enter(
 
     if s.active_suggestion_index.is_some() {
         apply_autocomplete(&mut s);
-        return false;
     }
 
     let raw_input = s.input_buffer.trim().to_string();
@@ -512,6 +515,9 @@ async fn handle_enter(
             s.cursor_position = 0;
             return false;
         }
+
+        s.history.push(ChatMessage::new("user", raw_input.clone()));
+        crate::config::save_history(&s.history);
 
         let cmd = tokens[0];
         let mut should_exit = false;
