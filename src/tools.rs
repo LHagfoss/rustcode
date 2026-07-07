@@ -32,6 +32,16 @@ pub const TOOLS: &[Tool] = &[
         arguments: "{\"path\": \"directory path, defaults to current dir\"}",
         handler: list_directory,
     },
+    Tool {
+        name: "read_file",
+        description: "Read a small chunk of a file, or search inside it. \
+                      Never returns whole files: page with start_line, or \
+                      use search to find the relevant lines first",
+        arguments: "{\"path\": \"file to read\", \
+                     \"start_line\": optional number to page from (default 1), \
+                     \"search\": \"optional text - returns only matching lines\"}",
+        handler: read_file,
+    },
 ];
 
 /// Maximum tool-call rounds per user prompt, so a confused model
@@ -48,6 +58,12 @@ fn get_time(_args: &Value) -> Result<String, String> {
 
 fn list_directory(args: &Value) -> Result<String, String> {
     let path = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+    // Redirect a common small-model mistake instead of dead-ending it.
+    if std::path::Path::new(path).is_file() {
+        return Err(format!(
+            "'{path}' is a file, not a directory - use the read_file tool instead"
+        ));
+    }
     let entries = std::fs::read_dir(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
@@ -65,6 +81,92 @@ fn list_directory(args: &Value) -> Result<String, String> {
     } else {
         Ok(names.join("\n"))
     }
+}
+
+// Context budget guards for read_file: apple-fm has a 2048-token window,
+// so tool output must stay small enough to leave room for the answer.
+const MAX_READ_LINES: usize = 40;
+const MAX_SEARCH_HITS: usize = 8;
+const SEARCH_CONTEXT_LINES: usize = 2;
+const MAX_LINE_CHARS: usize = 160;
+
+fn truncate_line(line: &str) -> String {
+    if line.chars().count() > MAX_LINE_CHARS {
+        let cut: String = line.chars().take(MAX_LINE_CHARS).collect();
+        format!("{cut}…")
+    } else {
+        line.to_string()
+    }
+}
+
+fn read_file(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+
+    // Search mode: only matching lines, numbered so the model can page
+    // to the right spot with start_line afterwards.
+    if let Some(query) = args.get("search").and_then(|s| s.as_str()) {
+        let needle = query.to_lowercase();
+        let hit_indices: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .collect();
+        if hit_indices.is_empty() {
+            return Ok(format!("{path} ({total} lines): no matches for '{query}'"));
+        }
+        let shown = hit_indices.len().min(MAX_SEARCH_HITS);
+        let mut out = format!(
+            "{path} ({total} lines): {} match(es) for '{query}'",
+            hit_indices.len()
+        );
+        if hit_indices.len() > shown {
+            out.push_str(&format!(", showing first {shown}"));
+        }
+        out.push('\n');
+        // Each hit gets a couple of trailing context lines so section
+        // headers ([dependencies], fn signatures) carry their body.
+        let mut printed_up_to = 0usize; // 1-based line number already printed
+        for &idx in &hit_indices[..shown] {
+            let end = (idx + SEARCH_CONTEXT_LINES).min(total - 1);
+            for i in idx..=end {
+                if i + 1 > printed_up_to {
+                    out.push_str(&format!("{}: {}\n", i + 1, truncate_line(lines[i])));
+                    printed_up_to = i + 1;
+                }
+            }
+        }
+        return Ok(out.trim_end().to_string());
+    }
+
+    // Chunked read mode.
+    let start = args
+        .get("start_line")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1)
+        .max(1) as usize;
+    if start > total {
+        return Ok(format!("{path} has only {total} lines (asked for {start})"));
+    }
+    let end = (start + MAX_READ_LINES - 1).min(total);
+    let mut out = format!("{path}: lines {start}-{end} of {total}\n");
+    for (i, line) in lines[start - 1..end].iter().enumerate() {
+        out.push_str(&format!("{}: {}\n", start + i, truncate_line(line)));
+    }
+    if end < total {
+        out.push_str(&format!(
+            "(truncated - call read_file again with \"start_line\": {} for more)",
+            end + 1
+        ));
+    }
+    Ok(out)
 }
 
 // ── Prompt context ───────────────────────────────────────────────────
@@ -86,7 +188,9 @@ pub fn tool_system_prompt() -> String {
     p.push_str(
         "\nThe tool result will be sent back to you in a <tool_result> block. \
          After receiving it, answer the user normally in plain text. \
-         Only call a tool when it is actually needed to answer.",
+         Only call a tool when it is actually needed to answer. \
+         If a tool returns an error, retry with corrected arguments or a \
+         more suitable tool instead of giving up.",
     );
     p
 }
@@ -157,6 +261,58 @@ mod tests {
     fn test_execute_unknown_tool() {
         let out = execute("nope", &serde_json::json!({}));
         assert!(out.contains("unknown tool"));
+    }
+
+    fn temp_file(name: &str, lines: usize) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("rustcode-tool-{name}-{}", std::process::id()));
+        let body: String = (1..=lines).map(|i| format!("line number {i}\n")).collect();
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_read_file_chunks_and_paginates() {
+        let path = temp_file("page", 100);
+        let out = execute("read_file", &serde_json::json!({"path": path}));
+        assert!(out.contains("lines 1-40 of 100"));
+        assert!(out.contains("start_line"));
+        assert!(!out.contains("line number 41"));
+
+        let out = execute(
+            "read_file",
+            &serde_json::json!({"path": path, "start_line": 90}),
+        );
+        assert!(out.contains("lines 90-100 of 100"));
+        assert!(!out.contains("truncated"));
+    }
+
+    #[test]
+    fn test_read_file_search() {
+        let path = temp_file("search", 100);
+        let out = execute(
+            "read_file",
+            &serde_json::json!({"path": path, "search": "number 42"}),
+        );
+        assert!(out.contains("1 match(es)"));
+        assert!(out.contains("42: line number 42"));
+
+        let out = execute(
+            "read_file",
+            &serde_json::json!({"path": path, "search": "zzz"}),
+        );
+        assert!(out.contains("no matches"));
+    }
+
+    #[test]
+    fn test_read_file_missing_args() {
+        let out = execute("read_file", &serde_json::json!({}));
+        assert!(out.contains("missing 'path'"));
+        let out = execute(
+            "read_file",
+            &serde_json::json!({"path": "/nope/nothing.txt"}),
+        );
+        assert!(out.contains("cannot read"));
     }
 
     #[test]
