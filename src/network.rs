@@ -289,15 +289,23 @@ pub async fn process_queue_orchestrator(
                     .collect()
             };
 
+            let system_prompt = crate::tools::tool_system_prompt();
             let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
                 "role": "system",
-                "content": crate::tools::tool_system_prompt(),
+                "content": system_prompt.clone(),
             })];
+            let mut first_user = true;
             msgs.extend(history_snapshot.into_iter().map(|m| {
                 if m.role == "tool" {
                     serde_json::json!({
                         "role": "user",
                         "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
+                    })
+                } else if m.role == "user" && first_user {
+                    first_user = false;
+                    serde_json::json!({
+                        "role": "user",
+                        "content": format!("System Instructions:\n{}\n\nUser request: {}", system_prompt, m.content),
                     })
                 } else {
                     serde_json::json!({"role": m.role, "content": m.content})
