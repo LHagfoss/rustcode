@@ -317,8 +317,9 @@ fn copy_file(args: &Value) -> Result<String, String> {
 
 pub fn tool_system_prompt() -> String {
     let mut p = String::from(
-        "You have access to tools. To use one, reply with ONLY a tool call in \
-         this exact format, nothing else:\n\
+        "You have access to tools. When you need to check files, list directories, \
+         or modify the filesystem, you must call a tool by outputting a tool call block \
+         in this exact format:\n\
          <tool_call>{\"name\": \"tool_name\", \"arguments\": {}}</tool_call>\n\n\
          Available tools:\n",
     );
@@ -329,11 +330,13 @@ pub fn tool_system_prompt() -> String {
         ));
     }
     p.push_str(
-        "\nThe tool result will be sent back to you in a <tool_result> block. \
-         After receiving it, answer the user normally in plain text. \
-         Only call a tool when it is actually needed to answer. \
-         If a tool returns an error, retry with corrected arguments or a \
-         more suitable tool instead of giving up.",
+        "\nIMPORTANT: You must output the actual <tool_call> block to run the tool. \
+         The tool result will be sent back to you in a <tool_result> block. \
+         After receiving it, you will continue your analysis or answer the user.\n\n\
+         Example:\n\
+         User: What files are in the current directory?\n\
+         Assistant: <think>\nI need to check the files in this directory.\n</think>\n\
+         <tool_call>{\"name\": \"list_directory\", \"arguments\": {}}</tool_call>\n",
     );
     p
 }
