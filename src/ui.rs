@@ -605,6 +605,22 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ]));
             }
             lines.push(Line::from("")); // spacer
+        } else if msg.role == "tool" {
+            // Tool execution results from the agent loop.
+            for (i, raw_line) in msg.content.lines().enumerate() {
+                let prefix = if i == 0 { "⚙ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        prefix,
+                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
+                    ),
+                    Span::styled(
+                        raw_line,
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    ),
+                ]));
+            }
+            lines.push(Line::from("")); // spacer
         } else if msg.role == "user" {
             lines.push(Line::from("")); // spacer above box
             let content_width = (inner_area.width as usize).saturating_sub(4);
@@ -646,6 +662,21 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
             lines.push(Line::from("")); // spacer below box
         } else if msg.role == "assistant" {
+            // Raw tool-call turns render as one compact line, not as prose.
+            if let Some((name, args)) = crate::tools::parse_tool_call(&msg.content) {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "→ ",
+                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
+                    ),
+                    Span::styled(
+                        format!("calling {name} {args}"),
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                continue;
+            }
             render_assistant_message(
                 &msg.content,
                 msg.response_time_ms,

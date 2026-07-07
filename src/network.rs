@@ -35,7 +35,7 @@ async fn count_tokens(text: &str) -> Option<u32> {
 async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Option<TokenUsage> {
     let mut prompt_text = String::new();
     for msg in history_before {
-        if matches!(msg.role.as_str(), "user" | "assistant") {
+        if matches!(msg.role.as_str(), "user" | "assistant" | "tool") {
             prompt_text.push_str(&msg.content);
             prompt_text.push('\n');
         }
@@ -203,81 +203,118 @@ pub async fn process_queue_orchestrator(
 
         let prompt_start_time = std::time::Instant::now();
 
-        // Build request payload: filter out local system messages.
-        let history_snapshot: Vec<ChatMessage> = {
-            let s = state.lock().await;
-            s.history
-                .iter()
-                .filter(|m| matches!(m.role.as_str(), "user" | "assistant"))
-                .cloned()
-                .collect()
-        };
+        // Agent loop: request → (tool call → execute → request again)* → reply.
+        let mut tool_rounds = 0;
+        loop {
+            // Build request payload: tool context first, then the conversation.
+            // Local system notices are filtered out; tool results are wrapped
+            // and sent as user turns since not every backend accepts role=tool.
+            let history_snapshot: Vec<ChatMessage> = {
+                let s = state.lock().await;
+                s.history
+                    .iter()
+                    .filter(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool"))
+                    .cloned()
+                    .collect()
+            };
 
-        let msgs: Vec<serde_json::Value> = history_snapshot
-            .into_iter()
-            .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
-            .collect();
+            let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
+                "role": "system",
+                "content": crate::tools::tool_system_prompt(),
+            })];
+            msgs.extend(history_snapshot.into_iter().map(|m| {
+                if m.role == "tool" {
+                    serde_json::json!({
+                        "role": "user",
+                        "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
+                    })
+                } else {
+                    serde_json::json!({"role": m.role, "content": m.content})
+                }
+            }));
 
-        // Clear current response buffer for this stream iteration
-        state.lock().await.current_response.clear();
-        stream_buffer.lock().await.content.clear();
+            // Clear current response buffer for this stream iteration
+            state.lock().await.current_response.clear();
+            stream_buffer.lock().await.content.clear();
 
-        // Get dynamic endpoint URL and model name from State.
-        let (api_base_url, model_name) = {
-            let s = state.lock().await;
-            (s.api_base_url.clone(), s.model_name.clone())
-        };
+            // Get dynamic endpoint URL and model name from State.
+            let (api_base_url, model_name) = {
+                let s = state.lock().await;
+                (s.api_base_url.clone(), s.model_name.clone())
+            };
 
-        let stream_result = stream_request(
-            &client,
-            Arc::clone(&state),
-            cancel_token.clone(),
-            &api_base_url,
-            &model_name,
-            &msgs,
-            Arc::clone(&stream_buffer),
-        )
-        .await;
+            let stream_result = stream_request(
+                &client,
+                Arc::clone(&state),
+                cancel_token.clone(),
+                &api_base_url,
+                &model_name,
+                &msgs,
+                Arc::clone(&stream_buffer),
+            )
+            .await;
 
-        if let Err(e) = stream_result {
-            let mut s = state.lock().await;
-            // Role "system": local error notices must never be replayed to the
-            // model as assistant turns, or small models parrot them back.
-            s.history.push(ChatMessage::new(
-                "system",
-                format!("Error from LLM Provider: {e}"),
-            ));
-            crate::config::save_history(&s.history);
-            s.current_response.clear();
-            s.current_token_usage = None;
-            s.status = AppStatus::Idle;
-        } else {
-            let final_content = stream_buffer.lock().await.content.clone();
-
-            if !final_content.is_empty() {
-                let history_before = {
-                    let s = state.lock().await;
-                    s.history.clone()
-                };
-
+            if let Err(e) = stream_result {
                 let mut s = state.lock().await;
-                s.response_time = Some(prompt_start_time.elapsed());
-                let mut msg = ChatMessage::new("assistant", final_content.clone());
-                msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
-                s.history.push(msg);
+                // Role "system": local error notices must never be replayed to the
+                // model as assistant turns, or small models parrot them back.
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!("Error from LLM Provider: {e}"),
+                ));
                 crate::config::save_history(&s.history);
                 s.current_response.clear();
+                s.current_token_usage = None;
                 s.status = AppStatus::Idle;
-                drop(s);
+                break;
+            }
 
-                // Run token estimation in the background while TUI has already transitioned to Idle.
-                let usage = estimate_token_usage(&history_before, &final_content).await;
-                state.lock().await.current_token_usage = usage;
-            } else {
+            let final_content = stream_buffer.lock().await.content.clone();
+
+            if final_content.is_empty() {
                 let mut s = state.lock().await;
                 s.status = AppStatus::Idle;
                 s.current_token_usage = None;
+                break;
             }
+
+            // Model asked for a tool: execute it, record both turns, go again.
+            if let Some((name, args)) = crate::tools::parse_tool_call(&final_content) {
+                if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
+                    tool_rounds += 1;
+                    let result = crate::tools::execute(&name, &args);
+                    let mut s = state.lock().await;
+                    s.history
+                        .push(ChatMessage::new("assistant", &final_content));
+                    s.history
+                        .push(ChatMessage::new("tool", format!("{name}: {result}")));
+                    crate::config::save_history(&s.history);
+                    s.current_response.clear();
+                    drop(s);
+                    continue;
+                }
+            }
+
+            // Plain reply (or tool budget exhausted): finish normally.
+            let history_before = {
+                let s = state.lock().await;
+                s.history.clone()
+            };
+
+            let mut s = state.lock().await;
+            s.response_time = Some(prompt_start_time.elapsed());
+            let mut msg = ChatMessage::new("assistant", final_content.clone());
+            msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
+            s.history.push(msg);
+            crate::config::save_history(&s.history);
+            s.current_response.clear();
+            s.status = AppStatus::Idle;
+            drop(s);
+
+            // Run token estimation in the background while TUI has already transitioned to Idle.
+            let usage = estimate_token_usage(&history_before, &final_content).await;
+            state.lock().await.current_token_usage = usage;
+            break;
         }
 
         if cancel_token.is_cancelled() {
