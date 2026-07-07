@@ -45,7 +45,9 @@ async fn count_tokens(text: &str) -> Option<u32> {
 async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Option<TokenUsage> {
     let mut prompt_text = String::new();
     for msg in history_before {
-        if matches!(msg.role.as_str(), "user" | "assistant" | "tool") {
+        if matches!(msg.role.as_str(), "user" | "assistant" | "tool")
+            && !msg.content.starts_with('/')
+        {
             prompt_text.push_str(&msg.content);
             prompt_text.push('\n');
         }
@@ -247,7 +249,10 @@ pub async fn process_queue_orchestrator(
                 let s = state.lock().await;
                 s.history
                     .iter()
-                    .filter(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool"))
+                    .filter(|m| {
+                        matches!(m.role.as_str(), "user" | "assistant" | "tool")
+                            && !m.content.starts_with('/')
+                    })
                     .cloned()
                     .collect()
             };
@@ -325,7 +330,10 @@ pub async fn process_queue_orchestrator(
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
                     tool_rounds += 1;
 
-                    let result = if crate::tools::needs_confirmation(&name) {
+                    let needs_confirm =
+                        crate::tools::needs_confirmation(&name) && !state.lock().await.auto_confirm;
+
+                    let result = if needs_confirm {
                         dbg_log!("Tool '{}' requires confirmation", name);
                         let path = args
                             .get("path")
