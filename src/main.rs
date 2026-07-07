@@ -57,14 +57,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
 
+    let mut needs_redraw = true;
+    let mut last_draw = std::time::Instant::now();
+
     loop {
-        // Draw with state held briefly for consistency.
+        // Redraw on input, continuously while a response is active (loader
+        // animation), and at a slow heartbeat when idle so background
+        // updates (e.g. token counts) still surface.
+        let response_active = app_state.lock().await.status != AppStatus::Idle;
+        if needs_redraw
+            || response_active
+            || last_draw.elapsed() >= std::time::Duration::from_millis(250)
         {
             let mut guard = app_state.lock().await;
             terminal.draw(|f| ui::render(f, &mut guard))?;
+            drop(guard);
+            last_draw = std::time::Instant::now();
+            needs_redraw = false;
         }
 
         if event::poll(std::time::Duration::from_millis(50))? {
+            needs_redraw = true;
             let ev = event::read()?;
             match ev {
                 Event::Key(key) => {
@@ -166,31 +179,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .min(filtered_items.len().saturating_sub(1));
                                 if !filtered_items.is_empty() {
                                     let item = filtered_items[idx];
-                                    if item.name == "Exit the app" {
-                                        exit_flag = true;
-                                    } else if item.name == "Switch model" {
-                                        s.show_model_picker = true;
-                                        s.show_command_picker = false;
-                                    } else if item.name == "New session" {
-                                        current_cancel_token.cancel();
-                                        current_cancel_token =
-                                            tokio_util::sync::CancellationToken::new();
-                                        s.history.clear();
-                                        s.pending_queue.clear();
-                                        s.current_response.clear();
-                                        s.current_token_usage = None;
-                                        s.response_time = None;
-                                        s.status = AppStatus::Idle;
-                                        s.input_buffer.clear();
-                                        s.cursor_position = 0;
-                                        s.show_command_picker = false;
-                                        crate::config::save_history(&s.history);
-                                    } else {
-                                        s.history.push(ChatMessage::new(
-                                            "system",
-                                            format!("Action executed: {}", item.name),
-                                        ));
-                                        s.show_command_picker = false;
+                                    s.show_command_picker = false;
+                                    match item.name {
+                                        "Exit the app" => {
+                                            exit_flag = true;
+                                        }
+                                        "Switch model" => {
+                                            s.show_model_picker = true;
+                                        }
+                                        "New session" => {
+                                            current_cancel_token.cancel();
+                                            current_cancel_token =
+                                                tokio_util::sync::CancellationToken::new();
+                                            start_new_session(&mut s);
+                                        }
+                                        "Resume session" => {
+                                            resume_history(&mut s);
+                                        }
+                                        "Copy last reply" => {
+                                            copy_last_reply(&mut s);
+                                        }
+                                        "Help" => {
+                                            let help = build_help_text();
+                                            s.history.push(ChatMessage::new("system", help));
+                                        }
+                                        _ => {}
                                     }
                                 } else {
                                     s.show_command_picker = false;
@@ -473,68 +486,24 @@ async fn handle_enter(
             "/clear" | "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
-                s.history.clear();
-                s.current_response.clear();
-                s.pending_queue.clear();
-                s.current_token_usage = None;
-                s.response_time = None;
-                s.status = AppStatus::Idle;
-                crate::config::save_history(&s.history);
+                start_new_session(&mut s);
             }
             "/cancel" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
             "/help" => {
-                let mut help = String::from("Available commands:");
-                for cmd_info in crate::app::suggestion::COMMANDS {
-                    help.push_str(&format!("\n  {:<10} - {}", cmd_info.name, cmd_info.desc));
-                }
-                help.push_str("\n\nUsage details:");
-                help.push_str("\n  /model <name> - Switch to profile name, or set model override");
-                help.push_str("\n  /provider <name> <url> <model> - Create/update profile");
-                help.push_str("\n  /provider <url> <model> - Update active profile");
-                help.push_str("\n  /ollama <url> <model> - Set 'ollama' profile URL and model");
-                help.push_str("\n  /ollama list [url] - Fetch and list available Ollama models");
+                let help = build_help_text();
                 s.history.push(ChatMessage::new("system", help));
             }
             "/exit" | "/quit" => {
                 should_exit = true;
             }
             "/copy" => {
-                let last_reply = s
-                    .history
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == "assistant")
-                    .map(|m| m.content.clone());
-                match last_reply {
-                    Some(content) => {
-                        let msg = if copy_to_clipboard(&content) {
-                            "Copied last assistant reply to clipboard."
-                        } else {
-                            "Failed to copy to clipboard."
-                        };
-                        s.history.push(ChatMessage::new("system", msg));
-                    }
-                    None => {
-                        s.history
-                            .push(ChatMessage::new("system", "No assistant reply to copy."));
-                    }
-                }
+                copy_last_reply(&mut s);
             }
             "/resume" | "/history" => {
-                let saved = crate::config::load_history();
-                if saved.is_empty() {
-                    s.history
-                        .push(ChatMessage::new("system", "No saved chat history found."));
-                } else {
-                    s.history = saved;
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        "Resumed chat history from disk.",
-                    ));
-                }
+                resume_history(&mut s);
             }
             "/model" | "/models" => {
                 if tokens.len() < 2 {
@@ -838,6 +807,70 @@ fn apply_autocomplete(s: &mut AppState) {
             }
         }
     }
+}
+
+/// Reset all conversation state; used by /new, /clear, and the palette.
+/// Callers cancel the stream token themselves (it lives in the main loop).
+fn start_new_session(s: &mut AppState) {
+    s.history.clear();
+    s.pending_queue.clear();
+    s.current_response.clear();
+    s.current_token_usage = None;
+    s.response_time = None;
+    s.status = AppStatus::Idle;
+    s.input_buffer.clear();
+    s.cursor_position = 0;
+    crate::config::save_history(&s.history);
+}
+
+/// Load saved chat history from disk into the current session.
+fn resume_history(s: &mut AppState) {
+    let saved = crate::config::load_history();
+    if saved.is_empty() {
+        s.history
+            .push(ChatMessage::new("system", "No saved chat history found."));
+    } else {
+        s.history = saved;
+        s.history.push(ChatMessage::new(
+            "system",
+            "Resumed chat history from disk.",
+        ));
+    }
+}
+
+/// Copy the most recent assistant reply to the clipboard.
+fn copy_last_reply(s: &mut AppState) {
+    let last_reply = s
+        .history
+        .iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .map(|m| m.content.clone());
+    let msg = match last_reply {
+        Some(content) => {
+            if copy_to_clipboard(&content) {
+                "Copied last assistant reply to clipboard."
+            } else {
+                "Failed to copy to clipboard."
+            }
+        }
+        None => "No assistant reply to copy.",
+    };
+    s.history.push(ChatMessage::new("system", msg));
+}
+
+fn build_help_text() -> String {
+    let mut help = String::from("Available commands:");
+    for cmd_info in crate::app::suggestion::COMMANDS {
+        help.push_str(&format!("\n  {:<10} - {}", cmd_info.name, cmd_info.desc));
+    }
+    help.push_str("\n\nUsage details:");
+    help.push_str("\n  /model <name> - Switch to profile name, or set model override");
+    help.push_str("\n  /provider <name> <url> <model> - Create/update profile");
+    help.push_str("\n  /provider <url> <model> - Update active profile");
+    help.push_str("\n  /ollama <url> <model> - Set 'ollama' profile URL and model");
+    help.push_str("\n  /ollama list [url] - Fetch and list available Ollama models");
+    help
 }
 
 /// Helper to write text to the macOS clipboard.

@@ -1247,173 +1247,41 @@ pub struct PaletteItem {
     pub shortcut: &'static str,
 }
 
+/// Every palette item maps to a real, implemented action (the shortcut
+/// column shows the equivalent slash command).
 pub const PALETTE_ITEMS: &[PaletteItem] = &[
-    // Suggested Group
-    PaletteItem {
-        group: "Suggested",
-        name: "Switch session",
-        shortcut: "ctrl+x l",
-    },
-    PaletteItem {
-        group: "Suggested",
-        name: "Switch model",
-        shortcut: "ctrl+x m",
-    },
-    // System Group
-    PaletteItem {
-        group: "System",
-        name: "Hide tips",
-        shortcut: "ctrl+x h",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Plugins",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Install plugin",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "View status",
-        shortcut: "ctrl+x s",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Switch theme",
-        shortcut: "ctrl+x t",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Switch to light mode",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Lock theme mode",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Help",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Open docs",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Exit the app",
-        shortcut: "ctrl+c, ctrl+d, ctrl+x q",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Toggle debug panel",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Toggle console",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Write heap snapshot",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable terminal title",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable animations",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable file context",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable diff wrapping",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable paste summary",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable session directory filtering",
-        shortcut: "",
-    },
     // Session Group
     PaletteItem {
         group: "Session",
-        name: "Open editor",
-        shortcut: "ctrl+x e",
-    },
-    PaletteItem {
-        group: "Session",
-        name: "Move session",
-        shortcut: "Move to another project dir",
-    },
-    PaletteItem {
-        group: "Session",
-        name: "Switch session",
-        shortcut: "ctrl+x l",
-    },
-    PaletteItem {
-        group: "Session",
         name: "New session",
-        shortcut: "ctrl+x n",
+        shortcut: "/new",
     },
-    // Prompt Group
     PaletteItem {
-        group: "Prompt",
-        name: "Skills",
-        shortcut: "",
+        group: "Session",
+        name: "Resume session",
+        shortcut: "/resume",
     },
-    // VCS Group
     PaletteItem {
-        group: "VCS",
-        name: "Open diff viewer",
-        shortcut: "",
+        group: "Session",
+        name: "Copy last reply",
+        shortcut: "/copy",
     },
     // Agent Group
     PaletteItem {
         group: "Agent",
         name: "Switch model",
-        shortcut: "ctrl+x m",
+        shortcut: "/model",
+    },
+    // System Group
+    PaletteItem {
+        group: "System",
+        name: "Help",
+        shortcut: "/help",
     },
     PaletteItem {
-        group: "Agent",
-        name: "Switch agent",
-        shortcut: "ctrl+x a",
-    },
-    PaletteItem {
-        group: "Agent",
-        name: "Toggle MCPs",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "Agent",
-        name: "Variant cycle",
-        shortcut: "ctrl+t",
-    },
-    // Provider Group
-    PaletteItem {
-        group: "Provider",
-        name: "Connect provider",
-        shortcut: "",
+        group: "System",
+        name: "Exit the app",
+        shortcut: "ctrl+c",
     },
 ];
 
@@ -1431,8 +1299,8 @@ fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
         .command_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    // Fixed modal box in center of terminal: width 65, height 24
-    let modal_area = centered_rect_fixed(65, 24, f.area());
+    // Fixed modal box in center of terminal
+    let modal_area = centered_rect_fixed(65, 20, f.area());
 
     // Clear the background to prevent text bleed-through
     f.render_widget(Clear, modal_area);
