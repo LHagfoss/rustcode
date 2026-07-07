@@ -131,6 +131,7 @@ async fn stream_request(
     let mut reader = BufReader::with_capacity(4096, wrapped);
     let mut line_buf = String::with_capacity(4096);
     let mut line_count = 0;
+    let mut in_reasoning = false;
 
     dbg_log!("stream_request: Starting SSE stream read loop");
     loop {
@@ -157,9 +158,33 @@ async fn stream_request(
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
                                     if !choices.is_empty() {
-                                        if let Some(content) = choices[0].get("delta").and_then(|d| d.get("content").or_else(|| d.get("text"))).and_then(|c| c.as_str()) {
-                                            buffer.lock().await.content.push_str(content);
-                                            state.lock().await.current_response.push_str(content);
+                                        let delta = choices[0].get("delta");
+                                        let reasoning = delta
+                                            .and_then(|d| d.get("reasoning").or_else(|| d.get("reasoning_content")))
+                                            .and_then(|r| r.as_str());
+                                        let content = delta
+                                            .and_then(|d| d.get("content").or_else(|| d.get("text")))
+                                            .and_then(|c| c.as_str());
+
+                                        let mut buf = buffer.lock().await;
+                                        let mut s = state.lock().await;
+
+                                        if let Some(r_token) = reasoning {
+                                            if !in_reasoning {
+                                                in_reasoning = true;
+                                                buf.content.push_str("<think>\n");
+                                                s.current_response.push_str("<think>\n");
+                                            }
+                                            buf.content.push_str(r_token);
+                                            s.current_response.push_str(r_token);
+                                        } else if let Some(c_token) = content {
+                                            if in_reasoning {
+                                                in_reasoning = false;
+                                                buf.content.push_str("\n</think>\n\n");
+                                                s.current_response.push_str("\n</think>\n\n");
+                                            }
+                                            buf.content.push_str(c_token);
+                                            s.current_response.push_str(c_token);
                                         }
                                     }
                                 }
@@ -193,6 +218,13 @@ async fn stream_request(
                 return Ok(());
             }
         }
+    }
+
+    if in_reasoning {
+        let mut buf = buffer.lock().await;
+        let mut s = state.lock().await;
+        buf.content.push_str("\n</think>\n\n");
+        s.current_response.push_str("\n</think>\n\n");
     }
 
     let mut buf = buffer.lock().await;
