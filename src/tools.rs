@@ -17,6 +17,9 @@ pub struct Tool {
     /// Human-readable arguments spec shown to the model, e.g. `{"path": "file to read"}`.
     pub arguments: &'static str,
     pub handler: fn(&Value) -> Result<String, String>,
+    /// If true, the agent loop will pause and show a Y/N confirmation modal
+    /// to the user before executing. Use for destructive tools (write, create, run).
+    pub requires_confirmation: bool,
 }
 
 pub const TOOLS: &[Tool] = &[
@@ -25,12 +28,14 @@ pub const TOOLS: &[Tool] = &[
         description: "Get the current local date and time",
         arguments: "{} (no arguments)",
         handler: get_time,
+        requires_confirmation: false,
     },
     Tool {
         name: "list_directory",
         description: "List files in a directory",
         arguments: "{\"path\": \"directory path, defaults to current dir\"}",
         handler: list_directory,
+        requires_confirmation: false,
     },
     Tool {
         name: "read_file",
@@ -41,6 +46,24 @@ pub const TOOLS: &[Tool] = &[
                      \"start_line\": optional number to page from (default 1), \
                      \"search\": \"optional text - returns only matching lines\"}",
         handler: read_file,
+        requires_confirmation: false,
+    },
+    Tool {
+        name: "create_file",
+        description: "Create a new file with content. Fails if the file already \
+                      exists — use write_file to overwrite. Creates parent \
+                      directories automatically",
+        arguments: "{\"path\": \"file to create\", \"content\": \"file content\"}",
+        handler: create_file,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "write_file",
+        description: "Overwrite an existing file with new content. Fails if the \
+                      file does not exist — use create_file for new files",
+        arguments: "{\"path\": \"file to overwrite\", \"content\": \"new content\"}",
+        handler: write_file,
+        requires_confirmation: true,
     },
 ];
 
@@ -169,6 +192,62 @@ fn read_file(args: &Value) -> Result<String, String> {
     Ok(out)
 }
 
+fn create_file(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let content = args
+        .get("content")
+        .and_then(|c| c.as_str())
+        .ok_or("missing 'content' argument")?;
+
+    let p = std::path::Path::new(path);
+    if p.exists() {
+        return Err(format!(
+            "'{path}' already exists — use write_file to overwrite it"
+        ));
+    }
+    // Create parent directories if needed.
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
+    }
+    std::fs::write(path, content).map_err(|e| format!("cannot create '{path}': {e}"))?;
+    let lines = content.lines().count().max(1);
+    Ok(format!(
+        "created '{path}' ({lines} lines, {} bytes)",
+        content.len()
+    ))
+}
+
+fn write_file(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let content = args
+        .get("content")
+        .and_then(|c| c.as_str())
+        .ok_or("missing 'content' argument")?;
+
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!(
+            "'{path}' does not exist — use create_file for new files"
+        ));
+    }
+    if p.is_dir() {
+        return Err(format!("'{path}' is a directory, not a file"));
+    }
+    std::fs::write(path, content).map_err(|e| format!("cannot write '{path}': {e}"))?;
+    let lines = content.lines().count().max(1);
+    Ok(format!(
+        "wrote '{path}' ({lines} lines, {} bytes)",
+        content.len()
+    ))
+}
+
 // ── Prompt context ───────────────────────────────────────────────────
 
 /// System prompt telling the model which tools exist and how to call them.
@@ -223,6 +302,15 @@ pub fn execute(name: &str, args: &Value) -> String {
             TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
         ),
     }
+}
+
+/// Check if a tool requires user confirmation before execution.
+pub fn needs_confirmation(name: &str) -> bool {
+    TOOLS
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| t.requires_confirmation)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -321,5 +409,81 @@ mod tests {
         for t in TOOLS {
             assert!(p.contains(t.name));
         }
+    }
+
+    #[test]
+    fn test_create_file_basic() {
+        let dir = std::env::temp_dir().join(format!("rustcode-create-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("sub").join("hello.txt");
+        let out = execute(
+            "create_file",
+            &serde_json::json!({"path": path.to_str().unwrap(), "content": "hello world\n"}),
+        );
+        assert!(out.contains("created"), "got: {out}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world\n");
+        // Second call should fail (file already exists).
+        let out = execute(
+            "create_file",
+            &serde_json::json!({"path": path.to_str().unwrap(), "content": "nope"}),
+        );
+        assert!(out.contains("already exists"), "got: {out}");
+        assert!(out.contains("write_file"), "cross-tool hint missing: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_file_basic() {
+        let path = std::env::temp_dir().join(format!("rustcode-write-{}", std::process::id()));
+        std::fs::write(&path, "old content").unwrap();
+        let out = execute(
+            "write_file",
+            &serde_json::json!({"path": path.to_str().unwrap(), "content": "new content\nline 2\n"}),
+        );
+        assert!(out.contains("wrote"), "got: {out}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "new content\nline 2\n"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_write_file_nonexistent() {
+        let out = execute(
+            "write_file",
+            &serde_json::json!({"path": "/tmp/rustcode-nope-12345.txt", "content": "x"}),
+        );
+        assert!(out.contains("does not exist"), "got: {out}");
+        assert!(
+            out.contains("create_file"),
+            "cross-tool hint missing: {out}"
+        );
+    }
+
+    #[test]
+    fn test_create_file_missing_args() {
+        let out = execute("create_file", &serde_json::json!({}));
+        assert!(out.contains("missing 'path'"));
+        let out = execute("create_file", &serde_json::json!({"path": "/tmp/x"}));
+        assert!(out.contains("missing 'content'"));
+    }
+
+    #[test]
+    fn test_write_file_missing_args() {
+        let out = execute("write_file", &serde_json::json!({}));
+        assert!(out.contains("missing 'path'"));
+        let out = execute("write_file", &serde_json::json!({"path": "/tmp/x"}));
+        assert!(out.contains("missing 'content'"));
+    }
+
+    #[test]
+    fn test_needs_confirmation() {
+        assert!(!needs_confirmation("get_time"));
+        assert!(!needs_confirmation("list_directory"));
+        assert!(!needs_confirmation("read_file"));
+        assert!(needs_confirmation("create_file"));
+        assert!(needs_confirmation("write_file"));
+        assert!(!needs_confirmation("nonexistent"));
     }
 }

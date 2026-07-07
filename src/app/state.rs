@@ -5,6 +5,18 @@ pub enum AppStatus {
     Idle,
     Streaming,
     Queued,
+    /// The agent loop is paused waiting for the user to approve/deny a
+    /// destructive tool call (write_file, create_file, etc.).
+    AwaitingToolConfirmation,
+}
+
+/// A pending tool call that needs user approval before execution.
+#[derive(Debug, Clone)]
+pub struct ToolConfirmation {
+    pub tool_name: String,
+    pub path: String,
+    pub content_preview: String,
+    pub content_bytes: usize,
 }
 
 /// Token-count snapshot for the status bar.
@@ -81,6 +93,13 @@ pub struct AppState {
     pub command_picker_index: usize,
     pub command_picker_search: String,
 
+    // Tool confirmation gate: the agent loop parks here when a destructive
+    // tool needs user approval.
+    pub pending_tool_confirmation: Option<ToolConfirmation>,
+    /// Sender half lives in main.rs; the agent loop (network.rs) holds the
+    /// receiver via a separate Arc and `.recv()`s on it.
+    pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
+
     // Scroll state
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
@@ -145,6 +164,8 @@ impl AppState {
             show_command_picker: false,
             command_picker_index: 0,
             command_picker_search: String::new(),
+            pending_tool_confirmation: None,
+            tool_confirmation_response: None,
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             last_max_scroll: 0,

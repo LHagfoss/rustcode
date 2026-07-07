@@ -1529,4 +1529,152 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     if state.show_command_picker {
         render_command_picker_modal(f, state);
     }
+
+    // Draw Tool Confirmation Modal on top of everything when awaiting approval
+    if state.status == AppStatus::AwaitingToolConfirmation {
+        render_tool_confirmation_modal(f, state);
+    }
+}
+
+fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
+    let confirmation = match &state.pending_tool_confirmation {
+        Some(c) => c,
+        None => return,
+    };
+
+    let modal_area = centered_rect_fixed(60, 14, f.area());
+
+    f.render_widget(Clear, modal_area);
+
+    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL));
+    f.render_widget(modal_block, modal_area);
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Tool name
+            Constraint::Length(1), // Path
+            Constraint::Length(1), // Size
+            Constraint::Length(1), // Spacer
+            Constraint::Min(2),    // Preview
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    // Header
+    let action_label = match confirmation.tool_name.as_str() {
+        "create_file" => "Create file",
+        "write_file" => "Overwrite file",
+        _ => "Execute tool",
+    };
+    let header_line = Line::from(vec![Span::styled(
+        format!("⚠ {action_label}?"),
+        Style::default().fg(COLOR_TIP).add_modifier(Modifier::BOLD),
+    )]);
+    f.render_widget(
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[0],
+    );
+
+    // Tool name
+    let tool_line = Line::from(vec![
+        Span::styled("  tool  ", Style::default().fg(COLOR_MUTED)),
+        Span::styled(
+            &confirmation.tool_name,
+            Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(tool_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[2],
+    );
+
+    // Path
+    let path_display = if confirmation.path.len() > inner_area.width as usize - 10 {
+        let cut = inner_area.width as usize - 13;
+        format!("…{}", &confirmation.path[confirmation.path.len() - cut..])
+    } else {
+        confirmation.path.clone()
+    };
+    let path_line = Line::from(vec![
+        Span::styled("  path  ", Style::default().fg(COLOR_MUTED)),
+        Span::styled(path_display, Style::default().fg(COLOR_PRIMARY)),
+    ]);
+    f.render_widget(
+        Paragraph::new(path_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[3],
+    );
+
+    // Size
+    let size_line = Line::from(vec![
+        Span::styled("  size  ", Style::default().fg(COLOR_MUTED)),
+        Span::styled(
+            format!("{} bytes", confirmation.content_bytes),
+            Style::default().fg(COLOR_TEXT),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(size_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[4],
+    );
+
+    // Content preview
+    if !confirmation.content_preview.is_empty() {
+        let preview_lines: Vec<Line> = confirmation
+            .content_preview
+            .lines()
+            .take(modal_chunks[6].height as usize)
+            .map(|l| {
+                let display: String = l.chars().take(inner_area.width as usize - 4).collect();
+                Line::from(Span::styled(
+                    format!("  {display}"),
+                    Style::default()
+                        .fg(COLOR_MUTED)
+                        .add_modifier(Modifier::ITALIC),
+                ))
+            })
+            .collect();
+        f.render_widget(
+            Paragraph::new(preview_lines)
+                .style(Style::default().bg(COLOR_ELEMENT))
+                .wrap(Wrap { trim: false }),
+            modal_chunks[6],
+        );
+    }
+
+    // Footer: Y/N keybindings
+    let footer_line = Line::from(vec![
+        Span::styled(
+            "  y",
+            Style::default()
+                .fg(COLOR_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" approve  ", Style::default().fg(COLOR_MUTED)),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(COLOR_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" deny  ", Style::default().fg(COLOR_MUTED)),
+        Span::styled(
+            "esc",
+            Style::default()
+                .fg(COLOR_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" cancel", Style::default().fg(COLOR_MUTED)),
+    ]);
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[7],
+    );
 }
