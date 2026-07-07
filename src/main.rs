@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         EnterAlternateScreen,
         EnableMouseCapture,
         crossterm::event::EnableBracketedPaste,
+        crossterm::event::EnableFocusChange,
         SetCursorStyle::BlinkingBlock
     )?;
 
@@ -59,12 +60,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut needs_redraw = true;
     let mut last_draw = std::time::Instant::now();
+    let mut was_responding = false;
+    let mut terminal_focused = true;
 
     loop {
         // Redraw on input, continuously while a response is active (loader
         // animation), and at a slow heartbeat when idle so background
         // updates (e.g. token counts) still surface.
         let response_active = app_state.lock().await.status != AppStatus::Idle;
+
+        // Generation just finished while the terminal is in the background:
+        // fire a terminal notification (OSC 9, supported by Ghostty/iTerm2/
+        // kitty/WezTerm) plus a bell so Terminal.app bounces the Dock icon.
+        if was_responding && !response_active && !terminal_focused {
+            use crossterm::style::Print;
+            let _ = execute!(
+                terminal.backend_mut(),
+                Print("\x1b]9;rustcode · response finished\x07\x07")
+            );
+        }
+        was_responding = response_active;
         if needs_redraw
             || response_active
             || last_draw.elapsed() >= std::time::Duration::from_millis(250)
@@ -399,6 +414,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     s.reset_suggestion_cycle();
                 }
+                Event::FocusGained => {
+                    terminal_focused = true;
+                }
+                Event::FocusLost => {
+                    terminal_focused = false;
+                }
                 Event::Mouse(mouse) => match mouse.kind {
                     event::MouseEventKind::ScrollUp => {
                         app_state.lock().await.scroll_up(3);
@@ -423,6 +444,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         LeaveAlternateScreen,
         DisableMouseCapture,
         crossterm::event::DisableBracketedPaste,
+        crossterm::event::DisableFocusChange,
         SetCursorStyle::DefaultUserShape
     )?;
     terminal.show_cursor()?;

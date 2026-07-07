@@ -709,6 +709,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
             ]));
         }
+        // Breathing room below the live Build status line.
+        lines.push(Line::from(""));
     }
 
     // Calculate auto-scroll offset based on wrapped line heights.
