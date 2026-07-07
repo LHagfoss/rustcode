@@ -27,6 +27,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         SetCursorStyle::BlinkingBlock
     )?;
 
+    // Kitty keyboard protocol (where supported) so Shift+Enter is
+    // distinguishable from plain Enter for multiline input.
+    let keyboard_enhanced = matches!(
+        crossterm::terminal::supports_keyboard_enhancement(),
+        Ok(true)
+    );
+    if keyboard_enhanced {
+        execute!(
+            stdout,
+            event::PushKeyboardEnhancementFlags(
+                event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        )?;
+    }
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -35,7 +50,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app_state_struct.history = Vec::new();
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
-    let client = reqwest::Client::new();
+    // Connect timeout only: streamed responses can legitimately run long,
+    // but a dead server should fail fast instead of spinning forever.
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()?;
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
 
     loop {
@@ -153,11 +172,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         s.show_model_picker = true;
                                         s.show_command_picker = false;
                                     } else if item.name == "New session" {
+                                        current_cancel_token.cancel();
+                                        current_cancel_token =
+                                            tokio_util::sync::CancellationToken::new();
                                         s.history.clear();
+                                        s.pending_queue.clear();
                                         s.current_response.clear();
+                                        s.current_token_usage = None;
+                                        s.response_time = None;
+                                        s.status = AppStatus::Idle;
                                         s.input_buffer.clear();
                                         s.cursor_position = 0;
                                         s.show_command_picker = false;
+                                        crate::config::save_history(&s.history);
                                     } else {
                                         s.history.push(ChatMessage::new(
                                             "system",
@@ -313,19 +340,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Char(c) => {
                             let mut s = app_state.lock().await;
+                            let ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
+                            let alt = key.modifiers.contains(event::KeyModifiers::ALT);
                             // macOS Option+Left/Right → b/f with ALT modifier.
-                            if key.modifiers.contains(event::KeyModifiers::ALT) && c == 'b' {
+                            if alt && c == 'b' {
                                 s.move_cursor_word_left();
-                            } else if key.modifiers.contains(event::KeyModifiers::ALT) && c == 'f' {
+                            } else if alt && c == 'f' {
                                 s.move_cursor_word_right();
-                            } else if key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                && c == 'o'
-                            {
+                            } else if ctrl && c == 'o' {
                                 s.insert_char('\n');
                                 s.reset_suggestion_cycle();
-                            } else if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                && !key.modifiers.contains(event::KeyModifiers::ALT)
-                            {
+                            } else if ctrl && c == 'a' {
+                                s.move_cursor_to_start();
+                            } else if ctrl && c == 'e' {
+                                s.move_cursor_to_end();
+                            } else if ctrl && c == 'u' {
+                                s.kill_line_to_start();
+                                s.reset_suggestion_cycle();
+                            } else if ctrl && c == 'w' {
+                                s.delete_word_backspace();
+                                s.reset_suggestion_cycle();
+                            } else if !ctrl && !alt {
                                 s.insert_char(c);
                                 s.reset_suggestion_cycle();
                             }
@@ -351,6 +386,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     s.reset_suggestion_cycle();
                 }
+                Event::Mouse(mouse) => match mouse.kind {
+                    event::MouseEventKind::ScrollUp => {
+                        app_state.lock().await.scroll_up(3);
+                    }
+                    event::MouseEventKind::ScrollDown => {
+                        app_state.lock().await.scroll_down(3);
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -358,6 +402,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Restore terminal state on exit.
     disable_raw_mode()?;
+    if keyboard_enhanced {
+        execute!(terminal.backend_mut(), event::PopKeyboardEnhancementFlags)?;
+    }
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
@@ -439,13 +486,42 @@ async fn handle_enter(
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
             "/help" => {
-                s.history.push(ChatMessage::new(
-                    "system",
-                    "Available commands:\n  /help   - Show this help message\n  /clear  - Clear conversation history\n  /new    - Start a new conversation\n  /cancel - Cancel active streaming or queued prompt\n  /exit   - Quit the application\n  /quit   - Quit the application\n  /model <name> - Switch to profile name, or set model override\n  /provider <name> <url> <model> - Create/update profile\n  /provider <url> <model> - Update active profile\n  /ollama <url> <model> - Set 'ollama' profile URL and model\n  /ollama list [url] - Fetch and list available Ollama models",
-                ));
+                let mut help = String::from("Available commands:");
+                for cmd_info in crate::app::suggestion::COMMANDS {
+                    help.push_str(&format!("\n  {:<10} - {}", cmd_info.name, cmd_info.desc));
+                }
+                help.push_str("\n\nUsage details:");
+                help.push_str("\n  /model <name> - Switch to profile name, or set model override");
+                help.push_str("\n  /provider <name> <url> <model> - Create/update profile");
+                help.push_str("\n  /provider <url> <model> - Update active profile");
+                help.push_str("\n  /ollama <url> <model> - Set 'ollama' profile URL and model");
+                help.push_str("\n  /ollama list [url] - Fetch and list available Ollama models");
+                s.history.push(ChatMessage::new("system", help));
             }
             "/exit" | "/quit" => {
                 should_exit = true;
+            }
+            "/copy" => {
+                let last_reply = s
+                    .history
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "assistant")
+                    .map(|m| m.content.clone());
+                match last_reply {
+                    Some(content) => {
+                        let msg = if copy_to_clipboard(&content) {
+                            "Copied last assistant reply to clipboard."
+                        } else {
+                            "Failed to copy to clipboard."
+                        };
+                        s.history.push(ChatMessage::new("system", msg));
+                    }
+                    None => {
+                        s.history
+                            .push(ChatMessage::new("system", "No assistant reply to copy."));
+                    }
+                }
             }
             "/resume" | "/history" => {
                 let saved = crate::config::load_history();
@@ -736,7 +812,7 @@ fn read_text_from_clipboard() -> Option<String> {
 /// Helper to get length of filtered command autocomplete suggestions.
 fn get_filtered_cmds_len(input_buffer: &str) -> usize {
     if input_buffer.starts_with('/') && !input_buffer.contains(' ') {
-        crate::ui::AUTO_COMMANDS
+        crate::app::suggestion::COMMANDS
             .iter()
             .filter(|c| c.name.starts_with(input_buffer))
             .count()
@@ -748,10 +824,11 @@ fn get_filtered_cmds_len(input_buffer: &str) -> usize {
 /// Helper to apply selected autocomplete suggestion to input buffer.
 fn apply_autocomplete(s: &mut AppState) {
     if s.input_buffer.starts_with('/') && !s.input_buffer.contains(' ') {
-        let filtered_cmds: Vec<&crate::ui::CommandInfo> = crate::ui::AUTO_COMMANDS
-            .iter()
-            .filter(|c| c.name.starts_with(&s.input_buffer))
-            .collect();
+        let filtered_cmds: Vec<&crate::app::suggestion::CommandInfo> =
+            crate::app::suggestion::COMMANDS
+                .iter()
+                .filter(|c| c.name.starts_with(&s.input_buffer))
+                .collect();
 
         if let Some(idx) = s.active_suggestion_index {
             if idx < filtered_cmds.len() {
@@ -763,111 +840,46 @@ fn apply_autocomplete(s: &mut AppState) {
     }
 }
 
-#[allow(dead_code)]
-struct PickerItem {
-    group: String,
-    name: String,
-    desc: String,
-    is_profile: bool,
-}
-
-fn get_filtered_picker_items(s: &AppState) -> Vec<PickerItem> {
-    let mut items = vec![
-        PickerItem {
-            group: "Apple Foundation Models".to_string(),
-            name: "apple-fm".to_string(),
-            desc: "system".to_string(),
-            is_profile: true,
-        },
-        PickerItem {
-            group: "ollama".to_string(),
-            name: "hrbrmstr/ornith-35b-fixed:latest".to_string(),
-            desc: "ollama".to_string(),
-            is_profile: false,
-        },
-        PickerItem {
-            group: "ollama".to_string(),
-            name: "qwen3.6:35b-a3b-mtp-q8_0".to_string(),
-            desc: "ollama".to_string(),
-            is_profile: false,
-        },
-    ];
-
-    // Add custom profiles from config if they are not already in the list
-    for p in &s.config.models {
-        if p.name != "apple-fm" && p.name != "ollama" {
-            let group_name = if p.url.contains("11434") {
-                "ollama"
-            } else if p.url.contains("1976") {
-                "Apple Foundation Models"
-            } else {
-                "custom providers"
-            };
-            items.push(PickerItem {
-                group: group_name.to_string(),
-                name: p.name.clone(),
-                desc: p.model.clone(),
-                is_profile: true,
-            });
+/// Helper to write text to the macOS clipboard.
+fn copy_to_clipboard(text: &str) -> bool {
+    use std::io::Write;
+    let child = std::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        return false;
+    };
+    if let Some(stdin) = child.stdin.as_mut() {
+        if stdin.write_all(text.as_bytes()).is_err() {
+            return false;
         }
     }
-
-    let search = s.model_picker_search.to_lowercase();
-    items
-        .into_iter()
-        .filter(|item| {
-            item.name.to_lowercase().contains(&search)
-                || item.group.to_lowercase().contains(&search)
-        })
-        .collect()
+    child.wait().map(|s| s.success()).unwrap_or(false)
 }
 
 fn get_picker_items_count(s: &AppState) -> usize {
-    get_filtered_picker_items(s).len()
+    crate::ui::get_filtered_picker_items(s).len()
 }
 
+/// Apply the highlighted model picker row: switch to that profile and persist.
 fn select_picker_model(s: &mut AppState) {
-    let items = get_filtered_picker_items(s);
-    let selected_idx = s.model_picker_index.min(items.len().saturating_sub(1));
-    if selected_idx < items.len() {
-        let item = &items[selected_idx];
-        if item.is_profile {
-            if let Some(profile) = s.config.models.iter().find(|m| m.name == item.name) {
-                s.api_base_url = profile.url.clone();
-                s.model_name = profile.model.clone();
-                s.config.default = item.name.clone();
-                s.config.latest_model = Some(profile.model.clone());
-                s.config.latest_url = Some(profile.url.clone());
-                crate::config::save_entire_config(&s.config);
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!("Switched to model profile '{}'", item.name),
-                ));
-            }
-        } else {
-            if item.group == "ollama" {
-                s.config.default = "ollama".to_string();
-                if let Some(profile) = s.config.models.iter_mut().find(|m| m.name == "ollama") {
-                    profile.model = item.name.clone();
-                    s.api_base_url = profile.url.clone();
-                } else {
-                    let url = "http://100.90.28.23:11434/v1/chat/completions".to_string();
-                    s.api_base_url = url.clone();
-                    s.config.models.push(crate::config::ModelProfile {
-                        name: "ollama".to_string(),
-                        url,
-                        model: item.name.clone(),
-                    });
-                }
-            }
-            s.model_name = item.name.clone();
-            s.config.latest_model = Some(item.name.clone());
-            s.config.latest_url = Some(s.api_base_url.clone());
-            crate::config::save_entire_config(&s.config);
-            s.history.push(ChatMessage::new(
-                "system",
-                format!("Switched active model to '{}' (ollama)", item.name),
-            ));
-        }
+    let items = crate::ui::get_filtered_picker_items(s);
+    if items.is_empty() {
+        return;
+    }
+    let selected_idx = s.model_picker_index.min(items.len() - 1);
+    let item = &items[selected_idx];
+
+    if let Some(profile) = s.config.models.iter().find(|m| m.name == item.name) {
+        s.api_base_url = profile.url.clone();
+        s.model_name = profile.model.clone();
+        s.config.default = item.name.clone();
+        s.config.latest_model = Some(profile.model.clone());
+        s.config.latest_url = Some(profile.url.clone());
+        crate::config::save_entire_config(&s.config);
+        s.history.push(ChatMessage::new(
+            "system",
+            format!("Switched to model profile '{}'", item.name),
+        ));
     }
 }
