@@ -8,18 +8,29 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
+
+/// Pad `s` with trailing spaces up to `width` terminal columns (unicode-aware).
+fn pad_to_width(s: &str, width: usize) -> String {
+    let current = s.width();
+    if current < width {
+        format!("{}{}", s, " ".repeat(width - current))
+    } else {
+        s.to_string()
+    }
+}
 
 // Cozy Rain Theme Colors
-const COLOR_BG: Color = Color::Rgb(21, 23, 26);          // #15171A (smoky base background)
-const COLOR_PANEL: Color = Color::Rgb(26, 29, 32);       // #1A1D20 (translucent/charcoal panel cards)
-const COLOR_ELEMENT: Color = Color::Rgb(34, 38, 42);     // #22262A (element background / code block panel)
-const COLOR_TEXT: Color = Color::Rgb(240, 229, 222);      // #F0E5DE (soft cream main text)
-const COLOR_MUTED: Color = Color::Rgb(136, 146, 154);     // #88929A (muted gray text)
-const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93);    // #EC6E5D (vibrant coral active accent)
-const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101);   // #3C5865 (deep slate blue)
-const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);     // #7fd88f (green syntax/success)
-const COLOR_BORDER: Color = Color::Rgb(72, 85, 89);      // #485559 (border)
-const COLOR_TIP: Color = Color::Rgb(224, 169, 109);      // #E0A96D (warning/gold Tip dot)
+const COLOR_BG: Color = Color::Rgb(21, 23, 26); // #15171A (smoky base background)
+const COLOR_PANEL: Color = Color::Rgb(26, 29, 32); // #1A1D20 (translucent/charcoal panel cards)
+const COLOR_ELEMENT: Color = Color::Rgb(34, 38, 42); // #22262A (element background / code block panel)
+const COLOR_TEXT: Color = Color::Rgb(240, 229, 222); // #F0E5DE (soft cream main text)
+const COLOR_MUTED: Color = Color::Rgb(136, 146, 154); // #88929A (muted gray text)
+const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93); // #EC6E5D (vibrant coral active accent)
+const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101); // #3C5865 (deep slate blue)
+const COLOR_GREEN: Color = Color::Rgb(127, 216, 143); // #7fd88f (green syntax/success)
+const COLOR_BORDER: Color = Color::Rgb(72, 85, 89); // #485559 (border)
+const COLOR_TIP: Color = Color::Rgb(224, 169, 109); // #E0A96D (warning/gold Tip dot)
 
 // ASCII Welcome Logo
 const LOGO: &[&str] = &[
@@ -30,81 +41,7 @@ const LOGO: &[&str] = &[
 ];
 
 // Command Information for Autocomplete Menu
-pub struct CommandInfo {
-    pub name: &'static str,
-    pub desc: &'static str,
-}
-
-pub const AUTO_COMMANDS: &[CommandInfo] = &[
-    CommandInfo {
-        name: "/agents",
-        desc: "Switch agent",
-    },
-    CommandInfo {
-        name: "/cancel",
-        desc: "Cancel active stream or queued prompt",
-    },
-    CommandInfo {
-        name: "/clear",
-        desc: "Clear conversation history",
-    },
-    CommandInfo {
-        name: "/connect",
-        desc: "Connect provider",
-    },
-    CommandInfo {
-        name: "/diff",
-        desc: "Open diff viewer",
-    },
-    CommandInfo {
-        name: "/editor",
-        desc: "Open editor",
-    },
-    CommandInfo {
-        name: "/exit",
-        desc: "Exit the app",
-    },
-    CommandInfo {
-        name: "/help",
-        desc: "Show help info",
-    },
-    CommandInfo {
-        name: "/history",
-        desc: "Resume previous chat history",
-    },
-    CommandInfo {
-        name: "/init",
-        desc: "guided AGENTS.md setup",
-    },
-    CommandInfo {
-        name: "/mcps",
-        desc: "Toggle MCPs",
-    },
-    CommandInfo {
-        name: "/models",
-        desc: "Switch model profile",
-    },
-    CommandInfo {
-        name: "/move",
-        desc: "Move to another project dir",
-    },
-    CommandInfo {
-        name: "/new",
-        desc: "Start a new conversation",
-    },
-    CommandInfo {
-        name: "/ollama",
-        desc: "Configure or list Ollama models",
-    },
-    CommandInfo {
-        name: "/provider",
-        desc: "Add/update model provider profile",
-    },
-    CommandInfo {
-        name: "/resume",
-        desc: "Resume previous chat history",
-    },
-];
+pub use crate::app::suggestion::{COMMANDS, CommandInfo};
 
 /// Helper to dim colors if the model picker modal is active.
 fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool) -> Style {
@@ -182,23 +119,15 @@ fn render_assistant_message<'a>(
 
             if is_code_fence {
                 let content_width = (viewport_width as usize).saturating_sub(6);
-                let mut padded = raw_line.to_string();
-                if padded.len() < content_width {
-                    padded.push_str(&" ".repeat(content_width - padded.len()));
-                }
                 spans.push(Span::styled(
-                    padded,
+                    pad_to_width(raw_line, content_width),
                     get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
                 ));
                 in_code_block = !in_code_block;
             } else if in_code_block {
                 let content_width = (viewport_width as usize).saturating_sub(6);
-                let mut padded = raw_line.to_string();
-                if padded.len() < content_width {
-                    padded.push_str(&" ".repeat(content_width - padded.len()));
-                }
                 spans.push(Span::styled(
-                    padded,
+                    pad_to_width(raw_line, content_width),
                     get_themed_style(COLOR_GREEN, COLOR_ELEMENT, Modifier::empty(), show_picker),
                 ));
             } else {
@@ -210,7 +139,11 @@ fn render_assistant_message<'a>(
                 while let Some(c) = chars.next() {
                     if c == '`' {
                         if !current.is_empty() {
-                            let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
+                            let modifier = if in_bold {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            };
                             let style = if in_inline_code {
                                 get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                             } else {
@@ -223,7 +156,11 @@ fn render_assistant_message<'a>(
                     } else if c == '*' && chars.peek() == Some(&'*') {
                         chars.next();
                         if !current.is_empty() {
-                            let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
+                            let modifier = if in_bold {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            };
                             let style = if in_inline_code {
                                 get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                             } else {
@@ -239,7 +176,11 @@ fn render_assistant_message<'a>(
                 }
 
                 if !current.is_empty() {
-                    let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
+                    let modifier = if in_bold {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    };
                     let style = if in_inline_code {
                         get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                     } else {
@@ -318,7 +259,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-            
+
         let step = ((millis / 80) % 10) as usize;
         let pulse_center = if step < 5 { step } else { 9 - step };
 
@@ -337,48 +278,78 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             let dist = (i as isize - pulse_center as isize).abs() as usize;
             let level = if dist >= 5 { 0 } else { 5 - dist };
             let color = colors[level];
-            spans.push(Span::styled("■", get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker)));
+            spans.push(Span::styled(
+                "■",
+                get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+            ));
         }
 
         if !state.pending_queue.is_empty() {
-            spans.push(Span::styled(format!("  queued: {}", state.pending_queue.len()), get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker)));
+            spans.push(Span::styled(
+                format!("  queued: {}", state.pending_queue.len()),
+                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            ));
         }
 
-        spans.push(Span::styled("   ..... esc ", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)));
-        spans.push(Span::styled("interrupt", get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker)));
+        spans.push(Span::styled(
+            "   ..... esc ",
+            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        ));
+        spans.push(Span::styled(
+            "interrupt",
+            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+        ));
         spans
     } else {
         let static_color = Color::Rgb(40, 48, 54);
         let mut spans = Vec::new();
 
         for _ in 0..6 {
-            spans.push(Span::styled("■", get_themed_style(static_color, COLOR_BG, Modifier::empty(), show_picker)));
+            spans.push(Span::styled(
+                "■",
+                get_themed_style(static_color, COLOR_BG, Modifier::empty(), show_picker),
+            ));
         }
 
-        spans.push(Span::styled("   idle", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)));
+        spans.push(Span::styled(
+            "   idle",
+            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        ));
         spans
     };
 
     let right_spans = if state.history.is_empty() {
         vec![
-            Span::styled("tab", get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker)),
-            Span::styled(" agents   ", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)),
-            Span::styled("ctrl+p", get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker)),
-            Span::styled(" commands", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)),
+            Span::styled(
+                "tab",
+                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+            ),
+            Span::styled(
+                " agents   ",
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ),
+            Span::styled(
+                "ctrl+p",
+                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+            ),
+            Span::styled(
+                " commands",
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ),
         ]
     } else {
         let total_tokens = if let Some(usage) = &state.current_token_usage {
             usage.total_tokens
         } else {
-            let last_usage = state.history.iter()
+            let last_usage = state
+                .history
+                .iter()
                 .rev()
                 .find_map(|m| m.token_usage.as_ref());
             if let Some(u) = last_usage {
                 u.total_tokens
             } else {
-                let chars: usize = state.history.iter()
-                    .map(|m| m.content.len())
-                    .sum();
+                let chars: usize = state.history.iter().map(|m| m.content.len()).sum();
                 (chars / 4) as u32
             }
         };
@@ -390,11 +361,23 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         };
 
         vec![
-            Span::styled("context used: ", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)),
-            Span::styled(token_str, get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker)),
+            Span::styled(
+                "context used: ",
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ),
+            Span::styled(
+                token_str,
+                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            ),
             Span::styled("   ", Style::default()),
-            Span::styled("ctrl+p", get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker)),
-            Span::styled(" commands", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)),
+            Span::styled(
+                "ctrl+p",
+                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+            ),
+            Span::styled(
+                " commands",
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ),
         ]
     };
 
@@ -403,8 +386,16 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(footer_area);
 
-    f.render_widget(Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG)), footer_chunks[0]);
-    f.render_widget(Paragraph::new(Line::from(right_spans)).alignment(ratatui::layout::Alignment::Right).style(Style::default().bg(COLOR_BG)), footer_chunks[1]);
+    f.render_widget(
+        Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG)),
+        footer_chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(right_spans))
+            .alignment(ratatui::layout::Alignment::Right)
+            .style(Style::default().bg(COLOR_BG)),
+        footer_chunks[1],
+    );
 }
 
 /// Render the input area (block + cursor + optional completion suffix).
@@ -464,7 +455,11 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
-        let cursor_char_index = state.cursor_position;
+        // cursor_position is a byte offset; rendering iterates chars.
+        let cursor_char_index = state.input_buffer
+            [..state.cursor_position.min(state.input_buffer.len())]
+            .chars()
+            .count();
 
         // Split styled_chars into lines, respecting '\n' and wrapping at inner_width
         let mut current_line_spans = Vec::new();
@@ -610,6 +605,22 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ]));
             }
             lines.push(Line::from("")); // spacer
+        } else if msg.role == "tool" {
+            // Tool execution results from the agent loop.
+            for (i, raw_line) in msg.content.lines().enumerate() {
+                let prefix = if i == 0 { "⚙ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        prefix,
+                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
+                    ),
+                    Span::styled(
+                        raw_line,
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    ),
+                ]));
+            }
+            lines.push(Line::from("")); // spacer
         } else if msg.role == "user" {
             lines.push(Line::from("")); // spacer above box
             let content_width = (inner_area.width as usize).saturating_sub(4);
@@ -622,7 +633,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     for word in raw_line.split_whitespace() {
                         if current.is_empty() {
                             current.push_str(word);
-                        } else if current.len() + 1 + word.len() <= content_width {
+                        } else if current.width() + 1 + word.width() <= content_width {
                             current.push(' ');
                             current.push_str(word);
                         } else {
@@ -636,10 +647,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 }
             }
 
-            for mut line_str in wrapped_lines {
-                if line_str.len() < content_width {
-                    line_str.push_str(&" ".repeat(content_width - line_str.len()));
-                }
+            for line_str in wrapped_lines {
+                let line_str = pad_to_width(&line_str, content_width);
                 lines.push(Line::from(vec![
                     Span::styled(
                         "▌ ",
@@ -653,6 +662,21 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
             lines.push(Line::from("")); // spacer below box
         } else if msg.role == "assistant" {
+            // Raw tool-call turns render as one compact line, not as prose.
+            if let Some((name, args)) = crate::tools::parse_tool_call(&msg.content) {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "→ ",
+                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
+                    ),
+                    Span::styled(
+                        format!("calling {name} {args}"),
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                continue;
+            }
             render_assistant_message(
                 &msg.content,
                 msg.response_time_ms,
@@ -716,6 +740,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
             ]));
         }
+        // Breathing room below the live Build status line.
+        lines.push(Line::from(""));
     }
 
     // Calculate auto-scroll offset based on wrapped line heights.
@@ -723,7 +749,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     for line in &lines {
         match line.width() {
             0 => total_wrapped_lines += 1,
-            w => total_wrapped_lines += (w as u16).div_ceil(inner_area.width),
+            w => total_wrapped_lines += (w as u16).div_ceil(inner_area.width.max(1)),
         }
     }
     let max_scroll = total_wrapped_lines.saturating_sub(inner_area.height);
@@ -768,7 +794,7 @@ fn render_popup_menu(
             let total_len = left_text.len();
             let padding_len = (area.width as usize).saturating_sub(total_len);
             let full_text = format!("{}{}", left_text, " ".repeat(padding_len));
-            
+
             Line::from(Span::styled(
                 full_text,
                 Style::default()
@@ -781,20 +807,11 @@ fn render_popup_menu(
             let desc_text = cmd.desc.to_string();
             let total_len = left_text.len() + desc_text.len();
             let padding_len = (area.width as usize).saturating_sub(total_len);
-            
+
             Line::from(vec![
-                Span::styled(
-                    left_text,
-                    Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL),
-                ),
-                Span::styled(
-                    desc_text,
-                    Style::default().fg(COLOR_MUTED).bg(COLOR_PANEL),
-                ),
-                Span::styled(
-                    " ".repeat(padding_len),
-                    Style::default().bg(COLOR_PANEL),
-                ),
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL)),
+                Span::styled(desc_text, Style::default().fg(COLOR_MUTED).bg(COLOR_PANEL)),
+                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL)),
             ])
         };
         popup_lines.push(line);
@@ -961,9 +978,12 @@ fn render_welcome_screen(
         inner,
     );
 
-    // Position cursor inside prompt box
+    // Position cursor inside prompt box (cursor_position is a byte offset)
     if inner.width > 0 && !show_picker {
-        f.set_cursor_position((inner.x + state.cursor_position as u16, inner.y));
+        let cursor_col = state.input_buffer[..state.cursor_position.min(state.input_buffer.len())]
+            .chars()
+            .count() as u16;
+        f.set_cursor_position((inner.x + cursor_col, inner.y));
     }
 
     // 3. Hint Row right below prompt box
@@ -1066,69 +1086,48 @@ fn centered_rect_fixed(width: u16, height: u16, r: ratatui::layout::Rect) -> rat
     let y = r.y + r.height.saturating_sub(height) / 2;
     ratatui::layout::Rect::new(x, y, width.min(r.width), height.min(r.height))
 }
-#[allow(dead_code)]
+/// One row in the model picker: a model profile from the config.
 #[derive(Clone)]
-struct PickerItem {
-    group: String,
-    name: String,
-    desc: String,
-    is_profile: bool,
+pub struct PickerItem {
+    pub group: String,
+    pub name: String,
+    pub desc: String,
 }
 
-fn get_picker_items(state: &AppState) -> Vec<PickerItem> {
-    let mut items = vec![
-        PickerItem {
-            group: "Apple Foundation Models".to_string(),
-            name: "apple-fm".to_string(),
-            desc: "system".to_string(),
-            is_profile: true,
-        },
-        PickerItem {
-            group: "ollama".to_string(),
-            name: "hrbrmstr/ornith-35b-fixed:latest".to_string(),
-            desc: "ollama".to_string(),
-            is_profile: false,
-        },
-        PickerItem {
-            group: "ollama".to_string(),
-            name: "qwen3.6:35b-a3b-mtp-q8_0".to_string(),
-            desc: "ollama".to_string(),
-            is_profile: false,
-        },
-    ];
-
-    // Add custom profiles from config if they are not already in the list
-    for p in &state.config.models {
-        if p.name != "apple-fm" && p.name != "ollama" {
-            let group_name = if p.url.contains("11434") {
-                "ollama"
-            } else if p.url.contains("1976") {
-                "Apple Foundation Models"
-            } else {
-                "custom providers"
-            };
-            items.push(PickerItem {
-                group: group_name.to_string(),
-                name: p.name.clone(),
-                desc: p.model.clone(),
-                is_profile: true,
-            });
-        }
+fn picker_group_for_url(url: &str) -> &'static str {
+    if url.contains(":11434") {
+        "ollama"
+    } else if url.contains(":1976") {
+        "Apple Foundation Models"
+    } else {
+        "custom providers"
     }
-    items
+}
+
+/// Model picker rows for the current config profiles, filtered by the
+/// active search string. Shared by rendering (ui) and selection (main).
+pub fn get_filtered_picker_items(state: &AppState) -> Vec<PickerItem> {
+    let search = state.model_picker_search.to_lowercase();
+    state
+        .config
+        .models
+        .iter()
+        .map(|p| PickerItem {
+            group: picker_group_for_url(&p.url).to_string(),
+            name: p.name.clone(),
+            desc: p.model.clone(),
+        })
+        .filter(|item| {
+            item.name.to_lowercase().contains(&search)
+                || item.group.to_lowercase().contains(&search)
+                || item.desc.to_lowercase().contains(&search)
+        })
+        .collect()
 }
 
 /// Render the model picker modal overlay.
 fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
-    let all_items = get_picker_items(state);
-    let search = state.model_picker_search.to_lowercase();
-    let filtered_items: Vec<PickerItem> = all_items
-        .into_iter()
-        .filter(|item| {
-            item.name.to_lowercase().contains(&search)
-                || item.group.to_lowercase().contains(&search)
-        })
-        .collect();
+    let filtered_items = get_filtered_picker_items(state);
 
     let selected_idx = state
         .model_picker_index
@@ -1261,10 +1260,12 @@ fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
 
     // 4. Modal Footer
     let footer_line = Line::from(vec![
-        Span::styled("Connect provider ", Style::default().fg(COLOR_TEXT)),
-        Span::styled("ctrl+a   ", Style::default().fg(COLOR_MUTED)),
-        Span::styled("Favorite ", Style::default().fg(COLOR_TEXT)),
-        Span::styled("ctrl+f", Style::default().fg(COLOR_MUTED)),
+        Span::styled("select ", Style::default().fg(COLOR_TEXT)),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED)),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT)),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED)),
+        Span::styled("search ", Style::default().fg(COLOR_TEXT)),
+        Span::styled("type", Style::default().fg(COLOR_MUTED)),
     ]);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
@@ -1279,173 +1280,41 @@ pub struct PaletteItem {
     pub shortcut: &'static str,
 }
 
+/// Every palette item maps to a real, implemented action (the shortcut
+/// column shows the equivalent slash command).
 pub const PALETTE_ITEMS: &[PaletteItem] = &[
-    // Suggested Group
-    PaletteItem {
-        group: "Suggested",
-        name: "Switch session",
-        shortcut: "ctrl+x l",
-    },
-    PaletteItem {
-        group: "Suggested",
-        name: "Switch model",
-        shortcut: "ctrl+x m",
-    },
-    // System Group
-    PaletteItem {
-        group: "System",
-        name: "Hide tips",
-        shortcut: "ctrl+x h",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Plugins",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Install plugin",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "View status",
-        shortcut: "ctrl+x s",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Switch theme",
-        shortcut: "ctrl+x t",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Switch to light mode",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Lock theme mode",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Help",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Open docs",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Exit the app",
-        shortcut: "ctrl+c, ctrl+d, ctrl+x q",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Toggle debug panel",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Toggle console",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Write heap snapshot",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable terminal title",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable animations",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable file context",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable diff wrapping",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable paste summary",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "System",
-        name: "Disable session directory filtering",
-        shortcut: "",
-    },
     // Session Group
     PaletteItem {
         group: "Session",
-        name: "Open editor",
-        shortcut: "ctrl+x e",
-    },
-    PaletteItem {
-        group: "Session",
-        name: "Move session",
-        shortcut: "Move to another project dir",
-    },
-    PaletteItem {
-        group: "Session",
-        name: "Switch session",
-        shortcut: "ctrl+x l",
-    },
-    PaletteItem {
-        group: "Session",
         name: "New session",
-        shortcut: "ctrl+x n",
+        shortcut: "/new",
     },
-    // Prompt Group
     PaletteItem {
-        group: "Prompt",
-        name: "Skills",
-        shortcut: "",
+        group: "Session",
+        name: "Resume session",
+        shortcut: "/resume",
     },
-    // VCS Group
     PaletteItem {
-        group: "VCS",
-        name: "Open diff viewer",
-        shortcut: "",
+        group: "Session",
+        name: "Copy last reply",
+        shortcut: "/copy",
     },
     // Agent Group
     PaletteItem {
         group: "Agent",
         name: "Switch model",
-        shortcut: "ctrl+x m",
+        shortcut: "/model",
+    },
+    // System Group
+    PaletteItem {
+        group: "System",
+        name: "Help",
+        shortcut: "/help",
     },
     PaletteItem {
-        group: "Agent",
-        name: "Switch agent",
-        shortcut: "ctrl+x a",
-    },
-    PaletteItem {
-        group: "Agent",
-        name: "Toggle MCPs",
-        shortcut: "",
-    },
-    PaletteItem {
-        group: "Agent",
-        name: "Variant cycle",
-        shortcut: "ctrl+t",
-    },
-    // Provider Group
-    PaletteItem {
-        group: "Provider",
-        name: "Connect provider",
-        shortcut: "",
+        group: "System",
+        name: "Exit the app",
+        shortcut: "ctrl+c",
     },
 ];
 
@@ -1463,8 +1332,8 @@ fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
         .command_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    // Fixed modal box in center of terminal: width 65, height 24
-    let modal_area = centered_rect_fixed(65, 24, f.area());
+    // Fixed modal box in center of terminal
+    let modal_area = centered_rect_fixed(65, 20, f.area());
 
     // Clear the background to prevent text bleed-through
     f.render_widget(Clear, modal_area);
@@ -1599,7 +1468,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     // Compute active autocomplete suggestions
     let filtered_cmds: Vec<&CommandInfo> =
         if state.input_buffer.starts_with('/') && !state.input_buffer.contains(' ') {
-            AUTO_COMMANDS
+            COMMANDS
                 .iter()
                 .filter(|c| c.name.starts_with(&state.input_buffer))
                 .collect()
