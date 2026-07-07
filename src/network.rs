@@ -335,11 +335,16 @@ pub async fn process_queue_orchestrator(
 
                     let result = if needs_confirm {
                         dbg_log!("Tool '{}' requires confirmation", name);
-                        let path = args
-                            .get("path")
-                            .and_then(|p| p.as_str())
-                            .unwrap_or("?")
-                            .to_string();
+                        let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+                            p.to_string()
+                        } else if let (Some(src), Some(dest)) = (
+                            args.get("src").and_then(|s| s.as_str()),
+                            args.get("dest").and_then(|d| d.as_str()),
+                        ) {
+                            format!("{src} -> {dest}")
+                        } else {
+                            "?".to_string()
+                        };
                         let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
                         let preview: String =
                             content.lines().take(6).collect::<Vec<_>>().join("\n");
