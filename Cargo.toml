@@ -18,3 +18,4 @@ serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
 toml = "0.8.19"
+unicode-width = "0.2.2"

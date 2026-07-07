@@ -1,18 +1,80 @@
-/// Command-suggestion cycling logic for the input buffer.
-/// When the user types `/`, Tab cycles through matching commands.
+//! Slash-command definitions and suggestion cycling for the input buffer.
+//! When the user types `/`, Tab cycles through matching commands.
 
-#[allow(clippy::empty_line_after_doc_comments)]
-pub const COMMANDS: &[&str] = &[
-    "/help",
-    "/clear",
-    "/new",
-    "/cancel",
-    "/exit",
-    "/quit",
-    "/model",
-    "/provider",
-    "/ollama",
+/// A slash command: name plus short description for the autocomplete menu.
+pub struct CommandInfo {
+    pub name: &'static str,
+    pub desc: &'static str,
+}
+
+/// Single source of truth for every implemented slash command.
+/// Powers Tab-cycling, the autocomplete popup, and /help output.
+pub const COMMANDS: &[CommandInfo] = &[
+    CommandInfo {
+        name: "/cancel",
+        desc: "Cancel active stream or queued prompt",
+    },
+    CommandInfo {
+        name: "/clear",
+        desc: "Clear conversation history",
+    },
+    CommandInfo {
+        name: "/copy",
+        desc: "Copy last assistant reply to clipboard",
+    },
+    CommandInfo {
+        name: "/exit",
+        desc: "Exit the app",
+    },
+    CommandInfo {
+        name: "/help",
+        desc: "Show help info",
+    },
+    CommandInfo {
+        name: "/history",
+        desc: "Resume previous chat history",
+    },
+    CommandInfo {
+        name: "/model",
+        desc: "Open model picker, switch profile, or override model",
+    },
+    CommandInfo {
+        name: "/new",
+        desc: "Start a new conversation",
+    },
+    CommandInfo {
+        name: "/ollama",
+        desc: "Configure or list Ollama models",
+    },
+    CommandInfo {
+        name: "/provider",
+        desc: "Add/update model provider profile",
+    },
+    CommandInfo {
+        name: "/quit",
+        desc: "Exit the app",
+    },
+    CommandInfo {
+        name: "/resume",
+        desc: "Resume previous chat history",
+    },
+    CommandInfo {
+        name: "/tools",
+        desc: "List available tools",
+    },
+    CommandInfo {
+        name: "/usage",
+        desc: "Show token usage and context stats",
+    },
 ];
+
+fn matching_command_names(prefix: &str) -> Vec<&'static str> {
+    COMMANDS
+        .iter()
+        .map(|c| c.name)
+        .filter(|name| name.starts_with(prefix))
+        .collect()
+}
 
 #[derive(Debug, Default)]
 pub struct SuggestionCycle {
@@ -41,11 +103,7 @@ impl SuggestionCycle {
             p
         };
 
-        let matches: Vec<&str> = COMMANDS
-            .iter()
-            .copied()
-            .filter(|c| c.starts_with(&prefix))
-            .collect();
+        let matches = matching_command_names(&prefix);
         if matches.is_empty() {
             return false;
         }
@@ -66,16 +124,12 @@ impl SuggestionCycle {
         }
 
         let prefix = self.original_prefix.as_deref().unwrap_or(input_buffer);
-        let matches: Vec<&str> = COMMANDS
-            .iter()
-            .copied()
-            .filter(|c| c.starts_with(prefix))
-            .collect();
-        if matches.is_empty() || self.suggestion_index.is_none() {
+        let matches = matching_command_names(prefix);
+        if matches.is_empty() {
             return None;
         }
 
-        let idx = self.suggestion_index.unwrap();
+        let idx = self.suggestion_index?;
         Some(
             matches[idx]
                 .strip_prefix(input_buffer)

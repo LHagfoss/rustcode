@@ -90,13 +90,13 @@ pub struct AppState {
 fn get_cwd_and_branch() -> String {
     let absolute_path = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "/Users/lagos/code/fm_harness".to_string());
+        .unwrap_or_default();
 
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/lagos".to_string());
-    let path_with_tildes = if absolute_path.starts_with(&home) {
-        absolute_path.replacen(&home, "~", 1)
-    } else {
-        absolute_path
+    let path_with_tildes = match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && absolute_path.starts_with(&home) => {
+            absolute_path.replacen(&home, "~", 1)
+        }
+        _ => absolute_path,
     };
 
     let branch = std::process::Command::new("git")
@@ -152,30 +152,73 @@ impl AppState {
     }
 
     // ── Input editing ────────────────────────────────────────────────
+    // `cursor_position` is a byte offset into `input_buffer`, always kept
+    // on a UTF-8 char boundary.
+
+    fn clamp_cursor(&mut self) {
+        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
+        while !self.input_buffer.is_char_boundary(self.cursor_position) {
+            self.cursor_position -= 1;
+        }
+    }
+
+    /// Byte length of the char immediately before the cursor, if any.
+    fn char_len_before_cursor(&self) -> Option<usize> {
+        self.input_buffer[..self.cursor_position]
+            .chars()
+            .next_back()
+            .map(|c| c.len_utf8())
+    }
 
     pub fn insert_char(&mut self, c: char) {
         self.history_index = None;
-        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
+        self.clamp_cursor();
         self.input_buffer.insert(self.cursor_position, c);
-        self.cursor_position += 1;
+        self.cursor_position += c.len_utf8();
         self.reset_suggestion_index();
     }
 
     pub fn delete_char_backspace(&mut self) {
         self.history_index = None;
-        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
-        if self.cursor_position > 0 {
-            self.input_buffer.remove(self.cursor_position - 1);
-            self.cursor_position -= 1;
+        self.clamp_cursor();
+        if let Some(len) = self.char_len_before_cursor() {
+            self.cursor_position -= len;
+            self.input_buffer.remove(self.cursor_position);
         }
         self.reset_suggestion_index();
     }
 
     pub fn delete_char_delete(&mut self) {
         self.history_index = None;
-        self.cursor_position = self.cursor_position.min(self.input_buffer.len());
+        self.clamp_cursor();
         if self.cursor_position < self.input_buffer.len() {
             self.input_buffer.remove(self.cursor_position);
+        }
+        self.reset_suggestion_index();
+    }
+
+    /// Delete the word before the cursor (readline Ctrl+W).
+    pub fn delete_word_backspace(&mut self) {
+        self.history_index = None;
+        self.clamp_cursor();
+        let end = self.cursor_position;
+        self.move_cursor_word_left();
+        let start = self.cursor_position;
+        if start < end {
+            self.input_buffer.replace_range(start..end, "");
+        }
+        self.reset_suggestion_index();
+    }
+
+    /// Delete from line start to the cursor (readline Ctrl+U).
+    pub fn kill_line_to_start(&mut self) {
+        self.history_index = None;
+        self.clamp_cursor();
+        let end = self.cursor_position;
+        let start = self.input_buffer[..end].rfind('\n').map_or(0, |i| i + 1);
+        if start < end {
+            self.input_buffer.replace_range(start..end, "");
+            self.cursor_position = start;
         }
         self.reset_suggestion_index();
     }
@@ -191,48 +234,55 @@ impl AppState {
     }
 
     pub fn move_cursor_left(&mut self) {
-        if self.cursor_position > 0 {
-            self.cursor_position -= 1;
+        self.clamp_cursor();
+        if let Some(len) = self.char_len_before_cursor() {
+            self.cursor_position -= len;
         }
     }
 
     pub fn move_cursor_right(&mut self) {
-        if self.cursor_position < self.input_buffer.len() {
-            self.cursor_position += 1;
+        self.clamp_cursor();
+        if let Some(c) = self.input_buffer[self.cursor_position..].chars().next() {
+            self.cursor_position += c.len_utf8();
         }
     }
 
     pub fn move_cursor_word_left(&mut self) {
-        let chars: Vec<char> = self.input_buffer.chars().collect();
-        let mut pos = self.cursor_position.min(chars.len());
-        if pos == 0 {
-            return;
-        }
+        self.clamp_cursor();
+        let mut pos = self.cursor_position;
         // Skip trailing whitespace.
-        while pos > 0 && chars[pos - 1].is_whitespace() {
-            pos -= 1;
+        while let Some(c) = self.input_buffer[..pos].chars().next_back() {
+            if !c.is_whitespace() {
+                break;
+            }
+            pos -= c.len_utf8();
         }
         // Skip the current word leftwards.
-        while pos > 0 && !chars[pos - 1].is_whitespace() {
-            pos -= 1;
+        while let Some(c) = self.input_buffer[..pos].chars().next_back() {
+            if c.is_whitespace() {
+                break;
+            }
+            pos -= c.len_utf8();
         }
         self.cursor_position = pos;
     }
 
     pub fn move_cursor_word_right(&mut self) {
-        let chars: Vec<char> = self.input_buffer.chars().collect();
-        let len = chars.len();
-        let mut pos = self.cursor_position.min(len);
-        if pos == len {
-            return;
-        }
+        self.clamp_cursor();
+        let mut pos = self.cursor_position;
         // Skip current word.
-        while pos < len && !chars[pos].is_whitespace() {
-            pos += 1;
+        while let Some(c) = self.input_buffer[pos..].chars().next() {
+            if c.is_whitespace() {
+                break;
+            }
+            pos += c.len_utf8();
         }
         // Skip whitespace.
-        while pos < len && chars[pos].is_whitespace() {
-            pos += 1;
+        while let Some(c) = self.input_buffer[pos..].chars().next() {
+            if !c.is_whitespace() {
+                break;
+            }
+            pos += c.len_utf8();
         }
         self.cursor_position = pos;
     }
@@ -261,7 +311,7 @@ impl AppState {
                 .unwrap_or(&self.input_buffer);
             let matches: Vec<&str> = crate::app::suggestion::COMMANDS
                 .iter()
-                .copied()
+                .map(|c| c.name)
                 .filter(|c| c.starts_with(prefix))
                 .collect();
             if let Some(idx) = self.suggestion_cycle.suggestion_index {
