@@ -1,11 +1,8 @@
-//! Configuration logic for the rustcode TUI client.
-
 use crate::app::ChatMessage;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Apple's on-device foundation model context-window limit (tokens).
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 
 const CONFIG_FILE: &str = "config.toml";
@@ -51,7 +48,6 @@ impl Default for AppConfig {
     }
 }
 
-/// Resolve the config directory, migrating from the legacy `fmr` location if present.
 pub fn get_config_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let config_root = PathBuf::from(home).join(".config");
@@ -60,7 +56,6 @@ pub fn get_config_dir() -> Option<PathBuf> {
     if !dir.exists() {
         let legacy = config_root.join("fmr");
         if legacy.exists() && fs::rename(&legacy, &dir).is_ok() {
-            // Legacy history file carries the old binary name.
             let old_history = dir.join("fmr_history.json");
             if old_history.exists() {
                 let _ = fs::rename(&old_history, dir.join(HISTORY_FILE));
@@ -175,8 +170,6 @@ fn save_history_to(dir: &Path, history: &[ChatMessage]) {
 mod tests {
     use super::*;
 
-    /// Unique temp dir per test so tests never touch the real config
-    /// and can run in parallel.
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("rustcode-tests").join(format!(
             "{}-{}",

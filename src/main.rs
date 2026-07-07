@@ -29,8 +29,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         SetCursorStyle::BlinkingBlock
     )?;
 
-    // Kitty keyboard protocol (where supported) so Shift+Enter is
-    // distinguishable from plain Enter for multiline input.
     let keyboard_enhanced = matches!(
         crossterm::terminal::supports_keyboard_enhancement(),
         Ok(true)
@@ -47,13 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Initialize state with an empty history at startup so welcome splash is shown
     let mut app_state_struct = AppState::new();
     app_state_struct.history = Vec::new();
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
-    // Connect timeout only: streamed responses can legitimately run long,
-    // but a dead server should fail fast instead of spinning forever.
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -65,14 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal_focused = true;
 
     loop {
-        // Redraw on input, continuously while a response is active (loader
-        // animation), and at a slow heartbeat when idle so background
-        // updates (e.g. token counts) still surface.
         let response_active = app_state.lock().await.status != AppStatus::Idle;
 
-        // Generation just finished while the terminal is in the background:
-        // fire a terminal notification (OSC 9, supported by Ghostty/iTerm2/
-        // kitty/WezTerm) plus a bell so Terminal.app bounces the Dock icon.
         if was_responding && !response_active && !terminal_focused {
             use crossterm::style::Print;
             let _ = execute!(
@@ -100,14 +89,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if key.kind == event::KeyEventKind::Release {
                         continue;
                     }
-                    // Ctrl+C → hard exit.
+
                     if key.modifiers.contains(event::KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
                     {
                         break;
                     }
 
-                    // ── Tool confirmation modal (Y / N / Esc) ──────────
                     {
                         let s = app_state.lock().await;
                         if s.status == AppStatus::AwaitingToolConfirmation {
@@ -127,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     s.pending_tool_confirmation = None;
                                 }
-                                _ => {} // ignore other keys while modal is up
+                                _ => {}
                             }
                             continue;
                         }
@@ -397,7 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             let ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                             let alt = key.modifiers.contains(event::KeyModifiers::ALT);
-                            // macOS Option+Left/Right → b/f with ALT modifier.
+
                             if alt && c == 'b' {
                                 s.move_cursor_word_left();
                             } else if alt && c == 'f' {
@@ -461,7 +449,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Restore terminal state on exit.
     disable_raw_mode()?;
     if keyboard_enhanced {
         execute!(terminal.backend_mut(), event::PopKeyboardEnhancementFlags)?;
@@ -479,7 +466,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Escape: cancel active stream / dequeue next queued prompt, and clear input field.
 async fn handle_escape(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &mut tokio_util::sync::CancellationToken,
@@ -500,7 +486,6 @@ async fn handle_escape(
     }
 }
 
-/// Enter: dispatch slash-commands or queue the user message for streaming.
 async fn handle_enter(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
@@ -620,7 +605,6 @@ async fn handle_enter(
                             format!("Switched to model profile '{}'", name),
                         ));
                     } else {
-                        // Direct override of model name for active profile
                         s.model_name = name.clone();
                         let default_name = s.config.default.clone();
                         if let Some(profile) =
@@ -645,7 +629,6 @@ async fn handle_enter(
                     s.api_base_url = url.clone();
                     s.model_name = model.clone();
 
-                    // Update or insert profile
                     if let Some(profile) = s.config.models.iter_mut().find(|m| m.name == name) {
                         profile.url = url;
                         profile.model = model;
@@ -783,7 +766,6 @@ async fn handle_enter(
                     s.api_base_url = url.clone();
                     s.model_name = model.clone();
 
-                    // Update or insert "ollama" profile
                     if let Some(profile) = s.config.models.iter_mut().find(|m| m.name == "ollama") {
                         profile.url = url;
                         profile.model = model;
@@ -817,7 +799,6 @@ async fn handle_enter(
         return should_exit;
     }
 
-    // Append to queue and launch streaming if idle.
     s.pending_queue.push(raw_input);
     s.input_buffer.clear();
     s.cursor_position = 0;
@@ -836,7 +817,6 @@ async fn handle_enter(
     false
 }
 
-/// Helper to save clipboard image on macOS and return its markdown link.
 fn paste_image_from_clipboard() -> Option<String> {
     let attachments_dir = crate::config::get_config_dir()?.join("attachments");
     let _ = std::fs::create_dir_all(&attachments_dir);
@@ -862,7 +842,6 @@ fn paste_image_from_clipboard() -> Option<String> {
     }
 }
 
-/// Helper to read clipboard text on macOS.
 fn read_text_from_clipboard() -> Option<String> {
     let output = std::process::Command::new("pbpaste").output().ok()?;
     if output.status.success() {
@@ -874,7 +853,6 @@ fn read_text_from_clipboard() -> Option<String> {
     None
 }
 
-/// Helper to get length of filtered command autocomplete suggestions.
 fn get_filtered_cmds_len(input_buffer: &str) -> usize {
     if input_buffer.starts_with('/') && !input_buffer.contains(' ') {
         crate::app::suggestion::COMMANDS
@@ -886,7 +864,6 @@ fn get_filtered_cmds_len(input_buffer: &str) -> usize {
     }
 }
 
-/// Helper to apply selected autocomplete suggestion to input buffer.
 fn apply_autocomplete(s: &mut AppState) {
     if s.input_buffer.starts_with('/') && !s.input_buffer.contains(' ') {
         let filtered_cmds: Vec<&crate::app::suggestion::CommandInfo> =
@@ -905,8 +882,6 @@ fn apply_autocomplete(s: &mut AppState) {
     }
 }
 
-/// Reset all conversation state; used by /new, /clear, and the palette.
-/// Callers cancel the stream token themselves (it lives in the main loop).
 fn start_new_session(s: &mut AppState) {
     s.history.clear();
     s.pending_queue.clear();
@@ -919,7 +894,6 @@ fn start_new_session(s: &mut AppState) {
     crate::config::save_history(&s.history);
 }
 
-/// Load saved chat history from disk into the current session.
 fn resume_history(s: &mut AppState) {
     let saved = crate::config::load_history();
     if saved.is_empty() {
@@ -934,7 +908,6 @@ fn resume_history(s: &mut AppState) {
     }
 }
 
-/// Copy the most recent assistant reply to the clipboard.
 fn copy_last_reply(s: &mut AppState) {
     let last_reply = s
         .history
@@ -969,7 +942,6 @@ fn build_help_text() -> String {
     help
 }
 
-/// Helper to write text to the macOS clipboard.
 fn copy_to_clipboard(text: &str) -> bool {
     use std::io::Write;
     let child = std::process::Command::new("pbcopy")
@@ -990,7 +962,6 @@ fn get_picker_items_count(s: &AppState) -> usize {
     crate::ui::get_filtered_picker_items(s).len()
 }
 
-/// Apply the highlighted model picker row: switch to that profile and persist.
 fn select_picker_model(s: &mut AppState) {
     let items = crate::ui::get_filtered_picker_items(s);
     if items.is_empty() {

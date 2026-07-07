@@ -1,20 +1,9 @@
-//! Tool system: registry, system-prompt context, call parsing, execution.
-//!
-//! Tool calling is prompt-based (the model is instructed to emit a
-//! `<tool_call>{...}</tool_call>` block) rather than using the OpenAI
-//! `tools` API parameter, so it works with any backend — including
-//! Apple FM's `fm serve`, which has no native tool support.
-//!
-//! To add a tool: write a handler `fn(&serde_json::Value) -> Result<String, String>`
-//! and append one `Tool` entry to `TOOLS`. Everything else (prompt context,
-//! parsing, execution, the agent loop) picks it up automatically.
-
 use serde_json::Value;
 
 pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
-    /// Human-readable arguments spec shown to the model, e.g. `{"path": "file to read"}`.
+
     pub arguments: &'static str,
     pub handler: fn(&Value) -> Result<String, String>,
     /// If true, the agent loop will pause and show a Y/N confirmation modal
@@ -71,8 +60,6 @@ pub const TOOLS: &[Tool] = &[
 /// can't loop forever.
 pub const MAX_TOOL_ROUNDS: usize = 4;
 
-// ── Handlers ─────────────────────────────────────────────────────────
-
 fn get_time(_args: &Value) -> Result<String, String> {
     Ok(chrono::Local::now()
         .format("%A %Y-%m-%d %H:%M:%S")
@@ -81,7 +68,7 @@ fn get_time(_args: &Value) -> Result<String, String> {
 
 fn list_directory(args: &Value) -> Result<String, String> {
     let path = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-    // Redirect a common small-model mistake instead of dead-ending it.
+
     if std::path::Path::new(path).is_file() {
         return Err(format!(
             "'{path}' is a file, not a directory - use the read_file tool instead"
@@ -106,8 +93,6 @@ fn list_directory(args: &Value) -> Result<String, String> {
     }
 }
 
-// Context budget guards for read_file: apple-fm has a 2048-token window,
-// so tool output must stay small enough to leave room for the answer.
 const MAX_READ_LINES: usize = 40;
 const MAX_SEARCH_HITS: usize = 8;
 const SEARCH_CONTEXT_LINES: usize = 2;
@@ -132,8 +117,6 @@ fn read_file(args: &Value) -> Result<String, String> {
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
 
-    // Search mode: only matching lines, numbered so the model can page
-    // to the right spot with start_line afterwards.
     if let Some(query) = args.get("search").and_then(|s| s.as_str()) {
         let needle = query.to_lowercase();
         let hit_indices: Vec<usize> = lines
@@ -154,9 +137,8 @@ fn read_file(args: &Value) -> Result<String, String> {
             out.push_str(&format!(", showing first {shown}"));
         }
         out.push('\n');
-        // Each hit gets a couple of trailing context lines so section
-        // headers ([dependencies], fn signatures) carry their body.
-        let mut printed_up_to = 0usize; // 1-based line number already printed
+
+        let mut printed_up_to = 0usize;
         for &idx in &hit_indices[..shown] {
             let end = (idx + SEARCH_CONTEXT_LINES).min(total - 1);
             for i in idx..=end {
@@ -169,7 +151,6 @@ fn read_file(args: &Value) -> Result<String, String> {
         return Ok(out.trim_end().to_string());
     }
 
-    // Chunked read mode.
     let start = args
         .get("start_line")
         .and_then(|v| v.as_u64())
@@ -208,7 +189,7 @@ fn create_file(args: &Value) -> Result<String, String> {
             "'{path}' already exists — use write_file to overwrite it"
         ));
     }
-    // Create parent directories if needed.
+
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
@@ -248,9 +229,6 @@ fn write_file(args: &Value) -> Result<String, String> {
     ))
 }
 
-// ── Prompt context ───────────────────────────────────────────────────
-
-/// System prompt telling the model which tools exist and how to call them.
 pub fn tool_system_prompt() -> String {
     let mut p = String::from(
         "You have access to tools. To use one, reply with ONLY a tool call in \
@@ -274,9 +252,6 @@ pub fn tool_system_prompt() -> String {
     p
 }
 
-// ── Parsing and execution ────────────────────────────────────────────
-
-/// Extract a tool call from a model reply, if present.
 pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
     let start = text.find("<tool_call>")? + "<tool_call>".len();
     let end = text[start..].find("</tool_call>")? + start;
@@ -289,8 +264,6 @@ pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
     Some((name, args))
 }
 
-/// Run a tool by name. Errors come back as strings so the model can
-/// read them and recover.
 pub fn execute(name: &str, args: &Value) -> String {
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
@@ -304,7 +277,6 @@ pub fn execute(name: &str, args: &Value) -> String {
     }
 }
 
-/// Check if a tool requires user confirmation before execution.
 pub fn needs_confirmation(name: &str) -> bool {
     TOOLS
         .iter()
@@ -422,7 +394,7 @@ mod tests {
         );
         assert!(out.contains("created"), "got: {out}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world\n");
-        // Second call should fail (file already exists).
+
         let out = execute(
             "create_file",
             &serde_json::json!({"path": path.to_str().unwrap(), "content": "nope"}),
