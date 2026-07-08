@@ -62,6 +62,64 @@ async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Op
     })
 }
 
+/// Extract a context length from ollama's /api/show `model_info` blob;
+/// the key is architecture-prefixed, e.g. "llama.context_length".
+fn context_length_from_model_info(info: &serde_json::Value) -> Option<u32> {
+    info.as_object()?
+        .iter()
+        .find(|(k, _)| k.ends_with(".context_length"))
+        .and_then(|(_, v)| v.as_u64())
+        .map(|n| n as u32)
+}
+
+/// Ask an ollama server for a model's context window. Returns None for
+/// non-ollama endpoints or on any error.
+pub async fn fetch_context_window(
+    client: &reqwest::Client,
+    chat_url: &str,
+    model: &str,
+) -> Option<u32> {
+    let base = chat_url.strip_suffix("/v1/chat/completions")?;
+    let show_url = format!("{base}/api/show");
+    let resp = client
+        .post(&show_url)
+        .json(&serde_json::json!({"model": model}))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    context_length_from_model_info(body.get("model_info")?)
+}
+
+/// Tokens reserved for the model's reply when budgeting the request.
+pub const RESPONSE_RESERVE_TOKENS: u32 = 1024;
+
+fn estimate_msg_chars(msg: &serde_json::Value) -> usize {
+    match msg.get("content") {
+        Some(serde_json::Value::String(s)) => s.len(),
+        Some(other) => other.to_string().len(),
+        None => 0,
+    }
+}
+
+/// Drop the oldest non-system messages until the payload fits the token
+/// budget (~4 chars/token), keeping the system prompt and the latest
+/// exchange. Returns how many messages were dropped.
+pub fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_tokens: u32) -> usize {
+    let budget_chars = budget_tokens as usize * 4;
+    let mut total: usize = msgs.iter().map(estimate_msg_chars).sum();
+    let mut dropped = 0;
+    while total > budget_chars && msgs.len() > 3 {
+        total -= estimate_msg_chars(&msgs[1]);
+        msgs.remove(1);
+        dropped += 1;
+    }
+    dropped
+}
+
 fn parse_sse_line(line: &str) -> Option<&str> {
     if let Some(s) = line.strip_prefix("data: ") {
         if s == "[DONE]" || s.is_empty() {
@@ -348,6 +406,27 @@ pub async fn process_queue_orchestrator(
                 }
             }));
 
+            let window = { state.lock().await.active_context_window() };
+            let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
+            let dropped = trim_msgs_to_budget(&mut msgs, budget);
+            if dropped > 0 {
+                dbg_log!(
+                    "context budget {} tokens exceeded: dropped {} oldest message(s)",
+                    budget,
+                    dropped
+                );
+                if tool_rounds == 0 {
+                    let mut s = state.lock().await;
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "context window full: dropped {} oldest message(s) from the request. Use /new to start fresh.",
+                            dropped
+                        ),
+                    ));
+                }
+            }
+
             state.lock().await.current_response.clear();
             stream_buffer.lock().await.content.clear();
 
@@ -577,6 +656,40 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_context_length_from_model_info() {
+        let info = serde_json::json!({
+            "general.architecture": "llama",
+            "llama.context_length": 262144,
+            "llama.embedding_length": 8192,
+        });
+        assert_eq!(context_length_from_model_info(&info), Some(262144));
+        assert_eq!(context_length_from_model_info(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn test_trim_msgs_keeps_system_and_latest() {
+        let big = "x".repeat(4000); // ~1000 tokens
+        let mut msgs: Vec<serde_json::Value> = vec![
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": big.clone()}),
+            serde_json::json!({"role": "assistant", "content": big.clone()}),
+            serde_json::json!({"role": "user", "content": big.clone()}),
+        ];
+        // budget fits only ~1 big message
+        let dropped = trim_msgs_to_budget(&mut msgs, 1100);
+        assert_eq!(dropped, 1);
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "system");
+        // huge budget: nothing dropped
+        let mut msgs2: Vec<serde_json::Value> = vec![
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": "hi"}),
+        ];
+        assert_eq!(trim_msgs_to_budget(&mut msgs2, 8192), 0);
+        assert_eq!(msgs2.len(), 2);
+    }
 
     #[test]
     fn test_parse_multimodal_content_plain() {

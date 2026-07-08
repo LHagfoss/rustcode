@@ -192,6 +192,25 @@ impl AppState {
         }
     }
 
+    /// True when any modal overlay is open (pickers or tool confirmation);
+    /// the background content renders dimmed.
+    pub fn modal_open(&self) -> bool {
+        self.show_model_picker
+            || self.show_command_picker
+            || self.show_history_picker
+            || self.status == AppStatus::AwaitingToolConfirmation
+    }
+
+    /// Context window of the active profile, in tokens.
+    pub fn active_context_window(&self) -> u32 {
+        self.config
+            .models
+            .iter()
+            .find(|m| m.name == self.config.default)
+            .and_then(|p| p.context_window)
+            .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW)
+    }
+
     fn clamp_cursor(&mut self) {
         self.cursor_position = self.cursor_position.min(self.input_buffer.len());
         while !self.input_buffer.is_char_boundary(self.cursor_position) {
