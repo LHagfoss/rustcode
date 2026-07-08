@@ -78,7 +78,11 @@ fn render_assistant_message<'a>(
 
     if let Some(think) = think_content {
         let thought_header = if let Some(ms) = response_time_ms {
-            format!("Thought: {}ms", ms)
+            if ms >= 1000 {
+                format!("Thought: {:.1}s", ms as f32 / 1000.0)
+            } else {
+                format!("Thought: {}ms", ms)
+            }
         } else {
             "Thought:".to_string()
         };
@@ -383,18 +387,37 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 
     let footer_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(22),
+            Constraint::Fill(1),
+        ])
         .split(footer_area);
+
+    let auto_accept_style = if state.auto_confirm {
+        get_themed_style(Color::Rgb(40, 167, 69), COLOR_BG, Modifier::empty(), show_picker)
+    } else {
+        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)
+    };
 
     f.render_widget(
         Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG)),
         footer_chunks[0],
     );
     f.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            state.auto_confirm_status_text(),
+            auto_accept_style,
+        )]))
+        .alignment(ratatui::layout::Alignment::Center)
+        .style(Style::default().bg(COLOR_BG)),
+        footer_chunks[1],
+    );
+    f.render_widget(
         Paragraph::new(Line::from(right_spans))
             .alignment(ratatui::layout::Alignment::Right)
             .style(Style::default().bg(COLOR_BG)),
-        footer_chunks[1],
+        footer_chunks[2],
     );
 }
 
@@ -1777,12 +1800,16 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
             .take(modal_chunks[7].height as usize)
             .map(|l| {
                 let display: String = l.chars().take(inner_area.width as usize - 4).collect();
-                Line::from(Span::styled(
-                    format!("  {display}"),
+                let style = if l.starts_with('+') {
+                    Style::default().fg(Color::Rgb(40, 167, 69))
+                } else if l.starts_with('-') {
+                    Style::default().fg(Color::Rgb(220, 53, 69))
+                } else {
                     Style::default()
                         .fg(COLOR_MUTED)
-                        .add_modifier(Modifier::ITALIC),
-                ))
+                        .add_modifier(Modifier::ITALIC)
+                };
+                Line::from(Span::styled(format!("  {display}"), style))
             })
             .collect();
         f.render_widget(

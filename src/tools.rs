@@ -519,6 +519,40 @@ fn write_file(args: &Value) -> Result<String, String> {
     ))
 }
 
+fn find_partial_match_error(content: &str, old_string: &str) -> String {
+    let old_lines: Vec<&str> = old_string.lines().collect();
+    let first_line = old_lines.iter().find(|l| !l.trim().is_empty());
+    if let Some(first) = first_line {
+        let escaped = regex::escape(first);
+        let parts: Vec<&str> = escaped.split_whitespace().collect();
+        if !parts.is_empty() {
+            let pattern = parts.join(r"\s+");
+            if let Ok(re) = Regex::new(&pattern) {
+                if let Some(m) = re.find(content) {
+                    let char_idx = m.start();
+                    let line_number = content[..char_idx].chars().filter(|&c| c == '\n').count() + 1;
+                    
+                    let file_lines: Vec<&str> = content.lines().collect();
+                    let start_idx = line_number.saturating_sub(1);
+                    let end_idx = (start_idx + old_lines.len()).min(file_lines.len());
+                    let actual_context = file_lines[start_idx..end_idx].join("\n");
+                    
+                    return format!(
+                        "error: 'old_string' not found in file. However, a partial match for the first line was found at line {line_number}.\n\n\
+                        Your 'old_string' was:\n\
+                        {old_string}\n\n\
+                        The file content starting at line {line_number} is:\n\
+                        {actual_context}\n\n\
+                        Please check for whitespace, indentation, or character differences."
+                    );
+                }
+            }
+        }
+    }
+    
+    "error: 'old_string' not found in file. Make sure it matches the file exactly (whitespace, indentation, quotes). Use read_file to check the exact text.".to_string()
+}
+
 fn edit(args: &Value) -> Result<String, String> {
     let path = args
         .get("path")
@@ -554,27 +588,43 @@ fn edit(args: &Value) -> Result<String, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
 
-    let count = content.matches(old_string).count();
-    if count == 0 {
-        return Err(format!(
-            "'old_string' not found in '{path}'. Make sure it matches the file exactly (whitespace, indentation, quotes). Use read_file to get the exact text."
-        ));
+    // Try exact matches first
+    let mut matches: Vec<std::ops::Range<usize>> = content
+        .match_indices(old_string)
+        .map(|(idx, s)| idx..idx + s.len())
+        .collect();
+
+    // If no exact matches, try whitespace-insensitive regex matching
+    if matches.is_empty() {
+        let escaped = regex::escape(old_string);
+        let parts: Vec<&str> = escaped.split_whitespace().collect();
+        if !parts.is_empty() {
+            let pattern = parts.join(r"\s+");
+            if let Ok(re) = Regex::new(&pattern) {
+                matches = re.find_iter(&content).map(|m| m.range()).collect();
+            }
+        }
     }
-    if count > 1 && !replace_all {
+
+    if matches.is_empty() {
+        return Err(find_partial_match_error(&content, old_string));
+    }
+
+    if matches.len() > 1 && !replace_all {
         return Err(format!(
-            "'old_string' appears {count} times in '{path}'. Add more surrounding context to make it unique, or set \"replace_all\": true."
+            "'old_string' appears {} times in '{path}'. Add more surrounding context to make it unique, or set \"replace_all\": true.",
+            matches.len()
         ));
     }
 
-    let new_content = if replace_all {
-        content.replace(old_string, new_string)
-    } else {
-        content.replacen(old_string, new_string, 1)
-    };
+    let mut new_content = content.clone();
+    for m in matches.iter().rev() {
+        new_content.replace_range(m.clone(), new_string);
+    }
 
     std::fs::write(path, &new_content).map_err(|e| format!("cannot write '{path}': {e}"))?;
 
-    let changed = if replace_all { count } else { 1 };
+    let changed = matches.len();
     Ok(format!(
         "edited '{path}' ({} replacement{}, {} -> {} bytes)",
         changed,
@@ -1308,6 +1358,43 @@ mod tests {
             }),
         );
         assert!(out.starts_with("error:") && out.contains("not found"), "got: {out}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn test_edit_whitespace_insensitive() {
+        let path = edit_fixture("fn  hello()   {\n\tprintln!(\"hi\");\n}\n");
+        let out = execute(
+            "edit",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "old_string": "fn hello() {\n    println!(\"hi\");\n}",
+                "new_string": "fn hello() { println!(\"hello\"); }"
+            }),
+        );
+        assert!(out.contains("edited"), "got: {out}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "fn hello() { println!(\"hello\"); }\n"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn test_edit_partial_match_diagnostic() {
+        let path = edit_fixture("fn hello() {\n    println!(\"hi\");\n}\n");
+        let out = execute(
+            "edit",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "old_string": "fn hello() {\n    println!(\"wrong\");\n}",
+                "new_string": "x"
+            }),
+        );
+        assert!(out.starts_with("error:"), "got: {out}");
+        assert!(out.contains("partial match"), "got: {out}");
+        assert!(out.contains("line 1"), "got: {out}");
+        assert!(out.contains("println!(\"hi\");"), "got: {out}");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

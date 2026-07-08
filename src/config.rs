@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub models: Vec<ModelProfile>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserSettings {
     #[serde(default)]

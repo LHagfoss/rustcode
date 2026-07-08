@@ -342,8 +342,32 @@ async fn confirm_and_execute(
     } else {
         "?".to_string()
     };
-    let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
-    let preview: String = content.lines().take(6).collect::<Vec<_>>().join("\n");
+    let (preview, content_bytes) = if name == "edit" {
+        let old_string = args.get("old_string").and_then(|s| s.as_str()).unwrap_or("");
+        let new_string = args.get("new_string").and_then(|s| s.as_str()).unwrap_or("");
+        let mut prev = String::new();
+        for line in old_string.lines().take(5) {
+            prev.push('-');
+            prev.push_str(line);
+            prev.push('\n');
+        }
+        if old_string.lines().count() > 5 {
+            prev.push_str("- ...\n");
+        }
+        for line in new_string.lines().take(5) {
+            prev.push('+');
+            prev.push_str(line);
+            prev.push('\n');
+        }
+        if new_string.lines().count() > 5 {
+            prev.push_str("+ ...\n");
+        }
+        (prev, new_string.len())
+    } else {
+        let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
+        (preview, content.len())
+    };
     let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
     {
         let mut s = state.lock().await;
@@ -351,7 +375,7 @@ async fn confirm_and_execute(
             tool_name: display_name.to_string(),
             path,
             content_preview: preview,
-            content_bytes: content.len(),
+            content_bytes,
         });
         s.tool_confirmation_response = Some(tx);
         s.status = AppStatus::AwaitingToolConfirmation;
@@ -724,6 +748,21 @@ pub async fn process_queue_orchestrator(
             )
             .await;
 
+            if cancel_token.is_cancelled() {
+                dbg_log!("Orchestrator: Stream request cancelled by token");
+                let mut s = state.lock().await;
+                let final_content = stream_buffer.lock().await.content.clone();
+                if !final_content.is_empty() {
+                    let mut msg = ChatMessage::new("assistant", final_content);
+                    msg.response_time_ms = Some(prompt_start_time.elapsed().as_millis() as u64);
+                    s.history.push(msg);
+                    crate::config::save_history(&s.history);
+                }
+                s.current_response.clear();
+                s.status = AppStatus::Idle;
+                break;
+            }
+
             if let Err(e) = stream_result {
                 dbg_log!("Stream request failed: {}", e);
                 let mut s = state.lock().await;
@@ -768,6 +807,13 @@ pub async fn process_queue_orchestrator(
                         name,
                         result.len()
                     );
+
+                    if cancel_token.is_cancelled() {
+                        dbg_log!("Orchestrator: Cancelled during tool execution");
+                        let mut s = state.lock().await;
+                        s.status = AppStatus::Idle;
+                        break;
+                    }
 
                     let mut s = state.lock().await;
                     s.pending_tool_confirmation = None;

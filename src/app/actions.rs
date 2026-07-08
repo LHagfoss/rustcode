@@ -14,7 +14,10 @@ pub async fn handle_escape(
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
 
-    if s.status != AppStatus::Streaming && !s.pending_queue.is_empty() {
+    if s.status == AppStatus::Streaming {
+        s.status = AppStatus::Idle;
+        s.pending_queue.clear();
+    } else if !s.pending_queue.is_empty() {
         s.pending_queue.remove(0);
         if s.pending_queue.is_empty() {
             s.status = AppStatus::Idle;
@@ -55,6 +58,9 @@ pub async fn handle_enter(
         let mut should_exit = false;
 
         match cmd {
+            "/status" => {
+                // Implement /status command logic here
+            },
             "/clear" | "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
