@@ -29,11 +29,9 @@ pub struct TokenUsage {
 }
 
 pub fn random_tip_index() -> usize {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as usize;
-    now % TIPS.len()
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    rng.random_range(0..TIPS.len())
 }
 
 pub const TIPS: &[&str] = &[
