@@ -71,6 +71,14 @@ impl ChatMessage {
     }
 }
 
+/// A subagent spawned by the main agent via the spawn_agent tool. Keeps its
+/// own conversation history so the main agent can follow up with send_agent.
+pub struct SubAgent {
+    pub id: u32,
+    pub task: String,
+    pub history: Vec<ChatMessage>,
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -110,6 +118,9 @@ pub struct AppState {
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
     pub auto_confirm: bool,
+
+    pub subagents: Vec<SubAgent>,
+    pub next_subagent_id: u32,
 
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
@@ -182,6 +193,8 @@ impl AppState {
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
             auto_confirm: false,
+            subagents: Vec::new(),
+            next_subagent_id: 1,
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             last_max_scroll: 0,

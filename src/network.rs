@@ -135,6 +135,7 @@ pub struct StreamBuffer {
     pub content: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_request(
     client: &reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -143,6 +144,7 @@ pub async fn stream_request(
     model: &str,
     messages: &[serde_json::Value],
     buffer: Arc<Mutex<StreamBuffer>>,
+    quiet: bool,
 ) -> Result<(), String> {
     let payload = serde_json::json!({
         "model": model,
@@ -226,49 +228,35 @@ pub async fn stream_request(
                                             .and_then(|d| d.get("content").or_else(|| d.get("text")))
                                             .and_then(|c| c.as_str());
 
-                                        let mut buf = buffer.lock().await;
-                                        let mut s = state.lock().await;
-
+                                        let mut chunk = String::new();
                                         if let Some(r_token) = reasoning {
                                             if !in_reasoning {
                                                 in_reasoning = true;
-                                                buf.content.push_str("<think>\n");
-                                                s.current_response.push_str("<think>\n");
-                                                if s.raw_cli_mode {
-                                                    use std::io::Write;
-                                                    print!("<think>\n");
-                                                    let _ = std::io::stdout().flush();
-                                                }
+                                                chunk.push_str("<think>\n");
                                             }
-                                            buf.content.push_str(r_token);
-                                            s.current_response.push_str(r_token);
-                                            if s.raw_cli_mode {
-                                                use std::io::Write;
-                                                print!("{}", r_token);
-                                                let _ = std::io::stdout().flush();
-                                            }
+                                            chunk.push_str(r_token);
                                         } else if let Some(c_token) = content {
                                             if in_reasoning {
                                                 in_reasoning = false;
-                                                buf.content.push_str("\n</think>\n\n");
-                                                s.current_response.push_str("\n</think>\n\n");
+                                                chunk.push_str("\n</think>\n\n");
+                                            }
+                                            chunk.push_str(c_token);
+                                        }
+                                        if !chunk.is_empty() {
+                                            buffer.lock().await.content.push_str(&chunk);
+                                            if !quiet {
+                                                let mut s = state.lock().await;
+                                                s.current_response.push_str(&chunk);
                                                 if s.raw_cli_mode {
                                                     use std::io::Write;
-                                                    print!("\n</think>\n\n");
+                                                    print!("{chunk}");
                                                     let _ = std::io::stdout().flush();
                                                 }
-                                            }
-                                            buf.content.push_str(c_token);
-                                            s.current_response.push_str(c_token);
-                                            if s.raw_cli_mode {
-                                                use std::io::Write;
-                                                print!("{}", c_token);
-                                                let _ = std::io::stdout().flush();
                                             }
                                         }
                                     }
                                 }
-                                if let Some(usage) = val.get("usage") {
+                                if let Some(usage) = val.get("usage").filter(|_| !quiet) {
                                     if let (Some(p), Some(c), Some(t)) = (
                                         usage.get("prompt_tokens").and_then(|v| v.as_u64()),
                                         usage.get("completion_tokens").and_then(|v| v.as_u64()),
@@ -301,14 +289,15 @@ pub async fn stream_request(
     }
 
     if in_reasoning {
-        let mut buf = buffer.lock().await;
-        let mut s = state.lock().await;
-        buf.content.push_str("\n</think>\n\n");
-        s.current_response.push_str("\n</think>\n\n");
-        if s.raw_cli_mode {
-            use std::io::Write;
-            print!("\n</think>\n\n");
-            let _ = std::io::stdout().flush();
+        buffer.lock().await.content.push_str("\n</think>\n\n");
+        if !quiet {
+            let mut s = state.lock().await;
+            s.current_response.push_str("\n</think>\n\n");
+            if s.raw_cli_mode {
+                use std::io::Write;
+                print!("\n</think>\n\n");
+                let _ = std::io::stdout().flush();
+            }
         }
     }
 
@@ -322,6 +311,289 @@ pub async fn stream_request(
         buf.content.len()
     );
     Ok(())
+}
+
+/// Show the Y/N confirmation modal (when the tool requires it) and run the
+/// tool. `display_name` is what the modal shows — subagent calls prefix it
+/// with the agent id so the user knows who is asking.
+async fn confirm_and_execute(
+    state: &Arc<Mutex<AppState>>,
+    name: &str,
+    args: &serde_json::Value,
+    display_name: &str,
+) -> String {
+    let needs_confirm =
+        crate::tools::needs_confirmation(name) && !state.lock().await.auto_confirm;
+    if !needs_confirm {
+        dbg_log!("Executing tool '{}' immediately...", name);
+        return crate::tools::execute(name, args);
+    }
+
+    dbg_log!("Tool '{}' requires confirmation", name);
+    let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+        p.to_string()
+    } else if let Some(cmd) = args.get("command").and_then(|c| c.as_str()) {
+        cmd.to_string()
+    } else if let (Some(src), Some(dest)) = (
+        args.get("src").and_then(|s| s.as_str()),
+        args.get("dest").and_then(|d| d.as_str()),
+    ) {
+        format!("{src} -> {dest}")
+    } else {
+        "?".to_string()
+    };
+    let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+    let preview: String = content.lines().take(6).collect::<Vec<_>>().join("\n");
+    let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+    {
+        let mut s = state.lock().await;
+        s.pending_tool_confirmation = Some(ToolConfirmation {
+            tool_name: display_name.to_string(),
+            path,
+            content_preview: preview,
+            content_bytes: content.len(),
+        });
+        s.tool_confirmation_response = Some(tx);
+        s.status = AppStatus::AwaitingToolConfirmation;
+    }
+    dbg_log!("Awaiting user confirmation for '{}'", name);
+    let result = match rx.await {
+        Ok(true) => {
+            dbg_log!("User approved tool call '{}', executing...", name);
+            crate::tools::execute(name, args)
+        }
+        Ok(false) => {
+            dbg_log!("User denied tool call '{}'", name);
+            "error: user denied this tool call".to_string()
+        }
+        Err(_) => {
+            dbg_log!("Confirmation channel closed for '{}'", name);
+            "error: confirmation channel closed".to_string()
+        }
+    };
+    {
+        let mut s = state.lock().await;
+        s.pending_tool_confirmation = None;
+        s.status = AppStatus::Streaming;
+    }
+    result
+}
+
+/// Max tool rounds a subagent gets before being cut off.
+const MAX_SUBAGENT_ROUNDS: usize = 15;
+
+fn push_status_line(s: &mut AppState, text: String) {
+    s.history.push(ChatMessage::new("system", text));
+    crate::config::save_history(&s.history);
+}
+
+/// Drop a leading <think>...</think> block so the main agent only gets the
+/// subagent's actual reply, not its reasoning.
+fn strip_leading_think(text: &str) -> &str {
+    match (text.trim_start().starts_with("<think>"), text.find("</think>")) {
+        (true, Some(i)) => text[i + "</think>".len()..].trim_start(),
+        _ => text,
+    }
+}
+
+/// Run one subagent conversation until it produces a plain reply (no tool
+/// call). Tokens stream quietly (not into the main chat view); tool calls
+/// surface as status lines and go through the same confirmation modal as
+/// the main agent. Returns the subagent's final reply or an error string.
+async fn run_subagent(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    agent_id: u32,
+) -> String {
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer {
+        content: String::new(),
+    }));
+    let mut rounds = 0usize;
+    loop {
+        if cancel_token.is_cancelled() {
+            return "error: cancelled".to_string();
+        }
+        let history_snapshot: Vec<ChatMessage> = {
+            let s = state.lock().await;
+            s.subagents
+                .iter()
+                .find(|a| a.id == agent_id)
+                .map(|a| a.history.clone())
+                .unwrap_or_default()
+        };
+        if history_snapshot.is_empty() {
+            return format!("error: no subagent with id {agent_id}");
+        }
+
+        let system_prompt = format!(
+            "{}\n\nYou are subagent {agent_id}, working for a main agent in the same \
+rustcode session. Complete the task you were given, then reply in plain text \
+with NO tool call — that reply is returned to the main agent. Keep the final \
+reply compact and information-dense.\n\n{}",
+            crate::tools::tool_system_prompt(false),
+            crate::context::environment_context()
+        );
+        let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
+            "role": "system",
+            "content": system_prompt,
+        })];
+        msgs.extend(history_snapshot.iter().map(|m| {
+            if m.role == "tool" {
+                serde_json::json!({
+                    "role": "user",
+                    "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
+                })
+            } else {
+                serde_json::json!({"role": m.role, "content": m.content})
+            }
+        }));
+        let window = { state.lock().await.active_context_window() };
+        let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
+        trim_msgs_to_budget(&mut msgs, budget);
+
+        stream_buffer.lock().await.content.clear();
+        let (api_base_url, model_name) = {
+            let s = state.lock().await;
+            (s.api_base_url.clone(), s.model_name.clone())
+        };
+        dbg_log!("subagent {} round {}: requesting {}", agent_id, rounds, model_name);
+        if let Err(e) = stream_request(
+            client,
+            Arc::clone(state),
+            cancel_token.clone(),
+            &api_base_url,
+            &model_name,
+            &msgs,
+            Arc::clone(&stream_buffer),
+            true,
+        )
+        .await
+        {
+            return format!("error: subagent request failed: {e}");
+        }
+        let content = stream_buffer.lock().await.content.clone();
+        if content.is_empty() {
+            return "error: subagent returned an empty reply".to_string();
+        }
+
+        if let Some((name, args)) = crate::tools::parse_tool_call(&content) {
+            if rounds >= MAX_SUBAGENT_ROUNDS {
+                return format!(
+                    "error: subagent {agent_id} hit the {MAX_SUBAGENT_ROUNDS}-round tool limit without a final reply"
+                );
+            }
+            rounds += 1;
+            let result = if crate::tools::is_agent_tool(&name) {
+                "error: subagents cannot spawn or message other agents".to_string()
+            } else {
+                {
+                    let mut s = state.lock().await;
+                    let target = args
+                        .get("path")
+                        .or_else(|| args.get("command"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    push_status_line(&mut s, format!("agent-{agent_id} → {name} {target}"));
+                }
+                confirm_and_execute(state, &name, &args, &format!("agent-{agent_id} · {name}"))
+                    .await
+            };
+            let mut s = state.lock().await;
+            if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
+                a.history.push(ChatMessage::new("assistant", &content));
+                a.history.push(ChatMessage::new("tool", format!("{name}: {result}")));
+            }
+            continue;
+        }
+
+        let mut s = state.lock().await;
+        if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
+            a.history.push(ChatMessage::new("assistant", &content));
+        }
+        return strip_leading_think(&content).to_string();
+    }
+}
+
+/// Handle spawn_agent / send_agent from the main agent: run a nested
+/// subagent conversation (the main agent waits) and return the subagent's
+/// reply as the tool result.
+async fn handle_agent_tool(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    name: &str,
+    args: &serde_json::Value,
+) -> String {
+    match name {
+        "spawn_agent" => {
+            let Some(task) = args
+                .get("task")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.trim().is_empty())
+            else {
+                return "error: missing 'task' argument".to_string();
+            };
+            let agent_id = {
+                let mut s = state.lock().await;
+                let id = s.next_subagent_id;
+                s.next_subagent_id += 1;
+                s.subagents.push(crate::app::SubAgent {
+                    id,
+                    task: task.to_string(),
+                    history: vec![ChatMessage::new("user", task)],
+                });
+                let brief: String = task.chars().take(60).collect();
+                push_status_line(&mut s, format!("agent-{id} spawned: {brief}"));
+                id
+            };
+            let reply = run_subagent(client, state, cancel_token, agent_id).await;
+            push_status_line(&mut *state.lock().await, format!("agent-{agent_id} done"));
+            format!("(subagent id {agent_id} — follow up with send_agent)\n{reply}")
+        }
+        "send_agent" => {
+            let id = args.get("id").and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            });
+            let Some(id) = id else {
+                return "error: missing or invalid 'id' argument".to_string();
+            };
+            let id = id as u32;
+            let Some(message) = args
+                .get("message")
+                .and_then(|m| m.as_str())
+                .filter(|m| !m.trim().is_empty())
+            else {
+                return "error: missing 'message' argument".to_string();
+            };
+            {
+                let mut s = state.lock().await;
+                let Some(task) = s
+                    .subagents
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map(|a| a.task.chars().take(40).collect::<String>())
+                else {
+                    let known: Vec<String> =
+                        s.subagents.iter().map(|a| a.id.to_string()).collect();
+                    return if known.is_empty() {
+                        "error: no subagents exist — use spawn_agent first".to_string()
+                    } else {
+                        format!("error: no subagent with id {id}. Known ids: {}", known.join(", "))
+                    };
+                };
+                push_status_line(&mut s, format!("agent-{id} ← follow-up ({task})"));
+                if let Some(a) = s.subagents.iter_mut().find(|a| a.id == id) {
+                    a.history.push(ChatMessage::new("user", message));
+                }
+            }
+            let reply = run_subagent(client, state, cancel_token, id).await;
+            push_status_line(&mut *state.lock().await, format!("agent-{id} done"));
+            format!("(subagent id {id})\n{reply}")
+        }
+        _ => format!("error: unknown agent tool '{name}'"),
+    }
 }
 
 pub async fn process_queue_orchestrator(
@@ -376,7 +648,7 @@ pub async fn process_queue_orchestrator(
 
             let system_prompt = format!(
                 "{}\n\n{}",
-                crate::tools::tool_system_prompt(),
+                crate::tools::tool_system_prompt(true),
                 crate::context::environment_context()
             );
             let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -448,6 +720,7 @@ pub async fn process_queue_orchestrator(
                 &model_name,
                 &msgs,
                 Arc::clone(&stream_buffer),
+                false,
             )
             .await;
 
@@ -485,64 +758,16 @@ pub async fn process_queue_orchestrator(
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
                     tool_rounds += 1;
 
-                    let needs_confirm =
-                        crate::tools::needs_confirmation(&name) && !state.lock().await.auto_confirm;
-
-                    let result = if needs_confirm {
-                        dbg_log!("Tool '{}' requires confirmation", name);
-                        let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
-                            p.to_string()
-                        } else if let Some(cmd) = args.get("command").and_then(|c| c.as_str()) {
-                            cmd.to_string()
-                        } else if let (Some(src), Some(dest)) = (
-                            args.get("src").and_then(|s| s.as_str()),
-                            args.get("dest").and_then(|d| d.as_str()),
-                        ) {
-                            format!("{src} -> {dest}")
-                        } else {
-                            "?".to_string()
-                        };
-                        let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                        let preview: String =
-                            content.lines().take(6).collect::<Vec<_>>().join("\n");
-                        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-                        {
-                            let mut s = state.lock().await;
-                            s.pending_tool_confirmation = Some(ToolConfirmation {
-                                tool_name: name.clone(),
-                                path: path.clone(),
-                                content_preview: preview,
-                                content_bytes: content.len(),
-                            });
-                            s.tool_confirmation_response = Some(tx);
-                            s.status = AppStatus::AwaitingToolConfirmation;
-                        }
-                        dbg_log!("Awaiting user confirmation for '{}'", name);
-
-                        match rx.await {
-                            Ok(true) => {
-                                dbg_log!("User approved tool call '{}', executing...", name);
-                                crate::tools::execute(&name, &args)
-                            }
-                            Ok(false) => {
-                                dbg_log!("User denied tool call '{}'", name);
-                                "error: user denied this tool call".to_string()
-                            }
-                            Err(_) => {
-                                dbg_log!("Confirmation channel closed for '{}'", name);
-                                "error: confirmation channel closed".to_string()
-                            }
-                        }
+                    let result = if crate::tools::is_agent_tool(&name) {
+                        handle_agent_tool(&client, &state, &cancel_token, &name, &args).await
                     } else {
-                        dbg_log!("Executing tool '{}' immediately...", name);
-                        let execute_result = crate::tools::execute(&name, &args);
-                        dbg_log!(
-                            "Tool '{}' execution finished with length: {} chars",
-                            name,
-                            execute_result.len()
-                        );
-                        execute_result
+                        confirm_and_execute(&state, &name, &args, &name).await
                     };
+                    dbg_log!(
+                        "Tool '{}' finished with result length: {} chars",
+                        name,
+                        result.len()
+                    );
 
                     let mut s = state.lock().await;
                     s.pending_tool_confirmation = None;
@@ -689,6 +914,20 @@ mod tests {
         ];
         assert_eq!(trim_msgs_to_budget(&mut msgs2, 8192), 0);
         assert_eq!(msgs2.len(), 2);
+    }
+
+    #[test]
+    fn test_strip_leading_think() {
+        assert_eq!(
+            strip_leading_think("<think>\nreasoning here\n</think>\n\nfinal answer"),
+            "final answer"
+        );
+        assert_eq!(strip_leading_think("plain reply"), "plain reply");
+        // </think> mentioned mid-text without a leading block: untouched
+        assert_eq!(
+            strip_leading_think("text about </think> tags"),
+            "text about </think> tags"
+        );
     }
 
     #[test]
