@@ -316,7 +316,11 @@ pub async fn process_queue_orchestrator(
                     .collect()
             };
 
-            let system_prompt = crate::tools::tool_system_prompt();
+            let system_prompt = format!(
+                "{}\n\n{}",
+                crate::tools::tool_system_prompt(),
+                crate::context::environment_context()
+            );
             let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
                 "role": "system",
                 "content": system_prompt.clone(),
