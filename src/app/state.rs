@@ -76,6 +76,7 @@ impl ChatMessage {
 pub struct SubAgent {
     pub id: u32,
     pub task: String,
+    pub model: Option<String>,
     pub history: Vec<ChatMessage>,
 }
 
