@@ -401,6 +401,10 @@ pub async fn handle_enter(
             }
         }
 
+        if matches!(cmd, "/model" | "/provider" | "/ollama") {
+            spawn_context_window_detection(Arc::clone(state), client.clone());
+        }
+
         s.input_buffer.clear();
         s.cursor_position = 0;
         return should_exit;
@@ -466,6 +470,39 @@ pub fn start_new_session(s: &mut AppState) {
     s.status = AppStatus::Idle;
     s.tip_index = crate::app::random_tip_index();
     crate::config::save_history(&s.history);
+}
+
+/// Fill in the active profile's context window from the provider when the
+/// config doesn't have one (currently: ollama's /api/show). Silent no-op on
+/// non-ollama endpoints, errors, or profiles that already have a window set.
+pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwest::Client) {
+    tokio::spawn(async move {
+        let (name, url, model) = {
+            let s = state.lock().await;
+            let name = s.config.default.clone();
+            let Some(profile) = s.config.models.iter().find(|m| m.name == name) else {
+                return;
+            };
+            if profile.context_window.is_some() {
+                return;
+            }
+            (name, profile.url.clone(), profile.model.clone())
+        };
+        let Some(ctx) = crate::network::fetch_context_window(&client, &url, &model).await else {
+            return;
+        };
+        let mut s = state.lock().await;
+        if let Some(profile) = s.config.models.iter_mut().find(|m| m.name == name)
+            && profile.context_window.is_none()
+        {
+            profile.context_window = Some(ctx);
+            crate::config::save_entire_config(&s.config);
+            s.history.push(ChatMessage::new(
+                "system",
+                format!("Detected context window for '{}': {} tokens", name, ctx),
+            ));
+        }
+    });
 }
 
 /// Parse a context window size like "262144" or "256k".

@@ -49,16 +49,6 @@ fn model_label(state: &AppState) -> String {
     state.config.default.clone()
 }
 
-fn active_context_window(state: &AppState) -> u32 {
-    state
-        .config
-        .models
-        .iter()
-        .find(|m| m.name == state.config.default)
-        .and_then(|p| p.context_window)
-        .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW)
-}
-
 fn render_assistant_message<'a>(
     content: &str,
     response_time_ms: Option<u64>,
@@ -251,8 +241,7 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
     let footer_area = chunks[3];
-    let show_picker =
-        state.show_model_picker || state.show_command_picker || state.show_history_picker;
+    let show_picker = state.modal_open();
 
     let left_spans = if state.status == AppStatus::Streaming || state.status == AppStatus::Queued {
         let millis = std::time::SystemTime::now()
@@ -360,11 +349,11 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             format!("{}", total_tokens)
         };
 
-        let window = active_context_window(state);
+        let window = state.active_context_window();
         let pct = if window == 0 {
             0.0
         } else {
-            ((total_tokens as f32 / window as f32) * 100.0).min(999.0)
+            ((total_tokens as f32 / window as f32) * 100.0).min(100.0)
         };
 
         vec![
@@ -410,8 +399,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 }
 
 fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) -> Margin {
-    let show_picker =
-        state.show_model_picker || state.show_command_picker || state.show_history_picker;
+    let show_picker = state.modal_open();
 
     let input_split = Layout::default()
         .direction(Direction::Horizontal)
@@ -563,8 +551,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         vertical: 0,
         horizontal: 1,
     });
-    let show_picker =
-        state.show_model_picker || state.show_command_picker || state.show_history_picker;
+    let show_picker = state.modal_open();
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -845,8 +832,7 @@ fn render_welcome_screen(
     let width = f.area().width;
     let height = f.area().height;
 
-    let show_picker =
-        state.show_model_picker || state.show_command_picker || state.show_history_picker;
+    let show_picker = state.modal_open();
 
     let box_width = 80u16.min(width.saturating_sub(6));
     let inner_width = box_width.saturating_sub(5).max(1);
@@ -1682,10 +1668,7 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default()
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_style(Style::default().fg(COLOR_BORDER))
-        .style(Style::default().bg(COLOR_PANEL));
+    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {

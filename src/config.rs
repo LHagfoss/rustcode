@@ -98,10 +98,20 @@ fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
         return (url, model, default_config);
     };
 
-    let config = match toml::from_str::<AppConfig>(&content) {
+    let mut config = match toml::from_str::<AppConfig>(&content) {
         Ok(c) => c,
         Err(_) => default_config,
     };
+
+    // backfill windows for profiles saved before the context_window field
+    let defaults = AppConfig::default();
+    for profile in &mut config.models {
+        if profile.context_window.is_none()
+            && let Some(d) = defaults.models.iter().find(|m| m.name == profile.name)
+        {
+            profile.context_window = d.context_window;
+        }
+    }
 
     let (url, model) = config
         .models
@@ -242,6 +252,18 @@ pub fn list_sessions() -> Vec<SessionMeta> {
             }
         })
         .collect()
+}
+
+/// Move the previous run's live history into the sessions archive so a new
+/// run starts fresh without silently overwriting the old chat. Call once at
+/// startup, before any history is saved.
+pub fn archive_live_history() {
+    let Some(dir) = get_config_dir() else { return };
+    let path = dir.join(HISTORY_FILE);
+    let history = load_session_file(&path);
+    if session_has_content(&history) && archive_session(&history).is_some() {
+        let _ = fs::remove_file(&path);
+    }
 }
 
 /// Meta for the live history file (the previous run's chat), if it has content.
