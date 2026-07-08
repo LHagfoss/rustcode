@@ -27,6 +27,18 @@ pub struct AppConfig {
     pub models: Vec<ModelProfile>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UserSettings {
+    #[serde(default)]
+    pub auto_confirm: bool,
+}
+
+impl Default for UserSettings {
+    fn default() -> Self {
+        Self { auto_confirm: false }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {

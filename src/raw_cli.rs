@@ -42,7 +42,7 @@ pub async fn run_raw_cli(prompt: &str, model_override: Option<&str>) -> Result<(
                 .collect()
         };
 
-        let system_prompt = crate::tools::tool_system_prompt();
+        let system_prompt = crate::tools::tool_system_prompt(false);
         let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
             "role": "system",
             "content": system_prompt.clone(),
@@ -88,6 +88,7 @@ pub async fn run_raw_cli(prompt: &str, model_override: Option<&str>) -> Result<(
             &model_name,
             &msgs,
             stream_buffer.clone(),
+            false,
         )
         .await {
             println!("Stream error: {}", e);
