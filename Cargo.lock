@@ -1898,6 +1898,7 @@ dependencies = [
  "futures-util",
  "globset",
  "ignore",
+ "rand 0.10.2",
  "ratatui",
  "regex",
  "reqwest",
