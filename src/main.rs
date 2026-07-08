@@ -144,10 +144,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             match key.code {
                                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                                     let mut s = app_state.lock().await;
+                                    s.pending_tool_confirmation = None;
                                     if let Some(tx) = s.tool_confirmation_response.take() {
                                         let _ = tx.send(true);
                                     }
-                                    s.pending_tool_confirmation = None;
                                 }
                                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                                     let mut s = app_state.lock().await;
