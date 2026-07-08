@@ -479,7 +479,13 @@ reply compact and information-dense.\n\n{}",
         stream_buffer.lock().await.content.clear();
         let (api_base_url, model_name) = {
             let s = state.lock().await;
-            (s.api_base_url.clone(), s.model_name.clone())
+            let subagent = s.subagents.iter().find(|a| a.id == agent_id).expect("Subagent not found");
+            let target_model_name = subagent.model.as_deref().unwrap_or(&s.model_name);
+            if let Some(profile) = s.config.models.iter().find(|p| p.name == target_model_name) {
+                (profile.url.clone(), profile.model.clone())
+            } else {
+                (s.api_base_url.clone(), s.model_name.clone())
+            }
         };
         dbg_log!("subagent {} round {}: requesting {}", agent_id, rounds, model_name);
         if let Err(e) = stream_request(
@@ -558,6 +564,10 @@ async fn handle_agent_tool(
             else {
                 return "error: missing 'task' argument".to_string();
             };
+            let model = args
+                .get("model")
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_string());
             let agent_id = {
                 let mut s = state.lock().await;
                 let id = s.next_subagent_id;
@@ -565,6 +575,7 @@ async fn handle_agent_tool(
                 s.subagents.push(crate::app::SubAgent {
                     id,
                     task: task.to_string(),
+                    model,
                     history: vec![ChatMessage::new("user", task)],
                 });
                 let brief: String = task.chars().take(60).collect();
