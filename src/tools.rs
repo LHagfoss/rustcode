@@ -649,7 +649,14 @@ fn copy_file(args: &Value) -> Result<String, String> {
     Ok(format!("copied '{src}' to '{dest}'"))
 }
 
-pub fn tool_system_prompt() -> String {
+/// Agent-orchestration tools handled by the orchestrator itself (async,
+/// need app state), not by the sync handlers in TOOLS. Only offered to the
+/// main agent — subagents cannot spawn or message other agents.
+pub fn is_agent_tool(name: &str) -> bool {
+    matches!(name, "spawn_agent" | "send_agent")
+}
+
+pub fn tool_system_prompt(include_agent_tools: bool) -> String {
     let mut p = String::new();
 
     p.push_str(
@@ -694,6 +701,18 @@ Available tools:\n",
             "- {}: {}. Arguments: {}\n",
             t.name, t.description, t.arguments
         ));
+    }
+    if include_agent_tools {
+        p.push_str(
+            "- spawn_agent: Delegate a self-contained task to a fresh subagent and get \
+its final answer back. The subagent has the same tools as you (except agent tools) \
+but starts with NO context — put everything it needs in the task description. Use it \
+for research, multi-file searches, or isolated subtasks to keep your own context \
+small. Arguments: {\"task\": \"full task description with all needed context\"}\n\
+- send_agent: Send a follow-up message to a subagent you spawned earlier; it keeps \
+its own conversation memory and replies. \
+Arguments: {\"id\": subagent id number, \"message\": \"follow-up message\"}\n",
+        );
     }
     p.push_str(
         "\nExample (task — needs a tool):\n\
@@ -1031,10 +1050,27 @@ mod tests {
 
     #[test]
     fn test_system_prompt_lists_tools() {
-        let p = tool_system_prompt();
+        let p = tool_system_prompt(true);
         for t in TOOLS {
             assert!(p.contains(t.name));
         }
+        assert!(p.contains("spawn_agent"));
+        assert!(p.contains("send_agent"));
+    }
+
+    #[test]
+    fn test_system_prompt_without_agent_tools() {
+        let p = tool_system_prompt(false);
+        assert!(!p.contains("spawn_agent"));
+        assert!(!p.contains("send_agent"));
+    }
+
+    #[test]
+    fn test_is_agent_tool() {
+        assert!(is_agent_tool("spawn_agent"));
+        assert!(is_agent_tool("send_agent"));
+        assert!(!is_agent_tool("grep"));
+        assert!(!is_agent_tool("run_command"));
     }
 
     #[test]

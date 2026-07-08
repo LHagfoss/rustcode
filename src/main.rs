@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // Cancel the running agent stream when denying
                                     current_cancel_token.cancel();
                                     let new_token = tokio_util::sync::CancellationToken::new();
-                                    *current_cancel_token = new_token;
+                                    current_cancel_token = new_token;
                                     let mut s = app_state.lock().await;
                                     if let Some(tx) = s.tool_confirmation_response.take() {
                                         let _ = tx.send(false);
