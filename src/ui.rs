@@ -45,6 +45,20 @@ fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool)
     }
 }
 
+fn model_label(state: &AppState) -> String {
+    state.config.default.clone()
+}
+
+fn active_context_window(state: &AppState) -> u32 {
+    state
+        .config
+        .models
+        .iter()
+        .find(|m| m.name == state.config.default)
+        .and_then(|p| p.context_window)
+        .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW)
+}
+
 fn render_assistant_message<'a>(
     content: &str,
     response_time_ms: Option<u64>,
@@ -237,7 +251,8 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
     let footer_area = chunks[3];
-    let show_picker = state.show_model_picker || state.show_command_picker;
+    let show_picker =
+        state.show_model_picker || state.show_command_picker || state.show_history_picker;
 
     let left_spans = if state.status == AppStatus::Streaming || state.status == AppStatus::Queued {
         let millis = std::time::SystemTime::now()
@@ -345,6 +360,13 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             format!("{}", total_tokens)
         };
 
+        let window = active_context_window(state);
+        let pct = if window == 0 {
+            0.0
+        } else {
+            ((total_tokens as f32 / window as f32) * 100.0).min(999.0)
+        };
+
         vec![
             Span::styled(
                 "context used: ",
@@ -353,6 +375,10 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             Span::styled(
                 token_str,
                 get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            ),
+            Span::styled(
+                format!(" ({:.0}%)", pct),
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             ),
             Span::styled("   ", Style::default()),
             Span::styled(
@@ -384,7 +410,8 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 }
 
 fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) -> Margin {
-    let show_picker = state.show_model_picker || state.show_command_picker;
+    let show_picker =
+        state.show_model_picker || state.show_command_picker || state.show_history_picker;
 
     let input_split = Layout::default()
         .direction(Direction::Horizontal)
@@ -518,13 +545,8 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
             get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::empty(), show_picker),
         ),
         Span::styled(
-            state.model_name.clone(),
+            model_label(state),
             get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
-        ),
-        Span::styled(" ", Style::default().bg(COLOR_PANEL)),
-        Span::styled(
-            state.config.default.clone(),
-            get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::empty(), show_picker),
         ),
     ]);
     f.render_widget(Paragraph::new(build_line), build_area);
@@ -541,7 +563,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         vertical: 0,
         horizontal: 1,
     });
-    let show_picker = state.show_model_picker || state.show_command_picker;
+    let show_picker =
+        state.show_model_picker || state.show_command_picker || state.show_history_picker;
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -643,7 +666,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             render_assistant_message(
                 &msg.content,
                 msg.response_time_ms,
-                &state.model_name,
+                &model_label(state),
                 &mut lines,
                 false,
                 inner_area.width,
@@ -669,7 +692,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
-                    state.model_name.clone(),
+                    model_label(state),
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
             ]));
@@ -677,7 +700,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             render_assistant_message(
                 &state.current_response,
                 None,
-                &state.model_name,
+                &model_label(state),
                 &mut lines,
                 true,
                 inner_area.width,
@@ -698,7 +721,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
-                    state.model_name.clone(),
+                    model_label(state),
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
             ]));
@@ -707,13 +730,17 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         lines.push(Line::from(""));
     }
 
-    let mut total_wrapped_lines = 0u16;
-    for line in &lines {
-        match line.width() {
-            0 => total_wrapped_lines += 1,
-            w => total_wrapped_lines += (w as u16).div_ceil(inner_area.width.max(1)),
-        }
-    }
+    // breathing room between the last line and the input box when
+    // scrolled to the bottom
+    lines.push(Line::from(""));
+
+    let conversation_paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .style(Style::default().bg(COLOR_BG));
+
+    // exact rendered height — the paragraph word-wraps, so estimating
+    // rows from character counts undershoots and cuts off the bottom
+    let total_wrapped_lines = conversation_paragraph.line_count(inner_area.width) as u16;
     let max_scroll = total_wrapped_lines.saturating_sub(inner_area.height);
     state.last_max_scroll = max_scroll;
 
@@ -729,12 +756,40 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         }
     };
 
-    let conversation_paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
-        .scroll((scroll_offset, 0))
-        .style(Style::default().bg(COLOR_BG));
+    let conversation_paragraph = conversation_paragraph.scroll((scroll_offset, 0));
 
     f.render_widget(conversation_paragraph, inner_area);
+
+    let conv = chunks[0];
+    let view_h = inner_area.height;
+    let content_h = total_wrapped_lines.max(1);
+    if content_h > view_h && max_scroll > 0 {
+        let sb_x = conv.x + conv.width.saturating_sub(1);
+        let sb_area = ratatui::layout::Rect::new(sb_x, conv.y, 1, view_h);
+        let thumb_len = ((view_h as u32 * view_h as u32) / content_h as u32).max(1) as u16;
+        let track = view_h.saturating_sub(thumb_len);
+        let pos = if max_scroll == 0 {
+            0
+        } else {
+            ((scroll_offset as u64 * track as u64) / max_scroll as u64) as u16
+        };
+        let mut rows = Vec::with_capacity(view_h as usize);
+        for i in 0..view_h {
+            let (ch, color) = if i >= pos && i < pos + thumb_len {
+                ('█', COLOR_PRIMARY)
+            } else {
+                ('│', COLOR_BORDER)
+            };
+            rows.push(Line::from(Span::styled(
+                ch.to_string(),
+                Style::default().fg(color).bg(COLOR_BG),
+            )));
+        }
+        f.render_widget(
+            Paragraph::new(rows).style(Style::default().bg(COLOR_BG)),
+            sb_area,
+        );
+    }
 }
 
 fn render_popup_menu(
@@ -790,7 +845,8 @@ fn render_welcome_screen(
     let width = f.area().width;
     let height = f.area().height;
 
-    let show_picker = state.show_model_picker || state.show_command_picker;
+    let show_picker =
+        state.show_model_picker || state.show_command_picker || state.show_history_picker;
 
     let box_width = 80u16.min(width.saturating_sub(6));
     let inner_width = box_width.saturating_sub(5).max(1);
@@ -982,13 +1038,8 @@ fn render_welcome_screen(
             get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::empty(), show_picker),
         ),
         Span::styled(
-            state.model_name.clone(),
+            model_label(state),
             get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
-        ),
-        Span::styled(" ", Style::default().bg(COLOR_PANEL)),
-        Span::styled(
-            state.config.default.clone(),
-            get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::empty(), show_picker),
         ),
     ]));
 
@@ -1035,7 +1086,15 @@ fn render_welcome_screen(
     f.render_widget(hint_text, hint_box_width_area);
 
     let tip_area = welcome_chunks[6];
-    let tip_lines = vec![
+    let tip_text = crate::app::TIPS[state.tip_index % crate::app::TIPS.len()];
+    let tip_full = format!("{tip_text}");
+    let tip_prefix = "● ";
+    let prefix_w = tip_prefix.width();
+    let tip_w = tip_full.width();
+    let total_w = prefix_w + tip_w + 4;
+    let tip_padding = (width.saturating_sub(total_w as u16) / 2) as usize;
+    let centered_spans = vec![
+        Span::styled(" ".repeat(tip_padding), Style::default()),
         Span::styled(
             "● ",
             get_themed_style(COLOR_TIP, COLOR_BG, Modifier::empty(), show_picker),
@@ -1045,30 +1104,10 @@ fn render_welcome_screen(
             get_themed_style(COLOR_TIP, COLOR_BG, Modifier::BOLD, show_picker),
         ),
         Span::styled(
-            "Use ",
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            "/status",
-            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            " or ",
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            "ctrl+x s",
-            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            " to see system status info",
+            tip_full,
             get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
         ),
     ];
-    let tip_text_len = 54;
-    let tip_padding = (width.saturating_sub(tip_text_len) / 2) as usize;
-    let mut centered_spans = vec![Span::styled(" ".repeat(tip_padding), Style::default())];
-    centered_spans.extend(tip_lines);
     f.render_widget(
         Paragraph::new(Line::from(centered_spans)).style(Style::default().bg(COLOR_BG)),
         tip_area,
@@ -1289,6 +1328,104 @@ fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
         modal_chunks[5],
+    );
+}
+
+/// Render the session history picker modal overlay (/history).
+fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
+    let sessions = &state.history_picker_sessions;
+    let selected_idx = state
+        .history_picker_index
+        .min(sessions.len().saturating_sub(1));
+
+    let modal_area = centered_rect_fixed(65, 18, f.area());
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL)),
+        modal_area,
+    );
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // List area
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    let header_line = Line::from(vec![
+        Span::styled(
+            "Resume session",
+            Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ".repeat(inner_area.width.saturating_sub(17) as usize),
+            Style::default(),
+        ),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED)),
+    ]);
+    f.render_widget(
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[0],
+    );
+
+    let mut list_lines = Vec::new();
+    for (idx, session) in sessions.iter().enumerate() {
+        let desc = format!("{} msgs  {}", session.message_count, session.when);
+        let is_selected = selected_idx == idx;
+        let line = if is_selected {
+            let left_text = format!(" ● {}", session.title);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.len() + desc.len());
+            Line::from(vec![
+                Span::styled(
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG)
+                        .bg(COLOR_PRIMARY)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG).bg(COLOR_PRIMARY),
+                ),
+                Span::styled(desc, Style::default().fg(COLOR_BG).bg(COLOR_PRIMARY)),
+            ])
+        } else {
+            let left_text = format!("   {}", session.title);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.len() + desc.len());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT)),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(desc, Style::default().fg(COLOR_MUTED)),
+            ])
+        };
+        list_lines.push(line);
+    }
+
+    let scroll_y = selected_idx.saturating_sub(3) as u16;
+    let list_paragraph = Paragraph::new(list_lines)
+        .scroll((scroll_y, 0))
+        .style(Style::default().bg(COLOR_PANEL));
+    f.render_widget(list_paragraph, modal_chunks[2]);
+
+    let footer_line = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT)),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED)),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT)),
+        Span::styled("enter", Style::default().fg(COLOR_MUTED)),
+    ]);
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
+        modal_chunks[3],
     );
 }
 
@@ -1524,6 +1661,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     if state.show_command_picker {
         render_command_picker_modal(f, state);
+    }
+
+    if state.show_history_picker {
+        render_history_picker_modal(f, state);
     }
 
     if state.status == AppStatus::AwaitingToolConfirmation {

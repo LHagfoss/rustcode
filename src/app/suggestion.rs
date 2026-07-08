@@ -13,6 +13,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Clear conversation history",
     },
     CommandInfo {
+        name: "/context",
+        desc: "Show or set active profile's context window",
+    },
+    CommandInfo {
         name: "/copy",
         desc: "Copy last assistant reply to clipboard",
     },
@@ -26,7 +30,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/history",
-        desc: "Resume previous chat history",
+        desc: "Pick a previous session to resume",
     },
     CommandInfo {
         name: "/model",
@@ -50,7 +54,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/resume",
-        desc: "Resume previous chat history",
+        desc: "Resume most recent session",
     },
     CommandInfo {
         name: "/tools",

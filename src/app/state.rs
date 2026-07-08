@@ -24,9 +24,30 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
-fn current_timestamp() -> String {
+    fn current_timestamp() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
+
+pub fn random_tip_index() -> usize {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as usize;
+    now % TIPS.len()
+}
+
+pub const TIPS: &[&str] = &[
+    "Use /tools to see what the agent can do",
+    "Ask the agent to fix a TODO or explain a file",
+    "Press Ctrl+P to open the command palette",
+    "Tab auto-completes slash commands",
+    "Switch models anytime with /model <name>",
+    "Use /usage to see token and response stats",
+    "Esc interrupts a running generation",
+    "The agent can grep, glob, read, edit, and run commands",
+    "Hold Shift+Enter for multi-line input",
+    "Type /help to see all commands and keybindings",
+];
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -82,6 +103,10 @@ pub struct AppState {
     pub command_picker_index: usize,
     pub command_picker_search: String,
 
+    pub show_history_picker: bool,
+    pub history_picker_index: usize,
+    pub history_picker_sessions: Vec<crate::config::SessionMeta>,
+
     pub pending_tool_confirmation: Option<ToolConfirmation>,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
@@ -92,6 +117,7 @@ pub struct AppState {
     pub is_scroll_locked_to_bottom: bool,
     pub last_max_scroll: u16,
     pub raw_cli_mode: bool,
+    pub tip_index: usize,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -152,6 +178,9 @@ impl AppState {
             show_command_picker: false,
             command_picker_index: 0,
             command_picker_search: String::new(),
+            show_history_picker: false,
+            history_picker_index: 0,
+            history_picker_sessions: Vec::new(),
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
             auto_confirm: false,
@@ -159,6 +188,7 @@ impl AppState {
             is_scroll_locked_to_bottom: true,
             last_max_scroll: 0,
             raw_cli_mode: false,
+            tip_index: random_tip_index(),
         }
     }
 

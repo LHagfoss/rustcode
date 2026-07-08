@@ -74,8 +74,71 @@ pub async fn handle_enter(
             "/copy" => {
                 copy_last_reply(&mut s);
             }
-            "/resume" | "/history" => {
-                resume_history(&mut s);
+            "/resume" => {
+                resume_latest_session(&mut s);
+            }
+            "/history" => {
+                let sessions = build_session_list(&s);
+                if sessions.is_empty() {
+                    s.history
+                        .push(ChatMessage::new("system", "No saved sessions found."));
+                } else {
+                    s.history_picker_sessions = sessions;
+                    s.history_picker_index = 0;
+                    s.show_history_picker = true;
+                }
+            }
+            "/context" => {
+                let default_name = s.config.default.clone();
+                if tokens.len() >= 2 {
+                    match parse_token_count(tokens[1]) {
+                        Some(n) => {
+                            if let Some(profile) =
+                                s.config.models.iter_mut().find(|m| m.name == default_name)
+                            {
+                                profile.context_window = Some(n);
+                                crate::config::save_entire_config(&s.config);
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!(
+                                        "Set context window for profile '{}' to {} tokens",
+                                        default_name, n
+                                    ),
+                                ));
+                            } else {
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    "No active profile to set context window on.",
+                                ));
+                            }
+                        }
+                        None => {
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                "Usage: /context <tokens> - e.g. /context 262144 or /context 256k",
+                            ));
+                        }
+                    }
+                } else {
+                    let window = s
+                        .config
+                        .models
+                        .iter()
+                        .find(|m| m.name == default_name)
+                        .and_then(|p| p.context_window);
+                    let text = match window {
+                        Some(w) => format!("Context window for '{}': {} tokens", default_name, w),
+                        None => format!(
+                            "Context window for '{}': not set (using default {})",
+                            default_name,
+                            crate::config::DEFAULT_CONTEXT_WINDOW
+                        ),
+                    };
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!("{text}\nSet with: /context <tokens>"),
+                    ));
+                }
             }
             "/usage" => {
                 let mut text = String::from("Session usage:");
@@ -163,6 +226,7 @@ pub async fn handle_enter(
                     let name = tokens[1].to_string();
                     let url = tokens[2].to_string();
                     let model = tokens[3].to_string();
+                    let context_window = tokens.get(4).and_then(|t| parse_token_count(t));
 
                     s.api_base_url = url.clone();
                     s.model_name = model.clone();
@@ -170,11 +234,15 @@ pub async fn handle_enter(
                     if let Some(profile) = s.config.models.iter_mut().find(|m| m.name == name) {
                         profile.url = url;
                         profile.model = model;
+                        if context_window.is_some() {
+                            profile.context_window = context_window;
+                        }
                     } else {
                         s.config.models.push(crate::config::ModelProfile {
                             name: name.clone(),
                             url,
                             model,
+                            context_window,
                         });
                     }
                     s.config.default = name.clone();
@@ -209,7 +277,7 @@ pub async fn handle_enter(
                         ),
                     ));
                 } else {
-                    s.history.push(ChatMessage::new("system", "Usage:\n  /provider <name> <url> <model> - Create/update profile\n  /provider <url> <model> - Update active profile"));
+                    s.history.push(ChatMessage::new("system", "Usage:\n  /provider <name> <url> <model> [context_window] - Create/update profile\n  /provider <url> <model> - Update active profile"));
                 }
             }
             "/ollama" => {
@@ -312,6 +380,7 @@ pub async fn handle_enter(
                             name: "ollama".to_string(),
                             url,
                             model,
+                            context_window: None,
                         });
                     }
                     s.config.default = "ollama".to_string();
@@ -386,6 +455,7 @@ pub fn apply_autocomplete(s: &mut AppState) {
 }
 
 pub fn start_new_session(s: &mut AppState) {
+    crate::config::archive_session(&s.history);
     s.history.clear();
     s.pending_queue.clear();
     s.current_response.clear();
@@ -394,28 +464,76 @@ pub fn start_new_session(s: &mut AppState) {
     s.history_index = None;
     s.temp_input.clear();
     s.status = AppStatus::Idle;
+    s.tip_index = crate::app::random_tip_index();
     crate::config::save_history(&s.history);
 }
 
-pub fn resume_history(s: &mut AppState) {
-    let loaded = crate::config::load_history();
-    if !loaded.is_empty() {
-        s.history = loaded;
-        s.pending_queue.clear();
-        s.current_response.clear();
-        s.current_token_usage = None;
-        s.response_time = None;
-        s.history_index = None;
-        s.temp_input.clear();
-        s.status = AppStatus::Idle;
+/// Parse a context window size like "262144" or "256k".
+pub fn parse_token_count(input: &str) -> Option<u32> {
+    let trimmed = input.trim();
+    if let Some(k) = trimmed
+        .strip_suffix('k')
+        .or_else(|| trimmed.strip_suffix('K'))
+    {
+        return k.parse::<u32>().ok().and_then(|n| n.checked_mul(1024));
+    }
+    trimmed.parse::<u32>().ok()
+}
+
+/// Sessions available to resume: archived ones plus the live history file
+/// from the previous run (only when the current chat has no real prompt yet,
+/// otherwise the live file just mirrors what's already on screen).
+pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
+    let mut list = crate::config::list_sessions();
+    if !crate::config::session_has_content(&s.history)
+        && let Some(live) = crate::config::live_session_meta()
+    {
+        list.insert(0, live);
+    }
+    list
+}
+
+pub fn resume_latest_session(s: &mut AppState) {
+    let list = build_session_list(s);
+    match list.first() {
+        Some(meta) => {
+            let meta = meta.clone();
+            load_session_into(s, &meta);
+        }
+        None => {
+            s.history
+                .push(ChatMessage::new("system", "No previous session to resume."));
+        }
+    }
+}
+
+pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
+    let loaded = crate::config::load_session_file(&meta.path);
+    if loaded.is_empty() {
         s.history.push(ChatMessage::new(
             "system",
-            format!("Resumed session with {} messages", s.history.len()),
+            format!("Could not load session '{}'", meta.title),
         ));
-    } else {
-        s.history
-            .push(ChatMessage::new("system", "No history found to resume."));
+        return;
     }
+    // archive the chat we're leaving so /history can bring it back
+    crate::config::archive_session(&s.history);
+    // the loaded session becomes the live one again
+    crate::config::delete_session_file(&meta.path);
+    s.history = loaded;
+    s.pending_queue.clear();
+    s.current_response.clear();
+    s.current_token_usage = None;
+    s.response_time = None;
+    s.history_index = None;
+    s.temp_input.clear();
+    s.status = AppStatus::Idle;
+    let count = s.history.len();
+    s.history.push(ChatMessage::new(
+        "system",
+        format!("Resumed session \"{}\" ({} messages)", meta.title, count),
+    ));
+    crate::config::save_history(&s.history);
 }
 
 pub fn copy_last_reply(s: &mut AppState) {
@@ -495,5 +613,19 @@ pub fn select_picker_model(s: &mut AppState) {
             "system",
             format!("Switched to model profile '{}'", profile.name),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_token_count;
+
+    #[test]
+    fn parse_token_count_plain_and_k_suffix() {
+        assert_eq!(parse_token_count("262144"), Some(262144));
+        assert_eq!(parse_token_count("256k"), Some(256 * 1024));
+        assert_eq!(parse_token_count("256K"), Some(256 * 1024));
+        assert_eq!(parse_token_count("abc"), None);
+        assert_eq!(parse_token_count(""), None);
     }
 }

@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod config;
+mod context;
 mod network;
 mod raw_cli;
 mod tools;
@@ -158,6 +159,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     let mut s = app_state.lock().await;
+                    if s.show_history_picker {
+                        match key.code {
+                            KeyCode::Esc => {
+                                s.show_history_picker = false;
+                            }
+                            KeyCode::Up => {
+                                let len = s.history_picker_sessions.len();
+                                if len > 0 {
+                                    s.history_picker_index = if s.history_picker_index == 0 {
+                                        len - 1
+                                    } else {
+                                        s.history_picker_index - 1
+                                    };
+                                }
+                            }
+                            KeyCode::Down => {
+                                let len = s.history_picker_sessions.len();
+                                if len > 0 {
+                                    s.history_picker_index = if s.history_picker_index + 1 >= len {
+                                        0
+                                    } else {
+                                        s.history_picker_index + 1
+                                    };
+                                }
+                            }
+                            KeyCode::Enter => {
+                                let idx = s
+                                    .history_picker_index
+                                    .min(s.history_picker_sessions.len().saturating_sub(1));
+                                if let Some(meta) = s.history_picker_sessions.get(idx).cloned() {
+                                    crate::app::load_session_into(&mut s, &meta);
+                                }
+                                s.show_history_picker = false;
+                            }
+                            _ => {}
+                        }
+                        drop(s);
+                        continue;
+                    }
+
                     if s.show_model_picker {
                         match key.code {
                             KeyCode::Esc => {
@@ -260,7 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             crate::app::start_new_session(&mut s);
                                         }
                                         "Resume session" => {
-                                            crate::app::resume_history(&mut s);
+                                            crate::app::resume_latest_session(&mut s);
                                         }
                                         "Copy last reply" => {
                                             crate::app::copy_last_reply(&mut s);
@@ -462,6 +503,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::FocusLost => {
                     terminal_focused = false;
+                }
+                Event::Mouse(mouse) => {
+                    use crossterm::event::MouseEventKind;
+                    let amt = 3u16;
+                    let mut s = app_state.lock().await;
+                    if s.show_model_picker || s.show_command_picker || s.show_history_picker {
+                        // don't scroll picker via mouse
+                    } else {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => s.scroll_up(amt),
+                            MouseEventKind::ScrollDown => s.scroll_down(amt),
+                            _ => {}
+                        }
+                    }
                 }
                 _ => {}
             }
