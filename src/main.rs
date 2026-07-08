@@ -72,6 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // move last run's chat into the sessions archive before anything
+    // overwrites the live history file; /resume and /history find it there
+    crate::config::archive_live_history();
+
     let mut app_state_struct = AppState::new();
     if let Some(ref m_name) = model_override {
         if let Some(profile) = app_state_struct.config.models.iter().find(|m| m.name == *m_name) {
@@ -86,6 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
+
+    // fill in the active profile's context window from the provider if the
+    // config doesn't specify one
+    crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
 
     let mut needs_redraw = true;
     let mut last_draw = std::time::Instant::now();
@@ -227,6 +235,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Enter => {
                                 crate::app::select_picker_model(&mut s);
                                 s.show_model_picker = false;
+                                crate::app::spawn_context_window_detection(
+                                    Arc::clone(&app_state),
+                                    client.clone(),
+                                );
                             }
                             KeyCode::Backspace => {
                                 s.model_picker_search.pop();
