@@ -452,8 +452,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        KeyCode::Char('v')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        KeyCode::Char('v') | KeyCode::Char('V')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL)
+                                || key.modifiers.contains(event::KeyModifiers::SUPER)
+                                || key.modifiers.contains(event::KeyModifiers::META) =>
                         {
                             if let Some(img_markdown) = crate::clipboard::paste_image_from_clipboard() {
                                 let mut s = app_state.lock().await;
@@ -537,6 +539,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             _ => {}
                         }
                     }
+                }
+                Event::Paste(text) => {
+                    let mut s = app_state.lock().await;
+                    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+                    for c in normalized.chars() {
+                        s.insert_char(c);
+                    }
+                    s.reset_suggestion_cycle();
                 }
                 _ => {}
             }

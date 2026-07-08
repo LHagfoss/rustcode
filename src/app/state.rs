@@ -212,6 +212,16 @@ impl AppState {
             || self.status == AppStatus::AwaitingToolConfirmation
     }
 
+    /// Returns the auto-confirm status label for the UI footer.
+    pub fn auto_confirm_status_text(&self) -> &'static str {
+        if self.auto_confirm {
+            "Auto-Confirm: ON"
+        } else {
+            "Auto-Confirm: OFF"
+        }
+    }
+
+
     /// Context window of the active profile, in tokens.
     pub fn active_context_window(&self) -> u32 {
         self.config
