@@ -354,6 +354,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     drop(s);
 
                     match key.code {
+                        KeyCode::BackTab => {
+                            let mut s = app_state.lock().await;
+                            s.auto_confirm = !s.auto_confirm;
+                        }
                         KeyCode::Esc => crate::app::handle_escape(&app_state, &mut current_cancel_token).await,
                         KeyCode::Up => {
                             let mut s = app_state.lock().await;
