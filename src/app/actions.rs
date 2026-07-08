@@ -468,6 +468,8 @@ pub fn start_new_session(s: &mut AppState) {
     s.history_index = None;
     s.temp_input.clear();
     s.status = AppStatus::Idle;
+    s.subagents.clear();
+    s.next_subagent_id = 1;
     s.tip_index = crate::app::random_tip_index();
     crate::config::save_history(&s.history);
 }
