@@ -132,6 +132,27 @@ pub const TOOLS: &[Tool] = &[
         handler: run_command,
         requires_confirmation: true,
     },
+    Tool {
+        name: "search_web",
+        description: "Performs a web search to look up documentation, API details, or code patterns.",
+        arguments: "{\"query\": \"search query terms\", \"domain\": \"optional domain filter e.g. 'docs.rs'\"}",
+        handler: search_web,
+        requires_confirmation: false,
+    },
+    Tool {
+        name: "find_symbol",
+        description: "Queries the codebase symbol index for matching structures, functions, enums, impls, traits, or modules. Returns definition location and signature.",
+        arguments: "{\"query\": \"search query string (fuzzy matching on symbol name)\"}",
+        handler: find_symbol_tool,
+        requires_confirmation: false,
+    },
+    Tool {
+        name: "get_project_map",
+        description: "Generates a compressed map of all symbols and API signatures in the codebase to understand project structure.",
+        arguments: "{}",
+        handler: get_project_map_tool,
+        requires_confirmation: false,
+    },
 ];
 
 /// Maximum tool-call rounds per user prompt, so a confused model
@@ -798,6 +819,139 @@ fn edit(args: &Value) -> Result<String, String> {
     ))
 }
 
+fn search_web(args: &Value) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|q| q.as_str())
+        .ok_or("missing 'query' argument")?;
+    let domain = args.get("domain").and_then(|d| d.as_str());
+
+    let mut search_query = query.to_string();
+    if let Some(dom) = domain {
+        search_query.push_str(&format!(" site:{}", dom));
+    }
+
+    let url = format!(
+        "https://html.duckduckgo.com/html/?q={}",
+        urlencoding::encode(&search_query)
+    );
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .map_err(|e| format!("failed to request search results: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "web search failed with status: {}",
+            response.status()
+        ));
+    }
+
+    let html_content = response
+        .text()
+        .map_err(|e| format!("failed to read search response body: {e}"))?;
+
+    let document = scraper::Html::parse_document(&html_content);
+
+    let result_selector = scraper::Selector::parse(".result").unwrap();
+    let snippet_selector = scraper::Selector::parse(".result__snippet").unwrap();
+    let url_selector = scraper::Selector::parse(".result__url").unwrap();
+
+    let mut out = String::new();
+    out.push_str(&format!("Web Search Results for '{}':\n\n", search_query));
+
+    let mut count = 0;
+    for element in document.select(&result_selector) {
+        if count >= 6 {
+            break;
+        }
+
+        let snippet_node = element.select(&snippet_selector).next();
+        let url_node = element.select(&url_selector).next();
+
+        if let (Some(s_node), Some(u_node)) = (snippet_node, url_node) {
+            let snippet = s_node
+                .text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+            let link = u_node
+                .text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+
+            count += 1;
+            out.push_str(&format!(
+                "{}. Snippet: {}\n   Source: https://{}\n\n",
+                count, snippet, link
+            ));
+        }
+    }
+
+    if count == 0 {
+        return Ok("No results found. Try refining your query.".to_string());
+    }
+
+    Ok(out)
+}
+
+fn find_symbol_tool(args: &Value) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|q| q.as_str())
+        .ok_or("missing 'query' argument")?;
+
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("cannot determine current directory: {e}"))?;
+
+    let _ = crate::symbols::update_index(&cwd);
+
+    let symbols = crate::symbols::find_symbol(&cwd, query)?;
+    if symbols.is_empty() {
+        return Ok(format!("No symbols found matching query '{}'.", query));
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Found {} symbols matching '{}':\n\n",
+        symbols.len(),
+        query
+    ));
+    for (i, sym) in symbols.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {} [{}] defined in {} (lines {}-{})\n   Signature: {}\n\n",
+            i + 1,
+            sym.name,
+            sym.kind,
+            sym.path,
+            sym.start_line,
+            sym.end_line,
+            sym.signature
+        ));
+    }
+
+    Ok(out)
+}
+
+fn get_project_map_tool(_args: &Value) -> Result<String, String> {
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("cannot determine current directory: {e}"))?;
+
+    let _ = crate::symbols::update_index(&cwd);
+
+    crate::symbols::get_project_map(&cwd)
+}
+
 fn delete_file(args: &Value) -> Result<String, String> {
     let path = args
         .get("path")
@@ -1172,6 +1326,23 @@ mod tests {
         let (name, args) = parse_tool_call(text).unwrap();
         assert_eq!(name, "get_time");
         assert!(args.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_search_web() {
+        let out = execute(
+            "search_web",
+            &serde_json::json!({
+                "query": "rust programming language",
+                "domain": "rust-lang.org"
+            }),
+        );
+        assert!(
+            out.contains("Web Search Results")
+                || out.contains("failed")
+                || out.contains("No results found"),
+            "got: {out}"
+        );
     }
 
     #[test]

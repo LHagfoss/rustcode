@@ -4,6 +4,7 @@ mod config;
 mod context;
 mod network;
 mod raw_cli;
+mod symbols;
 mod tools;
 mod ui;
 
