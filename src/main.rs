@@ -78,7 +78,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app_state_struct = AppState::new();
     if let Some(ref m_name) = model_override {
-        if let Some(profile) = app_state_struct.config.models.iter().find(|m| m.name == *m_name) {
+        if let Some(profile) = app_state_struct
+            .config
+            .models
+            .iter()
+            .find(|m| m.name == *m_name)
+        {
             app_state_struct.api_base_url = profile.url.clone();
             app_state_struct.model_name = profile.model.clone();
         }
@@ -358,11 +363,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             s.auto_confirm = !s.auto_confirm;
                         }
-                        KeyCode::Esc => crate::app::handle_escape(&app_state, &mut current_cancel_token).await,
+                        KeyCode::Esc => {
+                            crate::app::handle_escape(&app_state, &mut current_cancel_token).await
+                        }
                         KeyCode::Up => {
                             let mut s = app_state.lock().await;
                             if s.active_suggestion_index.is_some() {
-                                let filtered_len = crate::app::get_filtered_cmds_len(&s.input_buffer);
+                                let filtered_len =
+                                    crate::app::get_filtered_cmds_len(&s.input_buffer);
                                 if filtered_len > 0 {
                                     let current = s.active_suggestion_index.unwrap_or(0);
                                     s.active_suggestion_index = Some(if current == 0 {
@@ -378,7 +386,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Down => {
                             let mut s = app_state.lock().await;
                             if s.active_suggestion_index.is_some() {
-                                let filtered_len = crate::app::get_filtered_cmds_len(&s.input_buffer);
+                                let filtered_len =
+                                    crate::app::get_filtered_cmds_len(&s.input_buffer);
                                 if filtered_len > 0 {
                                     let current = s.active_suggestion_index.unwrap_or(0);
                                     s.active_suggestion_index =
@@ -445,8 +454,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.insert_char('\n');
                                 s.reset_suggestion_cycle();
                             } else {
-                                if crate::app::handle_enter(&app_state, &client, &mut current_cancel_token)
-                                    .await
+                                if crate::app::handle_enter(
+                                    &app_state,
+                                    &client,
+                                    &mut current_cancel_token,
+                                )
+                                .await
                                 {
                                     break;
                                 }
@@ -457,13 +470,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 || key.modifiers.contains(event::KeyModifiers::SUPER)
                                 || key.modifiers.contains(event::KeyModifiers::META) =>
                         {
-                            if let Some(img_markdown) = crate::clipboard::paste_image_from_clipboard() {
+                            if let Some(img_markdown) =
+                                crate::clipboard::paste_image_from_clipboard()
+                            {
                                 let mut s = app_state.lock().await;
                                 for c in img_markdown.chars() {
                                     s.insert_char(c);
                                 }
                                 s.reset_suggestion_cycle();
-                            } else if let Some(text) = crate::clipboard::read_text_from_clipboard() {
+                            } else if let Some(text) = crate::clipboard::read_text_from_clipboard()
+                            {
                                 let mut s = app_state.lock().await;
                                 let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                                 for c in normalized.chars() {

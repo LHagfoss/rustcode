@@ -395,7 +395,12 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         .split(footer_area);
 
     let auto_accept_style = if state.auto_confirm {
-        get_themed_style(Color::Rgb(40, 167, 69), COLOR_BG, Modifier::empty(), show_picker)
+        get_themed_style(
+            Color::Rgb(40, 167, 69),
+            COLOR_BG,
+            Modifier::empty(),
+            show_picker,
+        )
     } else {
         get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)
     };

@@ -59,11 +59,12 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "read_file",
         description: "Read a small chunk of a file, or search inside it. \
-                      Never returns whole files: page with start_line, or \
-                      use search to find the relevant lines first",
+                      Never returns whole files: use start_line for paging, search for matches, \
+                      or ranges for multiple specific sections",
         arguments: "{\"path\": \"file to read\", \
                      \"start_line\": optional number to page from (default 1), \
-                     \"search\": \"optional text - returns only matching lines\"}",
+                     \"search\": \"optional text - returns only matching lines\", \
+                     \"ranges\": \"optional list of {start: line, end: line} objects to read multiple sections\"}",
         handler: read_file,
         requires_confirmation: false,
     },
@@ -86,15 +87,14 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "edit",
-        description: "Surgically replace text in an existing file. Finds `old_string` \
-                      and replaces it with `new_string`. Fails if old_string is not \
-                      found, or appears more than once (use `replace_all: true` to \
-                      replace every occurrence). Read the file first to get exact text. \
-                      Prefer this over write_file for small changes to large files",
+        description: "Surgically replace text in an existing file using robust block matching. \
+                      Finds a `search_block` and replaces it with a `replace_block`. \
+                      Resilient to indentation changes. Supports optional line-number fallback.",
         arguments: "{\"path\": \"file to edit\", \
-                     \"old_string\": \"exact text to find (include surrounding context for uniqueness)\", \
-                     \"new_string\": \"text to replace it with\", \
-                     \"replace_all\": \"optional bool (default false)\"}",
+                      \"search_block\": \"text to find (include enough context for uniqueness)\", \
+                      \"replace_block\": \"text to replace it with\", \
+                      \"start_line\": \"optional line number for start of block\", \
+                      \"end_line\": \"optional line number for end of block\"}",
         handler: edit,
         requires_confirmation: true,
     },
@@ -152,10 +152,14 @@ fn build_include_matcher(include: Option<&str>) -> Result<Option<globset::GlobSe
     let Some(glob_str) = include else {
         return Ok(None);
     };
-    let glob = Glob::new(glob_str).map_err(|e| format!("invalid 'include' glob '{glob_str}': {e}"))?;
+    let glob =
+        Glob::new(glob_str).map_err(|e| format!("invalid 'include' glob '{glob_str}': {e}"))?;
     let mut b = GlobSetBuilder::new();
     b.add(glob);
-    Ok(Some(b.build().map_err(|e| format!("globset build failed: {e}"))?))
+    Ok(Some(
+        b.build()
+            .map_err(|e| format!("globset build failed: {e}"))?,
+    ))
 }
 
 fn grep(args: &Value) -> Result<String, String> {
@@ -228,11 +232,7 @@ fn grep(args: &Value) -> Result<String, String> {
                     out.push_str(&format!("\n{}:\n", path.display()));
                     wrote_header = true;
                 }
-                out.push_str(&format!(
-                    "  {}: {}\n",
-                    i + 1,
-                    truncate_line(line)
-                ));
+                out.push_str(&format!("  {}: {}\n", i + 1, truncate_line(line)));
                 file_lines += 1;
                 total_lines += 1;
                 if total_lines >= MAX_GREP_LINES {
@@ -258,7 +258,12 @@ fn grep(args: &Value) -> Result<String, String> {
     }
 }
 
-fn grep_one_file(path_str: &str, path: &Path, re: &Regex, max_lines: usize) -> Result<String, String> {
+fn grep_one_file(
+    path_str: &str,
+    path: &Path,
+    re: &Regex,
+    max_lines: usize,
+) -> Result<String, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path_str}': {e}"))?;
     let mut out = String::new();
@@ -271,9 +276,7 @@ fn grep_one_file(path_str: &str, path: &Path, re: &Regex, max_lines: usize) -> R
             }
             out.push_str(&format!("  {}: {}\n", i + 1, truncate_line(line)));
             if hits >= max_lines {
-                out.push_str(&format!(
-                    "(truncated at {max_lines} matching lines)\n"
-                ));
+                out.push_str(&format!("(truncated at {max_lines} matching lines)\n"));
                 break;
             }
         }
@@ -296,8 +299,7 @@ fn glob(args: &Value) -> Result<String, String> {
         return Err(format!("'{root}' is not a directory"));
     }
 
-    let glob = Glob::new(pattern)
-        .map_err(|e| format!("invalid glob '{pattern}': {e}"))?;
+    let glob = Glob::new(pattern).map_err(|e| format!("invalid glob '{pattern}': {e}"))?;
     let mut b = GlobSetBuilder::new();
     b.add(glob);
     let set = b
@@ -406,6 +408,45 @@ fn read_file(args: &Value) -> Result<String, String> {
         std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
+
+    if let Some(ranges_val) = args.get("ranges").and_then(|r| r.as_array()) {
+        let mut out = format!("{path} ({total} lines):\n");
+        for (i, range_val) in ranges_val.iter().enumerate() {
+            if let Some(range_obj) = range_val.as_object() {
+                let start = range_obj
+                    .get("start")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let end = range_obj
+                    .get("end")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                if let (Some(s), Some(e)) = (start, end) {
+                    if s >= 1 && e >= s && s <= total {
+                        let actual_end = e.min(total);
+                        out.push_str(&format!(
+                            "\n--- Range {}: lines {s}-{actual_end} ---\n",
+                            i + 1
+                        ));
+                        for (idx, line) in lines[s - 1..actual_end].iter().enumerate() {
+                            out.push_str(&format!("{}: {}\n", s + idx, truncate_line(line)));
+                        }
+                    } else {
+                        out.push_str(&format!(
+                            "\n--- Range {}: invalid range {s}-{e} ---\n",
+                            i + 1
+                        ));
+                    }
+                } else {
+                    out.push_str(&format!(
+                        "\n--- Range {}: missing start or end ---\n",
+                        i + 1
+                    ));
+                }
+            }
+        }
+        return Ok(out.trim_end().to_string());
+    }
 
     if let Some(query) = args.get("search").and_then(|s| s.as_str()) {
         let needle = query.to_lowercase();
@@ -530,13 +571,14 @@ fn find_partial_match_error(content: &str, old_string: &str) -> String {
             if let Ok(re) = Regex::new(&pattern) {
                 if let Some(m) = re.find(content) {
                     let char_idx = m.start();
-                    let line_number = content[..char_idx].chars().filter(|&c| c == '\n').count() + 1;
-                    
+                    let line_number =
+                        content[..char_idx].chars().filter(|&c| c == '\n').count() + 1;
+
                     let file_lines: Vec<&str> = content.lines().collect();
                     let start_idx = line_number.saturating_sub(1);
                     let end_idx = (start_idx + old_lines.len()).min(file_lines.len());
                     let actual_context = file_lines[start_idx..end_idx].join("\n");
-                    
+
                     return format!(
                         "error: 'old_string' not found in file. However, a partial match for the first line was found at line {line_number}.\n\n\
                         Your 'old_string' was:\n\
@@ -549,8 +591,73 @@ fn find_partial_match_error(content: &str, old_string: &str) -> String {
             }
         }
     }
-    
+
     "error: 'old_string' not found in file. Make sure it matches the file exactly (whitespace, indentation, quotes). Use read_file to check the exact text.".to_string()
+}
+
+/// Normalizes text by trimming trailing whitespace from each line.
+fn normalize_text(text: &str) -> String {
+    text.lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Finds the byte range of all matches of a block of text in content using indentation-insensitive matching.
+fn find_block_ranges(content: &str, search_block: &str) -> Vec<std::ops::Range<usize>> {
+    let search_lines: Vec<&str> = search_block.lines().collect();
+    if search_lines.is_empty() {
+        return Vec::new();
+    }
+
+    // Get byte offsets of all line starts
+    let mut line_starts = Vec::new();
+    let mut last_pos = 0;
+    for (i, c) in content.char_indices() {
+        if c == '\n' {
+            line_starts.push(last_pos);
+            last_pos = i + 1;
+        }
+    }
+    line_starts.push(last_pos);
+
+    let file_lines: Vec<&str> = content.lines().collect();
+    let mut matches = Vec::new();
+
+    for i in 0..=file_lines.len().saturating_sub(search_lines.len()) {
+        if file_lines[i].trim_end() != search_lines[0].trim_end() {
+            continue;
+        }
+
+        let f0_indent = file_lines[i].len() - file_lines[i].trim_start().len();
+        let s0_indent = search_lines[0].len() - search_lines[0].trim_start().len();
+        let delta = (f0_indent as isize) - (s0_indent as isize);
+
+        let mut match_found = true;
+        for j in 1..search_lines.len() {
+            if i + j >= file_lines.len()
+                || file_lines[i + j].trim_end() != search_lines[j].trim_end()
+            {
+                match_found = false;
+                break;
+            }
+
+            let fj_indent = file_lines[i + j].len() - file_lines[i + j].trim_start().len();
+            let sj_indent = search_lines[j].len() - search_lines[j].trim_start().len();
+            if (fj_indent as isize) - (sj_indent as isize) != delta {
+                match_found = false;
+                break;
+            }
+        }
+
+        if match_found {
+            let start = line_starts[i];
+            let last_line_idx = i + search_lines.len() - 1;
+            let end = line_starts[last_line_idx] + file_lines[last_line_idx].len();
+            matches.push(start..end);
+        }
+    }
+    matches
 }
 
 fn edit(args: &Value) -> Result<String, String> {
@@ -558,24 +665,34 @@ fn edit(args: &Value) -> Result<String, String> {
         .get("path")
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
-    let old_string = args
-        .get("old_string")
+    let search_block = args
+        .get("search_block")
+        .or_else(|| args.get("old_string"))
         .and_then(|s| s.as_str())
-        .ok_or("missing 'old_string' argument")?;
-    let new_string = args
-        .get("new_string")
+        .ok_or("missing 'search_block' or 'old_string' argument")?;
+    let replace_block = args
+        .get("replace_block")
+        .or_else(|| args.get("new_string"))
         .and_then(|s| s.as_str())
-        .ok_or("missing 'new_string' argument")?;
+        .ok_or("missing 'replace_block' or 'new_string' argument")?;
     let replace_all = args
         .get("replace_all")
         .and_then(|b| b.as_bool())
         .unwrap_or(false);
+    let start_line = args
+        .get("start_line")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let end_line = args
+        .get("end_line")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
 
-    if old_string.is_empty() {
-        return Err("'old_string' must not be empty".to_string());
+    if search_block.is_empty() {
+        return Err("search_block must not be empty".to_string());
     }
-    if old_string == new_string {
-        return Err("'old_string' and 'new_string' are identical — nothing to do".to_string());
+    if search_block == replace_block {
+        return Err("search_block and replace_block are identical — nothing to do".to_string());
     }
 
     let p = Path::new(path);
@@ -588,26 +705,65 @@ fn edit(args: &Value) -> Result<String, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
 
-    // Try exact matches first
-    let mut matches: Vec<std::ops::Range<usize>> = content
-        .match_indices(old_string)
-        .map(|(idx, s)| idx..idx + s.len())
-        .collect();
+    // 1. Try robust block matching first
+    let mut matches = find_block_ranges(&content, search_block);
 
-    // If no exact matches, try whitespace-insensitive regex matching
+    // 2. Fallback to line-based ranges if provided
     if matches.is_empty() {
-        let escaped = regex::escape(old_string);
-        let parts: Vec<&str> = escaped.split_whitespace().collect();
-        if !parts.is_empty() {
-            let pattern = parts.join(r"\s+");
-            if let Ok(re) = Regex::new(&pattern) {
-                matches = re.find_iter(&content).map(|m| m.range()).collect();
+        if let (Some(s), Some(e)) = (start_line, end_line) {
+            let file_lines: Vec<&str> = content.lines().collect();
+            if s >= 1 && e >= s && s <= file_lines.len() {
+                // Sanity check: does the trimmed content match search_block?
+                let actual_content = file_lines[s - 1..e.min(file_lines.len())].join("\n");
+                if normalize_text(&actual_content) == normalize_text(search_block) {
+                    // Calculate byte range for these lines
+                    let mut line_starts = Vec::new();
+                    let mut last_pos = 0;
+                    for c in content.chars() {
+                        if c == '\n' {
+                            line_starts.push(last_pos);
+                            last_pos += 1;
+                        } else {
+                            last_pos += c.len_utf8();
+                        }
+                    }
+                    line_starts.push(last_pos);
+
+                    let start_byte = line_starts[s - 1];
+                    let end_byte = if e < line_starts.len() {
+                        line_starts[e]
+                    } else {
+                        content.len()
+                    };
+                    matches.push(start_byte..end_byte);
+                }
+            }
+        }
+    }
+
+    // 3. Fallback to substring matching and regex whitespace-insensitive matching (for backwards compatibility & replace_all)
+    if matches.is_empty() {
+        // Try exact matches first
+        matches = content
+            .match_indices(search_block)
+            .map(|(idx, s)| idx..idx + s.len())
+            .collect();
+
+        // If no exact matches, try whitespace-insensitive regex matching
+        if matches.is_empty() {
+            let escaped = regex::escape(search_block);
+            let parts: Vec<&str> = escaped.split_whitespace().collect();
+            if !parts.is_empty() {
+                let pattern = parts.join(r"\s+");
+                if let Ok(re) = Regex::new(&pattern) {
+                    matches = re.find_iter(&content).map(|m| m.range()).collect();
+                }
             }
         }
     }
 
     if matches.is_empty() {
-        return Err(find_partial_match_error(&content, old_string));
+        return Err(find_partial_match_error(&content, search_block));
     }
 
     if matches.len() > 1 && !replace_all {
@@ -619,10 +775,18 @@ fn edit(args: &Value) -> Result<String, String> {
 
     let mut new_content = content.clone();
     for m in matches.iter().rev() {
-        new_content.replace_range(m.clone(), new_string);
+        new_content.replace_range(m.clone(), replace_block);
     }
 
     std::fs::write(path, &new_content).map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+    // Async auto-format: run 'cargo fmt' in background without blocking the response
+    let path_clone = path.to_string();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("cargo")
+            .args(["fmt", "--", &path_clone])
+            .output();
+    });
 
     let changed = matches.len();
     Ok(format!(
@@ -727,7 +891,7 @@ typecheck, build). Do NOT run those yourself unless asked.\n\
 - Do NOT commit or push unless the user explicitly asks.\n\
 - Destructive or state-changing tools (create, write, edit, delete, move, \
 copy, run_command) will prompt the user for confirmation before running. \
-Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n"
+Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
     );
 
     p.push_str(
@@ -788,7 +952,10 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
 }
 
 pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
-    let search_start = text.find("</think>").map(|idx| idx + "</think>".len()).unwrap_or(0);
+    let search_start = text
+        .find("</think>")
+        .map(|idx| idx + "</think>".len())
+        .unwrap_or(0);
     let search_text = &text[search_start..];
 
     for marker in &["```tool", "```json"] {
@@ -820,7 +987,9 @@ pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
     if let Some(first_brace) = search_text.find('{') {
         if let Some(last_brace) = search_text.rfind('}') {
             if last_brace > first_brace {
-                if let Ok(json) = serde_json::from_str::<Value>(search_text[first_brace..=last_brace].trim()) {
+                if let Ok(json) =
+                    serde_json::from_str::<Value>(search_text[first_brace..=last_brace].trim())
+                {
                     if let Some(res) = extract_tool_call(&json) {
                         return Some(res);
                     }
@@ -853,7 +1022,7 @@ pub fn needs_confirmation(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-const MAX_COMMAND_OUTPUT_BYTES: usize = 20_000;
+const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
 const MAX_LIST_ENTRIES: usize = 200;
 
@@ -886,7 +1055,9 @@ fn run_command(args: &Value) -> Result<String, String> {
         c
     };
 
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -898,13 +1069,13 @@ fn run_command(args: &Value) -> Result<String, String> {
         }
     }
 
-    let output = run_with_timeout(
-        cmd,
-        Duration::from_millis(timeout_ms.max(1)),
-    )?;
+    let output = run_with_timeout(cmd, Duration::from_millis(timeout_ms.max(1)))?;
 
     let mut result = String::new();
-    result.push_str(&format!("exit code: {}\n", output.status.code().unwrap_or(-1)));
+    result.push_str(&format!(
+        "exit code: {}\n",
+        output.status.code().unwrap_or(-1)
+    ));
 
     let stdout = truncate_bytes(&output.stdout, MAX_COMMAND_OUTPUT_BYTES);
     let stderr = truncate_bytes(&output.stderr, MAX_COMMAND_OUTPUT_BYTES);
@@ -929,10 +1100,7 @@ fn run_command(args: &Value) -> Result<String, String> {
     Ok(result.trim_end().to_string())
 }
 
-fn run_with_timeout(
-    mut cmd: std::process::Command,
-    timeout: Duration,
-) -> Result<Output, String> {
+fn run_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> Result<Output, String> {
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn process: {e}"))?;
@@ -1260,10 +1428,7 @@ mod tests {
             "run_command",
             &serde_json::json!({"command": "pwd", "cwd": dir.to_str().unwrap()}),
         );
-        assert!(
-            out.contains(canonical.to_str().unwrap()),
-            "got: {out}"
-        );
+        assert!(out.contains(canonical.to_str().unwrap()), "got: {out}");
     }
 
     #[test]
@@ -1296,7 +1461,10 @@ mod tests {
                 "timeout_ms": 200
             }),
         );
-        assert!(out.contains("error:") && out.contains("timed out"), "got: {out}");
+        assert!(
+            out.contains("error:") && out.contains("timed out"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1357,7 +1525,10 @@ mod tests {
                 "new_string": "x"
             }),
         );
-        assert!(out.starts_with("error:") && out.contains("not found"), "got: {out}");
+        assert!(
+            out.starts_with("error:") && out.contains("not found"),
+            "got: {out}"
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -1444,7 +1615,10 @@ mod tests {
                 "new_string": "hello"
             }),
         );
-        assert!(out.starts_with("error:") && out.contains("identical"), "got: {out}");
+        assert!(
+            out.starts_with("error:") && out.contains("identical"),
+            "got: {out}"
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -1458,7 +1632,10 @@ mod tests {
                 "new_string": "b"
             }),
         );
-        assert!(out.starts_with("error:") && out.contains("does not exist"), "got: {out}");
+        assert!(
+            out.starts_with("error:") && out.contains("does not exist"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1511,11 +1688,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/a.rs"), "fn alpha() {}\nfn beta() {}\n").unwrap();
-        std::fs::write(
-            dir.join("src/b.txt"),
-            "alpha is a letter\nnothing here\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join("src/b.txt"), "alpha is a letter\nnothing here\n").unwrap();
         dir
     }
 
@@ -1564,11 +1737,11 @@ mod tests {
 
     #[test]
     fn test_grep_bad_regex_errors() {
-        let out = execute(
-            "grep",
-            &serde_json::json!({"pattern": "*(", "path": "."}),
+        let out = execute("grep", &serde_json::json!({"pattern": "*(", "path": "."}));
+        assert!(
+            out.starts_with("error:") || out.contains("invalid regex"),
+            "got: {out}"
         );
-        assert!(out.starts_with("error:") || out.contains("invalid regex"), "got: {out}");
     }
 
     #[test]

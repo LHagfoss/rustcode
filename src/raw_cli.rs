@@ -1,8 +1,11 @@
+use crate::app::{AppState, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::app::{AppState, ChatMessage};
 
-pub async fn run_raw_cli(prompt: &str, model_override: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_raw_cli(
+    prompt: &str,
+    model_override: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -13,12 +16,20 @@ pub async fn run_raw_cli(prompt: &str, model_override: Option<&str>) -> Result<(
         if let Some(profile) = state.config.models.iter().find(|m| m.name == m_name) {
             state.api_base_url = profile.url.clone();
             state.model_name = profile.model.clone();
-            println!("Overriding model profile to: {} ({})", m_name, profile.model);
+            println!(
+                "Overriding model profile to: {} ({})",
+                m_name, profile.model
+            );
         } else {
-            println!("Warning: Model profile '{}' not found in config.toml. Using default.", m_name);
+            println!(
+                "Warning: Model profile '{}' not found in config.toml. Using default.",
+                m_name
+            );
         }
     }
-    state.history.push(ChatMessage::new("user", prompt.to_string()));
+    state
+        .history
+        .push(ChatMessage::new("user", prompt.to_string()));
 
     let state_arc = Arc::new(Mutex::new(state));
     let cancel_token = tokio_util::sync::CancellationToken::new();
@@ -90,7 +101,8 @@ pub async fn run_raw_cli(prompt: &str, model_override: Option<&str>) -> Result<(
             stream_buffer.clone(),
             false,
         )
-        .await {
+        .await
+        {
             println!("Stream error: {}", e);
             break;
         }
@@ -105,8 +117,11 @@ pub async fn run_raw_cli(prompt: &str, model_override: Option<&str>) -> Result<(
         if let Some((tool_name, tool_args)) = crate::tools::parse_tool_call(&response_content) {
             println!("\nDetected Tool Call:");
             println!("  Name: {}", tool_name);
-            println!("  Arguments: {}", serde_json::to_string_pretty(&tool_args).unwrap_or_default());
-            
+            println!(
+                "  Arguments: {}",
+                serde_json::to_string_pretty(&tool_args).unwrap_or_default()
+            );
+
             print!("\nExecute tool? (y/N): ");
             use std::io::Write;
             let _ = std::io::stdout().flush();
@@ -118,7 +133,8 @@ pub async fn run_raw_cli(prompt: &str, model_override: Option<&str>) -> Result<(
                 let result = crate::tools::execute(&tool_name, &tool_args);
                 println!("Result: {}", result);
                 let mut s = state_arc.lock().await;
-                s.history.push(ChatMessage::new("assistant", response_content));
+                s.history
+                    .push(ChatMessage::new("assistant", response_content));
                 s.history.push(ChatMessage::new("tool", result));
             } else {
                 println!("Tool call rejected. Exiting agent loop.");

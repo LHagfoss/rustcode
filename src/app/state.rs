@@ -24,7 +24,7 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
-    fn current_timestamp() -> String {
+fn current_timestamp() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
 
@@ -221,7 +221,6 @@ impl AppState {
             "Auto-Confirm: OFF"
         }
     }
-
 
     /// Context window of the active profile, in tokens.
     pub fn active_context_window(&self) -> u32 {

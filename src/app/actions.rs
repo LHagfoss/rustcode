@@ -1,6 +1,6 @@
+use crate::app::{AppState, AppStatus, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::app::{AppState, AppStatus, ChatMessage};
 
 pub async fn handle_escape(
     state: &Arc<Mutex<AppState>>,
@@ -60,7 +60,7 @@ pub async fn handle_enter(
         match cmd {
             "/status" => {
                 // Implement /status command logic here
-            },
+            }
             "/clear" | "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
@@ -428,7 +428,8 @@ pub async fn handle_enter(
         drop(s);
 
         tokio::spawn(async move {
-            crate::network::process_queue_orchestrator(client_clone, state_clone, token_clone).await;
+            crate::network::process_queue_orchestrator(client_clone, state_clone, token_clone)
+                .await;
         });
     }
     false
@@ -596,10 +597,8 @@ pub fn copy_last_reply(s: &mut AppState) {
                 "Copied last assistant reply to clipboard",
             ));
         } else {
-            s.history.push(ChatMessage::new(
-                "system",
-                "Failed to copy to clipboard",
-            ));
+            s.history
+                .push(ChatMessage::new("system", "Failed to copy to clipboard"));
         }
     } else {
         s.history.push(ChatMessage::new(

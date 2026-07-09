@@ -36,7 +36,9 @@ pub struct UserSettings {
 
 impl Default for UserSettings {
     fn default() -> Self {
-        Self { auto_confirm: false }
+        Self {
+            auto_confirm: false,
+        }
     }
 }
 
@@ -197,7 +199,10 @@ fn session_title(history: &[ChatMessage]) -> String {
 fn session_meta_from(path: PathBuf, history: &[ChatMessage]) -> SessionMeta {
     SessionMeta {
         title: session_title(history),
-        when: history.first().map(|m| m.timestamp.clone()).unwrap_or_default(),
+        when: history
+            .first()
+            .map(|m| m.timestamp.clone())
+            .unwrap_or_default(),
         message_count: history.len(),
         path,
     }
@@ -224,7 +229,9 @@ pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
 }
 
 fn prune_sessions(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     let mut files: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -300,7 +307,11 @@ pub fn load_session_file(path: &Path) -> Vec<ChatMessage> {
 pub fn delete_session_file(path: &Path) {
     // only ever remove files inside the sessions dir; the live history
     // file is rewritten by save_history instead
-    if path.parent().map(|p| p.ends_with(SESSIONS_DIR)).unwrap_or(false) {
+    if path
+        .parent()
+        .map(|p| p.ends_with(SESSIONS_DIR))
+        .unwrap_or(false)
+    {
         let _ = fs::remove_file(path);
     }
 }
@@ -355,7 +366,12 @@ mod tests {
         save_config_to(&dir, &config);
         let (_, _, loaded) = load_config_from(&dir);
         assert_eq!(
-            loaded.models.iter().find(|m| m.name == "apple-fm").unwrap().context_window,
+            loaded
+                .models
+                .iter()
+                .find(|m| m.name == "apple-fm")
+                .unwrap()
+                .context_window,
             Some(4096)
         );
     }
