@@ -831,6 +831,60 @@ fn search_web(args: &Value) -> Result<String, String> {
         search_query.push_str(&format!(" site:{}", dom));
     }
 
+    // 1. Try Tavily Search API first if key is present
+    if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+        let body = serde_json::json!({
+            "api_key": api_key,
+            "query": search_query,
+            "max_results": 5
+        });
+
+        let response = client
+            .post("https://api.tavily.com/search")
+            .json(&body)
+            .send()
+            .map_err(|e| format!("Tavily request failed: {e}"))?;
+
+        if response.status().is_success() {
+            let res_json: serde_json::Value = response
+                .json()
+                .map_err(|e| format!("failed to parse Tavily JSON: {e}"))?;
+
+            if let Some(results) = res_json.get("results").and_then(|r| r.as_array()) {
+                let mut out = String::new();
+                out.push_str(&format!(
+                    "Web Search Results for '{}' (via Tavily):\n\n",
+                    search_query
+                ));
+                for (i, r) in results.iter().enumerate() {
+                    let title = r
+                        .get("title")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("No Title");
+                    let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    let content = r.get("content").and_then(|c| c.as_str()).unwrap_or("");
+
+                    out.push_str(&format!(
+                        "{}. {}\n   Snippet: {}\n   Source: {}\n\n",
+                        i + 1,
+                        title,
+                        content,
+                        url
+                    ));
+                }
+                if !results.is_empty() {
+                    return Ok(out);
+                }
+            }
+        }
+    }
+
+    // 2. Fall back to DuckDuckGo scraping
     let url = format!(
         "https://html.duckduckgo.com/html/?q={}",
         urlencoding::encode(&search_query)
@@ -858,6 +912,11 @@ fn search_web(args: &Value) -> Result<String, String> {
         .text()
         .map_err(|e| format!("failed to read search response body: {e}"))?;
 
+    if html_content.contains("anomaly-modal") || html_content.contains("bots use DuckDuckGo too") {
+        return Err("Web search failed because DuckDuckGo triggered bot/CAPTCHA protection.\n\
+                   To bypass this and get reliable web search, please sign up for a free Tavily account (1,000 free searches/mo) at https://tavily.com and set the TAVILY_API_KEY environment variable.".to_string());
+    }
+
     let document = scraper::Html::parse_document(&html_content);
 
     let result_selector = scraper::Selector::parse(".result").unwrap();
@@ -865,7 +924,10 @@ fn search_web(args: &Value) -> Result<String, String> {
     let url_selector = scraper::Selector::parse(".result__url").unwrap();
 
     let mut out = String::new();
-    out.push_str(&format!("Web Search Results for '{}':\n\n", search_query));
+    out.push_str(&format!(
+        "Web Search Results for '{}' (via DuckDuckGo):\n\n",
+        search_query
+    ));
 
     let mut count = 0;
     for element in document.select(&result_selector) {
