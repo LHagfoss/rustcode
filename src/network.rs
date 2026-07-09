@@ -153,22 +153,20 @@ pub async fn stream_request(
         "temperature": 0.7,
         "max_tokens": 4096,
     });
-    dbg_log!("stream_request: Request payload: {}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    dbg_log!(
+        "stream_request: Request payload: {}",
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
 
-    let response = client
-        .post(url)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| {
-            let mut msg = format!("Request failed: {e}");
-            let mut src = std::error::Error::source(&e);
-            while let Some(cause) = src {
-                msg.push_str(&format!(": {cause}"));
-                src = cause.source();
-            }
-            msg
-        })?;
+    let response = client.post(url).json(&payload).send().await.map_err(|e| {
+        let mut msg = format!("Request failed: {e}");
+        let mut src = std::error::Error::source(&e);
+        while let Some(cause) = src {
+            msg.push_str(&format!(": {cause}"));
+            src = cause.source();
+        }
+        msg
+    })?;
 
     dbg_log!(
         "stream_request: Received response status: {}",
@@ -322,8 +320,7 @@ async fn confirm_and_execute(
     args: &serde_json::Value,
     display_name: &str,
 ) -> String {
-    let needs_confirm =
-        crate::tools::needs_confirmation(name) && !state.lock().await.auto_confirm;
+    let needs_confirm = crate::tools::needs_confirmation(name) && !state.lock().await.auto_confirm;
     if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
         return crate::tools::execute(name, args);
@@ -343,8 +340,14 @@ async fn confirm_and_execute(
         "?".to_string()
     };
     let (preview, content_bytes) = if name == "edit" {
-        let old_string = args.get("old_string").and_then(|s| s.as_str()).unwrap_or("");
-        let new_string = args.get("new_string").and_then(|s| s.as_str()).unwrap_or("");
+        let old_string = args
+            .get("old_string")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let new_string = args
+            .get("new_string")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
         let mut prev = String::new();
         for line in old_string.lines().take(5) {
             prev.push('-');
@@ -414,7 +417,10 @@ fn push_status_line(s: &mut AppState, text: String) {
 /// Drop a leading <think>...</think> block so the main agent only gets the
 /// subagent's actual reply, not its reasoning.
 fn strip_leading_think(text: &str) -> &str {
-    match (text.trim_start().starts_with("<think>"), text.find("</think>")) {
+    match (
+        text.trim_start().starts_with("<think>"),
+        text.find("</think>"),
+    ) {
         (true, Some(i)) => text[i + "</think>".len()..].trim_start(),
         _ => text,
     }
@@ -479,7 +485,11 @@ reply compact and information-dense.\n\n{}",
         stream_buffer.lock().await.content.clear();
         let (api_base_url, model_name) = {
             let s = state.lock().await;
-            let subagent = s.subagents.iter().find(|a| a.id == agent_id).expect("Subagent not found");
+            let subagent = s
+                .subagents
+                .iter()
+                .find(|a| a.id == agent_id)
+                .expect("Subagent not found");
             let target_model_name = subagent.model.as_deref().unwrap_or(&s.model_name);
             if let Some(profile) = s.config.models.iter().find(|p| p.name == target_model_name) {
                 (profile.url.clone(), profile.model.clone())
@@ -487,7 +497,12 @@ reply compact and information-dense.\n\n{}",
                 (s.api_base_url.clone(), s.model_name.clone())
             }
         };
-        dbg_log!("subagent {} round {}: requesting {}", agent_id, rounds, model_name);
+        dbg_log!(
+            "subagent {} round {}: requesting {}",
+            agent_id,
+            rounds,
+            model_name
+        );
         if let Err(e) = stream_request(
             client,
             Arc::clone(state),
@@ -532,7 +547,8 @@ reply compact and information-dense.\n\n{}",
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
-                a.history.push(ChatMessage::new("tool", format!("{name}: {result}")));
+                a.history
+                    .push(ChatMessage::new("tool", format!("{name}: {result}")));
             }
             continue;
         }
@@ -610,12 +626,14 @@ async fn handle_agent_tool(
                     .find(|a| a.id == id)
                     .map(|a| a.task.chars().take(40).collect::<String>())
                 else {
-                    let known: Vec<String> =
-                        s.subagents.iter().map(|a| a.id.to_string()).collect();
+                    let known: Vec<String> = s.subagents.iter().map(|a| a.id.to_string()).collect();
                     return if known.is_empty() {
                         "error: no subagents exist — use spawn_agent first".to_string()
                     } else {
-                        format!("error: no subagent with id {id}. Known ids: {}", known.join(", "))
+                        format!(
+                            "error: no subagent with id {id}. Known ids: {}",
+                            known.join(", ")
+                        )
                     };
                 };
                 push_status_line(&mut s, format!("agent-{id} ← follow-up ({task})"));
@@ -995,7 +1013,9 @@ mod tests {
 
     #[test]
     fn test_parse_multimodal_content_with_image_nonexistent() {
-        let val = parse_multimodal_content("Look at this: ![image](file:///nonexistent/path.png) interesting!");
+        let val = parse_multimodal_content(
+            "Look at this: ![image](file:///nonexistent/path.png) interesting!",
+        );
         assert!(val.is_array());
         let arr = val.as_array().unwrap();
         assert_eq!(arr.len(), 3);

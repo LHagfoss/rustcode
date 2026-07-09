@@ -19,10 +19,7 @@ pub fn environment_context() -> String {
     ));
 
     let now = chrono::Local::now();
-    out.push_str(&format!(
-        "- Today's date: {}\n",
-        now.format("%A %Y-%m-%d")
-    ));
+    out.push_str(&format!("- Today's date: {}\n", now.format("%A %Y-%m-%d")));
 
     if let Some(git) = git_context(&cwd) {
         out.push_str(&git);
@@ -60,7 +57,10 @@ fn git_context(cwd: &str) -> Option<String> {
         } else {
             let lines: Vec<&str> = trimmed.lines().collect();
             let shown: Vec<&str> = lines.iter().take(40).copied().collect();
-            out.push_str(&format!("- Working tree: {} changed path(s)\n", lines.len()));
+            out.push_str(&format!(
+                "- Working tree: {} changed path(s)\n",
+                lines.len()
+            ));
             out.push_str("```\n");
             out.push_str(&shown.join("\n"));
             if lines.len() > shown.len() {
@@ -183,4 +183,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

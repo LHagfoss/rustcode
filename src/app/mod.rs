@@ -1,5 +1,5 @@
-mod state;
 pub mod actions;
+mod state;
 pub mod suggestion;
 
 pub use actions::*;
