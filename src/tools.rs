@@ -1167,54 +1167,75 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     Some((name, args))
 }
 
-pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
+pub fn parse_tool_calls(text: &str) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
     let search_start = text
         .find("</think>")
         .map(|idx| idx + "</think>".len())
         .unwrap_or(0);
     let search_text = &text[search_start..];
 
-    for marker in &["```tool", "```json"] {
-        if let Some(start_code_idx) = search_text.find(marker) {
-            let start = start_code_idx + marker.len();
-            if let Some(end_code_offset) = search_text[start..].find("```") {
-                let end = start + end_code_offset;
-                if let Ok(json) = serde_json::from_str::<Value>(search_text[start..end].trim()) {
-                    if let Some(res) = extract_tool_call(&json) {
-                        return Some(res);
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(start_tag_idx) = text.find("<tool_call>") {
-        let start = start_tag_idx + "<tool_call>".len();
-        if let Some(end_tag_offset) = text[start..].find("</tool_call>") {
-            let end = start + end_tag_offset;
-            if let Ok(json) = serde_json::from_str::<Value>(text[start..end].trim()) {
+    // 1. Check for <tool_call>...</tool_call> tags
+    let mut current_pos = 0;
+    while let Some(start_idx) = search_text[current_pos..].find("<tool_call>") {
+        let start = current_pos + start_idx + "<tool_call>".len();
+        if let Some(end_offset) = search_text[start..].find("</tool_call>") {
+            let end = start + end_offset;
+            if let Ok(json) = serde_json::from_str::<Value>(search_text[start..end].trim()) {
                 if let Some(res) = extract_tool_call(&json) {
-                    return Some(res);
+                    out.push(res);
+                }
+            }
+            current_pos = end + "</tool_call>".len();
+        } else {
+            break;
+        }
+    }
+
+    // 2. Fallback: check for code blocks or JSON blocks
+    if out.is_empty() {
+        for marker in &["```tool", "```json"] {
+            let mut current_pos = 0;
+            while let Some(start_idx) = search_text[current_pos..].find(marker) {
+                let start = current_pos + start_idx + marker.len();
+                if let Some(end_offset) = search_text[start..].find("```") {
+                    let end = start + end_offset;
+                    if let Ok(json) = serde_json::from_str::<Value>(search_text[start..end].trim())
+                    {
+                        if let Some(res) = extract_tool_call(&json) {
+                            out.push(res);
+                        }
+                    }
+                    current_pos = end + "```".len();
+                } else {
+                    break;
                 }
             }
         }
     }
 
-    if let Some(first_brace) = search_text.find('{') {
-        if let Some(last_brace) = search_text.rfind('}') {
-            if last_brace > first_brace {
-                if let Ok(json) =
-                    serde_json::from_str::<Value>(search_text[first_brace..=last_brace].trim())
-                {
-                    if let Some(res) = extract_tool_call(&json) {
-                        return Some(res);
+    // 3. Fallback: single braced JSON
+    if out.is_empty() {
+        if let Some(first_brace) = search_text.find('{') {
+            if let Some(last_brace) = search_text.rfind('}') {
+                if last_brace > first_brace {
+                    if let Ok(json) =
+                        serde_json::from_str::<Value>(search_text[first_brace..=last_brace].trim())
+                    {
+                        if let Some(res) = extract_tool_call(&json) {
+                            out.push(res);
+                        }
                     }
                 }
             }
         }
     }
 
-    None
+    out
+}
+
+pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
+    parse_tool_calls(text).into_iter().next()
 }
 
 pub fn execute(name: &str, args: &Value) -> String {
@@ -1388,6 +1409,17 @@ mod tests {
         let (name, args) = parse_tool_call(text).unwrap();
         assert_eq!(name, "get_time");
         assert!(args.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_tool_calls_multiple() {
+        let text = "<tool_call>{\"name\": \"get_time\", \"arguments\": {}}</tool_call>\n\
+                    <tool_call>{\"name\": \"read_file\", \"arguments\": {\"path\": \"main.rs\"}}</tool_call>";
+        let calls = parse_tool_calls(text);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "get_time");
+        assert_eq!(calls[1].0, "read_file");
+        assert_eq!(calls[1].1.get("path").unwrap().as_str().unwrap(), "main.rs");
     }
 
     #[test]
