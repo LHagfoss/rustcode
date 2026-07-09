@@ -1119,8 +1119,8 @@ block with the `tool` language:\n\n\
 {\"name\": \"tool_name\", \"arguments\": {}}\n\
 ```\n\n\
 After the call, the tool result is sent back to you inside a \
-<tool_result> block, and you continue. Emit ONE tool call per turn, then wait \
-for the result. Do not narrate the JSON — just emit the block.\n\n\
+<tool_result> block, and you continue. You can emit one or more tool calls in parallel if needed; otherwise, wait \
+for the results before proceeding. Do not narrate the JSON — just emit the block.\n\n\
 Only call a tool when the task actually requires information or changes from \
 the filesystem, codebase, or shell. Greetings, chit-chat, and questions you \
 can answer from the conversation get a plain text reply with NO tool call.\n\n\
