@@ -1,5 +1,5 @@
 use crate::app::{AppState, AppStatus, ChatMessage, TokenUsage, ToolConfirmation};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, future::join_all};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -821,21 +821,73 @@ pub async fn process_queue_orchestrator(
                 break;
             }
 
-            if let Some((name, args)) = crate::tools::parse_tool_call(&final_content) {
-                dbg_log!("Parsed tool call request: '{}' with args: {:?}", name, args);
+            let tool_calls = crate::tools::parse_tool_calls(&final_content);
+            if !tool_calls.is_empty() {
+                dbg_log!("Parsed {} tool call requests", tool_calls.len());
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
                     tool_rounds += 1;
 
-                    let result = if crate::tools::is_agent_tool(&name) {
-                        handle_agent_tool(&client, &state, &cancel_token, &name, &args).await
+                    // Check if any tool call requires confirmation and auto_confirm is disabled
+                    let mut needs_confirmation = false;
+                    for (name, _) in &tool_calls {
+                        if crate::tools::needs_confirmation(name)
+                            && !state.lock().await.auto_confirm
+                        {
+                            needs_confirmation = true;
+                            break;
+                        }
+                    }
+
+                    let results = if needs_confirmation {
+                        dbg_log!(
+                            "Executing {} tool calls sequentially due to confirmation UI requirements",
+                            tool_calls.len()
+                        );
+                        let mut res = Vec::new();
+                        for (name, args) in &tool_calls {
+                            let result = if crate::tools::is_agent_tool(name) {
+                                handle_agent_tool(&client, &state, &cancel_token, name, args).await
+                            } else {
+                                confirm_and_execute(&state, name, args, name).await
+                            };
+                            res.push((name.clone(), result));
+                        }
+                        res
                     } else {
-                        confirm_and_execute(&state, &name, &args, &name).await
+                        dbg_log!("Executing {} tool calls in parallel", tool_calls.len());
+                        let mut futures = Vec::new();
+                        for (name, args) in &tool_calls {
+                            let client_clone = client.clone();
+                            let state_clone = Arc::clone(&state);
+                            let cancel_token_clone = cancel_token.clone();
+                            let name_clone = name.clone();
+                            let args_clone = args.clone();
+
+                            let fut = async move {
+                                let result = if crate::tools::is_agent_tool(&name_clone) {
+                                    handle_agent_tool(
+                                        &client_clone,
+                                        &state_clone,
+                                        &cancel_token_clone,
+                                        &name_clone,
+                                        &args_clone,
+                                    )
+                                    .await
+                                } else {
+                                    confirm_and_execute(
+                                        &state_clone,
+                                        &name_clone,
+                                        &args_clone,
+                                        &name_clone,
+                                    )
+                                    .await
+                                };
+                                (name_clone, result)
+                            };
+                            futures.push(fut);
+                        }
+                        join_all(futures).await
                     };
-                    dbg_log!(
-                        "Tool '{}' finished with result length: {} chars",
-                        name,
-                        result.len()
-                    );
 
                     if cancel_token.is_cancelled() {
                         dbg_log!("Orchestrator: Cancelled during tool execution");
@@ -849,8 +901,15 @@ pub async fn process_queue_orchestrator(
                     s.status = AppStatus::Streaming;
                     s.history
                         .push(ChatMessage::new("assistant", &final_content));
-                    s.history
-                        .push(ChatMessage::new("tool", format!("{name}: {result}")));
+                    for (name, result) in results {
+                        dbg_log!(
+                            "Tool '{}' finished with result length: {} chars",
+                            name,
+                            result.len()
+                        );
+                        s.history
+                            .push(ChatMessage::new("tool", format!("{name}: {result}")));
+                    }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
                     drop(s);
