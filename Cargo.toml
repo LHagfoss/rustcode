@@ -17,10 +17,17 @@ ignore = "0.4"
 rand = "0.10.2"
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 regex = "1"
-reqwest = { version = "0.13.4", features = ["json", "stream"] }
+reqwest = { version = "0.13.4", features = ["json", "stream", "blocking"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+scraper = "0.22.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+streaming-iterator = "0.1.9"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
 toml = "0.8.19"
+tree-sitter = "0.24.4"
+tree-sitter-rust = "0.23.2"
 unicode-width = "0.2.2"
+urlencoding = "2.1.3"
+
