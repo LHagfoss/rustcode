@@ -1,8 +1,8 @@
 <div align="center">
-# rustcode
+<h1>rustcode</h1>
 
-<img src="./image-1.png" alt="rustcode screenshot 1" width="400" />
-<img src="./image-2.png" alt="rustcode screenshot 2" width="400" />
+<img src="./image-1.png" alt="rustcode screenshot 1" width="600" />
+<img src="./image-2.png" alt="rustcode screenshot 2" width="600" />
 </div>
 
 ## initial
