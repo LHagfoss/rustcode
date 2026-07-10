@@ -3,6 +3,7 @@ mod clipboard;
 mod config;
 mod context;
 mod network;
+mod notifications;
 mod raw_cli;
 mod symbols;
 mod tools;
