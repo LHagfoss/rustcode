@@ -23,23 +23,24 @@ async fn count_tokens(text: &str) -> Option<u32> {
     if text.trim().is_empty() {
         return Some(0);
     }
-    let t = text.to_string();
-    tokio::task::spawn_blocking(move || {
-        let out = std::process::Command::new("fm")
-            .args(["token-count", "--quiet", &t])
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        std::str::from_utf8(&out.stdout)
-            .ok()?
-            .trim()
-            .parse::<u32>()
-            .ok()
-    })
-    .await
-    .ok()?
+    let mut cmd = tokio::process::Command::new("fm");
+    cmd.args(["token-count", "--quiet", text])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+
+    let child = cmd.spawn().ok()?;
+    let output_res =
+        tokio::time::timeout(std::time::Duration::from_secs(2), child.wait_with_output()).await;
+
+    let output = output_res.ok()?.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    std::str::from_utf8(&output.stdout)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
 }
 
 async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Option<TokenUsage> {
@@ -383,6 +384,9 @@ async fn confirm_and_execute(
         s.tool_confirmation_response = Some(tx);
         s.status = AppStatus::AwaitingToolConfirmation;
     }
+    // Notify the user via Ghostty / iTerm2 OSC sequence that a tool needs
+    // their approval. Harmless on other terminals.
+    let _ = crate::notifications::notify_pending_confirmation(name);
     dbg_log!("Awaiting user confirmation for '{}'", name);
     let result = match rx.await {
         Ok(true) => {
@@ -391,6 +395,8 @@ async fn confirm_and_execute(
         }
         Ok(false) => {
             dbg_log!("User denied tool call '{}'", name);
+            let _ =
+                crate::notifications::notify_finished(crate::notifications::FinishedStatus::Denied);
             "error: user denied this tool call".to_string()
         }
         Err(_) => {
@@ -936,6 +942,11 @@ pub async fn process_queue_orchestrator(
             s.status = AppStatus::Idle;
             drop(s);
 
+            // Notify the user that the agent loop completed successfully.
+            let _ = crate::notifications::notify_finished(
+                crate::notifications::FinishedStatus::Success,
+            );
+
             dbg_log!("Estimating token usage...");
             let usage = estimate_token_usage(&history_before, &final_content).await;
             dbg_log!("Token usage estimation result: {:?}", usage);
@@ -945,6 +956,10 @@ pub async fn process_queue_orchestrator(
 
         if cancel_token.is_cancelled() {
             dbg_log!("Cancel token is cancelled, exiting orchestrator loop");
+            // Best-effort: notify the user that a cancellation happened.
+            let _ = crate::notifications::notify_finished(
+                crate::notifications::FinishedStatus::Cancelled,
+            );
             break;
         }
     }
