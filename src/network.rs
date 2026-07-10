@@ -391,7 +391,14 @@ async fn confirm_and_execute(
     let result = match rx.await {
         Ok(true) => {
             dbg_log!("User approved tool call '{}', executing...", name);
-            crate::tools::execute(name, args)
+            // Spawn on the blocking thread pool so this doesn't hold up
+            // the async event loop (keypresses, redraws) while the tool
+            // does its I/O-bound work.
+            let name_owned = name.to_string();
+            let args_owned = args.clone();
+            tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned))
+                .await
+                .unwrap_or_else(|e| format!("tool panicked: {e}"))
         }
         Ok(false) => {
             dbg_log!("User denied tool call '{}'", name);
