@@ -32,6 +32,7 @@ pub async fn handle_enter(
 ) -> bool {
     let mut s = state.lock().await;
     s.reset_suggestion_cycle();
+    s.history_index = None;
 
     if s.active_suggestion_index.is_some() {
         apply_autocomplete(&mut s);
