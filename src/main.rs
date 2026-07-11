@@ -549,10 +549,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::Mouse(mouse) => {
                     use crossterm::event::MouseEventKind;
-                    if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) {
                         let amt = 3u16;
                         let mut s = app_state.lock().await;
-                        if !s.show_model_picker && !s.show_command_picker && !s.show_history_picker {
+                        if !s.show_model_picker && !s.show_command_picker && !s.show_history_picker
+                        {
                             match mouse.kind {
                                 MouseEventKind::ScrollUp => s.scroll_up(amt),
                                 MouseEventKind::ScrollDown => s.scroll_down(amt),

@@ -1,4 +1,4 @@
-use crate::app::{AppState, AppStatus, ChatMessage, TokenUsage, ToolConfirmation};
+use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker, TokenUsage, ToolConfirmation};
 use futures_util::{StreamExt, future::join_all};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -246,6 +246,12 @@ pub async fn stream_request(
                                             chunk.push_str(c_token);
                                         }
                                         if !chunk.is_empty() {
+                                            // Bump token counter (approximate)
+                                            let tokens = (chunk.len() as f64 * crate::app::TOKENS_PER_CHAR_APPROX) as u32;
+                                            if let Some(ref mut tracker) = state.lock().await.stream_tracker {
+                                                tracker.tokens_so_far += tokens;
+                                            }
+
                                             buffer.lock().await.content.push_str(&chunk);
                                             if !quiet {
                                                 let mut s = state.lock().await;
@@ -379,11 +385,15 @@ async fn confirm_and_execute(
             let mut s = state.lock().await;
             s.running_tools.push(tool_name.clone());
         }
-        let _cleanup = ToolCleanup { state: Arc::clone(state), tool_name };
+        let _cleanup = ToolCleanup {
+            state: Arc::clone(state),
+            tool_name,
+        };
 
         let name_owned = name.to_string();
         let args_owned = args.clone();
-        let run_fut = tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
+        let run_fut =
+            tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
 
         return tokio::select! {
             res = run_fut => {
@@ -410,8 +420,14 @@ async fn confirm_and_execute(
         "?".to_string()
     };
     let (preview, content_bytes) = if name == "edit" {
-        let search_block = args.get("search_block").and_then(|s| s.as_str()).unwrap_or("");
-        let replace_block = args.get("replace_block").and_then(|s| s.as_str()).unwrap_or("");
+        let search_block = args
+            .get("search_block")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let replace_block = args
+            .get("replace_block")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
 
         let diff = similar::TextDiff::from_lines(search_block, replace_block);
         let mut prev = String::new();
@@ -488,13 +504,22 @@ async fn confirm_and_execute(
                 let mut s = state.lock().await;
                 s.pending_tool_confirmation = None;
                 s.status = AppStatus::Streaming;
+                s.stream_tracker = Some(crate::app::StreamTracker {
+                    tokens_so_far: 0,
+                    start_time: std::time::Instant::now(),
+                });
                 s.running_tools.push(tool_name.clone());
             }
-            let _cleanup = ToolCleanup { state: Arc::clone(state), tool_name };
+            let _cleanup = ToolCleanup {
+                state: Arc::clone(state),
+                tool_name,
+            };
 
             let name_owned = name.to_string();
             let args_owned = args.clone();
-            let run_fut = tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
+            let run_fut = tokio::task::spawn_blocking(move || {
+                crate::tools::execute(&name_owned, &args_owned)
+            });
 
             tokio::select! {
                 res = run_fut => {
@@ -521,6 +546,10 @@ async fn confirm_and_execute(
         let mut s = state.lock().await;
         s.pending_tool_confirmation = None;
         s.status = AppStatus::Streaming;
+        s.stream_tracker = Some(crate::app::StreamTracker {
+            tokens_so_far: 0,
+            start_time: std::time::Instant::now(),
+        });
     }
     result
 }
@@ -659,8 +688,13 @@ reply compact and information-dense.\n\n{}",
             let chunk_content = stream_buffer.lock().await.content.clone();
             accumulated_content.push_str(&chunk_content);
 
-            if continuation_count < MAX_CONTINUATIONS && is_cut_off(&accumulated_content, finish_reason.as_deref()) {
-                dbg_log!("Subagent LLM response cut off. Auto-continuing (round {})...", continuation_count + 1);
+            if continuation_count < MAX_CONTINUATIONS
+                && is_cut_off(&accumulated_content, finish_reason.as_deref())
+            {
+                dbg_log!(
+                    "Subagent LLM response cut off. Auto-continuing (round {})...",
+                    continuation_count + 1
+                );
                 continuation_count += 1;
                 continue;
             }
@@ -691,8 +725,14 @@ reply compact and information-dense.\n\n{}",
                         .unwrap_or("");
                     push_status_line(&mut s, format!("agent-{agent_id} → {name} {target}"));
                 }
-                confirm_and_execute(state, cancel_token, &name, &args, &format!("agent-{agent_id} · {name}"))
-                    .await
+                confirm_and_execute(
+                    state,
+                    cancel_token,
+                    &name,
+                    &args,
+                    &format!("agent-{agent_id} · {name}"),
+                )
+                .await
             };
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
@@ -814,6 +854,10 @@ pub async fn process_queue_orchestrator(
                 break;
             }
             s.status = AppStatus::Streaming;
+            s.stream_tracker = Some(crate::app::StreamTracker {
+                tokens_so_far: 0,
+                start_time: std::time::Instant::now(),
+            });
             let prompt = s.pending_queue.remove(0);
             dbg_log!("Popped prompt from queue: '{}'", prompt);
             prompt
@@ -980,8 +1024,13 @@ pub async fn process_queue_orchestrator(
                     s.current_response = accumulated_content.clone();
                 }
 
-                if continuation_count < MAX_CONTINUATIONS && is_cut_off(&accumulated_content, finish_reason.as_deref()) {
-                    dbg_log!("Orchestrator: LLM response cut off. Auto-continuing (round {})...", continuation_count + 1);
+                if continuation_count < MAX_CONTINUATIONS
+                    && is_cut_off(&accumulated_content, finish_reason.as_deref())
+                {
+                    dbg_log!(
+                        "Orchestrator: LLM response cut off. Auto-continuing (round {})...",
+                        continuation_count + 1
+                    );
                     continuation_count += 1;
                     continue;
                 }
@@ -1100,6 +1149,10 @@ pub async fn process_queue_orchestrator(
                     let mut s = state.lock().await;
                     s.pending_tool_confirmation = None;
                     s.status = AppStatus::Streaming;
+                    s.stream_tracker = Some(crate::app::StreamTracker {
+                        tokens_so_far: 0,
+                        start_time: std::time::Instant::now(),
+                    });
                     s.history
                         .push(ChatMessage::new("assistant", &final_content));
                     for (name, result) in results {

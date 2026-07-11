@@ -243,6 +243,23 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
     lines_count
 }
 
+/// Returns ", Tokens/s: N.N" if streaming and tracker is active, else empty.
+fn format_tokens_info(state: &AppState) -> String {
+    use std::time::Duration;
+    if state.status != AppStatus::Streaming {
+        return String::new();
+    }
+    let Some(ref tracker) = state.stream_tracker else {
+        return String::new();
+    };
+    let elapsed = tracker.start_time.elapsed().as_secs_f64();
+    if elapsed < 0.1 {
+        return String::new();
+    } // wait a bit for stable reading
+    let tps = tracker.tokens_so_far as f64 / elapsed;
+    format!(", Tokens/s: {:.1}", tps)
+}
+
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
     let footer_area = chunks[3];
     let show_picker = state.modal_open();
@@ -368,7 +385,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             ((total_tokens as f32 / window as f32) * 100.0).min(100.0)
         };
 
-        vec![
+        let mut right_spans = vec![
             Span::styled(
                 "context used: ",
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
@@ -381,16 +398,27 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 format!(" ({:.0}%)", pct),
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             ),
-            Span::styled("   ", Style::default()),
-            Span::styled(
-                "ctrl+p",
-                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
-            ),
-            Span::styled(
-                " commands",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-            ),
-        ]
+        ];
+
+        let tps_info = format_tokens_info(state);
+        if !tps_info.is_empty() {
+            right_spans.push(Span::styled(
+                tps_info,
+                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            ));
+        }
+
+        right_spans.push(Span::styled("   ", Style::default()));
+        right_spans.push(Span::styled(
+            "ctrl+p",
+            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+        ));
+        right_spans.push(Span::styled(
+            " commands",
+            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        ));
+
+        right_spans
     };
 
     let footer_chunks = Layout::default()
