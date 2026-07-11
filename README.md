@@ -1,12 +1,11 @@
 <div align="center">
 <h1>rustcode</h1>
 
-<img src="./image-1.png" alt="rustcode screenshot 1" width="600" />
-<img src="./image-2.png" alt="rustcode screenshot 2" width="600" />
+<img src="./image-1.png" alt="rustcode screenshot 1"/>
 </div>
 
 ## initial
-`fmr` now `rustcode` is a lightweight Terminal User Interface (TUI) harness for testing Apple's on-device Foundation Models via `fm serve`. 
+`rustcode` is a lightweight Terminal User Interface (TUI) agent harness for testing originally Apple's on-device Foundation Models via `fm serve`. But now has turned out to create an overall Agent Harness and learn from that. It works on itself using a pipeline I made which is a self improvment loop (currently not working yet)
 
 ## new
 Now supports ollama or openai compatible APIs.
@@ -20,7 +19,8 @@ Major UI overhaul taking ALOT of inspo from OpenCodes Agent Harness.
     ```
 2. Build and run the TUI:
    `bash
-    cargo run
+    cargo build --release
+    cargo run --release
     `
    OR you can install it via `cargo install` and run it from anywhere:
    `bash
