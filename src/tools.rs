@@ -1100,6 +1100,9 @@ name, and `read_file` to read relevant sections. Understand the surrounding \
 code and project conventions before changing anything.\n\
 - Prefer `read_file` with `start_line` paging over dumping whole files. \
 Read just what you need.\n\
+- Prefer the `edit` tool over `write_file` for targeted code modifications. \
+When using `edit`, provide a unique `search_block` with enough context lines (usually 3-5 lines) \
+to avoid ambiguity, and ensure indentation and formatting match the target file exactly.\n\
 - Mirror existing style. Use the same libraries, naming, and patterns as the \
 surrounding code.\n\
 - After meaningful edits, tell the user how to verify (run tests, lint, \
