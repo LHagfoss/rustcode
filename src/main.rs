@@ -118,10 +118,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         was_responding = response_active;
-        if needs_redraw
-            || response_active
-            || last_draw.elapsed() >= std::time::Duration::from_millis(250)
-        {
+        let should_draw = needs_redraw
+            || (response_active && last_draw.elapsed() >= std::time::Duration::from_millis(50))
+            || last_draw.elapsed() >= std::time::Duration::from_millis(250);
+
+        if should_draw {
             let mut guard = app_state.lock().await;
             terminal.draw(|f| ui::render(f, &mut guard))?;
             drop(guard);
@@ -130,13 +131,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if event::poll(std::time::Duration::from_millis(50))? {
-            needs_redraw = true;
             let ev = event::read()?;
             match ev {
                 Event::Key(key) => {
                     if key.kind == event::KeyEventKind::Release {
                         continue;
                     }
+                    needs_redraw = true;
 
                     if key.modifiers.contains(event::KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
@@ -540,21 +541,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::FocusGained => {
                     terminal_focused = true;
+                    needs_redraw = true;
                 }
                 Event::FocusLost => {
                     terminal_focused = false;
+                    needs_redraw = true;
                 }
                 Event::Mouse(mouse) => {
                     use crossterm::event::MouseEventKind;
-                    let amt = 3u16;
-                    let mut s = app_state.lock().await;
-                    if s.show_model_picker || s.show_command_picker || s.show_history_picker {
-                        // don't scroll picker via mouse
-                    } else {
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => s.scroll_up(amt),
-                            MouseEventKind::ScrollDown => s.scroll_down(amt),
-                            _ => {}
+                    if matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+                        let amt = 3u16;
+                        let mut s = app_state.lock().await;
+                        if !s.show_model_picker && !s.show_command_picker && !s.show_history_picker {
+                            match mouse.kind {
+                                MouseEventKind::ScrollUp => s.scroll_up(amt),
+                                MouseEventKind::ScrollDown => s.scroll_down(amt),
+                                _ => {}
+                            }
+                            needs_redraw = true;
                         }
                     }
                 }
@@ -565,8 +569,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.insert_char(c);
                     }
                     s.reset_suggestion_cycle();
+                    needs_redraw = true;
                 }
-                _ => {}
+                Event::Resize(_, _) => {
+                    needs_redraw = true;
+                }
             }
         }
     }
