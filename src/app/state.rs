@@ -118,6 +118,11 @@ pub struct AppState {
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
+    /// The names of user-approved tools currently running in the background.
+    /// While this is not empty, the modal overlay stays closed and the user can
+    /// keep working normally.
+    pub running_tools: Vec<String>,
+
     pub auto_confirm: bool,
 
     pub subagents: Vec<SubAgent>,
@@ -193,6 +198,7 @@ impl AppState {
             history_picker_sessions: Vec::new(),
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
+            running_tools: Vec::new(),
             auto_confirm: false,
             subagents: Vec::new(),
             next_subagent_id: 1,
