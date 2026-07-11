@@ -146,7 +146,7 @@ pub async fn stream_request(
     messages: &[serde_json::Value],
     buffer: Arc<Mutex<StreamBuffer>>,
     quiet: bool,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let payload = serde_json::json!({
         "model": model,
         "messages": messages,
@@ -193,12 +193,13 @@ pub async fn stream_request(
     let mut line_buf = String::with_capacity(4096);
     let mut line_count = 0;
     let mut in_reasoning = false;
+    let mut finish_reason: Option<String> = None;
 
     dbg_log!("stream_request: Starting SSE stream read loop");
     loop {
         if cancel_token.is_cancelled() {
             dbg_log!("stream_request: Stream reading cancelled via token");
-            return Ok(());
+            return Ok(None);
         }
 
         tokio::select! {
@@ -219,6 +220,9 @@ pub async fn stream_request(
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
                                     if !choices.is_empty() {
+                                        if let Some(fr) = choices[0].get("finish_reason").and_then(|f| f.as_str()) {
+                                            finish_reason = Some(fr.to_string());
+                                        }
                                         let delta = choices[0].get("delta");
                                         let reasoning = delta
                                             .and_then(|d| d.get("reasoning").or_else(|| d.get("reasoning_content")))
@@ -282,7 +286,7 @@ pub async fn stream_request(
             }
             _ = cancel_token.cancelled() => {
                 dbg_log!("stream_request: Cancelled via select branch");
-                return Ok(());
+                return Ok(None);
             }
         }
     }
@@ -309,7 +313,35 @@ pub async fn stream_request(
         "stream_request: Stream request loop ended. Total content: {} chars",
         buf.content.len()
     );
-    Ok(())
+    Ok(finish_reason)
+}
+
+fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
+    if finish_reason == Some("length") {
+        return true;
+    }
+
+    // Check for unclosed <think> tag
+    let has_think = content.contains("<think>");
+    let has_think_end = content.contains("</think>");
+    if has_think && !has_think_end {
+        return true;
+    }
+
+    // Check for unclosed tool block
+    let triple_backticks_count = content.matches("```").count();
+    if triple_backticks_count % 2 != 0 {
+        return true;
+    }
+
+    // Check for unclosed <tool_call> tag
+    let has_tool_call = content.contains("<tool_call>");
+    let has_tool_call_end = content.contains("</tool_call>");
+    if has_tool_call && !has_tool_call_end {
+        return true;
+    }
+
+    false
 }
 
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
@@ -590,21 +622,52 @@ reply compact and information-dense.\n\n{}",
             rounds,
             model_name
         );
-        if let Err(e) = stream_request(
-            client,
-            Arc::clone(state),
-            cancel_token.clone(),
-            &api_base_url,
-            &model_name,
-            &msgs,
-            Arc::clone(&stream_buffer),
-            true,
-        )
-        .await
-        {
-            return format!("error: subagent request failed: {e}");
+        let mut accumulated_content = String::new();
+        let mut continuation_count = 0;
+        const MAX_CONTINUATIONS: usize = 5;
+
+        loop {
+            let mut current_msgs = msgs.clone();
+            if !accumulated_content.is_empty() {
+                current_msgs.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": accumulated_content
+                }));
+                current_msgs.push(serde_json::json!({
+                    "role": "user",
+                    "content": "continue"
+                }));
+            }
+            stream_buffer.lock().await.content.clear();
+            let stream_result = stream_request(
+                client,
+                Arc::clone(state),
+                cancel_token.clone(),
+                &api_base_url,
+                &model_name,
+                &current_msgs,
+                Arc::clone(&stream_buffer),
+                true,
+            )
+            .await;
+
+            let finish_reason = match stream_result {
+                Ok(fr) => fr,
+                Err(e) => return format!("error: subagent request failed: {e}"),
+            };
+
+            let chunk_content = stream_buffer.lock().await.content.clone();
+            accumulated_content.push_str(&chunk_content);
+
+            if continuation_count < MAX_CONTINUATIONS && is_cut_off(&accumulated_content, finish_reason.as_deref()) {
+                dbg_log!("Subagent LLM response cut off. Auto-continuing (round {})...", continuation_count + 1);
+                continuation_count += 1;
+                continue;
+            }
+            break;
         }
-        let content = stream_buffer.lock().await.content.clone();
+
+        let content = accumulated_content;
         if content.is_empty() {
             return "error: subagent returned an empty reply".to_string();
         }
@@ -852,34 +915,84 @@ pub async fn process_queue_orchestrator(
                 api_base_url,
                 model_name
             );
-            let stream_result = stream_request(
-                &client,
-                Arc::clone(&state),
-                cancel_token.clone(),
-                &api_base_url,
-                &model_name,
-                &msgs,
-                Arc::clone(&stream_buffer),
-                false,
-            )
-            .await;
+            let mut accumulated_content = String::new();
+            let mut continuation_count = 0;
+            const MAX_CONTINUATIONS: usize = 5;
+            let mut stream_err = None;
 
-            if cancel_token.is_cancelled() {
-                dbg_log!("Orchestrator: Stream request cancelled by token");
-                let mut s = state.lock().await;
-                let final_content = stream_buffer.lock().await.content.clone();
-                if !final_content.is_empty() {
-                    let mut msg = ChatMessage::new("assistant", final_content);
-                    msg.response_time_ms = Some(prompt_start_time.elapsed().as_millis() as u64);
-                    s.history.push(msg);
-                    crate::config::save_history(&s.history);
+            loop {
+                let mut current_msgs = msgs.clone();
+                if !accumulated_content.is_empty() {
+                    current_msgs.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": accumulated_content
+                    }));
+                    current_msgs.push(serde_json::json!({
+                        "role": "user",
+                        "content": "continue"
+                    }));
                 }
-                s.current_response.clear();
-                s.status = AppStatus::Idle;
+
+                state.lock().await.current_response.clear();
+                stream_buffer.lock().await.content.clear();
+
+                let stream_result = stream_request(
+                    &client,
+                    Arc::clone(&state),
+                    cancel_token.clone(),
+                    &api_base_url,
+                    &model_name,
+                    &current_msgs,
+                    Arc::clone(&stream_buffer),
+                    false,
+                )
+                .await;
+
+                if cancel_token.is_cancelled() {
+                    dbg_log!("Orchestrator: Stream request cancelled by token");
+                    let mut s = state.lock().await;
+                    let chunk_content = stream_buffer.lock().await.content.clone();
+                    accumulated_content.push_str(&chunk_content);
+                    if !accumulated_content.is_empty() {
+                        let mut msg = ChatMessage::new("assistant", accumulated_content.clone());
+                        msg.response_time_ms = Some(prompt_start_time.elapsed().as_millis() as u64);
+                        s.history.push(msg);
+                        crate::config::save_history(&s.history);
+                    }
+                    s.current_response.clear();
+                    s.status = AppStatus::Idle;
+                    break;
+                }
+
+                let finish_reason = match stream_result {
+                    Ok(fr) => fr,
+                    Err(e) => {
+                        stream_err = Some(e);
+                        break;
+                    }
+                };
+
+                let chunk_content = stream_buffer.lock().await.content.clone();
+                accumulated_content.push_str(&chunk_content);
+
+                {
+                    let mut s = state.lock().await;
+                    s.current_response = accumulated_content.clone();
+                }
+
+                if continuation_count < MAX_CONTINUATIONS && is_cut_off(&accumulated_content, finish_reason.as_deref()) {
+                    dbg_log!("Orchestrator: LLM response cut off. Auto-continuing (round {})...", continuation_count + 1);
+                    continuation_count += 1;
+                    continue;
+                }
                 break;
             }
 
-            if let Err(e) = stream_result {
+            if cancel_token.is_cancelled() {
+                break;
+            }
+
+            if let Some(e) = stream_err {
                 dbg_log!("Stream request failed: {}", e);
                 let mut s = state.lock().await;
 
@@ -894,7 +1007,7 @@ pub async fn process_queue_orchestrator(
                 break;
             }
 
-            let final_content = stream_buffer.lock().await.content.clone();
+            let final_content = accumulated_content;
             dbg_log!(
                 "Stream completed successfully. Content length: {} chars",
                 final_content.len()
