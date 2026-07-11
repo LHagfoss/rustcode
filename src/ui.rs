@@ -247,7 +247,10 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
     let footer_area = chunks[3];
     let show_picker = state.modal_open();
 
-    let left_spans = if state.status == AppStatus::Streaming || state.status == AppStatus::Queued {
+    let left_spans = if state.status == AppStatus::Streaming
+        || state.status == AppStatus::Queued
+        || !state.running_tools.is_empty()
+    {
         let millis = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
@@ -277,7 +280,12 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             ));
         }
 
-        if !state.pending_queue.is_empty() {
+        if let Some(tool_name) = state.running_tools.first() {
+            spans.push(Span::styled(
+                format!("  executing: {tool_name}"),
+                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            ));
+        } else if !state.pending_queue.is_empty() {
             spans.push(Span::styled(
                 format!("  queued: {}", state.pending_queue.len()),
                 get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
@@ -692,6 +700,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     }
 
     if state.status == AppStatus::Streaming || state.status == AppStatus::Queued {
+        let label = if let Some(tool_name) = state.running_tools.first() {
+            format!("Executing {tool_name}")
+        } else {
+            "Build".to_string()
+        };
+
         if state.current_response.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled(
@@ -699,7 +713,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
-                    "Build",
+                    label,
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
@@ -728,7 +742,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
-                    "Build",
+                    label,
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
