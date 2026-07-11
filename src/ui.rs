@@ -245,19 +245,13 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
 
 /// Returns ", Tokens/s: N.N" if streaming and tracker is active, else empty.
 fn format_tokens_info(state: &AppState) -> String {
-    use std::time::Duration;
-    if state.status != AppStatus::Streaming {
-        return String::new();
+    if let Some(ref tracker) = state.stream_tracker {
+        let (tps, _) = tracker.snapshot();
+        return format!(", Tokens/s: {:.1}", tps);
     }
-    let Some(ref tracker) = state.stream_tracker else {
-        return String::new();
-    };
-    let elapsed = tracker.start_time.elapsed().as_secs_f64();
-    if elapsed < 0.1 {
-        return String::new();
-    } // wait a bit for stable reading
-    let tps = tracker.tokens_so_far as f64 / elapsed;
-    format!(", Tokens/s: {:.1}", tps)
+
+    // Always show TPS — 0 when idle
+    format!(", Tokens/s: {:.1}", 0.0)
 }
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
@@ -610,6 +604,76 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
     input_margin
 }
 
+fn format_tool_call_brief(name: &str, args: &serde_json::Value) -> String {
+    match name {
+        "read_file" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+            if let Some(search) = args.get("search").and_then(|v| v.as_str()) {
+                format!("read_file: search \"{}\" in {}", search, path)
+            } else if let Some(start) = args.get("start_line").and_then(|v| v.as_i64()) {
+                format!("read_file: read {} starting at line {}", path, start)
+            } else if args.get("ranges").is_some() {
+                format!("read_file: read ranges in {}", path)
+            } else {
+                format!("read_file: read {}", path)
+            }
+        }
+        "create_file" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("create_file: create {}", path)
+        }
+        "write_file" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("write_file: overwrite {}", path)
+        }
+        "edit" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("edit: modify {}", path)
+        }
+        "delete_file" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("delete_file: delete {}", path)
+        }
+        "move_file" => {
+            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
+            let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("move_file: {} -> {}", src, dest)
+        }
+        "copy_file" => {
+            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
+            let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("copy_file: {} -> {}", src, dest)
+        }
+        "run_command" => {
+            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("run_command: {}", cmd)
+        }
+        "search_web" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("search_web: \"{}\"", query)
+        }
+        "find_symbol" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("find_symbol: \"{}\"", query)
+        }
+        "grep" => {
+            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            format!("grep: \"{}\" in {}", pattern, path)
+        }
+        "glob" => {
+            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            format!("glob: \"{}\" in {}", pattern, path)
+        }
+        "list_directory" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            format!("list_directory: {}", path)
+        }
+        _ => format!("{}: {}", name, args),
+    }
+}
+
 fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
     let inner_area = chunks[0].inner(Margin {
         vertical: 0,
@@ -645,18 +709,79 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
             lines.push(Line::from(""));
         } else if msg.role == "tool" {
-            for (i, raw_line) in msg.content.lines().enumerate() {
-                let prefix = if i == 0 { "⚙ " } else { "  " };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        prefix,
-                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        raw_line,
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                ]));
+            let (tool_name, tool_result) = if let Some(pos) = msg.content.find(": ") {
+                (&msg.content[..pos], &msg.content[pos + 2..])
+            } else {
+                ("", msg.content.as_str())
+            };
+
+            let summary = if tool_name == "read_file" || tool_name == "view_file" {
+                format!(
+                    "completed (read {} lines, {} bytes)",
+                    tool_result.lines().count(),
+                    tool_result.len()
+                )
+            } else if tool_name == "grep" {
+                format!("completed ({} matching lines)", tool_result.lines().count())
+            } else if tool_name == "glob" {
+                format!("completed ({} files found)", tool_result.lines().count())
+            } else if tool_name == "list_directory" {
+                format!("completed ({} entries listed)", tool_result.lines().count())
+            } else if tool_name == "find_symbol" {
+                format!("completed ({} symbols found)", tool_result.lines().count())
+            } else if tool_name == "get_project_map" {
+                format!("completed ({} bytes of map generated)", tool_result.len())
+            } else if tool_name == "search_web" {
+                format!("completed ({} bytes of search results)", tool_result.len())
+            } else {
+                tool_result.to_string()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "⚙ ",
+                    get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    format!("{}: ", tool_name),
+                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    summary,
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                ),
+            ]));
+
+            if let Some(ref diff) = msg.diff {
+                for line_str in diff.lines() {
+                    let style = if line_str.starts_with('+') {
+                        Style::default().fg(Color::Rgb(40, 167, 69))
+                    } else if line_str.starts_with('-') {
+                        Style::default().fg(Color::Rgb(220, 53, 69))
+                    } else {
+                        Style::default().fg(COLOR_MUTED)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            "  ",
+                            get_themed_style(
+                                COLOR_SECONDARY,
+                                COLOR_BG,
+                                Modifier::empty(),
+                                show_picker,
+                            ),
+                        ),
+                        Span::styled(
+                            line_str.to_string(),
+                            get_themed_style(
+                                style.fg.unwrap_or(COLOR_MUTED),
+                                COLOR_BG,
+                                style.add_modifier,
+                                show_picker,
+                            ),
+                        ),
+                    ]));
+                }
             }
             lines.push(Line::from(""));
         } else if msg.role == "user" {
@@ -701,13 +826,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(""));
         } else if msg.role == "assistant" {
             if let Some((name, args)) = crate::tools::parse_tool_call(&msg.content) {
+                let brief = format_tool_call_brief(&name, &args);
                 lines.push(Line::from(vec![
                     Span::styled(
                         "→ ",
                         get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
                     ),
                     Span::styled(
-                        format!("calling {name} {args}"),
+                        brief,
                         get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
                     ),
                 ]));
