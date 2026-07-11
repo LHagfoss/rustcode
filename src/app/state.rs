@@ -31,18 +31,49 @@ pub const TOKENS_PER_CHAR_APPROX: f64 = 0.25;
 #[derive(Debug, Clone)]
 pub struct StreamTracker {
     pub tokens_so_far: u32,
-    pub start_time: std::time::Instant,
+    /// Updated each time a chunk is received; used for per-second rate.
+    pub last_update: std::time::Instant,
+    /// EMA (alpha=0.35) of recent per-chunk rates — drives the smoothed TPS display.
+    pub tps_ema: f64,
+    /// Snapshot of tokens_so_far at `last_update` for computing per-interval delta.
+    prev_tokens: u32,
 }
 
 impl StreamTracker {
-    /// Returns (approximate_tokens_per_sec, total_approx_tokens) at this instant.
-    pub fn snapshot(&self) -> (f64, u32) {
-        let elapsed = self.start_time.elapsed().as_secs_f64();
-        if elapsed < 0.05 {
-            return (0.0, self.tokens_so_far);
+    pub fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            tokens_so_far: 0,
+            last_update: now,
+            tps_ema: 0.0,
+            prev_tokens: 0,
         }
-        let tps = self.tokens_so_far as f64 / elapsed;
-        (tps, self.tokens_so_far)
+    }
+
+    /// Called each time a new chunk arrives during streaming. Updates the EMA-smoothed
+    /// tokens-per-second rate used for display.
+    pub fn record_chunk(&mut self) {
+        let now = std::time::Instant::now();
+        let dt = (now - self.last_update).as_secs_f64().max(0.05);
+        let delta = self.tokens_so_far.saturating_sub(self.prev_tokens) as f64;
+        let raw_rate = delta / dt;
+
+        let alpha = 0.35; // EMA smoothing — responsive to recent activity, less jittery than raw
+        self.tps_ema = alpha * raw_rate + (1.0 - alpha) * self.tps_ema;
+
+        self.prev_tokens = self.tokens_so_far;
+        self.last_update = now;
+    }
+    /// Returns the current EMA-smoothed tokens/sec and total approximated tokens.
+    pub fn snapshot(&self) -> (f64, u32) {
+        let now = std::time::Instant::now();
+        // Slow decay when no chunks arrive — drops to 0 in ~3-4s of silence
+        if (now - self.last_update).as_secs_f64() > 0.5 {
+            let since_update = (now - self.last_update).as_secs_f64();
+            let decay = (1.0 - 0.04 * since_update).max(0.0);
+            return (self.tps_ema * decay, self.tokens_so_far);
+        }
+        (self.tps_ema.max(0.0), self.tokens_so_far)
     }
 }
 
@@ -79,6 +110,8 @@ pub struct ChatMessage {
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_time_ms: Option<u64>,
+    #[serde(skip)]
+    pub diff: Option<String>,
 }
 
 impl ChatMessage {
@@ -89,7 +122,13 @@ impl ChatMessage {
             token_usage: None,
             timestamp: current_timestamp(),
             response_time_ms: None,
+            diff: None,
         }
+    }
+
+    pub fn with_diff(mut self, diff: Option<String>) -> Self {
+        self.diff = diff;
+        self
     }
 }
 

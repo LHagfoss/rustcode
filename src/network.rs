@@ -250,6 +250,7 @@ pub async fn stream_request(
                                             let tokens = (chunk.len() as f64 * crate::app::TOKENS_PER_CHAR_APPROX) as u32;
                                             if let Some(ref mut tracker) = state.lock().await.stream_tracker {
                                                 tracker.tokens_so_far += tokens;
+                                                tracker.record_chunk();
                                             }
 
                                             buffer.lock().await.content.push_str(&chunk);
@@ -353,73 +354,8 @@ fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
 /// tool. `display_name` is what the modal shows — subagent calls prefix it
 /// with the agent id so the user knows who is asking.
-async fn confirm_and_execute(
-    state: &Arc<Mutex<AppState>>,
-    cancel_token: &tokio_util::sync::CancellationToken,
-    name: &str,
-    args: &serde_json::Value,
-    display_name: &str,
-) -> String {
-    struct ToolCleanup {
-        state: Arc<Mutex<AppState>>,
-        tool_name: String,
-    }
-    impl Drop for ToolCleanup {
-        fn drop(&mut self) {
-            let state = self.state.clone();
-            let tool_name = self.tool_name.clone();
-            tokio::spawn(async move {
-                let mut s = state.lock().await;
-                if let Some(pos) = s.running_tools.iter().position(|t| t == &tool_name) {
-                    s.running_tools.remove(pos);
-                }
-            });
-        }
-    }
-
-    let needs_confirm = crate::tools::needs_confirmation(name) && !state.lock().await.auto_confirm;
-    if !needs_confirm {
-        dbg_log!("Executing tool '{}' immediately...", name);
-        let tool_name = name.to_string();
-        {
-            let mut s = state.lock().await;
-            s.running_tools.push(tool_name.clone());
-        }
-        let _cleanup = ToolCleanup {
-            state: Arc::clone(state),
-            tool_name,
-        };
-
-        let name_owned = name.to_string();
-        let args_owned = args.clone();
-        let run_fut =
-            tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
-
-        return tokio::select! {
-            res = run_fut => {
-                res.unwrap_or_else(|e| format!("tool panicked: {e}"))
-            }
-            _ = cancel_token.cancelled() => {
-                dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
-                "error: tool execution cancelled by user".to_string()
-            }
-        };
-    }
-
-    dbg_log!("Tool '{}' requires confirmation", name);
-    let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
-        p.to_string()
-    } else if let Some(cmd) = args.get("command").and_then(|c| c.as_str()) {
-        cmd.to_string()
-    } else if let (Some(src), Some(dest)) = (
-        args.get("src").and_then(|s| s.as_str()),
-        args.get("dest").and_then(|d| d.as_str()),
-    ) {
-        format!("{src} -> {dest}")
-    } else {
-        "?".to_string()
-    };
-    let (preview, content_bytes) = if name == "edit" {
+fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
+    if name == "edit" {
         let search_block = args
             .get("search_block")
             .and_then(|s| s.as_str())
@@ -447,8 +383,9 @@ async fn confirm_and_execute(
                 }
             }
         }
-        (prev, replace_block.len())
+        Some(prev)
     } else if name == "write_file" || name == "create_file" {
+        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
         let old_content = std::fs::read_to_string(&path).unwrap_or_default();
         let new_content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
@@ -474,7 +411,86 @@ async fn confirm_and_execute(
                 }
             }
         }
-        (prev, new_content.len())
+        Some(prev)
+    } else {
+        None
+    }
+}
+
+/// Show the Y/N confirmation modal (when the tool requires it) and run the
+/// tool. `display_name` is what the modal shows — subagent calls prefix it
+/// with the agent id so the user knows who is asking.
+async fn confirm_and_execute(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    name: &str,
+    args: &serde_json::Value,
+    display_name: &str,
+) -> (String, Option<String>) {
+    struct ToolCleanup {
+        state: Arc<Mutex<AppState>>,
+        tool_name: String,
+    }
+    impl Drop for ToolCleanup {
+        fn drop(&mut self) {
+            let state = self.state.clone();
+            let tool_name = self.tool_name.clone();
+            tokio::spawn(async move {
+                let mut s = state.lock().await;
+                if let Some(pos) = s.running_tools.iter().position(|t| t == &tool_name) {
+                    s.running_tools.remove(pos);
+                }
+            });
+        }
+    }
+
+    let diff_opt = get_diff_preview(name, args);
+
+    let needs_confirm = crate::tools::needs_confirmation(name) && !state.lock().await.auto_confirm;
+    if !needs_confirm {
+        dbg_log!("Executing tool '{}' immediately...", name);
+        let tool_name = name.to_string();
+        {
+            let mut s = state.lock().await;
+            s.running_tools.push(tool_name.clone());
+        }
+        let _cleanup = ToolCleanup {
+            state: Arc::clone(state),
+            tool_name,
+        };
+
+        let name_owned = name.to_string();
+        let args_owned = args.clone();
+        let run_fut =
+            tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
+
+        let res = tokio::select! {
+            res = run_fut => {
+                res.unwrap_or_else(|e| format!("tool panicked: {e}"))
+            }
+            _ = cancel_token.cancelled() => {
+                dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
+                "error: tool execution cancelled by user".to_string()
+            }
+        };
+        return (res, diff_opt);
+    }
+
+    dbg_log!("Tool '{}' requires confirmation", name);
+    let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+        p.to_string()
+    } else if let Some(cmd) = args.get("command").and_then(|c| c.as_str()) {
+        cmd.to_string()
+    } else if let (Some(src), Some(dest)) = (
+        args.get("src").and_then(|s| s.as_str()),
+        args.get("dest").and_then(|d| d.as_str()),
+    ) {
+        format!("{src} -> {dest}")
+    } else {
+        "?".to_string()
+    };
+    let (preview, content_bytes) = if let Some(ref d) = diff_opt {
+        (d.clone(), d.len())
     } else {
         let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
         let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
@@ -504,10 +520,7 @@ async fn confirm_and_execute(
                 let mut s = state.lock().await;
                 s.pending_tool_confirmation = None;
                 s.status = AppStatus::Streaming;
-                s.stream_tracker = Some(crate::app::StreamTracker {
-                    tokens_so_far: 0,
-                    start_time: std::time::Instant::now(),
-                });
+                s.stream_tracker = Some(StreamTracker::new());
                 s.running_tools.push(tool_name.clone());
             }
             let _cleanup = ToolCleanup {
@@ -546,12 +559,9 @@ async fn confirm_and_execute(
         let mut s = state.lock().await;
         s.pending_tool_confirmation = None;
         s.status = AppStatus::Streaming;
-        s.stream_tracker = Some(crate::app::StreamTracker {
-            tokens_so_far: 0,
-            start_time: std::time::Instant::now(),
-        });
+        s.stream_tracker = Some(StreamTracker::new());
     }
-    result
+    (result, diff_opt)
 }
 
 /// Max tool rounds a subagent gets before being cut off.
@@ -713,8 +723,11 @@ reply compact and information-dense.\n\n{}",
                 );
             }
             rounds += 1;
-            let result = if crate::tools::is_agent_tool(&name) {
-                "error: subagents cannot spawn or message other agents".to_string()
+            let (result, diff_opt) = if crate::tools::is_agent_tool(&name) {
+                (
+                    "error: subagents cannot spawn or message other agents".to_string(),
+                    None,
+                )
             } else {
                 {
                     let mut s = state.lock().await;
@@ -737,8 +750,9 @@ reply compact and information-dense.\n\n{}",
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
-                a.history
-                    .push(ChatMessage::new("tool", format!("{name}: {result}")));
+                a.history.push(
+                    ChatMessage::new("tool", format!("{name}: {result}")).with_diff(diff_opt),
+                );
             }
             continue;
         }
@@ -854,10 +868,7 @@ pub async fn process_queue_orchestrator(
                 break;
             }
             s.status = AppStatus::Streaming;
-            s.stream_tracker = Some(crate::app::StreamTracker {
-                tokens_so_far: 0,
-                start_time: std::time::Instant::now(),
-            });
+            s.stream_tracker = Some(StreamTracker::new());
             let prompt = s.pending_queue.remove(0);
             dbg_log!("Popped prompt from queue: '{}'", prompt);
             prompt
@@ -1094,12 +1105,16 @@ pub async fn process_queue_orchestrator(
                         );
                         let mut res = Vec::new();
                         for (name, args) in &tool_calls {
-                            let result = if crate::tools::is_agent_tool(name) {
-                                handle_agent_tool(&client, &state, &cancel_token, name, args).await
+                            let (result, diff_opt) = if crate::tools::is_agent_tool(name) {
+                                (
+                                    handle_agent_tool(&client, &state, &cancel_token, name, args)
+                                        .await,
+                                    None,
+                                )
                             } else {
                                 confirm_and_execute(&state, &cancel_token, name, args, name).await
                             };
-                            res.push((name.clone(), result));
+                            res.push((name.clone(), result, diff_opt));
                         }
                         res
                     } else {
@@ -1113,15 +1128,19 @@ pub async fn process_queue_orchestrator(
                             let args_clone = args.clone();
 
                             let fut = async move {
-                                let result = if crate::tools::is_agent_tool(&name_clone) {
-                                    handle_agent_tool(
-                                        &client_clone,
-                                        &state_clone,
-                                        &cancel_token_clone,
-                                        &name_clone,
-                                        &args_clone,
+                                let (result, diff_opt) = if crate::tools::is_agent_tool(&name_clone)
+                                {
+                                    (
+                                        handle_agent_tool(
+                                            &client_clone,
+                                            &state_clone,
+                                            &cancel_token_clone,
+                                            &name_clone,
+                                            &args_clone,
+                                        )
+                                        .await,
+                                        None,
                                     )
-                                    .await
                                 } else {
                                     confirm_and_execute(
                                         &state_clone,
@@ -1132,7 +1151,7 @@ pub async fn process_queue_orchestrator(
                                     )
                                     .await
                                 };
-                                (name_clone, result)
+                                (name_clone, result, diff_opt)
                             };
                             futures.push(fut);
                         }
@@ -1149,20 +1168,19 @@ pub async fn process_queue_orchestrator(
                     let mut s = state.lock().await;
                     s.pending_tool_confirmation = None;
                     s.status = AppStatus::Streaming;
-                    s.stream_tracker = Some(crate::app::StreamTracker {
-                        tokens_so_far: 0,
-                        start_time: std::time::Instant::now(),
-                    });
+                    s.stream_tracker = Some(StreamTracker::new());
                     s.history
                         .push(ChatMessage::new("assistant", &final_content));
-                    for (name, result) in results {
+                    for (name, result, diff_opt) in results {
                         dbg_log!(
                             "Tool '{}' finished with result length: {} chars",
                             name,
                             result.len()
                         );
-                        s.history
-                            .push(ChatMessage::new("tool", format!("{name}: {result}")));
+                        s.history.push(
+                            ChatMessage::new("tool", format!("{name}: {result}"))
+                                .with_diff(diff_opt),
+                        );
                     }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
