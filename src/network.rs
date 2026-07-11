@@ -378,32 +378,55 @@ async fn confirm_and_execute(
         "?".to_string()
     };
     let (preview, content_bytes) = if name == "edit" {
-        let old_string = args
-            .get("old_string")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
-        let new_string = args
-            .get("new_string")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
+        let search_block = args.get("search_block").and_then(|s| s.as_str()).unwrap_or("");
+        let replace_block = args.get("replace_block").and_then(|s| s.as_str()).unwrap_or("");
+
+        let diff = similar::TextDiff::from_lines(search_block, replace_block);
         let mut prev = String::new();
-        for line in old_string.lines().take(5) {
-            prev.push('-');
-            prev.push_str(line);
-            prev.push('\n');
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                similar::ChangeTag::Delete => {
+                    prev.push('-');
+                    prev.push_str(change.value());
+                }
+                similar::ChangeTag::Insert => {
+                    prev.push('+');
+                    prev.push_str(change.value());
+                }
+                similar::ChangeTag::Equal => {
+                    prev.push(' ');
+                    prev.push_str(change.value());
+                }
+            }
         }
-        if old_string.lines().count() > 5 {
-            prev.push_str("- ...\n");
+        (prev, replace_block.len())
+    } else if name == "write_file" || name == "create_file" {
+        let old_content = std::fs::read_to_string(&path).unwrap_or_default();
+        let new_content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+
+        let diff = similar::TextDiff::from_lines(&old_content, new_content);
+        let mut prev = String::new();
+        for group in diff.grouped_ops(3) {
+            for op in group {
+                for change in diff.iter_changes(&op) {
+                    match change.tag() {
+                        similar::ChangeTag::Delete => {
+                            prev.push('-');
+                            prev.push_str(change.value());
+                        }
+                        similar::ChangeTag::Insert => {
+                            prev.push('+');
+                            prev.push_str(change.value());
+                        }
+                        similar::ChangeTag::Equal => {
+                            prev.push(' ');
+                            prev.push_str(change.value());
+                        }
+                    }
+                }
+            }
         }
-        for line in new_string.lines().take(5) {
-            prev.push('+');
-            prev.push_str(line);
-            prev.push('\n');
-        }
-        if new_string.lines().count() > 5 {
-            prev.push_str("+ ...\n");
-        }
-        (prev, new_string.len())
+        (prev, new_content.len())
     } else {
         let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
         let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
