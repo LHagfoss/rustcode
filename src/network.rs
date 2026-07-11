@@ -317,14 +317,51 @@ pub async fn stream_request(
 /// with the agent id so the user knows who is asking.
 async fn confirm_and_execute(
     state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
     name: &str,
     args: &serde_json::Value,
     display_name: &str,
 ) -> String {
+    struct ToolCleanup {
+        state: Arc<Mutex<AppState>>,
+        tool_name: String,
+    }
+    impl Drop for ToolCleanup {
+        fn drop(&mut self) {
+            let state = self.state.clone();
+            let tool_name = self.tool_name.clone();
+            tokio::spawn(async move {
+                let mut s = state.lock().await;
+                if let Some(pos) = s.running_tools.iter().position(|t| t == &tool_name) {
+                    s.running_tools.remove(pos);
+                }
+            });
+        }
+    }
+
     let needs_confirm = crate::tools::needs_confirmation(name) && !state.lock().await.auto_confirm;
     if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
-        return crate::tools::execute(name, args);
+        let tool_name = name.to_string();
+        {
+            let mut s = state.lock().await;
+            s.running_tools.push(tool_name.clone());
+        }
+        let _cleanup = ToolCleanup { state: Arc::clone(state), tool_name };
+
+        let name_owned = name.to_string();
+        let args_owned = args.clone();
+        let run_fut = tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
+
+        return tokio::select! {
+            res = run_fut => {
+                res.unwrap_or_else(|e| format!("tool panicked: {e}"))
+            }
+            _ = cancel_token.cancelled() => {
+                dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
+                "error: tool execution cancelled by user".to_string()
+            }
+        };
     }
 
     dbg_log!("Tool '{}' requires confirmation", name);
@@ -391,14 +428,28 @@ async fn confirm_and_execute(
     let result = match rx.await {
         Ok(true) => {
             dbg_log!("User approved tool call '{}', executing...", name);
-            // Spawn on the blocking thread pool so this doesn't hold up
-            // the async event loop (keypresses, redraws) while the tool
-            // does its I/O-bound work.
+            let tool_name = name.to_string();
+            {
+                let mut s = state.lock().await;
+                s.pending_tool_confirmation = None;
+                s.status = AppStatus::Streaming;
+                s.running_tools.push(tool_name.clone());
+            }
+            let _cleanup = ToolCleanup { state: Arc::clone(state), tool_name };
+
             let name_owned = name.to_string();
             let args_owned = args.clone();
-            tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned))
-                .await
-                .unwrap_or_else(|e| format!("tool panicked: {e}"))
+            let run_fut = tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
+
+            tokio::select! {
+                res = run_fut => {
+                    res.unwrap_or_else(|e| format!("tool panicked: {e}"))
+                }
+                _ = cancel_token.cancelled() => {
+                    dbg_log!("Tool execution cancelled during spawn_blocking await");
+                    "error: tool execution cancelled by user".to_string()
+                }
+            }
         }
         Ok(false) => {
             dbg_log!("User denied tool call '{}'", name);
@@ -554,7 +605,7 @@ reply compact and information-dense.\n\n{}",
                         .unwrap_or("");
                     push_status_line(&mut s, format!("agent-{agent_id} → {name} {target}"));
                 }
-                confirm_and_execute(state, &name, &args, &format!("agent-{agent_id} · {name}"))
+                confirm_and_execute(state, cancel_token, &name, &args, &format!("agent-{agent_id} · {name}"))
                     .await
             };
             let mut s = state.lock().await;
@@ -861,7 +912,7 @@ pub async fn process_queue_orchestrator(
                             let result = if crate::tools::is_agent_tool(name) {
                                 handle_agent_tool(&client, &state, &cancel_token, name, args).await
                             } else {
-                                confirm_and_execute(&state, name, args, name).await
+                                confirm_and_execute(&state, &cancel_token, name, args, name).await
                             };
                             res.push((name.clone(), result));
                         }
@@ -889,6 +940,7 @@ pub async fn process_queue_orchestrator(
                                 } else {
                                     confirm_and_execute(
                                         &state_clone,
+                                        &cancel_token_clone,
                                         &name_clone,
                                         &args_clone,
                                         &name_clone,
