@@ -15,6 +15,7 @@
 - [x] Improve `edit`: Move from exact string replacement to a more robust line-based or block-replacement system (less fragile than `old_string`).
 - [ ] Implement Symbol Search: Add indexing for functions/classes to avoid brute-force grepping paths.
 - [x] Shell Output: Review and optimize output capping to ensure critical logs aren't lost while preventing context overflow.
+- [ ] Implement Tokens/s display in footer next to "Context Used". Format: `Tokens/s: (n)` — shows real-time speed of streamed tokens per second during assistant replies.
 
 ## Tool Modal & Nonblocking Execution Fixes (branch `fix/tool-modal-nonblocking`)
 

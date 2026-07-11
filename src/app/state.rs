@@ -24,6 +24,28 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
+/// Approximate token count accumulated during the current streaming reply.
+/// Updated incrementally as SSE chunks arrive; used to compute Tokens/s in the footer.
+pub const TOKENS_PER_CHAR_APPROX: f64 = 0.25;
+
+#[derive(Debug, Clone)]
+pub struct StreamTracker {
+    pub tokens_so_far: u32,
+    pub start_time: std::time::Instant,
+}
+
+impl StreamTracker {
+    /// Returns (approximate_tokens_per_sec, total_approx_tokens) at this instant.
+    pub fn snapshot(&self) -> (f64, u32) {
+        let elapsed = self.start_time.elapsed().as_secs_f64();
+        if elapsed < 0.05 {
+            return (0.0, self.tokens_so_far);
+        }
+        let tps = self.tokens_so_far as f64 / elapsed;
+        (tps, self.tokens_so_far)
+    }
+}
+
 fn current_timestamp() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
@@ -123,6 +145,9 @@ pub struct AppState {
     /// keep working normally.
     pub running_tools: Vec<String>,
 
+    /// Tracks live token counts during the current streaming reply.
+    pub stream_tracker: Option<StreamTracker>,
+
     pub auto_confirm: bool,
 
     pub subagents: Vec<SubAgent>,
@@ -199,6 +224,7 @@ impl AppState {
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
             running_tools: Vec::new(),
+            stream_tracker: None,
             auto_confirm: false,
             subagents: Vec::new(),
             next_subagent_id: 1,
