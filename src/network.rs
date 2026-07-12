@@ -1385,7 +1385,9 @@ mod tests {
         assert!(is_reasoning_only("<think>\nlet me plan\n</think>"));
         assert!(is_reasoning_only("<think>plan</think>\n\n  \n"));
         // reasoning followed by a real answer → complete
-        assert!(!is_reasoning_only("<think>plan</think>\n\nhere is the answer"));
+        assert!(!is_reasoning_only(
+            "<think>plan</think>\n\nhere is the answer"
+        ));
         // reasoning followed by a tool call → complete
         assert!(!is_reasoning_only(
             "<think>plan</think>\n```tool\n{\"name\":\"get_time\"}\n```"
