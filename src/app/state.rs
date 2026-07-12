@@ -334,11 +334,7 @@ impl AppState {
 
     /// Returns the auto-confirm status label for the UI footer.
     pub fn auto_confirm_status_text(&self) -> &'static str {
-        if self.auto_confirm {
-            "Auto-Confirm: ON"
-        } else {
-            "Auto-Confirm: OFF"
-        }
+        if self.auto_confirm { "ON" } else { "OFF" }
     }
 
     /// Context window of the active profile, in tokens.
