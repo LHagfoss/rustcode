@@ -463,7 +463,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
-                            if s.active_suggestion_index.is_some() {
+                            if s.input_buffer.is_empty() && s.history.is_empty() {
+                                s.show_model_picker = true;
+                            } else if s.active_suggestion_index.is_some() {
                                 crate::app::apply_autocomplete(&mut s);
                             } else {
                                 s.cycle_suggestion();

@@ -1452,7 +1452,10 @@ mod tests {
         let bash = "```bash\necho hi\n```";
         let (name, args) = parse_tool_call(bash).unwrap();
         assert_eq!(name, "run_command");
-        assert_eq!(args.get("command").and_then(|c| c.as_str()), Some("echo hi"));
+        assert_eq!(
+            args.get("command").and_then(|c| c.as_str()),
+            Some("echo hi")
+        );
 
         // explicit tool protocol still wins over the shell fallback
         let tool = "```tool\n{\"name\":\"get_time\",\"arguments\":{}}\n```\n```bash\nls\n```";
