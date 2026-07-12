@@ -225,6 +225,7 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
     if inner_width == 0 {
         return 1;
     }
+
     let mut lines_count = 1;
     let mut col = 0;
 
@@ -243,15 +244,15 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
     lines_count
 }
 
-/// Returns ", Tokens/s: N.N" if streaming and tracker is active, else empty.
-fn format_tokens_info(state: &AppState) -> String {
-    if let Some(ref tracker) = state.stream_tracker {
-        let (tps, _) = tracker.snapshot();
-        return format!(", Tokens/s: {:.1}", tps);
+/// Returns ("Tokens/s: ", "N.N") with the live rate when streaming, or "0.0" when not.
+fn format_tokens_info(state: &AppState) -> (String, String) {
+    if state.status == AppStatus::Streaming {
+        if let Some(ref tracker) = state.stream_tracker {
+            let (tps, _) = tracker.snapshot();
+            return ("Tokens/s: ".to_string(), format!("{:.1}", tps));
+        }
     }
-
-    // Always show TPS — 0 when idle
-    format!(", Tokens/s: {:.1}", 0.0)
+    ("Tokens/s: ".to_string(), "0.0".to_string())
 }
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
@@ -379,9 +380,24 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             ((total_tokens as f32 / window as f32) * 100.0).min(100.0)
         };
 
-        let mut right_spans = vec![
+        let mut right_spans = Vec::new();
+
+        let tps_label = format_tokens_info(state).0;
+        let tps_value = format_tokens_info(state).1;
+        if !tps_label.is_empty() {
+            right_spans.push(Span::styled(
+                tps_label,
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ));
+            right_spans.push(Span::styled(
+                tps_value,
+                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            ));
+        }
+
+        right_spans.extend_from_slice(&[
             Span::styled(
-                "context used: ",
+                "   context used: ",
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             ),
             Span::styled(
@@ -392,15 +408,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 format!(" ({:.0}%)", pct),
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             ),
-        ];
-
-        let tps_info = format_tokens_info(state);
-        if !tps_info.is_empty() {
-            right_spans.push(Span::styled(
-                tps_info,
-                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
-            ));
-        }
+        ]);
 
         right_spans.push(Span::styled("   ", Style::default()));
         right_spans.push(Span::styled(
@@ -1309,7 +1317,7 @@ fn render_welcome_screen(
     ))
     .style(Style::default().bg(COLOR_BG));
     let right_meta = Paragraph::new(Span::styled(
-        env!("CARGO_PKG_VERSION"),
+        format!("v{}", env!("CARGO_PKG_VERSION")),
         get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
     ))
     .alignment(ratatui::layout::Alignment::Right)

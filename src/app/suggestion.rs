@@ -33,6 +33,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Pick a previous session to resume",
     },
     CommandInfo {
+        name: "/memory",
+        desc: "Show current process RAM usage",
+    },
+    CommandInfo {
         name: "/model",
         desc: "Open model picker, switch profile, or override model",
     },

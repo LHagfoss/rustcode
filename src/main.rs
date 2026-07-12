@@ -55,7 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         EnableMouseCapture,
         crossterm::event::EnableBracketedPaste,
         crossterm::event::EnableFocusChange,
-        SetCursorStyle::BlinkingBlock
+        SetCursorStyle::BlinkingBlock,
+        crossterm::style::Print("\x1b]0;rustcode · new session\x07")
     )?;
 
     let keyboard_enhanced = matches!(
@@ -74,8 +75,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // move last run's chat into the sessions archive before anything
-    // overwrites the live history file; /resume and /history find it there
     crate::config::archive_live_history();
 
     let mut app_state_struct = AppState::new();
@@ -98,8 +97,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
 
-    // fill in the active profile's context window from the provider if the
-    // config doesn't specify one
     crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
 
     let mut needs_redraw = true;
@@ -124,6 +121,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if should_draw {
             let mut guard = app_state.lock().await;
+
+            // Update terminal title based on session state
+            let title_display = if guard.history.is_empty() {
+                "rustcode".to_string()
+            } else {
+                let first_user_msg = guard
+                    .history
+                    .iter()
+                    .find(|m| m.role == "user" && !m.content.starts_with('/'));
+                match first_user_msg {
+                    Some(msg) => {
+                        let title = msg.content.lines().next().unwrap_or("").trim();
+                        if title.is_empty() || title.starts_with('/') {
+                            "rustcode".to_string()
+                        } else {
+                            let display_title = title.replace('|', "\\|").replace('\x07', "");
+                            format!("rustcode · {}", display_title)
+                        }
+                    }
+                    None => "rustcode".to_string(),
+                }
+            };
+
+            // Only update if the title changed to avoid unnecessary OSC sequences
+            let old_title = guard.current_terminal_title.clone();
+            if old_title.as_deref() != Some(title_display.as_str()) {
+                use crossterm::style::Print;
+                let _ = execute!(
+                    terminal.backend_mut(),
+                    Print(format!("\x1b]0;{}\x07", title_display))
+                );
+                guard.current_terminal_title = Some(title_display.clone());
+            }
+
             terminal.draw(|f| ui::render(f, &mut guard))?;
             drop(guard);
             last_draw = std::time::Instant::now();
@@ -210,6 +241,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .min(s.history_picker_sessions.len().saturating_sub(1));
                                 if let Some(meta) = s.history_picker_sessions.get(idx).cloned() {
                                     crate::app::load_session_into(&mut s, &meta);
+                                    let title_display =
+                                        meta.title.replace('|', "\\|").replace('\x07', "");
+                                    let _ = execute!(
+                                        terminal.backend_mut(),
+                                        crossterm::style::Print(format!(
+                                            "\x1b]0;rustcode · {}\x07",
+                                            title_display
+                                        ))
+                                    );
                                 }
                                 s.show_history_picker = false;
                             }

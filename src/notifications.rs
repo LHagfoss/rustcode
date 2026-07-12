@@ -1,15 +1,20 @@
-/// macOS push notifications via alerter_rs (native macOS User Notifications).
+use std::io::{self, IsTerminal, Write};
+
+/// Sends desktop notifications via terminal escape sequences (OSC 777).
 ///
-/// This sends actual macOS Notification Center alerts, not terminal escape
-/// sequences. Works whether the user runs rustcode in Ghostty, Terminal.app,
-/// or anywhere else.
+/// Works in modern terminal emulators like Ghostty, WezTerm, etc.,
+/// which support the OSC 777 notification sequence.
 pub fn notify(title: &str, body: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        use alerter_rs::Alerter;
-        if let Ok(handle) = Alerter::new(body).title(title).send_async() {
-            handle.detach();
-        }
+    if io::stdout().is_terminal() {
+        let clean_title = title.replace(|c| c == ';' || c == '\n' || c == '\r', " ");
+        let clean_body = body.replace(|c| c == ';' || c == '\n' || c == '\r', " ");
+        let mut stdout = io::stdout();
+        write!(
+            stdout,
+            "\x1b]777;notify;{};{}\x1b\\",
+            clean_title, clean_body
+        )?;
+        stdout.flush()?;
     }
     Ok(())
 }
