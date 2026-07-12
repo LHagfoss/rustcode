@@ -33,10 +33,8 @@ pub struct StreamTracker {
     pub tokens_so_far: u32,
     /// Updated each time a chunk is received; used for per-second rate.
     pub last_update: std::time::Instant,
-    /// EMA (alpha=0.35) of recent per-chunk rates — drives the smoothed TPS display.
-    pub tps_ema: f64,
-    /// Snapshot of tokens_so_far at `last_update` for computing per-interval delta.
     prev_tokens: u32,
+    history: std::collections::VecDeque<(std::time::Instant, u32)>,
 }
 
 impl StreamTracker {
@@ -45,35 +43,81 @@ impl StreamTracker {
         Self {
             tokens_so_far: 0,
             last_update: now,
-            tps_ema: 0.0,
             prev_tokens: 0,
+            history: std::collections::VecDeque::new(),
         }
     }
 
-    /// Called each time a new chunk arrives during streaming. Updates the EMA-smoothed
-    /// tokens-per-second rate used for display.
+    /// Called each time a new chunk arrives during streaming. Updates the history.
     pub fn record_chunk(&mut self) {
         let now = std::time::Instant::now();
-        let dt = (now - self.last_update).as_secs_f64().max(0.05);
-        let delta = self.tokens_so_far.saturating_sub(self.prev_tokens) as f64;
-        let raw_rate = delta / dt;
-
-        let alpha = 0.35; // EMA smoothing — responsive to recent activity, less jittery than raw
-        self.tps_ema = alpha * raw_rate + (1.0 - alpha) * self.tps_ema;
-
+        let delta = self.tokens_so_far.saturating_sub(self.prev_tokens);
+        if delta > 0 {
+            self.history.push_back((now, delta));
+        }
         self.prev_tokens = self.tokens_so_far;
         self.last_update = now;
+
+        // Keep only the last 1.5 seconds of chunk history to bound the deque size
+        let cutoff = now
+            .checked_sub(std::time::Duration::from_millis(1500))
+            .unwrap_or(now);
+        while let Some(&(time, _)) = self.history.front() {
+            if time < cutoff {
+                self.history.pop_front();
+            } else {
+                break;
+            }
+        }
     }
-    /// Returns the current EMA-smoothed tokens/sec and total approximated tokens.
+
+    /// Returns the current sliding window tokens/sec and total approximated tokens.
     pub fn snapshot(&self) -> (f64, u32) {
         let now = std::time::Instant::now();
-        // Slow decay when no chunks arrive — drops to 0 in ~3-4s of silence
-        if (now - self.last_update).as_secs_f64() > 0.5 {
-            let since_update = (now - self.last_update).as_secs_f64();
-            let decay = (1.0 - 0.04 * since_update).max(0.0);
-            return (self.tps_ema * decay, self.tokens_so_far);
+
+        let window_duration = std::time::Duration::from_secs(1);
+        let cutoff = now.checked_sub(window_duration).unwrap_or(now);
+
+        let mut total_tokens_in_window = 0;
+        let mut first_time_in_window = None;
+        let mut last_time_in_window = None;
+
+        for &(time, tokens) in &self.history {
+            if time >= cutoff {
+                total_tokens_in_window += tokens;
+                if first_time_in_window.is_none() {
+                    first_time_in_window = Some(time);
+                }
+                last_time_in_window = Some(time);
+            }
         }
-        (self.tps_ema.max(0.0), self.tokens_so_far)
+
+        if total_tokens_in_window == 0 {
+            return (0.0, self.tokens_so_far);
+        }
+
+        // To calculate rate, divide by the actual elapsed time between first and last chunks in the window.
+        // If there's only one chunk, default to a minimum time of 0.1s to avoid extreme spikes.
+        let elapsed = if let (Some(first), Some(last)) = (first_time_in_window, last_time_in_window)
+        {
+            (last - first).as_secs_f64().max(0.1)
+        } else {
+            1.0
+        };
+
+        let raw_tps = total_tokens_in_window as f64 / elapsed;
+
+        // Slow down/decay when no chunks arrive
+        let silence = (now - self.last_update).as_secs_f64();
+        let tps = if silence > 0.5 {
+            // Smooth exponential decay (half-life of 0.5 seconds)
+            let decay = (-silence / 0.5).exp();
+            raw_tps * decay
+        } else {
+            raw_tps
+        };
+
+        (tps.max(0.0), self.tokens_so_far)
     }
 }
 
@@ -197,6 +241,9 @@ pub struct AppState {
     pub last_max_scroll: u16,
     pub raw_cli_mode: bool,
     pub tip_index: usize,
+
+    /// Tracks the current terminal title to avoid redundant OSC 0 sequences.
+    pub current_terminal_title: Option<String>,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -269,6 +316,7 @@ impl AppState {
             next_subagent_id: 1,
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
+            current_terminal_title: None,
             last_max_scroll: 0,
             raw_cli_mode: false,
             tip_index: random_tip_index(),

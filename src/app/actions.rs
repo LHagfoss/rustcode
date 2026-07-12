@@ -1,5 +1,6 @@
 use crate::app::{AppState, AppStatus, ChatMessage};
 use std::sync::Arc;
+use sysinfo::{Pid, System};
 use tokio::sync::Mutex;
 
 pub async fn handle_escape(
@@ -59,8 +60,8 @@ pub async fn handle_enter(
         let mut should_exit = false;
 
         match cmd {
-            "/status" => {
-                // Implement /status command logic here
+            "/memory" => {
+                check_memory_usage(&mut s);
             }
             "/clear" | "/new" => {
                 cancel_token.cancel();
@@ -463,6 +464,25 @@ pub fn apply_autocomplete(s: &mut AppState) {
             s.cursor_position = s.input_buffer.len();
         }
         s.active_suggestion_index = None;
+    }
+}
+
+pub fn check_memory_usage(s: &mut AppState) {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    let pid = Pid::from(std::process::id() as usize);
+    if let Some(process) = sys.process(pid) {
+        let mem_mb = process.memory() / 1024 / 1024;
+        s.history.push(ChatMessage::new(
+            "system",
+            &format!("🦀 Current Rustcode RAM usage: {} MB", mem_mb),
+        ));
+    } else {
+        s.history.push(ChatMessage::new(
+            "system",
+            "Could not find current process.",
+        ));
     }
 }
 

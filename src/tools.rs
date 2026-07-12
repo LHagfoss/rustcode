@@ -21,6 +21,14 @@ pub struct Tool {
 
 pub const TOOLS: &[Tool] = &[
     Tool {
+        name: "check_match",
+        description: "Check football match data from api-sports.io. \
+                     Useful for checking live scores during matches or finding specific games.\\\n                     Example: check_match with team='Norway' and date='2026-07-11'",
+        arguments: "{\\\"date\\\": \"YYYY-MM-DD format required\\\", \\\"team\\\": \"optional team name filter\\\", \\\"status\\\": \"optional status (LIVE, FT, NS)\"}",
+        handler: check_match,
+        requires_confirmation: false,
+    },
+    Tool {
         name: "get_time",
         description: "Get the current local date and time",
         arguments: "{} (no arguments)",
@@ -2046,4 +2054,102 @@ mod tests {
         assert!(out.contains("no files matched"), "got: {out}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Check football match data from api-sports.io
+fn check_match(args: &serde_json::Value) -> Result<String, String> {
+    use reqwest::blocking::Client;
+    use std::fmt::Write as _;
+    
+    let team = args.get("team").and_then(|v| v.as_str()).unwrap_or("");
+    let date = args.get("date").and_then(|v| v.as_str()).unwrap_or("");
+
+    if date.is_empty() {
+        return Err("date parameter required (YYYY-MM-DD format)".to_string());
+    }
+
+    let client = Client::new();
+    let api_key = "fb492b51acab4d134f2d33ef9777865a";
+    let url = if !team.is_empty() {
+        format!("https://v3.football.api-sports.io/fixtures?date={}&team={}", date, team)
+    } else {
+        format!("https://v3.football.api-sports.io/fixtures?date={}", date)
+    };
+
+    let response = client.get(&url)
+        .header("x-apisports-key", api_key)
+        .send()
+        .map_err(|e| format!("API request failed: {}", e))?
+        .json::<serde_json::Value>()
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let matches = match response.get("response") {
+        Some(serde_json::Value::Array(matches)) => matches,
+        _ => return Ok("No matches found".to_string()),
+    };
+
+    if matches.is_empty() {
+        return Ok(format!("Found 0 match(es) for {}", date));
+    }
+
+    let mut output = String::new();
+    write!(output, "Found {} match(es),\n", matches.len()).unwrap();
+    writeln!(output, "══════════════════════════════════════════════════════").unwrap();
+    
+    for (i, match_data) in matches.iter().enumerate() {
+        let teams = &match_data["teams"];
+        let home = &teams["home"]["name"];
+        let away = &teams["away"]["name"];
+
+        let goals = &match_data["goals"];
+        let score_home = goals.get("home")
+            .and_then(|v| v.as_i64())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let score_away = goals.get("away")
+            .and_then(|v| v.as_i64())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "-".to_string());
+
+        let status_info = &match_data["status"];
+        let long_status = status_info.get("long")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+        let elapsed = status_info.get("elapsed")
+            .and_then(|v| v.as_i64());
+
+        let ts = match_data["fixture"]["timestamp"]
+            .as_i64()
+            .unwrap_or(0);
+        let dt = chrono::DateTime::from_timestamp(ts, 0)
+            .map(|d| d.format("%H:%M UTC").to_string())
+            .unwrap_or_else(|| "Invalid time".to_string());
+
+        let league_name = match_data["league"]["name"]
+            .as_str()
+            .unwrap_or("Unknown");
+        let country = match_data["league"]["country"]
+            .as_str()
+            .unwrap_or("");
+
+        if i > 0 {
+            writeln!(output, "\n──────────────────────────────────────────────────────").unwrap();
+        }
+
+        write!(output, "Match {}:\n", i + 1).unwrap();
+        write!(output, "League: {}\n", league_name).unwrap();
+        write!(output, "Country: {}\n", country).unwrap();
+        write!(output, "Time: {}\n", dt).unwrap();
+
+        if let Some(minutes) = elapsed {
+            writeln!(output, "Status: LIVE - Minute {}", minutes).unwrap();
+        } else {
+            writeln!(output, "Status: {}", long_status).unwrap();
+        }
+
+        writeln!(output, "Teams: {} vs {}", home, away).unwrap();
+        writeln!(output, "Score: {} - {}", score_home, score_away).unwrap();
+    }
+
+    Ok(output)
 }
