@@ -95,7 +95,6 @@ pub async fn fetch_context_window(
     context_length_from_model_info(body.get("model_info")?)
 }
 
-/// Tokens reserved for the model's reply when budgeting the request.
 pub const RESPONSE_RESERVE_TOKENS: u32 = 1024;
 
 fn estimate_msg_chars(msg: &serde_json::Value) -> usize {
@@ -246,7 +245,6 @@ pub async fn stream_request(
                                             chunk.push_str(c_token);
                                         }
                                         if !chunk.is_empty() {
-                                            // Bump token counter (approximate)
                                             let tokens = (chunk.len() as f64 * crate::app::TOKENS_PER_CHAR_APPROX) as u32;
                                             if let Some(ref mut tracker) = state.lock().await.stream_tracker {
                                                 tracker.tokens_so_far += tokens;
@@ -348,7 +346,43 @@ fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
         return true;
     }
 
+    // Qwen-family open models often close </think> and then emit a stop token
+    // with no actual answer or tool call. Treat that as incomplete so the
+    // continuation path nudges the model instead of stalling for a manual
+    // "continue".
+    if is_reasoning_only(content) {
+        return true;
+    }
+
     false
+}
+
+/// Remove every `<think>...</think>` span so we can inspect the model's actual
+/// answer/tool output.
+fn strip_think_blocks(content: &str) -> String {
+    let mut out = String::new();
+    let mut rest = content;
+    while let Some(start) = rest.find("<think>") {
+        out.push_str(&rest[..start]);
+        if let Some(end) = rest[start..].find("</think>") {
+            rest = &rest[start + end + "</think>".len()..];
+        } else {
+            // unclosed — drop the remainder (handled by the unclosed-think check)
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// True when the turn is nothing but reasoning: a non-empty response whose only
+/// content is `<think>` blocks, leaving no answer or tool call to act on.
+fn is_reasoning_only(content: &str) -> bool {
+    if content.trim().is_empty() {
+        return false;
+    }
+    strip_think_blocks(content).trim().is_empty()
 }
 
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
@@ -1343,6 +1377,31 @@ mod tests {
             strip_leading_think("text about </think> tags"),
             "text about </think> tags"
         );
+    }
+
+    #[test]
+    fn test_is_reasoning_only() {
+        // pure reasoning, no answer → stall we want to auto-continue
+        assert!(is_reasoning_only("<think>\nlet me plan\n</think>"));
+        assert!(is_reasoning_only("<think>plan</think>\n\n  \n"));
+        // reasoning followed by a real answer → complete
+        assert!(!is_reasoning_only("<think>plan</think>\n\nhere is the answer"));
+        // reasoning followed by a tool call → complete
+        assert!(!is_reasoning_only(
+            "<think>plan</think>\n```tool\n{\"name\":\"get_time\"}\n```"
+        ));
+        assert!(!is_reasoning_only(
+            "<think>plan</think>\n<tool_call>{\"name\":\"get_time\"}</tool_call>"
+        ));
+        // empty content is handled by the caller, not treated as reasoning-only
+        assert!(!is_reasoning_only("   "));
+        assert!(!is_reasoning_only("just a normal reply"));
+    }
+
+    #[test]
+    fn test_is_cut_off_reasoning_only() {
+        assert!(is_cut_off("<think>thinking</think>", None));
+        assert!(!is_cut_off("<think>thinking</think>\n\nthe answer", None));
     }
 
     #[test]

@@ -407,7 +407,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.auto_confirm = !s.auto_confirm;
                         }
                         KeyCode::Esc => {
-                            crate::app::handle_escape(&app_state, &mut current_cancel_token).await
+                            let mut s = app_state.lock().await;
+                            if s.sel_start.is_some() || s.sel_end.is_some() {
+                                s.clear_selection();
+                            } else {
+                                drop(s);
+                                crate::app::handle_escape(&app_state, &mut current_cancel_token)
+                                    .await
+                            }
                         }
                         KeyCode::Up => {
                             let mut s = app_state.lock().await;
@@ -446,11 +453,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::PageUp => {
                             let mut s = app_state.lock().await;
-                            s.scroll_up(5);
+                            let page = s.page_rows();
+                            s.scroll_up(page);
                         }
                         KeyCode::PageDown => {
                             let mut s = app_state.lock().await;
-                            s.scroll_down(5);
+                            let page = s.page_rows();
+                            s.scroll_down(page);
                         }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
@@ -539,12 +548,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.command_picker_index = 0;
                             s.command_picker_search.clear();
                         }
+                        // Ctrl+Y or Cmd/⌘+C copies the current app selection.
+                        KeyCode::Char('y') | KeyCode::Char('Y')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            let mut s = app_state.lock().await;
+                            if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
+                                let text =
+                                    ui::extract_selection(terminal.current_buffer_mut(), a, b);
+                                if !text.is_empty() {
+                                    crate::clipboard::copy_to_clipboard(&text);
+                                }
+                            }
+                            s.clear_selection();
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C')
+                            if key.modifiers.contains(event::KeyModifiers::SUPER)
+                                || key.modifiers.contains(event::KeyModifiers::META) =>
+                        {
+                            let mut s = app_state.lock().await;
+                            if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
+                                let text =
+                                    ui::extract_selection(terminal.current_buffer_mut(), a, b);
+                                if !text.is_empty() {
+                                    crate::clipboard::copy_to_clipboard(&text);
+                                }
+                            }
+                            s.clear_selection();
+                        }
+                        KeyCode::Char('t')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            let mut s = app_state.lock().await;
+                            s.mouse_capture_enabled = !s.mouse_capture_enabled;
+                            s.clear_selection();
+                            if s.mouse_capture_enabled {
+                                let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
+                            } else {
+                                let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+                            }
+                        }
                         KeyCode::Char(c) => {
                             let mut s = app_state.lock().await;
                             let ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                             let alt = key.modifiers.contains(event::KeyModifiers::ALT);
+                            let cmd = key.modifiers.contains(event::KeyModifiers::SUPER)
+                                || key.modifiers.contains(event::KeyModifiers::META);
 
-                            if alt && c == 'b' {
+                            if cmd {
+                                // Cmd/⌘ shortcuts are not text — never insert them.
+                            } else if alt && c == 'b' {
                                 s.move_cursor_word_left();
                             } else if alt && c == 'f' {
                                 s.move_cursor_word_right();
@@ -588,22 +641,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     needs_redraw = true;
                 }
                 Event::Mouse(mouse) => {
-                    use crossterm::event::MouseEventKind;
-                    if matches!(
-                        mouse.kind,
-                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                    ) {
-                        let amt = 3u16;
-                        let mut s = app_state.lock().await;
-                        if !s.show_model_picker && !s.show_command_picker && !s.show_history_picker
-                        {
-                            match mouse.kind {
-                                MouseEventKind::ScrollUp => s.scroll_up(amt),
-                                MouseEventKind::ScrollDown => s.scroll_down(amt),
-                                _ => {}
+                    use crossterm::event::{MouseButton, MouseEventKind};
+                    let mut s = app_state.lock().await;
+                    let modal =
+                        s.show_model_picker || s.show_command_picker || s.show_history_picker;
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp if !modal => {
+                            s.scroll_up(3);
+                            needs_redraw = true;
+                        }
+                        MouseEventKind::ScrollDown if !modal => {
+                            s.scroll_down(3);
+                            needs_redraw = true;
+                        }
+                        MouseEventKind::Down(MouseButton::Left) if !modal => {
+                            let on_scrollbar = s.scrollbar_height > 0
+                                && mouse.column == s.scrollbar_col
+                                && mouse.row >= s.scrollbar_top
+                                && mouse.row < s.scrollbar_top + s.scrollbar_height;
+                            if on_scrollbar {
+                                s.dragging_scrollbar = true;
+                                s.scrollbar_drag_to(mouse.row);
+                            } else {
+                                s.sel_start = Some((mouse.column, mouse.row));
+                                s.sel_end = Some((mouse.column, mouse.row));
+                                s.selecting = true;
                             }
                             needs_redraw = true;
                         }
+                        MouseEventKind::Drag(MouseButton::Left) if s.dragging_scrollbar => {
+                            s.scrollbar_drag_to(mouse.row);
+                            needs_redraw = true;
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
+                            s.sel_end = Some((mouse.column, mouse.row));
+                            needs_redraw = true;
+                        }
+                        MouseEventKind::Up(MouseButton::Left) if s.dragging_scrollbar => {
+                            s.dragging_scrollbar = false;
+                            needs_redraw = true;
+                        }
+                        MouseEventKind::Up(MouseButton::Left) if s.selecting => {
+                            s.sel_end = Some((mouse.column, mouse.row));
+                            s.selecting = false;
+                            if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
+                                if a != b {
+                                    // Dragged: copy on release, like selecting on a web page.
+                                    let text =
+                                        ui::extract_selection(terminal.current_buffer_mut(), a, b);
+                                    if !text.is_empty() {
+                                        crate::clipboard::copy_to_clipboard(&text);
+                                    }
+                                } else {
+                                    // A plain click: toggle a thought if one sits on this
+                                    // row, otherwise just clear any existing selection.
+                                    s.clear_selection();
+                                    if let Some(&(_, idx)) =
+                                        s.thought_toggle_rows.iter().find(|(row, _)| *row == b.1)
+                                    {
+                                        s.toggle_thought(idx);
+                                    }
+                                }
+                            }
+                            needs_redraw = true;
+                        }
+                        _ => {}
                     }
                 }
                 Event::Paste(text) => {
