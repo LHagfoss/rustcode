@@ -432,15 +432,15 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         ])
         .split(footer_area);
 
-    let auto_accept_style = if state.auto_confirm {
-        get_themed_style(
-            Color::Rgb(40, 167, 69),
-            COLOR_BG,
-            Modifier::empty(),
-            show_picker,
-        )
+    let status_color = if state.auto_confirm {
+        COLOR_PRIMARY
     } else {
-        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)
+        COLOR_MUTED
+    };
+    let status_modifier = if state.auto_confirm {
+        Modifier::BOLD
+    } else {
+        Modifier::empty()
     };
 
     f.render_widget(
@@ -448,10 +448,16 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         footer_chunks[0],
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            state.auto_confirm_status_text(),
-            auto_accept_style,
-        )]))
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "Auto-Confirm: ",
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ),
+            Span::styled(
+                state.auto_confirm_status_text(),
+                get_themed_style(status_color, COLOR_BG, status_modifier, show_picker),
+            ),
+        ]))
         .alignment(ratatui::layout::Alignment::Center)
         .style(Style::default().bg(COLOR_BG)),
         footer_chunks[1],
