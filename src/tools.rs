@@ -163,8 +163,6 @@ pub const TOOLS: &[Tool] = &[
     },
 ];
 
-/// Maximum tool-call rounds per user prompt, so a confused model
-/// can't loop forever.
 pub const MAX_TOOL_ROUNDS: usize = 25;
 
 fn get_time(_args: &Value) -> Result<String, String> {
@@ -639,7 +637,6 @@ fn find_block_ranges(content: &str, search_block: &str) -> Vec<std::ops::Range<u
         return Vec::new();
     }
 
-    // Get byte offsets of all line starts
     let mut line_starts = Vec::new();
     let mut last_pos = 0;
     for (i, c) in content.char_indices() {
@@ -734,10 +731,8 @@ fn edit(args: &Value) -> Result<String, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
 
-    // 1. Try robust block matching first
     let mut matches = find_block_ranges(&content, search_block);
 
-    // 2. Fallback to line-based ranges if provided
     if matches.is_empty() {
         if let (Some(s), Some(e)) = (start_line, end_line) {
             let file_lines: Vec<&str> = content.lines().collect();
@@ -839,7 +834,6 @@ fn search_web(args: &Value) -> Result<String, String> {
         search_query.push_str(&format!(" site:{}", dom));
     }
 
-    // 1. Try Tavily Search API first if key is present
     if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -892,7 +886,6 @@ fn search_web(args: &Value) -> Result<String, String> {
         }
     }
 
-    // 2. Fall back to DuckDuckGo scraping
     let url = format!(
         "https://html.duckduckgo.com/html/?q={}",
         urlencoding::encode(&search_query)
@@ -1225,6 +1218,30 @@ pub fn parse_tool_calls(text: &str) -> Vec<(String, Value)> {
         }
     }
 
+    // 2b. Fallback: some open models emit ```shell / ```bash fences to mean
+    // "run this", instead of the tool protocol. Treat them as run_command.
+    if out.is_empty() {
+        for marker in &["```shell", "```bash"] {
+            let mut current_pos = 0;
+            while let Some(start_idx) = search_text[current_pos..].find(marker) {
+                let start = current_pos + start_idx + marker.len();
+                if let Some(end_offset) = search_text[start..].find("```") {
+                    let end = start + end_offset;
+                    let cmd = search_text[start..end].trim();
+                    if !cmd.is_empty() {
+                        out.push((
+                            "run_command".to_string(),
+                            serde_json::json!({ "command": cmd }),
+                        ));
+                    }
+                    current_pos = end + "```".len();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
     // 3. Fallback: single braced JSON
     if out.is_empty() {
         if let Some(first_brace) = search_text.find('{') {
@@ -1420,6 +1437,27 @@ mod tests {
         let (name, args) = parse_tool_call(text).unwrap();
         assert_eq!(name, "get_time");
         assert!(args.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_shell_fence_as_run_command() {
+        let text = "<think>plan</think>\n```shell\ngit diff src/network.rs | head\n```";
+        let (name, args) = parse_tool_call(text).unwrap();
+        assert_eq!(name, "run_command");
+        assert_eq!(
+            args.get("command").and_then(|c| c.as_str()),
+            Some("git diff src/network.rs | head")
+        );
+
+        let bash = "```bash\necho hi\n```";
+        let (name, args) = parse_tool_call(bash).unwrap();
+        assert_eq!(name, "run_command");
+        assert_eq!(args.get("command").and_then(|c| c.as_str()), Some("echo hi"));
+
+        // explicit tool protocol still wins over the shell fallback
+        let tool = "```tool\n{\"name\":\"get_time\",\"arguments\":{}}\n```\n```bash\nls\n```";
+        let (name, _) = parse_tool_call(tool).unwrap();
+        assert_eq!(name, "get_time");
     }
 
     #[test]

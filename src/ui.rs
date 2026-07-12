@@ -26,6 +26,8 @@ const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93);
 const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101);
 const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);
 const COLOR_BORDER: Color = Color::Rgb(72, 85, 89);
+/// Uniform text-selection background — a touch lighter than the panel.
+const COLOR_SELECTION: Color = Color::Rgb(45, 50, 56);
 const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
 
 const LOGO: &[&str] = &[
@@ -57,6 +59,9 @@ fn render_assistant_message<'a>(
     is_generating: bool,
     viewport_width: u16,
     show_picker: bool,
+    thought_collapsed: bool,
+    msg_index: Option<usize>,
+    click_registry: &mut Vec<(usize, usize)>,
 ) {
     let mut think_content = None;
     let mut main_content = content;
@@ -77,7 +82,7 @@ fn render_assistant_message<'a>(
     }
 
     if let Some(think) = think_content {
-        let thought_header = if let Some(ms) = response_time_ms {
+        let base = if let Some(ms) = response_time_ms {
             if ms >= 1000 {
                 format!("Thought: {:.1}s", ms as f32 / 1000.0)
             } else {
@@ -86,8 +91,17 @@ fn render_assistant_message<'a>(
         } else {
             "Thought:".to_string()
         };
+        // Streaming (no msg_index) shows thoughts live with no toggle chip.
+        let toggle = match msg_index {
+            Some(_) if thought_collapsed => "+ ",
+            Some(_) => "− ",
+            None => "",
+        };
+        if let Some(idx) = msg_index {
+            click_registry.push((lines.len(), idx));
+        }
         lines.push(Line::from(Span::styled(
-            thought_header,
+            format!("{}{}", toggle, base),
             get_themed_style(
                 Color::Rgb(229, 192, 123),
                 COLOR_BG,
@@ -96,11 +110,13 @@ fn render_assistant_message<'a>(
             ),
         )));
 
-        for raw_line in think.lines() {
-            lines.push(Line::from(Span::styled(
-                raw_line.to_string(),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-            )));
+        if !thought_collapsed {
+            for raw_line in think.lines() {
+                lines.push(Line::from(Span::styled(
+                    raw_line.to_string(),
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                )));
+            }
         }
         lines.push(Line::from(""));
     }
@@ -694,10 +710,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         horizontal: 1,
     });
     let show_picker = state.modal_open();
+    state.viewport_height = inner_area.height;
 
     let mut lines: Vec<Line> = Vec::new();
 
-    for msg in &state.history {
+    let mut thought_clicks: Vec<(usize, usize)> = Vec::new();
+
+    for (msg_idx, msg) in state.history.iter().enumerate() {
         if msg.role == "system" {
             for raw_line in msg.content.lines() {
                 lines.push(Line::from(vec![
@@ -729,26 +748,34 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ("", msg.content.as_str())
             };
 
-            let summary = if tool_name == "read_file" || tool_name == "view_file" {
-                format!(
-                    "completed (read {} lines, {} bytes)",
-                    tool_result.lines().count(),
-                    tool_result.len()
-                )
-            } else if tool_name == "grep" {
-                format!("completed ({} matching lines)", tool_result.lines().count())
-            } else if tool_name == "glob" {
-                format!("completed ({} files found)", tool_result.lines().count())
-            } else if tool_name == "list_directory" {
-                format!("completed ({} entries listed)", tool_result.lines().count())
-            } else if tool_name == "find_symbol" {
-                format!("completed ({} symbols found)", tool_result.lines().count())
-            } else if tool_name == "get_project_map" {
-                format!("completed ({} bytes of map generated)", tool_result.len())
-            } else if tool_name == "search_web" {
-                format!("completed ({} bytes of search results)", tool_result.len())
-            } else {
-                tool_result.to_string()
+            let line_count = tool_result.lines().count();
+            let byte_count = tool_result.len();
+            // Default is a compact one-liner. We never dump full raw output into the
+            // chat — file/command bodies are noise unless they're a diff (handled via
+            // msg.diff below) or a short command result (previewed a few lines down).
+            let summary = match tool_name {
+                "read_file" | "view_file" => {
+                    format!(
+                        "completed (read {} lines, {} bytes)",
+                        line_count, byte_count
+                    )
+                }
+                "grep" => format!("completed ({} matching lines)", line_count),
+                "glob" => format!("completed ({} files found)", line_count),
+                "list_directory" => format!("completed ({} entries listed)", line_count),
+                "find_symbol" => format!("completed ({} symbols found)", line_count),
+                "get_project_map" => format!("completed ({} bytes of map generated)", byte_count),
+                "search_web" => format!("completed ({} bytes of search results)", byte_count),
+                _ => {
+                    let trimmed = tool_result.trim();
+                    if trimmed.is_empty() {
+                        "completed".to_string()
+                    } else if line_count <= 1 && trimmed.width() <= 80 {
+                        format!("completed · {}", trimmed)
+                    } else {
+                        format!("completed ({} lines)", line_count)
+                    }
+                }
             };
 
             lines.push(Line::from(vec![
@@ -765,6 +792,31 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
             ]));
+
+            // Command output is useful (test results, errors) but capped so it never
+            // floods the chat. Longer output is summarised by the line count above.
+            if tool_name == "run_command" && !tool_result.trim().is_empty() {
+                const MAX_PREVIEW: usize = 20;
+                let preview: Vec<&str> = tool_result.lines().take(MAX_PREVIEW).collect();
+                for line_str in preview {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            "  ",
+                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                        ),
+                        Span::styled(
+                            line_str.to_string(),
+                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                        ),
+                    ]));
+                }
+                if line_count > MAX_PREVIEW {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("  … {} more lines", line_count - MAX_PREVIEW),
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+                    )]));
+                }
+            }
 
             if let Some(ref diff) = msg.diff {
                 for line_str in diff.lines() {
@@ -854,6 +906,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 lines.push(Line::from(""));
                 continue;
             }
+            let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             render_assistant_message(
                 &msg.content,
                 msg.response_time_ms,
@@ -862,6 +915,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 false,
                 inner_area.width,
                 show_picker,
+                collapsed,
+                Some(msg_idx),
+                &mut thought_clicks,
             );
             lines.push(Line::from(""));
         }
@@ -902,6 +958,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 true,
                 inner_area.width,
                 show_picker,
+                false,
+                None,
+                &mut thought_clicks,
             );
 
             lines.push(Line::from(vec![
@@ -931,6 +990,27 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     // scrolled to the bottom
     lines.push(Line::from(""));
 
+    // Resolve each clickable thought header's wrapped start row. Lines wrap
+    // independently, so per-line line_count sums to the exact screen offset.
+    let mut header_wrapped_rows: Vec<(u16, usize)> = Vec::new();
+    if let Some(&(last_line, _)) = thought_clicks.last() {
+        let click_map: std::collections::HashMap<usize, usize> =
+            thought_clicks.iter().copied().collect();
+        let mut cum = 0u16;
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(&midx) = click_map.get(&i) {
+                header_wrapped_rows.push((cum, midx));
+            }
+            let h = Paragraph::new(vec![line.clone()])
+                .wrap(Wrap { trim: true })
+                .line_count(inner_area.width) as u16;
+            cum = cum.saturating_add(h);
+            if i >= last_line {
+                break;
+            }
+        }
+    }
+
     let conversation_paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
         .style(Style::default().bg(COLOR_BG));
@@ -957,12 +1037,25 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     f.render_widget(conversation_paragraph, inner_area);
 
+    // Map visible thought headers to on-screen rows for click hit-testing.
+    state.thought_toggle_rows.clear();
+    for (wrapped_row, midx) in header_wrapped_rows {
+        if wrapped_row >= scroll_offset && wrapped_row < scroll_offset + inner_area.height {
+            let screen_row = inner_area.y + (wrapped_row - scroll_offset);
+            state.thought_toggle_rows.push((screen_row, midx));
+        }
+    }
+
     let conv = chunks[0];
     let view_h = inner_area.height;
     let content_h = total_wrapped_lines.max(1);
+    state.scrollbar_height = 0;
     if content_h > view_h && max_scroll > 0 {
         let sb_x = conv.x + conv.width.saturating_sub(1);
         let sb_area = ratatui::layout::Rect::new(sb_x, conv.y, 1, view_h);
+        state.scrollbar_col = sb_x;
+        state.scrollbar_top = conv.y;
+        state.scrollbar_height = view_h;
         let thumb_len = ((view_h as u32 * view_h as u32) / content_h as u32).max(1) as u16;
         let track = view_h.saturating_sub(thumb_len);
         let pos = if max_scroll == 0 {
@@ -1828,7 +1921,8 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .margin(1)
+            .horizontal_margin(3)
+            .vertical_margin(1)
             .constraints([
                 Constraint::Min(3),
                 Constraint::Length(input_height),
@@ -1866,6 +1960,91 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     if state.status == AppStatus::AwaitingToolConfirmation {
         render_tool_confirmation_modal(f, state);
     }
+
+    // Painted last so it sits on top of everything, like a native selection.
+    if !state.modal_open() {
+        if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
+            highlight_selection(f, start, end);
+        }
+    }
+}
+
+/// Inverts the cells covered by a text selection (screen coords), row-major, so it
+/// reads like selecting a paragraph on a web page rather than a rectangular block.
+fn highlight_selection(f: &mut Frame, start: (u16, u16), end: (u16, u16)) {
+    let (start, end) = if (start.1, start.0) <= (end.1, end.0) {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    let buf = f.buffer_mut();
+    let area = buf.area;
+    let width = area.width;
+    if width == 0 {
+        return;
+    }
+    for row in start.1..=end.1 {
+        if row < area.y || row >= area.y + area.height {
+            continue;
+        }
+        let col_from = if row == start.1 { start.0 } else { area.x };
+        let col_to = if row == end.1 {
+            end.0
+        } else {
+            area.x + width - 1
+        };
+        for col in col_from..=col_to {
+            if col < area.x || col >= area.x + width {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
+                cell.set_fg(Color::Rgb(255, 255, 255));
+                cell.set_bg(COLOR_SELECTION);
+            }
+        }
+    }
+}
+
+/// Reconstructs selected text from the last rendered buffer, row-major with trailing
+/// whitespace trimmed per line — matches what the highlight shows on screen.
+pub fn extract_selection(
+    buf: &ratatui::buffer::Buffer,
+    start: (u16, u16),
+    end: (u16, u16),
+) -> String {
+    let (start, end) = if (start.1, start.0) <= (end.1, end.0) {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    let area = buf.area;
+    let width = area.width;
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for row in start.1..=end.1 {
+        if row < area.y || row >= area.y + area.height {
+            continue;
+        }
+        let col_from = if row == start.1 { start.0 } else { area.x };
+        let col_to = if row == end.1 {
+            end.0.min(area.x + width - 1)
+        } else {
+            area.x + width - 1
+        };
+        let mut line = String::new();
+        for col in col_from..=col_to {
+            if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
+                line.push_str(cell.symbol());
+            }
+        }
+        out.push_str(line.trim_end());
+        if row != end.1 {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {

@@ -58,7 +58,6 @@ impl StreamTracker {
         self.prev_tokens = self.tokens_so_far;
         self.last_update = now;
 
-        // Keep only the last 1.5 seconds of chunk history to bound the deque size
         let cutoff = now
             .checked_sub(std::time::Duration::from_millis(1500))
             .unwrap_or(now);
@@ -107,10 +106,8 @@ impl StreamTracker {
 
         let raw_tps = total_tokens_in_window as f64 / elapsed;
 
-        // Slow down/decay when no chunks arrive
         let silence = (now - self.last_update).as_secs_f64();
         let tps = if silence > 0.5 {
-            // Smooth exponential decay (half-life of 0.5 seconds)
             let decay = (-silence / 0.5).exp();
             raw_tps * decay
         } else {
@@ -228,7 +225,6 @@ pub struct AppState {
     /// keep working normally.
     pub running_tools: Vec<String>,
 
-    /// Tracks live token counts during the current streaming reply.
     pub stream_tracker: Option<StreamTracker>,
 
     pub auto_confirm: bool,
@@ -239,10 +235,20 @@ pub struct AppState {
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
     pub last_max_scroll: u16,
+    pub viewport_height: u16,
+    pub mouse_capture_enabled: bool,
+    pub sel_start: Option<(u16, u16)>,
+    pub sel_end: Option<(u16, u16)>,
+    pub selecting: bool,
+    pub expanded_thoughts: std::collections::HashSet<usize>,
+    pub thought_toggle_rows: Vec<(u16, usize)>,
+    pub scrollbar_col: u16,
+    pub scrollbar_top: u16,
+    pub scrollbar_height: u16,
+    pub dragging_scrollbar: bool,
     pub raw_cli_mode: bool,
     pub tip_index: usize,
 
-    /// Tracks the current terminal title to avoid redundant OSC 0 sequences.
     pub current_terminal_title: Option<String>,
 }
 
@@ -318,6 +324,17 @@ impl AppState {
             is_scroll_locked_to_bottom: true,
             current_terminal_title: None,
             last_max_scroll: 0,
+            viewport_height: 0,
+            mouse_capture_enabled: true,
+            sel_start: None,
+            sel_end: None,
+            selecting: false,
+            expanded_thoughts: std::collections::HashSet::new(),
+            thought_toggle_rows: Vec::new(),
+            scrollbar_col: 0,
+            scrollbar_top: 0,
+            scrollbar_height: 0,
+            dragging_scrollbar: false,
             raw_cli_mode: false,
             tip_index: random_tip_index(),
         }
@@ -569,16 +586,49 @@ impl AppState {
     }
 
     pub fn scroll_up(&mut self, amount: u16) {
+        self.clear_selection();
         self.is_scroll_locked_to_bottom = false;
         self.scroll_row = self.scroll_row.saturating_sub(amount);
     }
 
     pub fn scroll_down(&mut self, amount: u16) {
+        self.clear_selection();
         let max = self.last_max_scroll;
         let next = self.scroll_row.saturating_add(amount).min(max);
         self.scroll_row = next;
         if next >= max {
             self.is_scroll_locked_to_bottom = true;
         }
+    }
+
+    /// One page = the visible conversation height, minus a line of overlap for context.
+    pub fn page_rows(&self) -> u16 {
+        self.viewport_height.saturating_sub(1).max(1)
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.sel_start = None;
+        self.sel_end = None;
+        self.selecting = false;
+    }
+
+    pub fn toggle_thought(&mut self, idx: usize) {
+        if !self.expanded_thoughts.remove(&idx) {
+            self.expanded_thoughts.insert(idx);
+        }
+    }
+
+    /// Map a click on the scrollbar track to a scroll position and jump there.
+    pub fn scrollbar_drag_to(&mut self, row: u16) {
+        self.clear_selection();
+        let max = self.last_max_scroll;
+        if max == 0 || self.scrollbar_height <= 1 {
+            return;
+        }
+        let rel =
+            row.saturating_sub(self.scrollbar_top) as f32 / (self.scrollbar_height - 1) as f32;
+        let target = (rel.clamp(0.0, 1.0) * max as f32).round() as u16;
+        self.scroll_row = target.min(max);
+        self.is_scroll_locked_to_bottom = self.scroll_row >= max;
     }
 }

@@ -80,9 +80,7 @@ fn matching_command_names(prefix: &str) -> Vec<&'static str> {
 
 #[derive(Debug, Default)]
 pub struct SuggestionCycle {
-    /// Original prefix the user typed before cycling started.
     pub original_prefix: Option<String>,
-    /// Current index into the filtered match list (None = no active cycle).
     pub suggestion_index: Option<usize>,
 }
 
