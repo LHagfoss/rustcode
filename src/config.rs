@@ -316,6 +316,56 @@ pub fn delete_session_file(path: &Path) {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MonthlyUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub calls: u64,
+}
+
+pub fn track_usage(prompt_tokens: u64, completion_tokens: u64) {
+    let dir = match get_config_dir() {
+        Some(d) => d,
+        None => return,
+    };
+    let path = dir.join("usage_stats.json");
+    let mut stats: std::collections::BTreeMap<String, MonthlyUsage> = if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            std::collections::BTreeMap::new()
+        }
+    } else {
+        std::collections::BTreeMap::new()
+    };
+
+    let month_str = chrono::Local::now().format("%Y-%m").to_string();
+    let entry = stats.entry(month_str).or_default();
+    entry.prompt_tokens += prompt_tokens;
+    entry.completion_tokens += completion_tokens;
+    entry.total_tokens += prompt_tokens + completion_tokens;
+    entry.calls += 1;
+
+    if let Ok(json_str) = serde_json::to_string_pretty(&stats) {
+        let _ = fs::write(&path, json_str);
+    }
+}
+
+pub fn get_usage_history() -> std::collections::BTreeMap<String, MonthlyUsage> {
+    let dir = match get_config_dir() {
+        Some(d) => d,
+        None => return std::collections::BTreeMap::new(),
+    };
+    let path = dir.join("usage_stats.json");
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            return serde_json::from_str(&content).unwrap_or_default();
+        }
+    }
+    std::collections::BTreeMap::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
