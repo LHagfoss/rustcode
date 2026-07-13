@@ -301,8 +301,9 @@ fn get_cwd_and_branch() -> String {
 impl AppState {
     pub fn new() -> Self {
         let (api_base_url, model_name, mut config) = crate::config::load_config();
-        let active_session_id = crate::config::init_active_session(&mut config);
-        let history = crate::config::load_session_history_direct(&active_session_id);
+        let _ = crate::config::init_active_session(&mut config);
+        let active_session_id = crate::config::create_new_session(&mut config);
+        let history = Vec::new();
         let cwd_and_branch = get_cwd_and_branch();
 
         Self {
