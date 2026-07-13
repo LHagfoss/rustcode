@@ -1230,9 +1230,10 @@ editing files, running commands, and explaining code.\n\n\
 - You have a dedicated session-specific sandbox folder (`sandbox/`). If you need to write temporary scripts, compile experimental code, or run test fixtures, place them under the `sandbox/` directory (e.g. creating `sandbox/temp.rs` and running `run_command` with `\"cwd\": \"sandbox\"`). This ensures you do not pollute the user's main repository.\n\
 - If you generate reports, architectural designs, or documentation that should persist for the user, write them under the `artifacts/` directory (e.g. `artifacts/plan.md`).\n\n\
 # Asynchronous Background Tasks\n\
-- For slow-running commands (like test suites, cargo builds, or network calls), you can run them in the background by setting `\"background\": true` in the `run_command` tool. The tool will return a task ID and complete immediately. Yield control, and the system will automatically wake you up with a system message containing the command output once the background task finishes.\n\n\
+- For slow-running or heavy commands (like `cargo build`, `cargo test`, `cargo run`, `npm install`, `docker build`, `git push`, or any command taking more than 2 seconds), you **MUST** run them in the background by setting `\"background\": true` in the `run_command` tool. The tool will return a task ID and complete immediately. Yield control, and the system will automatically wake you up with a system message containing the command output once the background task finishes.\n\n\
 # How to work\n\
 - Be concise and direct. No filler, no preamble.\n\
+- **Tool Call Grouping & Uniqueness:** Do NOT output multiple identical tool call blocks in the same response. You may output multiple *different* tool call blocks to perform parallel operations (e.g. reading different files), but they must be grouped together in the same turn. Do not output a tool block, add text narration, and then output another tool block.\n\
 - Explore before editing. Use `grep` to search code, `glob` to find files by \
 name, and `read_file` to read relevant sections. Understand the surrounding \
 code and project conventions before changing anything.\n\
@@ -1515,15 +1516,25 @@ fn parse_tool_calls_impl(
 }
 
 pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
-    let first_try = parse_tool_calls_impl(text, protocol);
-    if !first_try.is_empty() {
-        return first_try;
+    let mut raw_calls = parse_tool_calls_impl(text, protocol);
+    if raw_calls.is_empty() {
+        let fallback = match protocol {
+            crate::config::ToolProtocol::Json => crate::config::ToolProtocol::Xml,
+            crate::config::ToolProtocol::Xml => crate::config::ToolProtocol::Json,
+        };
+        raw_calls = parse_tool_calls_impl(text, fallback);
     }
-    let fallback = match protocol {
-        crate::config::ToolProtocol::Json => crate::config::ToolProtocol::Xml,
-        crate::config::ToolProtocol::Xml => crate::config::ToolProtocol::Json,
-    };
-    parse_tool_calls_impl(text, fallback)
+
+    let mut unique_calls = Vec::new();
+    for call in raw_calls {
+        if !unique_calls
+            .iter()
+            .any(|(n, a)| n == &call.0 && a == &call.1)
+        {
+            unique_calls.push(call);
+        }
+    }
+    unique_calls
 }
 
 pub fn parse_tool_call(
