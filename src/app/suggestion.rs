@@ -37,6 +37,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show current process RAM usage",
     },
     CommandInfo {
+        name: "/mcp",
+        desc: "Configure Model Context Protocol (MCP) servers",
+    },
+    CommandInfo {
         name: "/model",
         desc: "Open model picker, switch profile, or override model",
     },
