@@ -1247,9 +1247,21 @@ pub async fn process_queue_orchestrator(
                 crate::notifications::FinishedStatus::Success,
             );
 
-            dbg_log!("Estimating token usage...");
-            let usage = estimate_token_usage(&history_before, &final_content).await;
-            dbg_log!("Token usage estimation result: {:?}", usage);
+            let usage = {
+                let s = state.lock().await;
+                if s.current_token_usage.is_some() {
+                    s.current_token_usage.clone()
+                } else {
+                    drop(s);
+                    dbg_log!("Estimating token usage...");
+                    let est = estimate_token_usage(&history_before, &final_content).await;
+                    dbg_log!("Token usage estimation result: {:?}", est);
+                    est
+                }
+            };
+            if let Some(u) = &usage {
+                crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
+            }
             state.lock().await.current_token_usage = usage;
             break;
         }
