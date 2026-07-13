@@ -588,8 +588,13 @@ async fn confirm_and_execute(
 
         let name_owned = name.to_string();
         let args_owned = args.clone();
-        let run_fut =
-            tokio::task::spawn_blocking(move || crate::tools::execute(&name_owned, &args_owned));
+        let session_id = { state.lock().await.active_session_id.clone() };
+        let run_fut = tokio::task::spawn_blocking(move || {
+            crate::tools::set_active_session_id(Some(session_id));
+            let result = crate::tools::execute(&name_owned, &args_owned);
+            crate::tools::set_active_session_id(None);
+            result
+        });
 
         let res = tokio::select! {
             res = run_fut => {
@@ -657,8 +662,12 @@ async fn confirm_and_execute(
 
             let name_owned = name.to_string();
             let args_owned = args.clone();
+            let session_id = { state.lock().await.active_session_id.clone() };
             let run_fut = tokio::task::spawn_blocking(move || {
-                crate::tools::execute(&name_owned, &args_owned)
+                crate::tools::set_active_session_id(Some(session_id));
+                let result = crate::tools::execute(&name_owned, &args_owned);
+                crate::tools::set_active_session_id(None);
+                result
             });
 
             tokio::select! {
@@ -1006,10 +1015,20 @@ pub async fn process_queue_orchestrator(
         let stream_buffer = Arc::new(Mutex::new(StreamBuffer {
             content: String::new(),
         }));
+        let is_wakeup = next_prompt.starts_with("__task_wakeup__:");
         {
             let mut s = state.lock().await;
-            s.history.push(ChatMessage::new("user", next_prompt));
-            crate::config::save_history(&s.history);
+            if is_wakeup {
+                let task_id = next_prompt.strip_prefix("__task_wakeup__:").unwrap_or("");
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!("Task {task_id} has finished running in the background."),
+                ));
+            } else {
+                s.history.push(ChatMessage::new("user", next_prompt));
+            }
+            let active_id = s.active_session_id.clone();
+            crate::config::save_session_history(&active_id, &s.history);
             s.current_response.clear();
             s.current_token_usage = None;
             s.response_time = None;

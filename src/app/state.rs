@@ -215,6 +215,7 @@ pub struct AppState {
     pub show_history_picker: bool,
     pub history_picker_index: usize,
     pub history_picker_sessions: Vec<crate::config::SessionMeta>,
+    pub active_session_id: String,
 
     pub pending_tool_confirmation: Option<ToolConfirmation>,
 
@@ -284,12 +285,14 @@ fn get_cwd_and_branch() -> String {
 
 impl AppState {
     pub fn new() -> Self {
-        let (api_base_url, model_name, config) = crate::config::load_config();
+        let (api_base_url, model_name, mut config) = crate::config::load_config();
+        let active_session_id = crate::config::init_active_session(&mut config);
+        let history = crate::config::load_session_history_direct(&active_session_id);
         let cwd_and_branch = get_cwd_and_branch();
 
         Self {
             input_buffer: String::new(),
-            history: Vec::new(),
+            history,
             current_response: String::new(),
             current_token_usage: None,
             pending_queue: Vec::new(),
@@ -318,6 +321,7 @@ impl AppState {
             running_tools: Vec::new(),
             stream_tracker: None,
             auto_confirm: false,
+            active_session_id,
             subagents: Vec::new(),
             next_subagent_id: 1,
             scroll_row: 0,
