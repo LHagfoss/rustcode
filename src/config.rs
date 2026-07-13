@@ -10,6 +10,7 @@ const CONFIG_FILE: &str = "config.toml";
 const HISTORY_FILE: &str = "history.json";
 const HISTORY_LIMIT: usize = 50;
 const SESSIONS_DIR: &str = "sessions";
+#[allow(dead_code)]
 const MAX_SESSIONS: usize = 30;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -40,6 +41,8 @@ pub struct AppConfig {
     pub models: Vec<ModelProfile>,
     #[serde(default)]
     pub tool_protocol: ToolProtocol,
+    #[serde(default)]
+    pub last_active_session_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -76,6 +79,7 @@ impl Default for AppConfig {
                 },
             ],
             tool_protocol: ToolProtocol::default(),
+            last_active_session_id: None,
         }
     }
 }
@@ -168,12 +172,6 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
     }
 }
 
-pub fn save_history(history: &[ChatMessage]) {
-    if let Some(dir) = get_config_dir() {
-        save_history_to(&dir, history);
-    }
-}
-
 fn save_history_to(dir: &Path, history: &[ChatMessage]) {
     let _ = fs::create_dir_all(dir);
     let start_idx = history.len().saturating_sub(HISTORY_LIMIT);
@@ -226,17 +224,138 @@ fn session_meta_from(path: PathBuf, history: &[ChatMessage]) -> SessionMeta {
 
 /// Archive a chat into the sessions directory. No-op for histories without
 /// a real prompt. Returns the archive path on success.
+pub fn save_history(history: &[ChatMessage]) {
+    if let Some(dir) = get_config_dir() {
+        let (_, _, config) = load_config();
+        if let Some(ref session_id) = config.last_active_session_id {
+            save_session_history(session_id, history);
+        } else {
+            save_history_to(&dir, history);
+        }
+    }
+}
+
+pub fn save_session_history(session_id: &str, history: &[ChatMessage]) {
+    if let Some(dir) = get_config_dir() {
+        let session_dir = dir.join(SESSIONS_DIR).join(session_id);
+        let _ = fs::create_dir_all(&session_dir);
+        let start_idx = history.len().saturating_sub(HISTORY_LIMIT);
+        if let Ok(json_str) = serde_json::to_string_pretty(&history[start_idx..]) {
+            let _ = fs::write(session_dir.join("history.json"), json_str);
+        }
+    }
+}
+
+pub fn load_session_history_direct(session_id: &str) -> Vec<ChatMessage> {
+    if let Some(dir) = get_config_dir() {
+        let path = dir.join(SESSIONS_DIR).join(session_id).join("history.json");
+        return load_session_file(&path);
+    }
+    Vec::new()
+}
+
+pub fn get_active_session_dir(session_id: &str) -> Option<PathBuf> {
+    let dir = get_config_dir()?;
+    Some(dir.join(SESSIONS_DIR).join(session_id))
+}
+
+pub fn get_active_session_sandbox_dir(session_id: &str) -> Option<PathBuf> {
+    let dir = get_active_session_dir(session_id)?;
+    Some(dir.join("sandbox"))
+}
+
+pub fn get_active_session_artifacts_dir(session_id: &str) -> Option<PathBuf> {
+    let dir = get_active_session_dir(session_id)?;
+    Some(dir.join("artifacts"))
+}
+
+pub fn init_active_session(config: &mut AppConfig) -> String {
+    let dir = match get_config_dir() {
+        Some(d) => d,
+        None => return "".to_string(),
+    };
+
+    if let Some(ref session_id) = config.last_active_session_id {
+        let session_dir = dir.join(SESSIONS_DIR).join(session_id);
+        if session_dir.exists() {
+            let _ = fs::create_dir_all(session_dir.join("sandbox"));
+            let _ = fs::create_dir_all(session_dir.join("artifacts"));
+            return session_id.clone();
+        }
+    }
+
+    let legacy_history_path = dir.join(HISTORY_FILE);
+    let legacy_history = load_session_file(&legacy_history_path);
+    if session_has_content(&legacy_history) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis();
+        let session_id = ts.to_string();
+        let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
+        let _ = fs::create_dir_all(&session_dir);
+        let _ = fs::create_dir_all(session_dir.join("sandbox"));
+        let _ = fs::create_dir_all(session_dir.join("artifacts"));
+
+        let json_str = serde_json::to_string_pretty(&legacy_history).unwrap_or_default();
+        let _ = fs::write(session_dir.join("history.json"), json_str);
+        let _ = fs::remove_file(&legacy_history_path);
+
+        config.last_active_session_id = Some(session_id.clone());
+        save_config_to(&dir, config);
+        return session_id;
+    }
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::from_secs(0))
+        .as_millis();
+    let session_id = ts.to_string();
+    let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
+    let _ = fs::create_dir_all(&session_dir);
+    let _ = fs::create_dir_all(session_dir.join("sandbox"));
+    let _ = fs::create_dir_all(session_dir.join("artifacts"));
+
+    config.last_active_session_id = Some(session_id.clone());
+    save_config_to(&dir, config);
+    session_id
+}
+
+pub fn create_new_session(config: &mut AppConfig) -> String {
+    let dir = match get_config_dir() {
+        Some(d) => d,
+        None => return "".to_string(),
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::from_secs(0))
+        .as_millis();
+    let session_id = ts.to_string();
+    let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
+    let _ = fs::create_dir_all(&session_dir);
+    let _ = fs::create_dir_all(session_dir.join("sandbox"));
+    let _ = fs::create_dir_all(session_dir.join("artifacts"));
+
+    config.last_active_session_id = Some(session_id.clone());
+    save_config_to(&dir, config);
+    session_id
+}
+
+#[allow(dead_code)]
 pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
     if !session_has_content(history) {
         return None;
     }
     let dir = get_config_dir()?.join(SESSIONS_DIR);
-    fs::create_dir_all(&dir).ok()?;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_millis();
-    let path = dir.join(format!("{ts}.json"));
+    let session_dir = dir.join(format!("{ts}"));
+    fs::create_dir_all(&session_dir).ok()?;
+    fs::create_dir_all(session_dir.join("sandbox")).ok()?;
+    fs::create_dir_all(session_dir.join("artifacts")).ok()?;
+    let path = session_dir.join("history.json");
     let start_idx = history.len().saturating_sub(HISTORY_LIMIT);
     let json_str = serde_json::to_string_pretty(&history[start_idx..]).ok()?;
     fs::write(&path, json_str).ok()?;
@@ -244,25 +363,35 @@ pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
     Some(path)
 }
 
+#[allow(dead_code)]
 fn prune_sessions(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().map(|e| e == "json").unwrap_or(false))
-        .collect();
-    if files.len() <= MAX_SESSIONS {
+    let mut targets: Vec<PathBuf> = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let p = entry.path();
+        if p.is_dir() {
+            if p.join("history.json").exists() {
+                targets.push(p);
+            }
+        } else if p.extension().map(|e| e == "json").unwrap_or(false) {
+            targets.push(p);
+        }
+    }
+    if targets.len() <= MAX_SESSIONS {
         return;
     }
-    files.sort();
-    for old in &files[..files.len() - MAX_SESSIONS] {
-        let _ = fs::remove_file(old);
+    targets.sort();
+    for old in &targets[..targets.len() - MAX_SESSIONS] {
+        if old.is_dir() {
+            let _ = fs::remove_dir_all(old);
+        } else {
+            let _ = fs::remove_file(old);
+        }
     }
 }
 
-/// Archived sessions, newest first.
 pub fn list_sessions() -> Vec<SessionMeta> {
     let Some(dir) = get_config_dir() else {
         return Vec::new();
@@ -270,11 +399,18 @@ pub fn list_sessions() -> Vec<SessionMeta> {
     let Ok(entries) = fs::read_dir(dir.join(SESSIONS_DIR)) else {
         return Vec::new();
     };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().map(|e| e == "json").unwrap_or(false))
-        .collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let p = entry.path();
+        if p.is_dir() {
+            let history_file = p.join("history.json");
+            if history_file.exists() {
+                paths.push(history_file);
+            }
+        } else if p.extension().map(|e| e == "json").unwrap_or(false) {
+            paths.push(p);
+        }
+    }
     paths.sort();
     paths.reverse();
     paths
@@ -290,27 +426,23 @@ pub fn list_sessions() -> Vec<SessionMeta> {
         .collect()
 }
 
-/// Move the previous run's live history into the sessions archive so a new
-/// run starts fresh without silently overwriting the old chat. Call once at
-/// startup, before any history is saved.
 pub fn archive_live_history() {
-    let Some(dir) = get_config_dir() else { return };
-    let path = dir.join(HISTORY_FILE);
-    let history = load_session_file(&path);
-    if session_has_content(&history) && archive_session(&history).is_some() {
-        let _ = fs::remove_file(&path);
-    }
+    // Deprecated/no-op in new per-session structure
 }
 
-/// Meta for the live history file (the previous run's chat), if it has content.
 pub fn live_session_meta() -> Option<SessionMeta> {
-    let path = get_config_dir()?.join(HISTORY_FILE);
-    let history = load_session_file(&path);
-    if session_has_content(&history) {
-        Some(session_meta_from(path, &history))
-    } else {
-        None
+    let (_, _, config) = load_config();
+    if let Some(session_id) = config.last_active_session_id {
+        let path = get_config_dir()?
+            .join(SESSIONS_DIR)
+            .join(&session_id)
+            .join("history.json");
+        let history = load_session_file(&path);
+        if session_has_content(&history) {
+            return Some(session_meta_from(path, &history));
+        }
     }
+    None
 }
 
 pub fn load_session_file(path: &Path) -> Vec<ChatMessage> {
@@ -320,10 +452,23 @@ pub fn load_session_file(path: &Path) -> Vec<ChatMessage> {
     serde_json::from_str::<Vec<ChatMessage>>(&content).unwrap_or_default()
 }
 
+#[allow(dead_code)]
 pub fn delete_session_file(path: &Path) {
-    // only ever remove files inside the sessions dir; the live history
-    // file is rewritten by save_history instead
     if path
+        .file_name()
+        .map(|n| n == "history.json")
+        .unwrap_or(false)
+    {
+        if let Some(parent) = path.parent() {
+            if parent
+                .parent()
+                .map(|p| p.ends_with(SESSIONS_DIR))
+                .unwrap_or(false)
+            {
+                let _ = fs::remove_dir_all(parent);
+            }
+        }
+    } else if path
         .parent()
         .map(|p| p.ends_with(SESSIONS_DIR))
         .unwrap_or(false)
