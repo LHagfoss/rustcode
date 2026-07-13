@@ -566,7 +566,7 @@ pub fn check_memory_usage(s: &mut AppState) {
 }
 
 pub fn start_new_session(s: &mut AppState) {
-    crate::config::archive_session(&s.history);
+    crate::config::save_session_history(&s.active_session_id, &s.history);
     s.history.clear();
     s.pending_queue.clear();
     s.current_response.clear();
@@ -578,7 +578,10 @@ pub fn start_new_session(s: &mut AppState) {
     s.subagents.clear();
     s.next_subagent_id = 1;
     s.tip_index = crate::app::random_tip_index();
-    crate::config::save_history(&s.history);
+
+    // Switch to a new active session ID
+    s.active_session_id = crate::config::create_new_session(&mut s.config);
+    crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
 /// Fill in the active profile's context window from the provider when the
@@ -662,10 +665,19 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
         ));
         return;
     }
-    // archive the chat we're leaving so /history can bring it back
-    crate::config::archive_session(&s.history);
-    // the loaded session becomes the live one again
-    crate::config::delete_session_file(&meta.path);
+
+    // Save current active session history
+    crate::config::save_session_history(&s.active_session_id, &s.history);
+
+    // Extract session ID from the loaded path parent
+    if let Some(parent) = meta.path.parent() {
+        if let Some(session_id_str) = parent.file_name().and_then(|n| n.to_str()) {
+            s.active_session_id = session_id_str.to_string();
+            s.config.last_active_session_id = Some(s.active_session_id.clone());
+            crate::config::save_entire_config(&s.config);
+        }
+    }
+
     s.history = loaded;
     s.pending_queue.clear();
     s.current_response.clear();
@@ -679,7 +691,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
         "system",
         format!("Resumed session \"{}\" ({} messages)", meta.title, count),
     ));
-    crate::config::save_history(&s.history);
+    crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
 pub fn copy_last_reply(s: &mut AppState) {
