@@ -49,8 +49,16 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Configure or list Ollama models",
     },
     CommandInfo {
+        name: "/parser",
+        desc: "Show or set current tool protocol (json, xml)",
+    },
+    CommandInfo {
         name: "/provider",
         desc: "Add/update model provider profile",
+    },
+    CommandInfo {
+        name: "/protocol",
+        desc: "Show or set current tool protocol (json, xml)",
     },
     CommandInfo {
         name: "/quit",
@@ -59,6 +67,14 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "/resume",
         desc: "Resume most recent session",
+    },
+    CommandInfo {
+        name: "/stats",
+        desc: "Show token usage and context statistics",
+    },
+    CommandInfo {
+        name: "/status",
+        desc: "Show token usage and context statistics",
     },
     CommandInfo {
         name: "/tools",

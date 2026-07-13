@@ -276,7 +276,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
     let footer_area = chunks[3];
     let show_picker = state.modal_open();
 
-    let mut left_spans = if state.status == AppStatus::Streaming
+    let left_spans = if state.status == AppStatus::Streaming
         || state.status == AppStatus::Queued
         || !state.running_tools.is_empty()
     {
@@ -347,13 +347,6 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         ));
         spans
     };
-
-    if let Some(handle) = &state.remote_server {
-        left_spans.push(Span::styled(
-            format!("   🌐 :{} tok:{}", handle.port, handle.token),
-            get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
-        ));
-    }
 
     let right_spans = if state.history.is_empty() {
         vec![
@@ -899,7 +892,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
             lines.push(Line::from(""));
         } else if msg.role == "assistant" {
-            if let Some((name, args)) = crate::tools::parse_tool_call(&msg.content) {
+            if let Some((name, args)) =
+                crate::tools::parse_tool_call(&msg.content, state.config.tool_protocol)
+            {
                 let brief = format_tool_call_brief(&name, &args);
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -1969,10 +1964,6 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         render_tool_confirmation_modal(f, state);
     }
 
-    if state.show_remote_modal {
-        render_remote_modal(f, state);
-    }
-
     // Painted last so it sits on top of everything, like a native selection.
     if !state.modal_open() {
         if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
@@ -2250,214 +2241,6 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" cancel", Style::default().fg(COLOR_MUTED)),
-    ]);
-    f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[8],
-    );
-}
-
-fn render_remote_modal(f: &mut Frame, state: &AppState) {
-    use crate::app::RemoteModalField;
-    let modal_area = centered_rect_fixed(65, 13, f.area());
-    f.render_widget(Clear, modal_area);
-
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL));
-    f.render_widget(modal_block, modal_area);
-
-    let inner_area = modal_area.inner(Margin {
-        vertical: 1,
-        horizontal: 3,
-    });
-
-    let modal_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // Header
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Host input
-            Constraint::Length(1), // Port input
-            Constraint::Length(1), // Token input
-            Constraint::Length(2), // Spacer/Status info
-            Constraint::Length(1), // Action/Start/Stop instructions
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Footer instruction
-        ])
-        .split(inner_area);
-
-    // 1. Modal Header
-    let header_line = Line::from(vec![
-        Span::styled(
-            "Remote Server Config",
-            Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(24) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED)),
-    ]);
-    f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[0],
-    );
-
-    // 2. Host Input
-    let is_host = state.remote_modal_field == RemoteModalField::Host;
-    let host_line = if is_host {
-        Line::from(vec![
-            Span::styled(
-                "Host:  ",
-                Style::default()
-                    .fg(COLOR_PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(state.remote_host.clone(), Style::default().fg(COLOR_TEXT)),
-            Span::styled("█", Style::default().fg(COLOR_PRIMARY)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("Host:  ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(state.remote_host.clone(), Style::default().fg(COLOR_TEXT)),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(host_line).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[2],
-    );
-
-    // 3. Port Input
-    let is_port = state.remote_modal_field == RemoteModalField::Port;
-    let port_line = if is_port {
-        Line::from(vec![
-            Span::styled(
-                "Port:  ",
-                Style::default()
-                    .fg(COLOR_PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(state.remote_port.clone(), Style::default().fg(COLOR_TEXT)),
-            Span::styled("█", Style::default().fg(COLOR_PRIMARY)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("Port:  ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(state.remote_port.clone(), Style::default().fg(COLOR_TEXT)),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(port_line).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[3],
-    );
-
-    // 4. Token Input
-    let is_token = state.remote_modal_field == RemoteModalField::Token;
-    let token_line = if is_token {
-        Line::from(vec![
-            Span::styled(
-                "Token: ",
-                Style::default()
-                    .fg(COLOR_PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(state.remote_token.clone(), Style::default().fg(COLOR_TEXT)),
-            Span::styled("█", Style::default().fg(COLOR_PRIMARY)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("Token: ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(state.remote_token.clone(), Style::default().fg(COLOR_TEXT)),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(token_line).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[4],
-    );
-
-    // 5. Status Info
-    let status_info = if let Some(server) = &state.remote_server {
-        let text = format!(
-            "Active on {}:{} (tok: {})",
-            state.remote_host, server.port, server.token
-        );
-        Line::from(vec![
-            Span::styled("Server Status: ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(
-                text,
-                Style::default()
-                    .fg(COLOR_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("Server Status: ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(
-                "Inactive",
-                Style::default()
-                    .fg(COLOR_MUTED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(status_info).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[5],
-    );
-
-    // 6. Action instructions
-    let action_line = if state.remote_server.is_some() {
-        Line::from(vec![
-            Span::styled(
-                "  enter",
-                Style::default()
-                    .fg(COLOR_PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Stop Server  ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(
-                "esc",
-                Style::default()
-                    .fg(COLOR_MUTED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Close Modal", Style::default().fg(COLOR_MUTED)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                "  enter",
-                Style::default()
-                    .fg(COLOR_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Start Server  ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(
-                "esc",
-                Style::default()
-                    .fg(COLOR_MUTED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Close Modal", Style::default().fg(COLOR_MUTED)),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(action_line).style(Style::default().bg(COLOR_PANEL)),
-        modal_chunks[6],
-    );
-
-    // 7. Footer
-    let footer_line = Line::from(vec![
-        Span::styled(
-            "  tab / shift+tab",
-            Style::default().fg(COLOR_TIP).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" cycle fields  ", Style::default().fg(COLOR_MUTED)),
-        Span::styled(
-            "backspace / chars",
-            Style::default().fg(COLOR_TIP).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" edit", Style::default().fg(COLOR_MUTED)),
     ]);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),

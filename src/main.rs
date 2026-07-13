@@ -5,7 +5,6 @@ mod context;
 mod network;
 mod notifications;
 mod raw_cli;
-mod remote_server;
 mod symbols;
 mod tools;
 mod ui;
@@ -13,7 +12,7 @@ mod ui;
 use crate::app::{AppState, AppStatus, ChatMessage};
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, Event, KeyCode},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -50,10 +49,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+    // Use SGR Mouse Mode (ESC[?1006h) — reliable on macOS Terminal.app and iTerm2
+    use std::io::Write;
+    write!(stdout, "\x1b[?1006h").ok();
     execute!(
         stdout,
         EnterAlternateScreen,
-        EnableMouseCapture,
         crossterm::event::EnableBracketedPaste,
         crossterm::event::EnableFocusChange,
         SetCursorStyle::BlinkingBlock,
@@ -97,7 +98,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
-    app_state.lock().await.cancel_token = Some(current_cancel_token.clone());
 
     crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
 
@@ -107,10 +107,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal_focused = true;
 
     loop {
-        if current_cancel_token.is_cancelled() {
-            current_cancel_token = tokio_util::sync::CancellationToken::new();
-            app_state.lock().await.cancel_token = Some(current_cancel_token.clone());
-        }
         let response_active = app_state.lock().await.status != AppStatus::Idle;
 
         {
@@ -220,7 +216,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let new_token = tokio_util::sync::CancellationToken::new();
                                     current_cancel_token = new_token;
                                     let mut s = app_state.lock().await;
-                                    s.cancel_token = Some(current_cancel_token.clone());
                                     if let Some(tx) = s.tool_confirmation_response.take() {
                                         let _ = tx.send(false);
                                     }
@@ -279,97 +274,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     );
                                 }
                                 s.show_history_picker = false;
-                            }
-                            _ => {}
-                        }
-                        drop(s);
-                        continue;
-                    }
-
-                    if s.show_remote_modal {
-                        match key.code {
-                            KeyCode::Esc => {
-                                s.show_remote_modal = false;
-                            }
-                            KeyCode::Tab => {
-                                use crate::app::RemoteModalField;
-                                s.remote_modal_field = match s.remote_modal_field {
-                                    RemoteModalField::Host => RemoteModalField::Port,
-                                    RemoteModalField::Port => RemoteModalField::Token,
-                                    RemoteModalField::Token => RemoteModalField::Host,
-                                };
-                            }
-                            KeyCode::BackTab => {
-                                use crate::app::RemoteModalField;
-                                s.remote_modal_field = match s.remote_modal_field {
-                                    RemoteModalField::Host => RemoteModalField::Token,
-                                    RemoteModalField::Port => RemoteModalField::Host,
-                                    RemoteModalField::Token => RemoteModalField::Port,
-                                };
-                            }
-                            KeyCode::Backspace => {
-                                use crate::app::RemoteModalField;
-                                match s.remote_modal_field {
-                                    RemoteModalField::Host => {
-                                        s.remote_host.pop();
-                                    }
-                                    RemoteModalField::Port => {
-                                        s.remote_port.pop();
-                                    }
-                                    RemoteModalField::Token => {
-                                        s.remote_token.pop();
-                                    }
-                                }
-                            }
-                            KeyCode::Char(c)
-                                if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                    && !key.modifiers.contains(event::KeyModifiers::ALT) =>
-                            {
-                                use crate::app::RemoteModalField;
-                                match s.remote_modal_field {
-                                    RemoteModalField::Host => {
-                                        s.remote_host.push(c);
-                                    }
-                                    RemoteModalField::Port => {
-                                        s.remote_port.push(c);
-                                    }
-                                    RemoteModalField::Token => {
-                                        s.remote_token.push(c);
-                                    }
-                                }
-                            }
-                            KeyCode::Enter => {
-                                if let Some(handle) = s.remote_server.take() {
-                                    handle.cancel.cancel();
-                                    s.history.push(ChatMessage::new(
-                                        "system",
-                                        format!("Remote server stopped (was on :{})", handle.port),
-                                    ));
-                                } else {
-                                    let host = s.remote_host.clone();
-                                    let port_str = s.remote_port.clone();
-                                    let token = s.remote_token.clone();
-
-                                    let port = port_str.parse::<u16>().unwrap_or(8080);
-                                    let cancel = tokio_util::sync::CancellationToken::new();
-                                    s.remote_server = Some(crate::app::RemoteHandle {
-                                        token: token.clone(),
-                                        port,
-                                        cancel: cancel.clone(),
-                                    });
-                                    s.history.push(ChatMessage::new(
-                                        "system",
-                                        format!("Remote server on :{port} — token: {token}"),
-                                    ));
-                                    let app = Arc::clone(&app_state);
-                                    tokio::spawn(async move {
-                                        crate::remote_server::run_server(
-                                            app, host, port, token, cancel,
-                                        )
-                                        .await;
-                                    });
-                                }
-                                s.show_remote_modal = false;
                             }
                             _ => {}
                         }
@@ -480,7 +384,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             current_cancel_token.cancel();
                                             current_cancel_token =
                                                 tokio_util::sync::CancellationToken::new();
-                                            s.cancel_token = Some(current_cancel_token.clone());
                                             crate::app::start_new_session(&mut s);
                                         }
                                         "Resume session" => {
@@ -669,15 +572,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.command_picker_index = 0;
                             s.command_picker_search.clear();
                         }
-                        // Ctrl+R opens the remote config modal.
-                        KeyCode::Char('r')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            let mut s = app_state.lock().await;
-                            s.show_remote_modal = true;
-                            s.remote_modal_field = crate::app::RemoteModalField::Host;
-                        }
-                        // Ctrl+Y or Cmd/⌘+C copies the current app selection.
+
+                        // Ctrl+Y copies the current app selection.
                         KeyCode::Char('y') | KeyCode::Char('Y')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
@@ -691,8 +587,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             s.clear_selection();
                         }
+                        // Cmd+C or Ctrl+C also copies selected text
                         KeyCode::Char('c') | KeyCode::Char('C')
-                            if key.modifiers.contains(event::KeyModifiers::SUPER)
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL)
+                                || key.modifiers.contains(event::KeyModifiers::SUPER)
                                 || key.modifiers.contains(event::KeyModifiers::META) =>
                         {
                             let mut s = app_state.lock().await;
@@ -711,10 +609,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             s.mouse_capture_enabled = !s.mouse_capture_enabled;
                             s.clear_selection();
+                            use std::io::Write;
                             if s.mouse_capture_enabled {
-                                let _ = execute!(terminal.backend_mut(), EnableMouseCapture);
+                                write!(terminal.backend_mut(), "\x1b[?1006h").ok();
                             } else {
-                                let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+                                write!(terminal.backend_mut(), "\x1b[?1006l").ok();
                             }
                         }
                         KeyCode::Char(c) => {

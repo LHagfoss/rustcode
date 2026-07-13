@@ -9,20 +9,6 @@ pub enum AppStatus {
     AwaitingToolConfirmation,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum RemoteModalField {
-    Host,
-    Port,
-    Token,
-}
-
-/// Handle to a running remote-control web server. Dropping/cancelling stops it.
-pub struct RemoteHandle {
-    pub token: String,
-    pub port: u16,
-    pub cancel: tokio_util::sync::CancellationToken,
-}
-
 #[derive(Debug, Clone)]
 pub struct ToolConfirmation {
     pub tool_name: String,
@@ -230,9 +216,6 @@ pub struct AppState {
     pub history_picker_index: usize,
     pub history_picker_sessions: Vec<crate::config::SessionMeta>,
 
-    /// Running remote-control server, if any.
-    pub remote_server: Option<RemoteHandle>,
-
     pub pending_tool_confirmation: Option<ToolConfirmation>,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
@@ -245,13 +228,6 @@ pub struct AppState {
     pub stream_tracker: Option<StreamTracker>,
 
     pub auto_confirm: bool,
-
-    pub show_remote_modal: bool,
-    pub remote_modal_field: RemoteModalField,
-    pub remote_host: String,
-    pub remote_port: String,
-    pub remote_token: String,
-    pub cancel_token: Option<tokio_util::sync::CancellationToken>,
 
     pub subagents: Vec<SubAgent>,
     pub next_subagent_id: u32,
@@ -337,7 +313,6 @@ impl AppState {
             show_history_picker: false,
             history_picker_index: 0,
             history_picker_sessions: Vec::new(),
-            remote_server: None,
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
             running_tools: Vec::new(),
@@ -362,13 +337,6 @@ impl AppState {
             dragging_scrollbar: false,
             raw_cli_mode: false,
             tip_index: random_tip_index(),
-
-            show_remote_modal: false,
-            remote_modal_field: RemoteModalField::Host,
-            remote_host: "0.0.0.0".to_string(),
-            remote_port: "8080".to_string(),
-            remote_token: crate::remote_server::gen_token(),
-            cancel_token: None,
         }
     }
 
@@ -378,7 +346,6 @@ impl AppState {
         self.show_model_picker
             || self.show_command_picker
             || self.show_history_picker
-            || self.show_remote_modal
             || self.status == AppStatus::AwaitingToolConfirmation
     }
 

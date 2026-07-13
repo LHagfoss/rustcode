@@ -21,10 +21,25 @@ pub struct ModelProfile {
     pub context_window: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolProtocol {
+    Json,
+    Xml,
+}
+
+impl Default for ToolProtocol {
+    fn default() -> Self {
+        ToolProtocol::Json
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub default: String,
     pub models: Vec<ModelProfile>,
+    #[serde(default)]
+    pub tool_protocol: ToolProtocol,
 }
 
 #[allow(dead_code)]
@@ -60,6 +75,7 @@ impl Default for AppConfig {
                     context_window: Some(32768),
                 },
             ],
+            tool_protocol: ToolProtocol::default(),
         }
     }
 }

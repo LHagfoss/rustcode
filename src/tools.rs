@@ -1087,7 +1087,10 @@ pub fn is_agent_tool(name: &str) -> bool {
     matches!(name, "spawn_agent" | "send_agent")
 }
 
-pub fn tool_system_prompt(include_agent_tools: bool) -> String {
+pub fn tool_system_prompt(
+    include_agent_tools: bool,
+    protocol: crate::config::ToolProtocol,
+) -> String {
     let mut p = String::new();
 
     p.push_str(
@@ -1114,22 +1117,39 @@ copy, run_command) will prompt the user for confirmation before running. \
 Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
     );
 
-    p.push_str(
-        "# Tools\n\
-You have access to tools. To use one, output a tool call block OUTSIDE of any \
-<think> tags, after the thinking tags close. The block must be a fenced code \
-block with the `tool` language:\n\n\
-```tool\n\
-{\"name\": \"tool_name\", \"arguments\": {}}\n\
-```\n\n\
-After the call, the tool result is sent back to you inside a \
-<tool_result> block, and you continue. You can emit one or more tool calls in parallel if needed; otherwise, wait \
-for the results before proceeding. Do not narrate the JSON — just emit the block.\n\n\
-Only call a tool when the task actually requires information or changes from \
-the filesystem, codebase, or shell. Greetings, chit-chat, and questions you \
-can answer from the conversation get a plain text reply with NO tool call.\n\n\
-Available tools:\n",
-    );
+    p.push_str("# Tools\n");
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            p.push_str(
+                "You have access to tools. To use one, output a tool call block OUTSIDE of any \
+                <think> tags, after the thinking tags close. The block must be a fenced code \
+                block with the `tool` language:\n\n\
+                ```tool\n\
+                {\"name\": \"tool_name\", \"arguments\": {}}\n\
+                ```\n\n\
+                After the call, the tool result is sent back to you inside a \
+                <tool_result> block, and you continue. You can emit one or more tool calls in parallel if needed; otherwise, wait \
+                for the results before proceeding. Do not narrate the JSON — just emit the block.\n\n"
+            );
+        }
+        crate::config::ToolProtocol::Xml => {
+            p.push_str(
+                "You have access to tools. To use one, output a tool call block OUTSIDE of any \
+                <think> tags, after the thinking tags close. The block must be a fenced code \
+                block with the `tool` language containing a `<tool_call>` XML node:\n\n\
+                ```tool\n\
+                <tool_call name=\"tool_name\">\n\
+                  <argument_name>argument_value</argument_name>\n\
+                </tool_call>\n\
+                ```\n\n\
+                After the call, the tool result is sent back to you inside a \
+                <tool_result> block, and you continue. You can emit one or more tool calls in parallel if needed; otherwise, wait \
+                for the results before proceeding. Do not narrate the XML — just emit the block.\n\n"
+            );
+        }
+    }
+
+    p.push_str("Available tools:\n");
     for t in TOOLS {
         p.push_str(&format!(
             "- {}: {}. Arguments: {}\n",
@@ -1148,8 +1168,11 @@ its own conversation memory and replies. \
 Arguments: {\"id\": subagent id number, \"message\": \"follow-up message\"}\n",
         );
     }
-    p.push_str(
-        "\nExample (task — needs a tool):\n\
+
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            p.push_str(
+                "\nExample (task — needs a tool):\n\
 User: Where is the agent loop implemented?\n\
 Assistant: I'll search the codebase for the agent loop.\n\
 ```tool\n\
@@ -1158,7 +1181,26 @@ Assistant: I'll search the codebase for the agent loop.\n\
 Example (conversation — no tool):\n\
 User: hello, how are you?\n\
 Assistant: Hi! Ready to help with your code. What are you working on?\n",
-    );
+            );
+        }
+        crate::config::ToolProtocol::Xml => {
+            p.push_str(
+                "\nExample (task — needs a tool):\n\
+User: Where is the agent loop implemented?\n\
+Assistant: I'll search the codebase for the agent loop.\n\
+```tool\n\
+<tool_call name=\"grep\">\n\
+  <pattern>agent loop</pattern>\n\
+  <include>*.rs</include>\n\
+</tool_call>\n\
+```\n\n\
+Example (conversation — no tool):\n\
+User: hello, how are you?\n\
+Assistant: Hi! Ready to help with your code. What are you working on?\n",
+            );
+        }
+    }
+
     p
 }
 
@@ -1171,38 +1213,21 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     Some((name, args))
 }
 
-pub fn parse_tool_calls(text: &str) -> Vec<(String, Value)> {
-    let mut out = Vec::new();
-    let search_start = text
-        .find("</think>")
-        .map(|idx| idx + "</think>".len())
-        .unwrap_or(0);
-    let search_text = &text[search_start..];
+pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            let mut out = Vec::new();
+            let search_start = text
+                .find("</think>")
+                .map(|idx| idx + "</think>".len())
+                .unwrap_or(0);
+            let search_text = &text[search_start..];
 
-    // 1. Check for <tool_call>...</tool_call> tags
-    let mut current_pos = 0;
-    while let Some(start_idx) = search_text[current_pos..].find("<tool_call>") {
-        let start = current_pos + start_idx + "<tool_call>".len();
-        if let Some(end_offset) = search_text[start..].find("</tool_call>") {
-            let end = start + end_offset;
-            if let Ok(json) = serde_json::from_str::<Value>(search_text[start..end].trim()) {
-                if let Some(res) = extract_tool_call(&json) {
-                    out.push(res);
-                }
-            }
-            current_pos = end + "</tool_call>".len();
-        } else {
-            break;
-        }
-    }
-
-    // 2. Fallback: check for code blocks or JSON blocks
-    if out.is_empty() {
-        for marker in &["```tool", "```json"] {
+            // 1. Check for <tool_call>...</tool_call> tags
             let mut current_pos = 0;
-            while let Some(start_idx) = search_text[current_pos..].find(marker) {
-                let start = current_pos + start_idx + marker.len();
-                if let Some(end_offset) = search_text[start..].find("```") {
+            while let Some(start_idx) = search_text[current_pos..].find("<tool_call>") {
+                let start = current_pos + start_idx + "<tool_call>".len();
+                if let Some(end_offset) = search_text[start..].find("</tool_call>") {
                     let end = start + end_offset;
                     if let Ok(json) = serde_json::from_str::<Value>(search_text[start..end].trim())
                     {
@@ -1210,60 +1235,131 @@ pub fn parse_tool_calls(text: &str) -> Vec<(String, Value)> {
                             out.push(res);
                         }
                     }
-                    current_pos = end + "```".len();
+                    current_pos = end + "</tool_call>".len();
                 } else {
                     break;
                 }
             }
-        }
-    }
 
-    // 2b. Fallback: some open models emit ```shell / ```bash fences to mean
-    // "run this", instead of the tool protocol. Treat them as run_command.
-    if out.is_empty() {
-        for marker in &["```shell", "```bash"] {
-            let mut current_pos = 0;
-            while let Some(start_idx) = search_text[current_pos..].find(marker) {
-                let start = current_pos + start_idx + marker.len();
-                if let Some(end_offset) = search_text[start..].find("```") {
-                    let end = start + end_offset;
-                    let cmd = search_text[start..end].trim();
-                    if !cmd.is_empty() {
-                        out.push((
-                            "run_command".to_string(),
-                            serde_json::json!({ "command": cmd }),
-                        ));
-                    }
-                    current_pos = end + "```".len();
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    // 3. Fallback: single braced JSON
-    if out.is_empty() {
-        if let Some(first_brace) = search_text.find('{') {
-            if let Some(last_brace) = search_text.rfind('}') {
-                if last_brace > first_brace {
-                    if let Ok(json) =
-                        serde_json::from_str::<Value>(search_text[first_brace..=last_brace].trim())
-                    {
-                        if let Some(res) = extract_tool_call(&json) {
-                            out.push(res);
+            // 2. Fallback: check for code blocks or JSON blocks
+            if out.is_empty() {
+                for marker in &["```tool", "```json"] {
+                    let mut current_pos = 0;
+                    while let Some(start_idx) = search_text[current_pos..].find(marker) {
+                        let start = current_pos + start_idx + marker.len();
+                        if let Some(end_offset) = search_text[start..].find("```") {
+                            let end = start + end_offset;
+                            if let Ok(json) =
+                                serde_json::from_str::<Value>(search_text[start..end].trim())
+                            {
+                                if let Some(res) = extract_tool_call(&json) {
+                                    out.push(res);
+                                }
+                            }
+                            current_pos = end + "```".len();
+                        } else {
+                            break;
                         }
                     }
                 }
             }
+
+            // 2b. Fallback: some open models emit ```shell / ```bash fences to mean
+            // "run this", instead of the tool protocol. Treat them as run_command
+            // ONLY if the block constitutes the entire response (excluding think block).
+            if out.is_empty() {
+                let trimmed_search = search_text.trim();
+                for marker in &["```shell", "```bash"] {
+                    if trimmed_search.starts_with(marker) && trimmed_search.ends_with("```") {
+                        if let Some(first_end) = trimmed_search[marker.len()..].find("```") {
+                            let absolute_end = marker.len() + first_end;
+                            if absolute_end + "```".len() == trimmed_search.len() {
+                                let cmd = trimmed_search[marker.len()..absolute_end].trim();
+                                if !cmd.is_empty() {
+                                    out.push((
+                                        "run_command".to_string(),
+                                        serde_json::json!({ "command": cmd }),
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Fallback: single braced JSON
+            if out.is_empty() {
+                if let Some(first_brace) = search_text.find('{') {
+                    if let Some(last_brace) = search_text.rfind('}') {
+                        if last_brace > first_brace {
+                            if let Ok(json) = serde_json::from_str::<Value>(
+                                search_text[first_brace..=last_brace].trim(),
+                            ) {
+                                if let Some(res) = extract_tool_call(&json) {
+                                    out.push(res);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            out
+        }
+        crate::config::ToolProtocol::Xml => {
+            let mut out = Vec::new();
+            let search_start = text
+                .find("</think>")
+                .map(|idx| idx + "</think>".len())
+                .unwrap_or(0);
+            let search_text = &text[search_start..];
+
+            let xml_re = match Regex::new(
+                r#"(?s)<tool_call\s+name=["']([^"']+)["']\s*>(.*?)</tool_call>"#,
+            ) {
+                Ok(re) => re,
+                Err(_) => return out,
+            };
+
+            let child_re = match Regex::new(r#"(?s)<([a-zA-Z0-9_\-]+)>(.*?)</([a-zA-Z0-9_\-]+)>"#) {
+                Ok(re) => re,
+                Err(_) => return out,
+            };
+
+            for cap in xml_re.captures_iter(search_text) {
+                let name = cap[1].to_string();
+                let inner = &cap[2];
+
+                let mut args_map = serde_json::Map::new();
+                for child_cap in child_re.captures_iter(inner) {
+                    let open_tag = child_cap[1].to_string();
+                    let close_tag = child_cap[3].to_string();
+                    if open_tag != close_tag {
+                        continue;
+                    }
+                    let key = open_tag;
+                    let val_str = child_cap[2].trim();
+
+                    let val = match serde_json::from_str::<Value>(val_str) {
+                        Ok(v) => v,
+                        Err(_) => Value::String(val_str.to_string()),
+                    };
+                    args_map.insert(key, val);
+                }
+                out.push((name, Value::Object(args_map)));
+            }
+
+            out
         }
     }
-
-    out
 }
 
-pub fn parse_tool_call(text: &str) -> Option<(String, Value)> {
-    parse_tool_calls(text).into_iter().next()
+pub fn parse_tool_call(
+    text: &str,
+    protocol: crate::config::ToolProtocol,
+) -> Option<(String, Value)> {
+    parse_tool_calls(text, protocol).into_iter().next()
 }
 
 pub fn execute(name: &str, args: &Value) -> String {
@@ -1431,6 +1527,24 @@ fn truncate_bytes(bytes: &[u8], max: usize) -> String {
 mod tests {
     use super::*;
 
+    fn parse_tool_call(text: &str) -> Option<(String, Value)> {
+        super::parse_tool_call(text, crate::config::ToolProtocol::Json)
+    }
+
+    fn parse_tool_calls(text: &str) -> Vec<(String, Value)> {
+        super::parse_tool_calls(text, crate::config::ToolProtocol::Json)
+    }
+
+    #[test]
+    fn test_parse_xml_tool_call() {
+        let text = "<tool_call name=\"read_file\"><path>main.rs</path><start_line>10</start_line></tool_call>";
+        let res = super::parse_tool_calls(text, crate::config::ToolProtocol::Xml);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "read_file");
+        assert_eq!(res[0].1.get("path").unwrap().as_str().unwrap(), "main.rs");
+        assert_eq!(res[0].1.get("start_line").unwrap().as_i64().unwrap(), 10);
+    }
+
     #[test]
     fn test_parse_tool_call() {
         let text = "<tool_call>{\"name\": \"get_time\", \"arguments\": {}}</tool_call>";
@@ -1585,7 +1699,7 @@ mod tests {
 
     #[test]
     fn test_system_prompt_lists_tools() {
-        let p = tool_system_prompt(true);
+        let p = tool_system_prompt(true, crate::config::ToolProtocol::Json);
         for t in TOOLS {
             assert!(p.contains(t.name));
         }
@@ -1595,7 +1709,7 @@ mod tests {
 
     #[test]
     fn test_system_prompt_without_agent_tools() {
-        let p = tool_system_prompt(false);
+        let p = tool_system_prompt(false, crate::config::ToolProtocol::Json);
         assert!(!p.contains("spawn_agent"));
         assert!(!p.contains("send_agent"));
     }
