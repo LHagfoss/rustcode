@@ -2,11 +2,108 @@ use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[allow(dead_code)]
+pub struct BackgroundTaskInfo {
+    pub id: String,
+    pub command: String,
+    pub start_time: Instant,
+    pub child_pid: Option<u32>,
+    pub cancel_sender: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTaskInfo>> {
+    static TASKS: OnceLock<StdMutex<HashMap<String, BackgroundTaskInfo>>> = OnceLock::new();
+    TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+static WAKEUP_CALLBACK: OnceLock<Box<dyn Fn(String, String, String) + Send + Sync + 'static>> =
+    OnceLock::new();
+
+pub fn register_wakeup_callback<F>(cb: F)
+where
+    F: Fn(String, String, String) + Send + Sync + 'static,
+{
+    let _ = WAKEUP_CALLBACK.set(Box::new(cb));
+}
+
+thread_local! {
+    static ACTIVE_SESSION_ID: RefCell<Option<String>> = RefCell::new(None);
+}
+
+pub fn set_active_session_id(id: Option<String>) {
+    ACTIVE_SESSION_ID.with(|f| {
+        *f.borrow_mut() = id;
+    });
+}
+
+pub fn get_active_session_id() -> Option<String> {
+    ACTIVE_SESSION_ID.with(|f| f.borrow().clone())
+}
+
+fn resolve_tool_path(raw_path: &str) -> PathBuf {
+    let p = Path::new(raw_path);
+
+    // Check if the path contains a component named "sandbox"
+    let mut parts_sandbox = Vec::new();
+    let mut found_sandbox = false;
+    for component in p.components() {
+        let name = component.as_os_str();
+        if found_sandbox {
+            parts_sandbox.push(name);
+        } else if name == "sandbox" {
+            found_sandbox = true;
+        }
+    }
+
+    if found_sandbox {
+        if let Some(session_id) = get_active_session_id() {
+            if let Some(sandbox_dir) = crate::config::get_active_session_sandbox_dir(&session_id) {
+                let mut resolved = sandbox_dir;
+                for part in parts_sandbox {
+                    resolved.push(part);
+                }
+                return resolved;
+            }
+        }
+    }
+
+    // Check if the path contains a component named "artifacts"
+    let mut parts_artifacts = Vec::new();
+    let mut found_artifacts = false;
+    for component in p.components() {
+        let name = component.as_os_str();
+        if found_artifacts {
+            parts_artifacts.push(name);
+        } else if name == "artifacts" {
+            found_artifacts = true;
+        }
+    }
+
+    if found_artifacts {
+        if let Some(session_id) = get_active_session_id() {
+            if let Some(artifacts_dir) =
+                crate::config::get_active_session_artifacts_dir(&session_id)
+            {
+                let mut resolved = artifacts_dir;
+                for part in parts_artifacts {
+                    resolved.push(part);
+                }
+                return resolved;
+            }
+        }
+    }
+
+    PathBuf::from(raw_path)
+}
 
 fn parse_json_number(v: &Value) -> Option<u64> {
     if let Some(n) = v.as_u64() {
@@ -402,13 +499,15 @@ fn glob(args: &Value) -> Result<String, String> {
 
 fn list_directory(args: &Value) -> Result<String, String> {
     let path = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+    let resolved_path = resolve_tool_path(path);
 
-    if std::path::Path::new(path).is_file() {
+    if resolved_path.is_file() {
         return Err(format!(
             "'{path}' is a file, not a directory - use the read_file tool instead"
         ));
     }
-    let entries = std::fs::read_dir(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let entries =
+        std::fs::read_dir(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
         .map(|e| {
@@ -455,8 +554,9 @@ fn read_file(args: &Value) -> Result<String, String> {
         .get("path")
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let resolved_path = resolve_tool_path(path);
+    let content = std::fs::read_to_string(&resolved_path)
+        .map_err(|e| format!("cannot read '{path}': {e}"))?;
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
 
@@ -565,18 +665,18 @@ fn create_file(args: &Value) -> Result<String, String> {
         .and_then(|c| c.as_str())
         .ok_or("missing 'content' argument")?;
 
-    let p = std::path::Path::new(path);
-    if p.exists() {
+    let resolved_path = resolve_tool_path(path);
+    if resolved_path.exists() {
         return Err(format!(
             "'{path}' already exists — use write_file to overwrite it"
         ));
     }
 
-    if let Some(parent) = p.parent() {
+    if let Some(parent) = resolved_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
     }
-    std::fs::write(path, content).map_err(|e| format!("cannot create '{path}': {e}"))?;
+    std::fs::write(&resolved_path, content).map_err(|e| format!("cannot create '{path}': {e}"))?;
     let lines = content.lines().count().max(1);
     Ok(format!(
         "created '{path}' ({lines} lines, {} bytes)",
@@ -594,16 +694,16 @@ fn write_file(args: &Value) -> Result<String, String> {
         .and_then(|c| c.as_str())
         .ok_or("missing 'content' argument")?;
 
-    let p = std::path::Path::new(path);
-    if !p.exists() {
+    let resolved_path = resolve_tool_path(path);
+    if !resolved_path.exists() {
         return Err(format!(
             "'{path}' does not exist — use create_file for new files"
         ));
     }
-    if p.is_dir() {
+    if resolved_path.is_dir() {
         return Err(format!("'{path}' is a directory, not a file"));
     }
-    std::fs::write(path, content).map_err(|e| format!("cannot write '{path}': {e}"))?;
+    std::fs::write(&resolved_path, content).map_err(|e| format!("cannot write '{path}': {e}"))?;
     let lines = content.lines().count().max(1);
     Ok(format!(
         "wrote '{path}' ({lines} lines, {} bytes)",
@@ -745,15 +845,15 @@ fn edit(args: &Value) -> Result<String, String> {
         return Err("search_block and replace_block are identical — nothing to do".to_string());
     }
 
-    let p = Path::new(path);
-    if !p.exists() {
+    let resolved_path = resolve_tool_path(path);
+    if !resolved_path.exists() {
         return Err(format!("'{path}' does not exist"));
     }
-    if p.is_dir() {
+    if resolved_path.is_dir() {
         return Err(format!("'{path}' is a directory, not a file"));
     }
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let content = std::fs::read_to_string(&resolved_path)
+        .map_err(|e| format!("cannot read '{path}': {e}"))?;
 
     let mut matches = find_block_ranges(&content, search_block);
 
@@ -826,10 +926,11 @@ fn edit(args: &Value) -> Result<String, String> {
         new_content.replace_range(m.clone(), replace_block);
     }
 
-    std::fs::write(path, &new_content).map_err(|e| format!("cannot write '{path}': {e}"))?;
+    std::fs::write(&resolved_path, &new_content)
+        .map_err(|e| format!("cannot write '{path}': {e}"))?;
 
     // Async auto-format: run 'cargo fmt' in background without blocking the response
-    let path_clone = path.to_string();
+    let path_clone = resolved_path.to_string_lossy().to_string();
     std::thread::spawn(move || {
         let _ = std::process::Command::new("cargo")
             .args(["fmt", "--", &path_clone])
@@ -1044,16 +1145,16 @@ fn delete_file(args: &Value) -> Result<String, String> {
         .get("path")
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
-    let p = std::path::Path::new(path);
-    if !p.exists() {
+    let resolved_path = resolve_tool_path(path);
+    if !resolved_path.exists() {
         return Err(format!("'{path}' does not exist"));
     }
-    if p.is_dir() {
+    if resolved_path.is_dir() {
         return Err(format!(
             "'{path}' is a directory — use delete_dir if needed (not supported yet)"
         ));
     }
-    std::fs::remove_file(p).map_err(|e| format!("cannot delete '{path}': {e}"))?;
+    std::fs::remove_file(&resolved_path).map_err(|e| format!("cannot delete '{path}': {e}"))?;
     Ok(format!("deleted '{path}'"))
 }
 
@@ -1066,15 +1167,17 @@ fn move_file(args: &Value) -> Result<String, String> {
         .get("dest")
         .and_then(|d| d.as_str())
         .ok_or("missing 'dest' argument")?;
-    let src_path = std::path::Path::new(src);
-    if !src_path.exists() {
+    let resolved_src = resolve_tool_path(src);
+    let resolved_dest = resolve_tool_path(dest);
+    if !resolved_src.exists() {
         return Err(format!("source '{src}' does not exist"));
     }
-    if let Some(parent) = std::path::Path::new(dest).parent() {
+    if let Some(parent) = resolved_dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create directories for '{dest}': {e}"))?;
     }
-    std::fs::rename(src, dest).map_err(|e| format!("cannot move '{src}' to '{dest}': {e}"))?;
+    std::fs::rename(&resolved_src, &resolved_dest)
+        .map_err(|e| format!("cannot move '{src}' to '{dest}': {e}"))?;
     Ok(format!("moved '{src}' to '{dest}'"))
 }
 
@@ -1087,20 +1190,22 @@ fn copy_file(args: &Value) -> Result<String, String> {
         .get("dest")
         .and_then(|d| d.as_str())
         .ok_or("missing 'dest' argument")?;
-    let src_path = std::path::Path::new(src);
-    if !src_path.exists() {
+    let resolved_src = resolve_tool_path(src);
+    let resolved_dest = resolve_tool_path(dest);
+    if !resolved_src.exists() {
         return Err(format!("source '{src}' does not exist"));
     }
-    if src_path.is_dir() {
+    if resolved_src.is_dir() {
         return Err(format!(
             "source '{src}' is a directory — copy_file only supports copying files"
         ));
     }
-    if let Some(parent) = std::path::Path::new(dest).parent() {
+    if let Some(parent) = resolved_dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create directories for '{dest}': {e}"))?;
     }
-    std::fs::copy(src, dest).map_err(|e| format!("cannot copy '{src}' to '{dest}': {e}"))?;
+    std::fs::copy(&resolved_src, &resolved_dest)
+        .map_err(|e| format!("cannot copy '{src}' to '{dest}': {e}"))?;
     Ok(format!("copied '{src}' to '{dest}'"))
 }
 
@@ -1121,6 +1226,11 @@ pub fn tool_system_prompt(
         "You are rustcode, an interactive coding agent running in a terminal. \
 You help with software engineering tasks: reading code, finding symbols, \
 editing files, running commands, and explaining code.\n\n\
+# Sandbox and Artifacts Workspaces\n\
+- You have a dedicated session-specific sandbox folder (`sandbox/`). If you need to write temporary scripts, compile experimental code, or run test fixtures, place them under the `sandbox/` directory (e.g. creating `sandbox/temp.rs` and running `run_command` with `\"cwd\": \"sandbox\"`). This ensures you do not pollute the user's main repository.\n\
+- If you generate reports, architectural designs, or documentation that should persist for the user, write them under the `artifacts/` directory (e.g. `artifacts/plan.md`).\n\n\
+# Asynchronous Background Tasks\n\
+- For slow-running commands (like test suites, cargo builds, or network calls), you can run them in the background by setting `\"background\": true` in the `run_command` tool. The tool will return a task ID and complete immediately. Yield control, and the system will automatically wake you up with a system message containing the command output once the background task finishes.\n\n\
 # How to work\n\
 - Be concise and direct. No filler, no preamble.\n\
 - Explore before editing. Use `grep` to search code, `glob` to find files by \
@@ -1440,10 +1550,21 @@ fn run_command(args: &Value) -> Result<String, String> {
         .unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS);
     let env = args.get("env").and_then(|e| e.as_object());
 
-    if let Some(cwd) = cwd {
-        let p = Path::new(cwd);
-        if !p.is_dir() {
-            return Err(format!("cwd '{cwd}' is not a directory"));
+    let resolved_cwd = match cwd {
+        Some("sandbox") | Some("./sandbox") => {
+            if let Some(session_id) = get_active_session_id() {
+                crate::config::get_active_session_sandbox_dir(&session_id)
+            } else {
+                None
+            }
+        }
+        Some(other) => Some(PathBuf::from(other)),
+        None => None,
+    };
+
+    if let Some(ref cwd_path) = resolved_cwd {
+        if !cwd_path.is_dir() {
+            return Err(format!("cwd '{}' is not a directory", cwd_path.display()));
         }
     }
 
@@ -1460,8 +1581,8 @@ fn run_command(args: &Value) -> Result<String, String> {
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
+    if let Some(ref cwd_path) = resolved_cwd {
+        cmd.current_dir(cwd_path);
     }
     if let Some(env_map) = env {
         for (k, v) in env_map {
@@ -1469,6 +1590,117 @@ fn run_command(args: &Value) -> Result<String, String> {
                 cmd.env(k, val);
             }
         }
+    }
+
+    let run_in_bg = args
+        .get("background")
+        .and_then(parse_json_bool)
+        .unwrap_or(false);
+    if run_in_bg {
+        let session_id = get_active_session_id().unwrap_or_default();
+        let cmd_str = command_str.to_string();
+        let task_id = format!(
+            "task_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_millis()
+        );
+
+        let resolved_cwd_clone = resolved_cwd.clone();
+        let env_clone = env.cloned();
+        let task_id_clone = task_id.clone();
+
+        if let Some(mut tasks) = get_background_tasks().lock().ok() {
+            tasks.insert(
+                task_id.clone(),
+                BackgroundTaskInfo {
+                    id: task_id.clone(),
+                    command: cmd_str.clone(),
+                    start_time: std::time::Instant::now(),
+                    child_pid: None,
+                    cancel_sender: None,
+                },
+            );
+        }
+
+        std::thread::spawn(move || {
+            let mut cmd = if cfg!(target_os = "windows") {
+                let mut c = std::process::Command::new("cmd");
+                c.args(["/C", &cmd_str]);
+                c
+            } else {
+                let mut c = std::process::Command::new("sh");
+                c.args(["-c", &cmd_str]);
+                c
+            };
+
+            cmd.stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null());
+
+            if let Some(ref cwd_path) = resolved_cwd_clone {
+                cmd.current_dir(cwd_path);
+            }
+            if let Some(env_map) = env_clone {
+                for (k, v) in env_map {
+                    if let Some(val) = v.as_str() {
+                        cmd.env(k, val);
+                    }
+                }
+            }
+
+            let result = match cmd.spawn() {
+                Ok(child) => {
+                    if let Some(pid) = Some(child.id()) {
+                        if let Some(mut tasks) = get_background_tasks().lock().ok() {
+                            if let Some(info) = tasks.get_mut(&task_id_clone) {
+                                info.child_pid = Some(pid);
+                            }
+                        }
+                    }
+
+                    match child.wait_with_output() {
+                        Ok(output) => {
+                            let out_str = String::from_utf8_lossy(&output.stdout).to_string();
+                            let err_str = String::from_utf8_lossy(&output.stderr).to_string();
+                            let mut full = out_str;
+                            if !err_str.is_empty() {
+                                if !full.is_empty() {
+                                    full.push('\n');
+                                }
+                                full.push_str("stderr:\n");
+                                full.push_str(&err_str);
+                            }
+                            if output.status.success() {
+                                Ok(full)
+                            } else {
+                                Err(format!("exit code {:?}\n{}", output.status.code(), full))
+                            }
+                        }
+                        Err(e) => Err(format!("failed to wait: {e}")),
+                    }
+                }
+                Err(e) => Err(format!("failed to spawn: {e}")),
+            };
+
+            if let Some(mut tasks) = get_background_tasks().lock().ok() {
+                tasks.remove(&task_id_clone);
+            }
+
+            let output_str = match result {
+                Ok(out) => out,
+                Err(err) => err,
+            };
+
+            if let Some(cb) = WAKEUP_CALLBACK.get() {
+                cb(session_id, task_id_clone, output_str);
+            }
+        });
+
+        return Ok(format!(
+            "Task started in background. Task ID: {task_id}. Status: Running."
+        ));
     }
 
     let output = run_with_timeout(cmd, Duration::from_millis(timeout_ms.max(1)))?;
@@ -1584,6 +1816,28 @@ mod tests {
         assert_eq!(res[0].0, "read_file");
         assert_eq!(res[0].1.get("path").unwrap().as_str().unwrap(), "main.rs");
         assert_eq!(res[0].1.get("start_line").unwrap().as_i64().unwrap(), 10);
+    }
+
+    #[test]
+    fn test_resolve_tool_path() {
+        set_active_session_id(Some("test_session_123".to_string()));
+        let resolved = resolve_tool_path("sandbox/script.py");
+        assert!(resolved.to_string_lossy().contains("test_session_123"));
+        assert!(resolved.to_string_lossy().contains("sandbox"));
+        assert!(resolved.to_string_lossy().ends_with("script.py"));
+
+        let resolved_artifacts = resolve_tool_path("./artifacts/report.md");
+        assert!(
+            resolved_artifacts
+                .to_string_lossy()
+                .contains("test_session_123")
+        );
+        assert!(resolved_artifacts.to_string_lossy().contains("artifacts"));
+        assert!(resolved_artifacts.to_string_lossy().ends_with("report.md"));
+
+        let resolved_normal = resolve_tool_path("src/main.rs");
+        assert_eq!(resolved_normal, Path::new("src/main.rs"));
+        set_active_session_id(None);
     }
 
     #[test]

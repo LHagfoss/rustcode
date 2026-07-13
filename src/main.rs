@@ -135,13 +135,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app_state_struct.model_name = profile.model.clone();
         }
     }
-    app_state_struct.history = Vec::new();
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
+
+    // Register the background task wakeup callback
+    let state_cb = Arc::clone(&app_state);
+    let client_cb = client.clone();
+    let token_cb = current_cancel_token.clone();
+    let handle = tokio::runtime::Handle::current();
+    crate::tools::register_wakeup_callback(move |session_id, task_id, output| {
+        let state_clone = Arc::clone(&state_cb);
+        let client_clone = client_cb.clone();
+        let token_clone = token_cb.clone();
+        let handle_clone = handle.clone();
+        handle_clone.spawn(async move {
+            let mut s = state_clone.lock().await;
+            if s.active_session_id == session_id {
+                s.history.push(ChatMessage::new(
+                    "tool",
+                    format!("background_task: Task {task_id} completed. Output:\n{output}"),
+                ));
+                crate::config::save_session_history(&session_id, &s.history);
+                s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
+                if s.status == AppStatus::Idle {
+                    s.status = AppStatus::Queued;
+                    drop(s);
+                    crate::network::process_queue_orchestrator(
+                        client_clone,
+                        state_clone,
+                        token_clone,
+                    )
+                    .await;
+                }
+            } else {
+                let mut history = crate::config::load_session_history_direct(&session_id);
+                history.push(ChatMessage::new(
+                    "tool",
+                    format!("background_task: Task {task_id} completed. Output:\n{output}"),
+                ));
+                crate::config::save_session_history(&session_id, &history);
+            }
+        });
+    });
 
     crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
 
