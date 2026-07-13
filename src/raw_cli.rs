@@ -53,7 +53,8 @@ pub async fn run_raw_cli(
                 .collect()
         };
 
-        let system_prompt = crate::tools::tool_system_prompt(false);
+        let protocol = { state_arc.lock().await.config.tool_protocol };
+        let system_prompt = crate::tools::tool_system_prompt(false, protocol);
         let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
             "role": "system",
             "content": system_prompt.clone(),
@@ -114,7 +115,10 @@ pub async fn run_raw_cli(
             s.current_response.clone()
         };
 
-        if let Some((tool_name, tool_args)) = crate::tools::parse_tool_call(&response_content) {
+        let protocol = { state_arc.lock().await.config.tool_protocol };
+        if let Some((tool_name, tool_args)) =
+            crate::tools::parse_tool_call(&response_content, protocol)
+        {
             println!("\nDetected Tool Call:");
             println!("  Name: {}", tool_name);
             println!(

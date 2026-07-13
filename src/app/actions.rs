@@ -14,7 +14,6 @@ pub async fn handle_escape(
 
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
-    s.cancel_token = Some(cancel_token.clone());
 
     if s.status == AppStatus::Streaming {
         s.status = AppStatus::Idle;
@@ -157,7 +156,7 @@ pub async fn handle_enter(
                     ));
                 }
             }
-            "/usage" => {
+            "/usage" | "/stats" | "/status" => {
                 let mut text = String::from("Session usage:");
                 let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
                 let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
@@ -221,6 +220,48 @@ pub async fn handle_enter(
                 }
 
                 s.history.push(ChatMessage::new("system", text));
+            }
+            "/protocol" | "/parser" => {
+                if tokens.len() < 2 {
+                    let current = match s.config.tool_protocol {
+                        crate::config::ToolProtocol::Json => "json",
+                        crate::config::ToolProtocol::Xml => "xml",
+                    };
+                    let msg = format!(
+                        "Current tool protocol: {}\nUse `/protocol xml` or `/protocol json` to switch the parser and instructions.",
+                        current
+                    );
+                    s.history.push(ChatMessage::new("system", msg));
+                } else {
+                    let new_proto = tokens[1].to_lowercase();
+                    match new_proto.as_str() {
+                        "json" => {
+                            s.config.tool_protocol = crate::config::ToolProtocol::Json;
+                            crate::config::save_entire_config(&s.config);
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                "Switched tool protocol to JSON (using JSON system instructions and JSON parser).".to_string()
+                            ));
+                        }
+                        "xml" => {
+                            s.config.tool_protocol = crate::config::ToolProtocol::Xml;
+                            crate::config::save_entire_config(&s.config);
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                "Switched tool protocol to XML (using XML system instructions and XML parser).".to_string()
+                            ));
+                        }
+                        _ => {
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                format!(
+                                    "Unknown protocol '{}'. Supported values: json, xml",
+                                    tokens[1]
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
             "/tools" => {
                 let mut text = String::from("Available tools (model can call these):");

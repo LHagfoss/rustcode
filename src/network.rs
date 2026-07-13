@@ -194,6 +194,13 @@ pub async fn stream_request(
     let mut in_reasoning = false;
     let mut finish_reason: Option<String> = None;
 
+    #[derive(Debug)]
+    struct ToolAccumulator {
+        name: String,
+        arguments: String,
+    }
+    let mut accumulators: Vec<ToolAccumulator> = Vec::new();
+
     dbg_log!("stream_request: Starting SSE stream read loop");
     loop {
         if cancel_token.is_cancelled() {
@@ -222,15 +229,34 @@ pub async fn stream_request(
                                         if let Some(fr) = choices[0].get("finish_reason").and_then(|f| f.as_str()) {
                                             finish_reason = Some(fr.to_string());
                                         }
-                                        let delta = choices[0].get("delta");
-                                        let reasoning = delta
-                                            .and_then(|d| d.get("reasoning").or_else(|| d.get("reasoning_content")))
-                                            .and_then(|r| r.as_str());
-                                        let content = delta
-                                            .and_then(|d| d.get("content").or_else(|| d.get("text")))
-                                            .and_then(|c| c.as_str());
+                                         let delta = choices[0].get("delta");
+                                         let reasoning = delta
+                                             .and_then(|d| d.get("reasoning").or_else(|| d.get("reasoning_content")))
+                                             .and_then(|r| r.as_str());
+                                         let content = delta
+                                             .and_then(|d| d.get("content").or_else(|| d.get("text")))
+                                             .and_then(|c| c.as_str());
 
-                                        let mut chunk = String::new();
+                                         if let Some(tool_calls) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
+                                             for tc in tool_calls {
+                                                 let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                                 while accumulators.len() <= idx {
+                                                     accumulators.push(ToolAccumulator {
+                                                         name: String::new(),
+                                                         arguments: String::new(),
+                                                     });
+                                                 }
+                                                 let acc = &mut accumulators[idx];
+                                                 if let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) {
+                                                     acc.name.push_str(name);
+                                                 }
+                                                 if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()) {
+                                                     acc.arguments.push_str(args);
+                                                 }
+                                             }
+                                         }
+
+                                         let mut chunk = String::new();
                                         if let Some(r_token) = reasoning {
                                             if !in_reasoning {
                                                 in_reasoning = true;
@@ -304,6 +330,63 @@ pub async fn stream_request(
             if s.raw_cli_mode {
                 use std::io::Write;
                 print!("\n</think>\n\n");
+                let _ = std::io::stdout().flush();
+            }
+        }
+    }
+
+    let mut translation = String::new();
+    let protocol = { state.lock().await.config.tool_protocol };
+    for acc in &accumulators {
+        if acc.name.is_empty() {
+            continue;
+        }
+        match protocol {
+            crate::config::ToolProtocol::Json => {
+                let args_json: serde_json::Value = serde_json::from_str(&acc.arguments)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+
+                let tool_call_obj = serde_json::json!({
+                    "name": acc.name,
+                    "arguments": args_json
+                });
+
+                translation.push_str("\n\n```tool\n");
+                translation.push_str(&serde_json::to_string(&tool_call_obj).unwrap_or_default());
+                translation.push_str("\n```\n");
+            }
+            crate::config::ToolProtocol::Xml => {
+                let args_json: serde_json::Value = serde_json::from_str(&acc.arguments)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+
+                translation.push_str("\n\n```tool\n");
+                translation.push_str(&format!("<tool_call name=\"{}\">\n", acc.name));
+                if let Some(obj) = args_json.as_object() {
+                    for (k, v) in obj {
+                        let v_str = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        translation.push_str(&format!("  <{k}>{v_str}</{k}>\n"));
+                    }
+                }
+                translation.push_str("</tool_call>\n```\n");
+            }
+        }
+    }
+
+    if !translation.is_empty() {
+        dbg_log!(
+            "stream_request: Translating and appending native tool call: {}",
+            translation
+        );
+        buffer.lock().await.content.push_str(&translation);
+        if !quiet {
+            let mut s = state.lock().await;
+            s.current_response.push_str(&translation);
+            if s.raw_cli_mode {
+                use std::io::Write;
+                print!("{translation}");
                 let _ = std::io::stdout().flush();
             }
         }
@@ -648,12 +731,13 @@ async fn run_subagent(
             return format!("error: no subagent with id {agent_id}");
         }
 
+        let protocol = { state.lock().await.config.tool_protocol };
         let system_prompt = format!(
             "{}\n\nYou are subagent {agent_id}, working for a main agent in the same \
 rustcode session. Complete the task you were given, then reply in plain text \
 with NO tool call — that reply is returned to the main agent. Keep the final \
 reply compact and information-dense.\n\n{}",
-            crate::tools::tool_system_prompt(false),
+            crate::tools::tool_system_prompt(false, protocol),
             crate::context::environment_context()
         );
         let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -750,7 +834,8 @@ reply compact and information-dense.\n\n{}",
             return "error: subagent returned an empty reply".to_string();
         }
 
-        if let Some((name, args)) = crate::tools::parse_tool_call(&content) {
+        let protocol = { state.lock().await.config.tool_protocol };
+        if let Some((name, args)) = crate::tools::parse_tool_call(&content, protocol) {
             if rounds >= MAX_SUBAGENT_ROUNDS {
                 return format!(
                     "error: subagent {agent_id} hit the {MAX_SUBAGENT_ROUNDS}-round tool limit without a final reply"
@@ -926,21 +1011,24 @@ pub async fn process_queue_orchestrator(
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
-            let history_snapshot: Vec<ChatMessage> = {
+            let (history_snapshot, protocol): (Vec<ChatMessage>, crate::config::ToolProtocol) = {
                 let s = state.lock().await;
-                s.history
-                    .iter()
-                    .filter(|m| {
-                        matches!(m.role.as_str(), "user" | "assistant" | "tool")
-                            && !m.content.starts_with('/')
-                    })
-                    .cloned()
-                    .collect()
+                (
+                    s.history
+                        .iter()
+                        .filter(|m| {
+                            matches!(m.role.as_str(), "user" | "assistant" | "tool")
+                                && !m.content.starts_with('/')
+                        })
+                        .cloned()
+                        .collect(),
+                    s.config.tool_protocol,
+                )
             };
 
             let system_prompt = format!(
                 "{}\n\n{}",
-                crate::tools::tool_system_prompt(true),
+                crate::tools::tool_system_prompt(true, protocol),
                 crate::context::environment_context()
             );
             let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -1115,7 +1203,8 @@ pub async fn process_queue_orchestrator(
                 break;
             }
 
-            let tool_calls = crate::tools::parse_tool_calls(&final_content);
+            let protocol = { state.lock().await.config.tool_protocol };
+            let tool_calls = crate::tools::parse_tool_calls(&final_content, protocol);
             if !tool_calls.is_empty() {
                 dbg_log!("Parsed {} tool call requests", tool_calls.len());
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
