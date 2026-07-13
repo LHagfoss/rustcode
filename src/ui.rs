@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -1721,6 +1721,215 @@ fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
     );
 }
 
+fn render_mcp_config_modal(f: &mut Frame, state: &AppState) {
+    let servers = &state.config.mcp_servers;
+    let selected_idx = state.mcp_picker_index;
+
+    let modal_area = centered_rect_fixed(70, 18, f.area());
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL)),
+        modal_area,
+    );
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // Content area
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    if let Some(ref edit_state) = state.mcp_edit_state {
+        // --- ADD / EDIT MODE ---
+        let title = if edit_state.is_add {
+            "Add MCP Server"
+        } else {
+            "Edit MCP Server"
+        };
+        let header_line = Line::from(vec![Span::styled(
+            title,
+            Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+        )]);
+        f.render_widget(Paragraph::new(header_line), modal_chunks[0]);
+
+        // Draw 3 input fields
+        let form_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Name input
+                Constraint::Length(3), // Command input
+                Constraint::Length(3), // Args input
+            ])
+            .split(modal_chunks[2]);
+
+        for field_idx in 0..3 {
+            let label = match field_idx {
+                0 => "Server Name",
+                1 => "Executable Command",
+                _ => "Arguments (space-separated)",
+            };
+            let val = match field_idx {
+                0 => &edit_state.name_input,
+                1 => &edit_state.command_input,
+                _ => &edit_state.args_input,
+            };
+
+            let is_active = edit_state.active_field == field_idx;
+            let display_val = if is_active {
+                format!("{val}_")
+            } else {
+                val.clone()
+            };
+
+            let border_style = if is_active {
+                Style::default().fg(COLOR_TEXT)
+            } else {
+                Style::default().fg(COLOR_MUTED)
+            };
+
+            f.render_widget(
+                Paragraph::new(display_val).block(
+                    Block::default()
+                        .title(Span::styled(label, Style::default().fg(COLOR_MUTED)))
+                        .borders(Borders::ALL)
+                        .border_style(border_style),
+                ),
+                form_chunks[field_idx],
+            );
+        }
+
+        let footer_line = Line::from(vec![
+            Span::styled(
+                "enter",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Save    ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                "esc",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Cancel    ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                "tab / arrows",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Switch Field", Style::default().fg(COLOR_MUTED)),
+        ]);
+        f.render_widget(Paragraph::new(footer_line), modal_chunks[3]);
+    } else {
+        // --- LIST MODE ---
+        let header_line = Line::from(vec![
+            Span::styled(
+                "MCP Servers Configuration",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " ".repeat(inner_area.width.saturating_sub(29) as usize),
+                Style::default(),
+            ),
+            Span::styled("esc", Style::default().fg(COLOR_MUTED)),
+        ]);
+        f.render_widget(Paragraph::new(header_line), modal_chunks[0]);
+
+        let mut list_lines = Vec::new();
+        for (idx, srv) in servers.iter().enumerate() {
+            let is_selected = selected_idx == idx;
+            let status = if srv.enabled { "Enabled" } else { "Disabled" };
+            let status_style = if srv.enabled {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(COLOR_MUTED)
+            };
+
+            let cmd_text = format!("{} {}", srv.command, srv.args.join(" "));
+
+            let line = if is_selected {
+                let left_text = format!(" ● {}", srv.name);
+                let right_text = format!(" [{}] {}", status, cmd_text);
+                let padding_len =
+                    (inner_area.width as usize).saturating_sub(left_text.len() + right_text.len());
+
+                Line::from(vec![
+                    Span::styled(
+                        left_text,
+                        Style::default()
+                            .fg(COLOR_BG)
+                            .bg(COLOR_PRIMARY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        " ".repeat(padding_len),
+                        Style::default().fg(COLOR_BG).bg(COLOR_PRIMARY),
+                    ),
+                    Span::styled(format!(" [{}]", status), status_style.bg(COLOR_PRIMARY)),
+                    Span::styled(
+                        format!(" {}", cmd_text),
+                        Style::default()
+                            .fg(COLOR_BG)
+                            .bg(COLOR_PRIMARY)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled(
+                        format!("{:<20}", srv.name),
+                        Style::default().fg(COLOR_MUTED),
+                    ),
+                    Span::styled(" [", Style::default().fg(COLOR_MUTED)),
+                    Span::styled(status, status_style),
+                    Span::styled("] ", Style::default().fg(COLOR_MUTED)),
+                    Span::styled(cmd_text, Style::default().fg(COLOR_MUTED)),
+                ])
+            };
+            list_lines.push(line);
+        }
+
+        if list_lines.is_empty() {
+            f.render_widget(
+                Paragraph::new("No MCP servers configured.\nPress 'a' to add a new server.")
+                    .style(Style::default().fg(COLOR_MUTED)),
+                modal_chunks[2],
+            );
+        } else {
+            f.render_widget(Paragraph::new(list_lines), modal_chunks[2]);
+        }
+
+        let footer_line = Line::from(vec![
+            Span::styled(
+                "a",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Add    ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                "e",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Edit    ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                "d",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Delete    ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                "enter",
+                Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Toggle Enabled", Style::default().fg(COLOR_MUTED)),
+        ]);
+        f.render_widget(Paragraph::new(footer_line), modal_chunks[3]);
+    }
+}
+
 #[derive(Clone)]
 pub struct PaletteItem {
     pub group: &'static str,
@@ -1958,6 +2167,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     if state.show_history_picker {
         render_history_picker_modal(f, state);
+    }
+
+    if state.show_mcp_config {
+        render_mcp_config_modal(f, state);
     }
 
     if state.status == AppStatus::AwaitingToolConfirmation {

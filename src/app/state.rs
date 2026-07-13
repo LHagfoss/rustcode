@@ -182,6 +182,17 @@ pub struct SubAgent {
     pub history: Vec<ChatMessage>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpEditState {
+    pub is_add: bool,
+    pub edit_index: Option<usize>,
+    pub name_input: String,
+    pub command_input: String,
+    pub args_input: String,
+    pub active_field: usize, // 0 = Name, 1 = Command, 2 = Args
+    pub cursor_pos: usize,
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -216,6 +227,10 @@ pub struct AppState {
     pub history_picker_index: usize,
     pub history_picker_sessions: Vec<crate::config::SessionMeta>,
     pub active_session_id: String,
+
+    pub show_mcp_config: bool,
+    pub mcp_picker_index: usize,
+    pub mcp_edit_state: Option<McpEditState>,
 
     pub pending_tool_confirmation: Option<ToolConfirmation>,
 
@@ -316,6 +331,9 @@ impl AppState {
             show_history_picker: false,
             history_picker_index: 0,
             history_picker_sessions: Vec::new(),
+            show_mcp_config: false,
+            mcp_picker_index: 0,
+            mcp_edit_state: None,
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
             running_tools: Vec::new(),
@@ -350,6 +368,7 @@ impl AppState {
         self.show_model_picker
             || self.show_command_picker
             || self.show_history_picker
+            || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation
     }
 

@@ -35,6 +35,21 @@ impl Default for ToolProtocol {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub default: String,
@@ -43,6 +58,8 @@ pub struct AppConfig {
     pub tool_protocol: ToolProtocol,
     #[serde(default)]
     pub last_active_session_id: Option<String>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 #[allow(dead_code)]
@@ -80,6 +97,7 @@ impl Default for AppConfig {
             ],
             tool_protocol: ToolProtocol::default(),
             last_active_session_id: None,
+            mcp_servers: Vec::new(),
         }
     }
 }

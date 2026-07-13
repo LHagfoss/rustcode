@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1292,6 +1292,26 @@ Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
             t.name, t.description, t.arguments
         ));
     }
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(tools) = client.get_tools() {
+                for tool in tools {
+                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let desc = tool
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+                    let schema = tool.get("inputSchema").unwrap_or(&serde_json::Value::Null);
+                    p.push_str(&format!(
+                        "- {}: {}. Arguments: {}\n",
+                        name,
+                        desc,
+                        serde_json::to_string(schema).unwrap_or_default()
+                    ));
+                }
+            }
+        }
+    }
     if include_agent_tools {
         p.push_str(
             "- spawn_agent: Delegate a self-contained task to a fresh subagent and get \
@@ -1514,6 +1534,55 @@ pub fn parse_tool_call(
 }
 
 pub fn execute(name: &str, args: &Value) -> String {
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(tools) = client.get_tools() {
+                if tools
+                    .iter()
+                    .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
+                {
+                    let handle = tokio::runtime::Handle::current();
+                    let client_clone = Arc::clone(client);
+                    let name_owned = name.to_string();
+                    let args_clone = args.clone();
+
+                    let res = handle.block_on(async move {
+                        client_clone
+                            .call(
+                                "tools/call",
+                                serde_json::json!({
+                                    "name": name_owned,
+                                    "arguments": args_clone
+                                }),
+                            )
+                            .await
+                    });
+
+                    return match res {
+                        Ok(val) => {
+                            if let Some(content_arr) = val
+                                .get("result")
+                                .and_then(|r| r.get("content"))
+                                .and_then(|c| c.as_array())
+                            {
+                                let mut text_parts = Vec::new();
+                                for item in content_arr {
+                                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                        text_parts.push(text.to_string());
+                                    }
+                                }
+                                text_parts.join("\n")
+                            } else {
+                                serde_json::to_string_pretty(&val).unwrap_or_default()
+                            }
+                        }
+                        Err(e) => format!("error: MCP tool call failed: {e}"),
+                    };
+                }
+            }
+        }
+    }
+
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
             Ok(out) => out,
