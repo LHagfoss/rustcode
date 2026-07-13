@@ -24,7 +24,11 @@ pub fn paste_image_from_clipboard() -> Option<String> {
 }
 
 pub fn read_text_from_clipboard() -> Option<String> {
-    let output = std::process::Command::new("pbpaste").output().ok()?;
+    let output = std::process::Command::new("pbpaste")
+        .env("LANG", "en_US.UTF-8")
+        .env("LC_CTYPE", "en_US.UTF-8")
+        .output()
+        .ok()?;
     if output.status.success() {
         let text = std::str::from_utf8(&output.stdout).ok()?.to_string();
         if !text.is_empty() {
@@ -37,6 +41,8 @@ pub fn read_text_from_clipboard() -> Option<String> {
 pub fn copy_to_clipboard(text: &str) -> bool {
     use std::io::Write;
     if let Ok(mut child) = std::process::Command::new("pbcopy")
+        .env("LANG", "en_US.UTF-8")
+        .env("LC_CTYPE", "en_US.UTF-8")
         .stdin(std::process::Stdio::piped())
         .spawn()
     {
