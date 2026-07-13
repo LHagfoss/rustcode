@@ -14,6 +14,7 @@ pub async fn handle_escape(
 
     cancel_token.cancel();
     *cancel_token = tokio_util::sync::CancellationToken::new();
+    s.cancel_token = Some(cancel_token.clone());
 
     if s.status == AppStatus::Streaming {
         s.status = AppStatus::Idle;
@@ -63,7 +64,15 @@ pub async fn handle_enter(
             "/memory" => {
                 check_memory_usage(&mut s);
             }
-            "/clear" | "/new" => {
+            "/clear" => {
+                // Visual wipe only: clear streamed response and token usage.
+                // History, cancel-token, session state all stay intact — the
+                // LLM still sees the same chat on next message.
+                s.current_response.clear();
+                s.current_token_usage = None;
+                s.status = AppStatus::Idle;
+            }
+            "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
                 start_new_session(&mut s);
@@ -182,6 +191,35 @@ pub async fn handle_enter(
                 if let Some(rt) = s.response_time {
                     text.push_str(&format!("\n  last response time: {:.1}s", rt.as_secs_f32()));
                 }
+
+                let format_commas = |n: u64| -> String {
+                    let s = n.to_string();
+                    let mut result = String::new();
+                    let len = s.len();
+                    for (i, c) in s.chars().enumerate() {
+                        if i > 0 && (len - i) % 3 == 0 {
+                            result.push(',');
+                        }
+                        result.push(c);
+                    }
+                    result
+                };
+
+                let usage_history = crate::config::get_usage_history();
+                if !usage_history.is_empty() {
+                    text.push_str("\n\nMonthly usage statistics:");
+                    for (month, stats) in usage_history {
+                        text.push_str(&format!(
+                            "\n  {}: {} prompt + {} completion = {} tokens ({} calls)",
+                            month,
+                            format_commas(stats.prompt_tokens),
+                            format_commas(stats.completion_tokens),
+                            format_commas(stats.total_tokens),
+                            format_commas(stats.calls)
+                        ));
+                    }
+                }
+
                 s.history.push(ChatMessage::new("system", text));
             }
             "/tools" => {
