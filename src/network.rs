@@ -404,6 +404,16 @@ pub async fn stream_request(
     Ok(finish_reason)
 }
 
+fn has_intended_tool_call(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    lower.contains("```tool")
+        || lower.contains("```json")
+        || lower.contains("<tool_call")
+        || lower.contains("</tool_call>")
+        || lower.contains("<call_name")
+        || lower.contains("</call_name>")
+}
+
 fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     if finish_reason == Some("length") {
         return true;
@@ -1313,6 +1323,40 @@ pub async fn process_queue_orchestrator(
                 } else {
                     dbg_log!("Tool rounds exceeded MAX_TOOL_ROUNDS or cancelled");
                 }
+            } else if has_intended_tool_call(&final_content)
+                && tool_rounds < crate::tools::MAX_TOOL_ROUNDS
+            {
+                dbg_log!(
+                    "Orchestrator: Detected malformed tool call, auto-correcting and retrying..."
+                );
+                tool_rounds += 1;
+                let mut s = state.lock().await;
+                s.history
+                    .push(ChatMessage::new("assistant", &final_content));
+
+                let feedback = "tool_error: The tool call block was malformed or could not be parsed. \
+Please output a single, complete, valid tool call block inside a ```tool fenced block. \
+Ensure you use either JSON format:\n\n\
+```tool\n\
+{\"name\": \"tool_name\", \"arguments\": {...}}\n\
+```\n\n\
+or XML format:\n\n\
+```tool\n\
+<tool_call name=\"tool_name\">\n\
+  <arg_name>arg_val</arg_name>\n\
+</tool_call>\n\
+```\n\n\
+Make sure tags match exactly, do not omit '<' or '>', and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans.";
+
+                s.history
+                    .push(ChatMessage::new("tool", feedback.to_string()));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.status = AppStatus::Streaming;
+                s.stream_tracker = Some(StreamTracker::new());
+                drop(s);
+                dbg_log!("Retrying agent loop round due to malformed tool call");
+                continue;
             }
 
             dbg_log!("Finishing agent loop, writing final assistant reply");

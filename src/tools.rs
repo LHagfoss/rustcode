@@ -8,6 +8,30 @@ use std::process::{Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+fn parse_json_number(v: &Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        Some(n)
+    } else if let Some(s) = v.as_str() {
+        s.parse::<u64>().ok()
+    } else {
+        None
+    }
+}
+
+fn parse_json_bool(v: &Value) -> Option<bool> {
+    if let Some(b) = v.as_bool() {
+        Some(b)
+    } else if let Some(s) = v.as_str() {
+        match s.to_lowercase().as_str() {
+            "true" | "yes" | "1" => Some(true),
+            "false" | "no" | "0" => Some(false),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
@@ -198,7 +222,7 @@ fn grep(args: &Value) -> Result<String, String> {
     let include = args.get("include").and_then(|p| p.as_str());
     let ignore_case = args
         .get("ignore_case")
-        .and_then(|b| b.as_bool())
+        .and_then(parse_json_bool)
         .unwrap_or(false);
 
     let mut re_builder = regex::RegexBuilder::new(pattern);
@@ -442,11 +466,11 @@ fn read_file(args: &Value) -> Result<String, String> {
             if let Some(range_obj) = range_val.as_object() {
                 let start = range_obj
                     .get("start")
-                    .and_then(|v| v.as_u64())
+                    .and_then(parse_json_number)
                     .map(|v| v as usize);
                 let end = range_obj
                     .get("end")
-                    .and_then(|v| v.as_u64())
+                    .and_then(parse_json_number)
                     .map(|v| v as usize);
                 if let (Some(s), Some(e)) = (start, end) {
                     if s >= 1 && e >= s && s <= total {
@@ -511,7 +535,7 @@ fn read_file(args: &Value) -> Result<String, String> {
 
     let start = args
         .get("start_line")
-        .and_then(|v| v.as_u64())
+        .and_then(parse_json_number)
         .unwrap_or(1)
         .max(1) as usize;
     if start > total {
@@ -703,15 +727,15 @@ fn edit(args: &Value) -> Result<String, String> {
         .ok_or("missing 'replace_block' or 'new_string' argument")?;
     let replace_all = args
         .get("replace_all")
-        .and_then(|b| b.as_bool())
+        .and_then(parse_json_bool)
         .unwrap_or(false);
     let start_line = args
         .get("start_line")
-        .and_then(|v| v.as_u64())
+        .and_then(parse_json_number)
         .map(|v| v as usize);
     let end_line = args
         .get("end_line")
-        .and_then(|v| v.as_u64())
+        .and_then(parse_json_number)
         .map(|v| v as usize);
 
     if search_block.is_empty() {
@@ -1125,11 +1149,12 @@ Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
                 <think> tags, after the thinking tags close. The block must be a fenced code \
                 block with the `tool` language:\n\n\
                 ```tool\n\
-                {\"name\": \"tool_name\", \"arguments\": {}}\n\
+                {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
-                After the call, the tool result is sent back to you inside a \
-                <tool_result> block, and you continue. You can emit one or more tool calls in parallel if needed; otherwise, wait \
-                for the results before proceeding. Do not narrate the JSON — just emit the block.\n\n"
+                CRITICAL JSON RULES:\n\
+                - You MUST use the exact keys \"name\" and \"arguments\". Do not invent other keys.\n\
+                - Do not wrap numbers or booleans in quotes inside \"arguments\" if they are expected as numbers or booleans.\n\
+                - Output exactly one complete, valid JSON block. Do not narrate or explain the JSON.\n\n"
             );
         }
         crate::config::ToolProtocol::Xml => {
@@ -1142,9 +1167,10 @@ Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
                   <argument_name>argument_value</argument_name>\n\
                 </tool_call>\n\
                 ```\n\n\
-                After the call, the tool result is sent back to you inside a \
-                <tool_result> block, and you continue. You can emit one or more tool calls in parallel if needed; otherwise, wait \
-                for the results before proceeding. Do not narrate the XML — just emit the block.\n\n"
+                CRITICAL XML RULES:\n\
+                - You MUST open the block with `<tool_call name=\"tool_name\">` and close it with `</tool_call>`.\n\
+                - Do NOT use tags like `<call_name>`, `<arg_key>`, `<arg_value>`, or `<call_call_name>`. The tag names for arguments MUST match the argument names of the tool exactly (e.g. `<path>filename</path>`).\n\
+                - Output exactly one complete, valid XML block. Do not narrate or explain the XML.\n\n"
             );
         }
     }
@@ -1213,7 +1239,10 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     Some((name, args))
 }
 
-pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
+fn parse_tool_calls_impl(
+    text: &str,
+    protocol: crate::config::ToolProtocol,
+) -> Vec<(String, Value)> {
     match protocol {
         crate::config::ToolProtocol::Json => {
             let mut out = Vec::new();
@@ -1355,6 +1384,18 @@ pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Ve
     }
 }
 
+pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
+    let first_try = parse_tool_calls_impl(text, protocol);
+    if !first_try.is_empty() {
+        return first_try;
+    }
+    let fallback = match protocol {
+        crate::config::ToolProtocol::Json => crate::config::ToolProtocol::Xml,
+        crate::config::ToolProtocol::Xml => crate::config::ToolProtocol::Json,
+    };
+    parse_tool_calls_impl(text, fallback)
+}
+
 pub fn parse_tool_call(
     text: &str,
     protocol: crate::config::ToolProtocol,
@@ -1395,7 +1436,7 @@ fn run_command(args: &Value) -> Result<String, String> {
     let cwd = args.get("cwd").and_then(|c| c.as_str());
     let timeout_ms = args
         .get("timeout_ms")
-        .and_then(|v| v.as_u64())
+        .and_then(parse_json_number)
         .unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS);
     let env = args.get("env").and_then(|e| e.as_object());
 
