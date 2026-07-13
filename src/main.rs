@@ -19,7 +19,51 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+
+const WHEEL_ARROW_WINDOW: Duration = Duration::from_millis(50);
+const WHEEL_ARROW_SCROLL_ROWS: u16 = 6;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingArrowKey {
+    Up,
+    Down,
+}
+
+impl PendingArrowKey {
+    fn from_key_code(code: KeyCode) -> Option<Self> {
+        match code {
+            KeyCode::Up => Some(Self::Up),
+            KeyCode::Down => Some(Self::Down),
+            _ => None,
+        }
+    }
+
+    fn apply_history(self, state: &mut AppState) {
+        match self {
+            Self::Up => state.history_up(),
+            Self::Down => state.history_down(),
+        }
+    }
+
+    fn apply_scroll(self, state: &mut AppState) {
+        match self {
+            Self::Up => state.scroll_up(WHEEL_ARROW_SCROLL_ROWS),
+            Self::Down => state.scroll_down(WHEEL_ARROW_SCROLL_ROWS),
+        }
+    }
+}
+
+async fn flush_pending_history_arrow(
+    app_state: &Arc<Mutex<AppState>>,
+    pending_arrow_key: &mut Option<(PendingArrowKey, Instant)>,
+) {
+    if let Some((direction, _)) = pending_arrow_key.take() {
+        let mut s = app_state.lock().await;
+        direction.apply_history(&mut s);
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -105,8 +149,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_draw = std::time::Instant::now();
     let mut was_responding = false;
     let mut terminal_focused = true;
+    let mut pending_arrow_key: Option<(PendingArrowKey, Instant)> = None;
 
     loop {
+        if pending_arrow_key
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= WHEEL_ARROW_WINDOW)
+        {
+            flush_pending_history_arrow(&app_state, &mut pending_arrow_key).await;
+            needs_redraw = true;
+        }
+
         let response_active = app_state.lock().await.status != AppStatus::Idle;
 
         {
@@ -422,6 +475,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     drop(s);
+
+                    if let Some(direction) = PendingArrowKey::from_key_code(key.code) {
+                        let should_defer_for_wheel_detection = {
+                            let s = app_state.lock().await;
+                            key.kind == event::KeyEventKind::Press
+                                && key.modifiers.is_empty()
+                                && s.active_suggestion_index.is_none()
+                                && s.last_max_scroll > 0
+                        };
+
+                        if should_defer_for_wheel_detection {
+                            let now = Instant::now();
+                            if let Some((pending_direction, pending_at)) = pending_arrow_key {
+                                if now.duration_since(pending_at) <= WHEEL_ARROW_WINDOW {
+                                    if pending_direction == direction {
+                                        let mut s = app_state.lock().await;
+                                        direction.apply_scroll(&mut s);
+                                        needs_redraw = true;
+                                    }
+
+                                    // Trackpads can emit fast mixed arrow-like events for
+                                    // horizontal/diagonal wheel gestures. Do not replay those
+                                    // as prompt history navigation.
+                                    pending_arrow_key = None;
+                                    continue;
+                                }
+
+                                flush_pending_history_arrow(&app_state, &mut pending_arrow_key)
+                                    .await;
+                            }
+
+                            pending_arrow_key = Some((direction, now));
+                            continue;
+                        }
+                    }
+
+                    flush_pending_history_arrow(&app_state, &mut pending_arrow_key).await;
 
                     match key.code {
                         KeyCode::BackTab => {
