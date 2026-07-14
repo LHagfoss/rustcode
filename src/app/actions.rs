@@ -104,6 +104,11 @@ pub async fn handle_enter(
                     s.show_history_picker = true;
                 }
             }
+            "/mcp" => {
+                s.show_mcp_config = true;
+                s.mcp_picker_index = 0;
+                s.mcp_edit_state = None;
+            }
             "/context" => {
                 let default_name = s.config.default.clone();
                 if tokens.len() >= 2 {
