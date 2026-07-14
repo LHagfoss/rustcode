@@ -1790,15 +1790,16 @@ mod tests {
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let args = serde_json::json!({
             "path": "sandbox/test_bypass.txt",
-            "content": "bypassed content"
+            "content": "bypassed content",
+            "overwrite": true
         });
 
         let (result, _) = confirm_and_execute(
             &state,
             &cancel_token,
-            "write_file",
+            "write_to_file",
             &args,
-            "write_file",
+            "write_to_file",
             true,
         )
         .await;
