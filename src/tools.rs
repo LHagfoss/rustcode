@@ -284,7 +284,7 @@ pub const TOOLS: &[Tool] = &[
     },
 ];
 
-pub const MAX_TOOL_ROUNDS: usize = 25;
+pub const MAX_TOOL_ROUNDS: usize = 60;
 
 fn get_time(_args: &Value) -> Result<String, String> {
     Ok(chrono::Local::now()

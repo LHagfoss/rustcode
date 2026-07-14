@@ -1003,6 +1003,7 @@ async fn handle_agent_tool(
     }
 }
 
+#[allow(unused_assignments)]
 pub async fn process_queue_orchestrator(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -1049,6 +1050,8 @@ pub async fn process_queue_orchestrator(
         let prompt_start_time = std::time::Instant::now();
 
         let mut tool_rounds = 0;
+        #[allow(unused_assignments)]
+        let mut limit_reached = false;
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
@@ -1417,6 +1420,11 @@ pub async fn process_queue_orchestrator(
                     continue;
                 } else {
                     dbg_log!("Tool rounds exceeded MAX_TOOL_ROUNDS or cancelled");
+                    if !cancel_token.is_cancelled() && tool_rounds >= crate::tools::MAX_TOOL_ROUNDS
+                    {
+                        limit_reached = true;
+                    }
+                    break;
                 }
             } else if has_intended_tool_call(&final_content)
                 && tool_rounds < crate::tools::MAX_TOOL_ROUNDS
@@ -1465,6 +1473,17 @@ Make sure tags match exactly, do not omit '<' or '>', and do not wrap numbers/bo
             let mut msg = ChatMessage::new("assistant", final_content.clone());
             msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
             s.history.push(msg);
+
+            if limit_reached {
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!(
+                        "⚠ Tool execution limit ({} rounds) reached. Type a message to continue or summarize.",
+                        crate::tools::MAX_TOOL_ROUNDS
+                    ),
+                ));
+            }
+
             crate::config::save_history(&s.history);
             s.current_response.clear();
             s.status = AppStatus::Idle;
