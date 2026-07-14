@@ -1423,6 +1423,17 @@ pub async fn process_queue_orchestrator(
                         };
                     }
 
+                    // Update UI state immediately after confirmation is resolved
+                    {
+                        let mut s = state.lock().await;
+                        s.pending_tool_confirmation = None;
+                        s.status = AppStatus::Streaming;
+                        s.stream_tracker = Some(StreamTracker::new());
+                        s.history
+                            .push(ChatMessage::new("assistant", &final_content));
+                        crate::config::save_history(&s.history);
+                    }
+
                     let results = if !approved {
                         tool_calls
                             .iter()
@@ -1484,11 +1495,7 @@ pub async fn process_queue_orchestrator(
                     }
 
                     let mut s = state.lock().await;
-                    s.pending_tool_confirmation = None;
                     s.status = AppStatus::Streaming;
-                    s.stream_tracker = Some(StreamTracker::new());
-                    s.history
-                        .push(ChatMessage::new("assistant", &final_content));
                     for (name, result, diff_opt) in results {
                         dbg_log!(
                             "Tool '{}' finished with result length: {} chars",

@@ -17,6 +17,223 @@ fn pad_to_width(s: &str, width: usize) -> String {
     }
 }
 
+fn is_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "fn" | "let"
+            | "mut"
+            | "pub"
+            | "use"
+            | "struct"
+            | "enum"
+            | "impl"
+            | "trait"
+            | "match"
+            | "if"
+            | "else"
+            | "return"
+            | "loop"
+            | "for"
+            | "in"
+            | "while"
+            | "async"
+            | "await"
+            | "mod"
+            | "crate"
+            | "self"
+            | "Self"
+            | "true"
+            | "false"
+            | "const"
+            | "static"
+            | "type"
+            | "where"
+            | "dyn"
+            | "as"
+            | "ref"
+            | "move"
+            | "unsafe"
+    )
+}
+
+fn is_type(s: &str) -> bool {
+    matches!(
+        s,
+        "Option"
+            | "Result"
+            | "Some"
+            | "None"
+            | "Ok"
+            | "Err"
+            | "String"
+            | "str"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "Vec"
+            | "Arc"
+            | "Rc"
+            | "Mutex"
+            | "Box"
+            | "Pin"
+            | "Future"
+            | "Instant"
+            | "Duration"
+    ) || (!s.is_empty() && s.chars().next().unwrap().is_uppercase())
+}
+
+fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
+    let mut spans = Vec::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    let color_keyword = Color::Rgb(198, 120, 221); // Purple
+    let color_type = Color::Rgb(229, 192, 123); // Yellow
+    let color_string = Color::Rgb(152, 195, 121); // Green
+    let color_comment = Color::Rgb(92, 99, 112); // Gray (muted)
+    let color_number = Color::Rgb(209, 154, 102); // Orange
+    let color_macro = Color::Rgb(97, 175, 239); // Blue
+    let color_fn = Color::Rgb(97, 175, 239); // Blue
+    let color_bg = COLOR_ELEMENT;
+
+    while i < chars.len() {
+        // Comments
+        if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '/' {
+            let comment_text: String = chars[i..].iter().collect();
+            spans.push(Span::styled(
+                comment_text,
+                get_themed_style(color_comment, color_bg, Modifier::empty(), show_picker),
+            ));
+            break;
+        }
+
+        // Strings
+        if chars[i] == '"' {
+            let mut s = String::new();
+            s.push('"');
+            i += 1;
+            let mut escaped = false;
+            while i < chars.len() {
+                let c = chars[i];
+                s.push(c);
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            spans.push(Span::styled(
+                s,
+                get_themed_style(color_string, color_bg, Modifier::empty(), show_picker),
+            ));
+            continue;
+        }
+
+        // Characters
+        if chars[i] == '\'' {
+            let mut s = String::new();
+            s.push('\'');
+            i += 1;
+            let mut escaped = false;
+            while i < chars.len() {
+                let c = chars[i];
+                s.push(c);
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '\'' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            spans.push(Span::styled(
+                s,
+                get_themed_style(color_string, color_bg, Modifier::empty(), show_picker),
+            ));
+            continue;
+        }
+
+        // Numbers
+        if chars[i].is_ascii_digit() {
+            let mut num = String::new();
+            while i < chars.len()
+                && (chars[i].is_ascii_digit()
+                    || chars[i] == '.'
+                    || chars[i] == '_'
+                    || chars[i].is_ascii_alphabetic())
+            {
+                num.push(chars[i]);
+                i += 1;
+            }
+            spans.push(Span::styled(
+                num,
+                get_themed_style(color_number, color_bg, Modifier::empty(), show_picker),
+            ));
+            continue;
+        }
+
+        // Identifiers
+        if chars[i].is_alphabetic() || chars[i] == '_' {
+            let mut ident = String::new();
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                ident.push(chars[i]);
+                i += 1;
+            }
+
+            let is_macro = i < chars.len() && chars[i] == '!';
+            let is_fn = !is_macro
+                && ((i < chars.len() && chars[i] == '(')
+                    || (i + 1 < chars.len() && chars[i] == ':' && chars[i + 1] == ':'));
+
+            let style = if is_macro {
+                ident.push('!');
+                i += 1;
+                get_themed_style(color_macro, color_bg, Modifier::BOLD, show_picker)
+            } else if is_keyword(&ident) {
+                get_themed_style(color_keyword, color_bg, Modifier::BOLD, show_picker)
+            } else if is_type(&ident) {
+                get_themed_style(color_type, color_bg, Modifier::empty(), show_picker)
+            } else if is_fn {
+                get_themed_style(color_fn, color_bg, Modifier::empty(), show_picker)
+            } else {
+                get_themed_style(COLOR_TEXT, color_bg, Modifier::empty(), show_picker)
+            };
+
+            spans.push(Span::styled(ident, style));
+            continue;
+        }
+
+        // Symbols
+        let mut symbol = String::new();
+        symbol.push(chars[i]);
+        i += 1;
+        spans.push(Span::styled(
+            symbol,
+            get_themed_style(COLOR_TEXT, color_bg, Modifier::empty(), show_picker),
+        ));
+    }
+
+    spans
+}
+
 const COLOR_BG: Color = Color::Rgb(21, 23, 26);
 const COLOR_PANEL: Color = Color::Rgb(26, 29, 32);
 const COLOR_ELEMENT: Color = Color::Rgb(34, 38, 42);
@@ -138,10 +355,15 @@ fn render_assistant_message<'a>(
                 in_code_block = !in_code_block;
             } else if in_code_block {
                 let content_width = (viewport_width as usize).saturating_sub(6);
-                spans.push(Span::styled(
-                    pad_to_width(raw_line, content_width),
-                    get_themed_style(COLOR_GREEN, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                ));
+                let mut line_spans = highlight_rust_line(raw_line, show_picker);
+                let current_width: usize = line_spans.iter().map(|s| s.content.width()).sum();
+                if current_width < content_width {
+                    line_spans.push(Span::styled(
+                        " ".repeat(content_width - current_width),
+                        get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                    ));
+                }
+                spans.extend(line_spans);
             } else {
                 let mut chars = raw_line.chars().peekable();
                 let mut current = String::new();
@@ -1028,7 +1250,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 header_wrapped_rows.push((cum, midx));
             }
             let h = Paragraph::new(vec![line.clone()])
-                .wrap(Wrap { trim: true })
+                .wrap(Wrap { trim: false })
                 .line_count(inner_area.width) as u16;
             cum = cum.saturating_add(h);
             if i >= last_line {
@@ -1038,7 +1260,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     }
 
     let conversation_paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
+        .wrap(Wrap { trim: false })
         .style(Style::default().bg(COLOR_BG));
 
     // exact rendered height — the paragraph word-wraps, so estimating
