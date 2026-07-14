@@ -284,7 +284,7 @@ pub const TOOLS: &[Tool] = &[
     },
 ];
 
-pub const MAX_TOOL_ROUNDS: usize = 25;
+pub const MAX_TOOL_ROUNDS: usize = 60;
 
 fn get_time(_args: &Value) -> Result<String, String> {
     Ok(chrono::Local::now()
@@ -1497,6 +1497,88 @@ fn parse_tool_calls_impl(
                 }
             }
 
+            // 4. Fallback: robust key-value extraction for pseudo-XML / JSON hybrids (e.g. <arg_key>...)
+            if out.is_empty() {
+                let mut tool_name = None;
+                let mut args_obj = serde_json::Map::new();
+
+                let mut current_pos = 0;
+                while let Some(start_idx) = search_text[current_pos..].find("<arg_key>") {
+                    let key_start = current_pos + start_idx + "<arg_key>".len();
+                    let key_end = search_text[key_start..]
+                        .find('<')
+                        .map(|offset| key_start + offset)
+                        .unwrap_or(search_text.len());
+
+                    let raw_key = &search_text[key_start..key_end];
+
+                    // Now check for a value tag
+                    let mut val_str = String::new();
+                    if let Some(val_idx) = search_text[key_end..].find("<arg_value>") {
+                        let val_start = key_end + val_idx + "<arg_value>".len();
+                        let val_end = search_text[val_start..]
+                            .find('<')
+                            .map(|offset| val_start + offset)
+                            .unwrap_or(search_text.len());
+                        val_str = search_text[val_start..val_end].to_string();
+                        current_pos = val_end;
+                    } else {
+                        current_pos = key_end;
+                    }
+
+                    // Clean up key and value
+                    let mut key = raw_key.trim().to_string();
+                    let mut val = val_str.trim().to_string();
+
+                    // If the key has a JSON-like pair inside (e.g. `start_line": "1619"`), split it!
+                    if key.contains(':') {
+                        let (split_key, split_val) = {
+                            let parts: Vec<&str> = key.splitn(2, ':').collect();
+                            let sk = parts[0]
+                                .trim_matches(|c: char| {
+                                    c == '"' || c == '\'' || c == ' ' || c == '{' || c == '}'
+                                })
+                                .to_string();
+                            let sv = parts[1]
+                                .trim_matches(|c: char| {
+                                    c == '"' || c == '\'' || c == ' ' || c == '{' || c == '}'
+                                })
+                                .to_string();
+                            (sk, sv)
+                        };
+                        key = split_key;
+                        val = split_val;
+                    } else {
+                        key = key
+                            .trim_matches(|c: char| {
+                                c == '"' || c == '\'' || c == ' ' || c == '{' || c == '}'
+                            })
+                            .to_string();
+                        val = val
+                            .trim_matches(|c: char| {
+                                c == '"' || c == '\'' || c == ' ' || c == '{' || c == '}'
+                            })
+                            .to_string();
+                    }
+
+                    if key == "name" {
+                        tool_name = Some(val);
+                    } else if !key.is_empty() {
+                        if let Ok(num) = val.parse::<i64>() {
+                            args_obj.insert(key, Value::Number(num.into()));
+                        } else if let Ok(b) = val.parse::<bool>() {
+                            args_obj.insert(key, Value::Bool(b));
+                        } else {
+                            args_obj.insert(key, Value::String(val));
+                        }
+                    }
+                }
+
+                if let Some(name) = tool_name {
+                    out.push((name, Value::Object(args_obj)));
+                }
+            }
+
             out
         }
         crate::config::ToolProtocol::Xml => {
@@ -2053,6 +2135,43 @@ mod tests {
         assert_eq!(res[0].0, "get_time");
         assert_eq!(res[1].0, "read_file");
         assert_eq!(res[1].1.get("path").unwrap().as_str().unwrap(), "x");
+    }
+
+    #[test]
+    fn test_parse_tool_call_pseudo_xml() {
+        let text = "```tool<arg_key>name</arg_key><arg_value>read_file</arg_value><arg_key>path</arg_key><arg_value>src/main.rs</arg_value>```";
+        let res = parse_tool_calls(text);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "read_file");
+        assert_eq!(
+            res[0].1.get("path").unwrap().as_str().unwrap(),
+            "src/main.rs"
+        );
+
+        let text_corrupted = "<arg_key>name</arg_key><arg_value>grep</arg_value>\
+                              <arg_key>start_line\": \"1619\"</arg_value>\
+                              <arg_key>end_line\": \"1640\"}";
+        let res_corrupted = parse_tool_calls(text_corrupted);
+        assert_eq!(res_corrupted.len(), 1);
+        assert_eq!(res_corrupted[0].0, "grep");
+        assert_eq!(
+            res_corrupted[0]
+                .1
+                .get("start_line")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            1619
+        );
+        assert_eq!(
+            res_corrupted[0]
+                .1
+                .get("end_line")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            1640
+        );
     }
 
     #[test]
