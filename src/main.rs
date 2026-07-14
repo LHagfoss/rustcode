@@ -59,6 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     execute!(
         stdout,
         EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture,
         crossterm::event::EnableBracketedPaste,
         crossterm::event::EnableFocusChange,
         SetCursorStyle::BlinkingBlock,
@@ -208,21 +209,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let title_display = if guard.history.is_empty() {
                 "rustcode".to_string()
             } else {
-                let first_user_msg = guard
-                    .history
-                    .iter()
-                    .find(|m| m.role == "user" && !m.content.starts_with('/'));
-                match first_user_msg {
-                    Some(msg) => {
-                        let title = msg.content.lines().next().unwrap_or("").trim();
-                        if title.is_empty() || title.starts_with('/') {
-                            "rustcode".to_string()
-                        } else {
-                            let display_title = title.replace('|', "\\|").replace('\x07', "");
-                            format!("rustcode · {}", display_title)
-                        }
+                // Check for custom title first
+                let session_id = guard.active_session_id.clone();
+                let custom_title = crate::config::load_session_title(&session_id).or_else(|| {
+                    guard
+                        .history
+                        .iter()
+                        .find(|m| m.role == "user" && !m.content.starts_with('/'))
+                        .map(|m| m.content.lines().next().unwrap_or("").trim().to_string())
+                });
+                match custom_title {
+                    Some(title) if !title.is_empty() && !title.starts_with('/') => {
+                        let display_title = title.replace('|', "\\|").replace('\x07', "");
+                        format!("rustcode · {}", display_title)
                     }
-                    None => "rustcode".to_string(),
+                    _ => "rustcode".to_string(),
                 }
             };
 
@@ -604,28 +605,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if !filtered_items.is_empty() {
                                     let item = filtered_items[idx];
                                     s.show_command_picker = false;
-                                    match item.name {
-                                        "Exit the app" => {
+                                    match item.shortcut {
+                                        "ctrl+c" => {
                                             exit_flag = true;
                                         }
-                                        "Switch model" => {
+                                        "/model" => {
                                             s.show_model_picker = true;
                                         }
-                                        "New session" => {
+                                        "/new" => {
                                             current_cancel_token.cancel();
                                             current_cancel_token =
                                                 tokio_util::sync::CancellationToken::new();
                                             crate::app::start_new_session(&mut s);
                                         }
-                                        "Resume session" => {
+                                        "/resume" => {
                                             crate::app::resume_latest_session(&mut s);
                                         }
-                                        "Copy last reply" => {
+                                        "/copy" => {
                                             crate::app::copy_last_reply(&mut s);
                                         }
-                                        "Help" => {
+                                        "/help" => {
                                             let help = crate::app::build_help_text();
                                             s.history.push(ChatMessage::new("system", help));
+                                        }
+                                        "/context" => {
+                                            s.history.push(ChatMessage::new(
+                                                "system",
+                                                "Use /context <tokens> to set context window (e.g. /context 262144)",
+                                            ));
+                                        }
+                                        "/parser" | "/protocol" => {
+                                            s.history.push(ChatMessage::new(
+                                                "system",
+                                                "Only JSON tool format is supported",
+                                            ));
+                                        }
+                                        "/provider" => {
+                                            s.history.push(ChatMessage::new(
+                                                "system",
+                                                "Use /provider <name> <url> <model> to configure a provider profile",
+                                            ));
+                                        }
+                                        "/ollama" => {
+                                            s.history.push(ChatMessage::new(
+                                                "system",
+                                                "Use /ollama list to list available Ollama models",
+                                            ));
+                                        }
+                                        "/mcp" => {
+                                            s.show_mcp_config = true;
+                                            s.mcp_picker_index = 0;
+                                            s.mcp_edit_state = None;
+                                        }
+                                        "/change_title" => {
+                                            s.history.push(ChatMessage::new(
+                                                "system",
+                                                "Use /change_title <new title> to rename this session",
+                                            ));
+                                        }
+                                        "/clear" => {
+                                            s.current_response.clear();
+                                            s.current_token_usage = None;
+                                            s.status = crate::app::AppStatus::Idle;
+                                        }
+                                        "/cancel" => {
+                                            current_cancel_token.cancel();
+                                            current_cancel_token =
+                                                tokio_util::sync::CancellationToken::new();
+                                        }
+                                        "/stats" | "/usage" | "/status" => {
+                                            s.history.push(ChatMessage::new(
+                                                "system",
+                                                "Token usage data will appear after your next message",
+                                            ));
+                                        }
+                                        "/memory" => {
+                                            crate::app::check_memory_usage(&mut s);
+                                        }
+                                        "/tools" => {
+                                            let mut text = String::from("Available tools:");
+                                            for t in crate::tools::TOOLS {
+                                                text.push_str(&format!("\n  {}", t.name));
+                                            }
+                                            s.history.push(ChatMessage::new("system", text));
                                         }
                                         _ => {}
                                     }
