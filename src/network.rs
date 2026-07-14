@@ -43,14 +43,26 @@ async fn count_tokens(text: &str) -> Option<u32> {
         .ok()
 }
 
-async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Option<TokenUsage> {
+async fn estimate_token_usage(messages: &[serde_json::Value], reply: &str) -> Option<TokenUsage> {
     let mut prompt_text = String::new();
-    for msg in history_before {
-        if matches!(msg.role.as_str(), "user" | "assistant" | "tool")
-            && !msg.content.starts_with('/')
-        {
-            prompt_text.push_str(&msg.content);
-            prompt_text.push('\n');
+    for msg in messages {
+        if let Some(content) = msg.get("content") {
+            if let Some(s) = content.as_str() {
+                prompt_text.push_str(s);
+                prompt_text.push('\n');
+            } else if content.is_array() {
+                if let Some(arr) = content.as_array() {
+                    for item in arr {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            prompt_text.push_str(text);
+                            prompt_text.push('\n');
+                        }
+                    }
+                }
+            } else {
+                prompt_text.push_str(&content.to_string());
+                prompt_text.push('\n');
+            }
         }
     }
     let prompt = count_tokens(&prompt_text).await?;
@@ -60,6 +72,7 @@ async fn estimate_token_usage(history_before: &[ChatMessage], reply: &str) -> Op
         prompt_tokens: prompt,
         completion_tokens: total.saturating_sub(prompt),
         total_tokens: total,
+        cached_tokens: None,
     })
 }
 
@@ -79,8 +92,67 @@ pub async fn fetch_context_window(
     client: &reqwest::Client,
     chat_url: &str,
     model: &str,
+    engine: Option<&str>,
 ) -> Option<u32> {
     let base = chat_url.strip_suffix("/v1/chat/completions")?;
+
+    if let Some(eng) = engine {
+        match eng.to_lowercase().as_str() {
+            "ollama" => {
+                let show_url = format!("{base}/api/show");
+                let resp = client
+                    .post(&show_url)
+                    .json(&serde_json::json!({"model": model}))
+                    .send()
+                    .await
+                    .ok()?;
+                if resp.status().is_success() {
+                    let body: serde_json::Value = resp.json().await.ok()?;
+                    if let Some(ctx) = context_length_from_model_info(body.get("model_info")?) {
+                        return Some(ctx);
+                    }
+                }
+            }
+            "llamacpp" | "llama.cpp" | "llama" => {
+                let props_url = format!("{base}/props");
+                let resp = client.get(&props_url).send().await.ok()?;
+                if resp.status().is_success() {
+                    let body: serde_json::Value = resp.json().await.ok()?;
+                    if let Some(n) = body
+                        .get("default_generation_settings")
+                        .and_then(|v| v.get("n_ctx"))
+                        .and_then(|v| v.as_u64())
+                    {
+                        return Some(n as u32);
+                    }
+                    if let Some(n) = body.get("n_ctx").and_then(|v| v.as_u64()) {
+                        return Some(n as u32);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Fallback: try llama.cpp first, then Ollama
+    let props_url = format!("{base}/props");
+    if let Ok(resp) = client.get(&props_url).send().await {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(n) = body
+                    .get("default_generation_settings")
+                    .and_then(|v| v.get("n_ctx"))
+                    .and_then(|v| v.as_u64())
+                {
+                    return Some(n as u32);
+                }
+                if let Some(n) = body.get("n_ctx").and_then(|v| v.as_u64()) {
+                    return Some(n as u32);
+                }
+            }
+        }
+    }
+
     let show_url = format!("{base}/api/show");
     let resp = client
         .post(&show_url)
@@ -88,11 +160,14 @@ pub async fn fetch_context_window(
         .send()
         .await
         .ok()?;
-    if !resp.status().is_success() {
-        return None;
+    if resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.ok()?;
+        if let Some(ctx) = context_length_from_model_info(body.get("model_info")?) {
+            return Some(ctx);
+        }
     }
-    let body: serde_json::Value = resp.json().await.ok()?;
-    context_length_from_model_info(body.get("model_info")?)
+
+    None
 }
 
 pub const RESPONSE_RESERVE_TOKENS: u32 = 1024;
@@ -150,6 +225,9 @@ pub async fn stream_request(
         "model": model,
         "messages": messages,
         "stream": true,
+        "stream_options": {
+            "include_usage": true
+        },
         "temperature": 0.7,
         "max_tokens": 4096,
     });
@@ -296,10 +374,17 @@ pub async fn stream_request(
                                         usage.get("completion_tokens").and_then(|v| v.as_u64()),
                                         usage.get("total_tokens").and_then(|v| v.as_u64()),
                                     ) {
+                                        let cached = usage.get("prompt_tokens_details")
+                                            .and_then(|details| details.get("cached_tokens"))
+                                            .and_then(|v| v.as_u64())
+                                            .or_else(|| usage.get("cached_tokens").and_then(|v| v.as_u64()))
+                                            .map(|n| n as u32);
+
                                         state.lock().await.current_token_usage = Some(TokenUsage {
                                             prompt_tokens: p as u32,
                                             completion_tokens: c as u32,
                                             total_tokens: t as u32,
+                                            cached_tokens: cached,
                                         });
                                     }
                                 }
@@ -1052,6 +1137,7 @@ pub async fn process_queue_orchestrator(
         let mut tool_rounds = 0;
         #[allow(unused_assignments)]
         let mut limit_reached = false;
+        let mut last_sent_messages: Vec<serde_json::Value> = Vec::new();
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
@@ -1153,6 +1239,7 @@ pub async fn process_queue_orchestrator(
                         "content": "continue"
                     }));
                 }
+                last_sent_messages = current_msgs.clone();
 
                 state.lock().await.current_response.clear();
                 stream_buffer.lock().await.content.clear();
@@ -1463,10 +1550,6 @@ Make sure tags match exactly, do not omit '<' or '>', and do not wrap numbers/bo
             }
 
             dbg_log!("Finishing agent loop, writing final assistant reply");
-            let history_before = {
-                let s = state.lock().await;
-                s.history.clone()
-            };
 
             let mut s = state.lock().await;
             s.response_time = Some(prompt_start_time.elapsed());
@@ -1484,15 +1567,7 @@ Make sure tags match exactly, do not omit '<' or '>', and do not wrap numbers/bo
                 ));
             }
 
-            crate::config::save_history(&s.history);
-            s.current_response.clear();
-            s.status = AppStatus::Idle;
             drop(s);
-
-            // Notify the user that the agent loop completed successfully.
-            let _ = crate::notifications::notify_finished(
-                crate::notifications::FinishedStatus::Success,
-            );
 
             let usage = {
                 let s = state.lock().await;
@@ -1501,15 +1576,34 @@ Make sure tags match exactly, do not omit '<' or '>', and do not wrap numbers/bo
                 } else {
                     drop(s);
                     dbg_log!("Estimating token usage...");
-                    let est = estimate_token_usage(&history_before, &final_content).await;
+                    let est = estimate_token_usage(&last_sent_messages, &final_content).await;
                     dbg_log!("Token usage estimation result: {:?}", est);
                     est
                 }
             };
+
+            let mut s = state.lock().await;
+            if let Some(msg) = s.history.iter_mut().rev().find(|m| m.role == "assistant") {
+                msg.token_usage = usage.clone();
+            }
+
+            crate::config::save_history(&s.history);
+            let active_id = s.active_session_id.clone();
+            crate::config::save_session_history(&active_id, &s.history);
+
+            s.current_response.clear();
+            s.status = AppStatus::Idle;
+
             if let Some(u) = &usage {
                 crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
             }
-            state.lock().await.current_token_usage = usage;
+            s.current_token_usage = usage;
+            drop(s);
+
+            // Notify the user that the agent loop completed successfully.
+            let _ = crate::notifications::notify_finished(
+                crate::notifications::FinishedStatus::Success,
+            );
             break;
         }
 

@@ -20,6 +20,8 @@ pub struct ModelProfile {
     pub model: String,
     #[serde(default)]
     pub context_window: Option<u32>,
+    #[serde(default)]
+    pub engine: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,12 +89,14 @@ impl Default for AppConfig {
                     url: "http://127.0.0.1:1976/v1/chat/completions".to_string(),
                     model: "system".to_string(),
                     context_window: Some(MAX_CONTEXT_TOKENS),
+                    engine: Some("llamacpp".to_string()),
                 },
                 ModelProfile {
                     name: "ollama".to_string(),
                     url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
                     model: "llama3.2:latest".to_string(),
                     context_window: Some(32768),
+                    engine: Some("ollama".to_string()),
                 },
             ],
             tool_protocol: ToolProtocol::default(),
