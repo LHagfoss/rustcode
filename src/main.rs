@@ -62,6 +62,11 @@ async fn flush_pending_history_arrow(
 ) {
     if let Some((direction, _)) = pending_arrow_key.take() {
         let mut s = app_state.lock().await;
+        // If there's scrollable content and no active suggestion, just clear pending
+        // without triggering history navigation - user is trying to scroll through messages
+        if s.last_max_scroll > 0 && s.active_suggestion_index.is_none() {
+            return;
+        }
         direction.apply_history(&mut s);
     }
 }
@@ -698,25 +703,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         continue;
                     }
+                    let active_suggestion_index_is_none = s.active_suggestion_index.is_none();
                     drop(s);
 
                     if let Some(direction) = PendingArrowKey::from_key_code(key.code) {
+                        // Always defer arrow keys for wheel gesture detection
                         let should_defer_for_wheel_detection = {
-                            let s = app_state.lock().await;
                             key.kind == event::KeyEventKind::Press
                                 && key.modifiers.is_empty()
-                                && s.active_suggestion_index.is_none()
-                                && s.last_max_scroll > 0
+                                && active_suggestion_index_is_none
                         };
 
                         if should_defer_for_wheel_detection {
                             let now = Instant::now();
                             if let Some((pending_direction, pending_at)) = pending_arrow_key {
                                 if now.duration_since(pending_at) <= WHEEL_ARROW_WINDOW {
-                                    if pending_direction == direction {
-                                        let mut s = app_state.lock().await;
+                                    // Rapid successive arrow keys - treat as potential scroll gesture
+                                    // Only apply scroll if there's content to scroll through
+                                    let mut s = app_state.lock().await;
+
+                                    if pending_direction == direction && s.last_max_scroll > 0 {
                                         direction.apply_scroll(&mut s);
                                         needs_redraw = true;
+                                    } else {
+                                        // No scrollable content - fall through to history navigation
+                                        flush_pending_history_arrow(
+                                            &app_state,
+                                            &mut pending_arrow_key,
+                                        )
+                                        .await;
                                     }
 
                                     // Trackpads can emit fast mixed arrow-like events for
