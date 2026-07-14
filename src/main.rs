@@ -23,53 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-const WHEEL_ARROW_WINDOW: Duration = Duration::from_millis(50);
-const WHEEL_ARROW_SCROLL_ROWS: u16 = 6;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PendingArrowKey {
-    Up,
-    Down,
-}
-
-impl PendingArrowKey {
-    fn from_key_code(code: KeyCode) -> Option<Self> {
-        match code {
-            KeyCode::Up => Some(Self::Up),
-            KeyCode::Down => Some(Self::Down),
-            _ => None,
-        }
-    }
-
-    fn apply_history(self, state: &mut AppState) {
-        match self {
-            Self::Up => state.history_up(),
-            Self::Down => state.history_down(),
-        }
-    }
-
-    fn apply_scroll(self, state: &mut AppState) {
-        match self {
-            Self::Up => state.scroll_up(WHEEL_ARROW_SCROLL_ROWS),
-            Self::Down => state.scroll_down(WHEEL_ARROW_SCROLL_ROWS),
-        }
-    }
-}
-
-async fn flush_pending_history_arrow(
-    app_state: &Arc<Mutex<AppState>>,
-    pending_arrow_key: &mut Option<(PendingArrowKey, Instant)>,
-) {
-    if let Some((direction, _)) = pending_arrow_key.take() {
-        let mut s = app_state.lock().await;
-        // If there's scrollable content and no active suggestion, just clear pending
-        // without triggering history navigation - user is trying to scroll through messages
-        if s.last_max_scroll > 0 && s.active_suggestion_index.is_none() {
-            return;
-        }
-        direction.apply_history(&mut s);
-    }
-}
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smooth scrolling
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -207,17 +161,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_draw = std::time::Instant::now();
     let mut was_responding = false;
     let mut terminal_focused = true;
-    let mut pending_arrow_key: Option<(PendingArrowKey, Instant)> = None;
+    // Scroll coalescing: batch rapid scroll events
+    let mut scroll_coalesce: i32 = 0;
+    const SCROLL_COALESCE_WINDOW: Duration = Duration::from_millis(16);
+    let mut last_scroll_time = Instant::now();
 
     loop {
-        if pending_arrow_key
-            .as_ref()
-            .is_some_and(|(_, at)| at.elapsed() >= WHEEL_ARROW_WINDOW)
-        {
-            flush_pending_history_arrow(&app_state, &mut pending_arrow_key).await;
-            needs_redraw = true;
-        }
-
         let response_active = app_state.lock().await.status != AppStatus::Idle;
 
         {
@@ -249,8 +198,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         was_responding = response_active;
         let should_draw = needs_redraw
-            || (response_active && last_draw.elapsed() >= std::time::Duration::from_millis(50))
-            || last_draw.elapsed() >= std::time::Duration::from_millis(250);
+            || (response_active && last_draw.elapsed() >= std::time::Duration::from_millis(16))
+            || last_draw.elapsed() >= std::time::Duration::from_millis(100);
 
         if should_draw {
             let mut guard = app_state.lock().await;
@@ -294,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             needs_redraw = false;
         }
 
-        if event::poll(std::time::Duration::from_millis(50))? {
+        if event::poll(EVENT_POLL_INTERVAL)? {
             let ev = event::read()?;
             match ev {
                 Event::Key(key) => {
@@ -703,54 +652,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         continue;
                     }
-                    let active_suggestion_index_is_none = s.active_suggestion_index.is_none();
                     drop(s);
-
-                    if let Some(direction) = PendingArrowKey::from_key_code(key.code) {
-                        // Always defer arrow keys for wheel gesture detection
-                        let should_defer_for_wheel_detection = {
-                            key.kind == event::KeyEventKind::Press
-                                && key.modifiers.is_empty()
-                                && active_suggestion_index_is_none
-                        };
-
-                        if should_defer_for_wheel_detection {
-                            let now = Instant::now();
-                            if let Some((pending_direction, pending_at)) = pending_arrow_key {
-                                if now.duration_since(pending_at) <= WHEEL_ARROW_WINDOW {
-                                    // Rapid successive arrow keys - treat as potential scroll gesture
-                                    // Only apply scroll if there's content to scroll through
-                                    let mut s = app_state.lock().await;
-
-                                    if pending_direction == direction && s.last_max_scroll > 0 {
-                                        direction.apply_scroll(&mut s);
-                                        needs_redraw = true;
-                                    } else {
-                                        // No scrollable content - fall through to history navigation
-                                        flush_pending_history_arrow(
-                                            &app_state,
-                                            &mut pending_arrow_key,
-                                        )
-                                        .await;
-                                    }
-
-                                    // Trackpads can emit fast mixed arrow-like events for
-                                    // horizontal/diagonal wheel gestures. Do not replay those
-                                    // as prompt history navigation.
-                                    pending_arrow_key = None;
-                                    continue;
-                                }
-
-                                flush_pending_history_arrow(&app_state, &mut pending_arrow_key)
-                                    .await;
-                            }
-
-                            pending_arrow_key = Some((direction, now));
-                            continue;
-                        }
-                    }
-
-                    flush_pending_history_arrow(&app_state, &mut pending_arrow_key).await;
 
                     match key.code {
                         KeyCode::BackTab => {
@@ -999,6 +901,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::Mouse(mouse) => {
                     use crossterm::event::{MouseButton, MouseEventKind};
+                    let now = Instant::now();
+                    // Coalesce rapid scroll events
+                    if now.duration_since(last_scroll_time) < SCROLL_COALESCE_WINDOW {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => scroll_coalesce += 1,
+                            MouseEventKind::ScrollDown => scroll_coalesce -= 1,
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    // Process accumulated scroll
+                    if scroll_coalesce != 0 {
+                        let mut s = app_state.lock().await;
+                        let modal = s.modal_open();
+                        if !modal {
+                            if scroll_coalesce > 0 {
+                                s.scroll_up((scroll_coalesce as u16).min(10));
+                            } else {
+                                s.scroll_down((-scroll_coalesce as u16).min(10));
+                            }
+                            needs_redraw = true;
+                        }
+                        scroll_coalesce = 0;
+                    }
+                    last_scroll_time = now;
+
                     let mut s = app_state.lock().await;
                     let modal = s.modal_open();
                     match mouse.kind {

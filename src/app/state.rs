@@ -614,7 +614,7 @@ impl AppState {
     pub fn scroll_up(&mut self, amount: u16) {
         self.clear_selection();
         self.is_scroll_locked_to_bottom = false;
-        self.scroll_row = self.scroll_row.saturating_sub(amount);
+        self.scroll_row = self.scroll_row.saturating_sub(amount).max(0);
     }
 
     pub fn scroll_down(&mut self, amount: u16) {
