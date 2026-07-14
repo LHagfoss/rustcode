@@ -232,7 +232,7 @@ pub struct AppState {
     pub mcp_picker_index: usize,
     pub mcp_edit_state: Option<McpEditState>,
 
-    pub pending_tool_confirmation: Option<ToolConfirmation>,
+    pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
