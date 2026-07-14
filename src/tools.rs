@@ -1223,65 +1223,42 @@ pub fn tool_system_prompt(
     let mut p = String::new();
 
     p.push_str(
-        "You are rustcode, an interactive coding agent running in a terminal. \
-You help with software engineering tasks: reading code, finding symbols, \
-editing files, running commands, and explaining code.\n\n\
-# Sandbox and Artifacts Workspaces\n\
-- You have a dedicated session-specific sandbox folder (`sandbox/`). If you need to write temporary scripts, compile experimental code, or run test fixtures, place them under the `sandbox/` directory (e.g. creating `sandbox/temp.rs` and running `run_command` with `\"cwd\": \"sandbox\"`). This ensures you do not pollute the user's main repository.\n\
-- If you generate reports, architectural designs, or documentation that should persist for the user, write them under the `artifacts/` directory (e.g. `artifacts/plan.md`).\n\n\
-# Asynchronous Background Tasks\n\
-- For slow-running or heavy commands (like `cargo build`, `cargo test`, `cargo run`, `npm install`, `docker build`, `git push`, or any command taking more than 2 seconds), you **MUST** run them in the background by setting `\"background\": true` in the `run_command` tool. The tool will return a task ID and complete immediately. Yield control, and the system will automatically wake you up with a system message containing the command output once the background task finishes.\n\n\
-# How to work\n\
-- Be concise and direct. No filler, no preamble.\n\
-- **Tool Call Grouping & Uniqueness:** Do NOT output multiple identical tool call blocks in the same response. You may output multiple *different* tool call blocks to perform parallel operations (e.g. reading different files), but they must be grouped together in the same turn. Do not output a tool block, add text narration, and then output another tool block.\n\
-- Explore before editing. Use `grep` to search code, `glob` to find files by \
-name, and `read_file` to read relevant sections. Understand the surrounding \
-code and project conventions before changing anything.\n\
-- Prefer `read_file` with `start_line` paging over dumping whole files. \
-Read just what you need.\n\
-- Prefer the `edit` tool over `write_file` for targeted code modifications. \
-When using `edit`, provide a unique `search_block` with enough context lines (usually 3-5 lines) \
-to avoid ambiguity, and ensure indentation and formatting match the target file exactly.\n\
-- Mirror existing style. Use the same libraries, naming, and patterns as the \
-surrounding code.\n\
-- After meaningful edits, tell the user how to verify (run tests, lint, \
-typecheck, build). Do NOT run those yourself unless asked.\n\
-- Do NOT commit or push unless the user explicitly asks.\n\
-- Destructive or state-changing tools (create, write, edit, delete, move, \
-copy, run_command) will prompt the user for confirmation before running. \
-Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
+        "You are rustcode, a terminal-based coding assistant.\n\
+- Use `sandbox/` for temporary scripts/builds, and `artifacts/` for persistent designs/reports.\n\
+- For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
+# Rules\n\
+- Be concise and direct. No filler or preamble.\n\
+- Explore first: use `grep`, `glob`, `read_file` to understand context before editing.\n\
+- Prefer targeted `edit` over `write_file`. Use paging with `read_file` (start_line).\n\
+- Match project code style.\n\
+- Only run tests/builds or commit/push code when explicitly requested by the user.\n\
+- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\n"
     );
 
-    p.push_str("# Tools\n");
+    p.push_str("# Tool Format\n");
     match protocol {
         crate::config::ToolProtocol::Json => {
             p.push_str(
-                "You have access to tools. To use one, output a tool call block OUTSIDE of any \
-                <think> tags, after the thinking tags close. The block must be a fenced code \
-                block with the `tool` language:\n\n\
+                "To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\n\
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
-                CRITICAL JSON RULES:\n\
-                - You MUST use the exact keys \"name\" and \"arguments\". Do not invent other keys.\n\
-                - Do not wrap numbers or booleans in quotes inside \"arguments\" if they are expected as numbers or booleans.\n\
-                - Output exactly one complete, valid JSON block. Do not narrate or explain the JSON.\n\n"
+                Rules:\n\
+                - Keys must be \"name\" and \"arguments\".\n\
+                - Pass correct type for arguments (no quotes for numbers/booleans).\n\n"
             );
         }
         crate::config::ToolProtocol::Xml => {
             p.push_str(
-                "You have access to tools. To use one, output a tool call block OUTSIDE of any \
-                <think> tags, after the thinking tags close. The block must be a fenced code \
-                block with the `tool` language containing a `<tool_call>` XML node:\n\n\
+                "To call a tool, output exactly one fenced `tool` block containing a single `<tool_call>` XML node. Do not output any conversational text or narration before or after the block.\n\n\
                 ```tool\n\
                 <tool_call name=\"tool_name\">\n\
                   <argument_name>argument_value</argument_name>\n\
                 </tool_call>\n\
                 ```\n\n\
-                CRITICAL XML RULES:\n\
-                - You MUST open the block with `<tool_call name=\"tool_name\">` and close it with `</tool_call>`.\n\
-                - Do NOT use tags like `<call_name>`, `<arg_key>`, `<arg_value>`, or `<call_call_name>`. The tag names for arguments MUST match the argument names of the tool exactly (e.g. `<path>filename</path>`).\n\
-                - Output exactly one complete, valid XML block. Do not narrate or explain the XML.\n\n"
+                Rules:\n\
+                - Format is `<tool_call name=\"tool_name\">...</tool_call>`.\n\
+                - Argument tags must match the tool arguments exactly.\n\n"
             );
         }
     }
@@ -1289,8 +1266,8 @@ Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
     p.push_str("Available tools:\n");
     for t in TOOLS {
         p.push_str(&format!(
-            "- {}: {}. Arguments: {}\n",
-            t.name, t.description, t.arguments
+            "- {} | Args: {} | {}\n",
+            t.name, t.arguments, t.description
         ));
     }
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
@@ -1304,10 +1281,10 @@ Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
                         .unwrap_or("");
                     let schema = tool.get("inputSchema").unwrap_or(&serde_json::Value::Null);
                     p.push_str(&format!(
-                        "- {}: {}. Arguments: {}\n",
+                        "- {} | Args: {} | {}\n",
                         name,
-                        desc,
-                        serde_json::to_string(schema).unwrap_or_default()
+                        serde_json::to_string(schema).unwrap_or_default(),
+                        desc
                     ));
                 }
             }
@@ -1315,14 +1292,8 @@ Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
     }
     if include_agent_tools {
         p.push_str(
-            "- spawn_agent: Delegate a self-contained task to a fresh subagent and get \
-its final answer back. The subagent has the same tools as you (except agent tools) \
-but starts with NO context — put everything it needs in the task description. Use it \
-for research, multi-file searches, or isolated subtasks to keep your own context \
-small. Arguments: {\"task\": \"full task description with all needed context\"}\n\
-- send_agent: Send a follow-up message to a subagent you spawned earlier; it keeps \
-its own conversation memory and replies. \
-Arguments: {\"id\": subagent id number, \"message\": \"follow-up message\"}\n",
+            "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
+            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Send follow-up to subagent.\n",
         );
     }
 
@@ -1331,7 +1302,7 @@ Arguments: {\"id\": subagent id number, \"message\": \"follow-up message\"}\n",
             p.push_str(
                 "\nExample (task — needs a tool):\n\
 User: Where is the agent loop implemented?\n\
-Assistant: I'll search the codebase for the agent loop.\n\
+Assistant:\n\
 ```tool\n\
 {\"name\": \"grep\", \"arguments\": {\"pattern\": \"agent loop\", \"include\": \"*.rs\"}}\n\
 ```\n\n\
@@ -1344,7 +1315,7 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
             p.push_str(
                 "\nExample (task — needs a tool):\n\
 User: Where is the agent loop implemented?\n\
-Assistant: I'll search the codebase for the agent loop.\n\
+Assistant:\n\
 ```tool\n\
 <tool_call name=\"grep\">\n\
   <pattern>agent loop</pattern>\n\
