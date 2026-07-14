@@ -1248,19 +1248,6 @@ pub fn tool_system_prompt(
                 - Pass correct type for arguments (no quotes for numbers/booleans).\n\n"
             );
         }
-        crate::config::ToolProtocol::Xml => {
-            p.push_str(
-                "To call a tool, output exactly one fenced `tool` block containing a single `<tool_call>` XML node. Do not output any conversational text or narration before or after the block.\n\n\
-                ```tool\n\
-                <tool_call name=\"tool_name\">\n\
-                  <argument_name>argument_value</argument_name>\n\
-                </tool_call>\n\
-                ```\n\n\
-                Rules:\n\
-                - Format is `<tool_call name=\"tool_name\">...</tool_call>`.\n\
-                - Argument tags must match the tool arguments exactly.\n\n"
-            );
-        }
     }
 
     p.push_str("Available tools:\n");
@@ -1305,22 +1292,6 @@ User: Where is the agent loop implemented?\n\
 Assistant:\n\
 ```tool\n\
 {\"name\": \"grep\", \"arguments\": {\"pattern\": \"agent loop\", \"include\": \"*.rs\"}}\n\
-```\n\n\
-Example (conversation — no tool):\n\
-User: hello, how are you?\n\
-Assistant: Hi! Ready to help with your code. What are you working on?\n",
-            );
-        }
-        crate::config::ToolProtocol::Xml => {
-            p.push_str(
-                "\nExample (task — needs a tool):\n\
-User: Where is the agent loop implemented?\n\
-Assistant:\n\
-```tool\n\
-<tool_call name=\"grep\">\n\
-  <pattern>agent loop</pattern>\n\
-  <include>*.rs</include>\n\
-</tool_call>\n\
 ```\n\n\
 Example (conversation — no tool):\n\
 User: hello, how are you?\n\
@@ -1552,64 +1523,11 @@ fn parse_tool_calls_impl(
 
             out
         }
-        crate::config::ToolProtocol::Xml => {
-            let mut out = Vec::new();
-            let search_start = text
-                .find("</think>")
-                .map(|idx| idx + "</think>".len())
-                .unwrap_or(0);
-            let search_text = &text[search_start..];
-
-            let xml_re = match Regex::new(
-                r#"(?s)<tool_call\s+name=["']([^"']+)["']\s*>(.*?)</tool_call>"#,
-            ) {
-                Ok(re) => re,
-                Err(_) => return out,
-            };
-
-            let child_re = match Regex::new(r#"(?s)<([a-zA-Z0-9_\-]+)>(.*?)</([a-zA-Z0-9_\-]+)>"#) {
-                Ok(re) => re,
-                Err(_) => return out,
-            };
-
-            for cap in xml_re.captures_iter(search_text) {
-                let name = cap[1].to_string();
-                let inner = &cap[2];
-
-                let mut args_map = serde_json::Map::new();
-                for child_cap in child_re.captures_iter(inner) {
-                    let open_tag = child_cap[1].to_string();
-                    let close_tag = child_cap[3].to_string();
-                    if open_tag != close_tag {
-                        continue;
-                    }
-                    let key = open_tag;
-                    let val_str = child_cap[2].trim();
-
-                    let val = match serde_json::from_str::<Value>(val_str) {
-                        Ok(v) => v,
-                        Err(_) => Value::String(val_str.to_string()),
-                    };
-                    args_map.insert(key, val);
-                }
-                out.push((name, Value::Object(args_map)));
-            }
-
-            out
-        }
     }
 }
 
 pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
-    let mut raw_calls = parse_tool_calls_impl(text, protocol);
-    if raw_calls.is_empty() {
-        let fallback = match protocol {
-            crate::config::ToolProtocol::Json => crate::config::ToolProtocol::Xml,
-            crate::config::ToolProtocol::Xml => crate::config::ToolProtocol::Json,
-        };
-        raw_calls = parse_tool_calls_impl(text, fallback);
-    }
-
+    let raw_calls = parse_tool_calls_impl(text, protocol);
     let mut unique_calls = Vec::new();
     for call in raw_calls {
         if !unique_calls
@@ -1971,16 +1889,6 @@ mod tests {
 
     fn parse_tool_calls(text: &str) -> Vec<(String, Value)> {
         super::parse_tool_calls(text, crate::config::ToolProtocol::Json)
-    }
-
-    #[test]
-    fn test_parse_xml_tool_call() {
-        let text = "<tool_call name=\"read_file\"><path>main.rs</path><start_line>10</start_line></tool_call>";
-        let res = super::parse_tool_calls(text, crate::config::ToolProtocol::Xml);
-        assert_eq!(res.len(), 1);
-        assert_eq!(res[0].0, "read_file");
-        assert_eq!(res[0].1.get("path").unwrap().as_str().unwrap(), "main.rs");
-        assert_eq!(res[0].1.get("start_line").unwrap().as_i64().unwrap(), 10);
     }
 
     #[test]

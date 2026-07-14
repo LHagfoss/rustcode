@@ -421,43 +421,22 @@ pub async fn stream_request(
     }
 
     let mut translation = String::new();
-    let protocol = { state.lock().await.config.tool_protocol };
     for acc in &accumulators {
         if acc.name.is_empty() {
             continue;
         }
-        match protocol {
-            crate::config::ToolProtocol::Json => {
-                let args_json: serde_json::Value = serde_json::from_str(&acc.arguments)
-                    .unwrap_or(serde_json::Value::Object(Default::default()));
 
-                let tool_call_obj = serde_json::json!({
-                    "name": acc.name,
-                    "arguments": args_json
-                });
+        let args_json: serde_json::Value = serde_json::from_str(&acc.arguments)
+            .unwrap_or(serde_json::Value::Object(Default::default()));
 
-                translation.push_str("\n\n```tool\n");
-                translation.push_str(&serde_json::to_string(&tool_call_obj).unwrap_or_default());
-                translation.push_str("\n```\n");
-            }
-            crate::config::ToolProtocol::Xml => {
-                let args_json: serde_json::Value = serde_json::from_str(&acc.arguments)
-                    .unwrap_or(serde_json::Value::Object(Default::default()));
+        let tool_call_obj = serde_json::json!({
+            "name": acc.name,
+            "arguments": args_json
+        });
 
-                translation.push_str("\n\n```tool\n");
-                translation.push_str(&format!("<tool_call name=\"{}\">\n", acc.name));
-                if let Some(obj) = args_json.as_object() {
-                    for (k, v) in obj {
-                        let v_str = match v {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        translation.push_str(&format!("  <{k}>{v_str}</{k}>\n"));
-                    }
-                }
-                translation.push_str("</tool_call>\n```\n");
-            }
-        }
+        translation.push_str("\n\n```tool\n");
+        translation.push_str(&serde_json::to_string(&tool_call_obj).unwrap_or_default());
+        translation.push_str("\n```\n");
     }
 
     if !translation.is_empty() {
@@ -491,20 +470,13 @@ pub async fn stream_request(
 
 fn has_intended_tool_call(content: &str) -> bool {
     let lower = content.to_lowercase();
-    lower.contains("```tool")
-        || lower.contains("```json")
-        || lower.contains("<tool_call")
-        || lower.contains("</tool_call>")
-        || lower.contains("<call_name")
-        || lower.contains("</call_name>")
+    lower.contains("```tool") || lower.contains("```json")
 }
 
 fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     // If the model already produced a valid tool call, we don't need to continue text generation.
     // We should execute the tool and get its output first.
-    if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Json).is_empty()
-        || !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Xml).is_empty()
-    {
+    if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Json).is_empty() {
         return false;
     }
 
@@ -859,11 +831,28 @@ reply compact and information-dense.\n\n{}",
             "role": "system",
             "content": system_prompt,
         })];
-        msgs.extend(history_snapshot.iter().map(|m| {
+        let history_len = history_snapshot.len();
+        msgs.extend(history_snapshot.iter().enumerate().map(|(idx, m)| {
             if m.role == "tool" {
+                let is_old = history_len.saturating_sub(idx) > 6;
+                let content = if is_old && m.content.len() > 2000 {
+                    let lines: Vec<&str> = m.content.lines().collect();
+                    if lines.len() > 20 {
+                        format!(
+                            "{}\n... (truncated {} lines of old tool output to save context) ...\n{}",
+                            lines.iter().take(8).copied().collect::<Vec<_>>().join("\n"),
+                            lines.len().saturating_sub(16),
+                            lines.iter().skip(lines.len() - 8).copied().collect::<Vec<_>>().join("\n")
+                        )
+                    } else {
+                        m.content.clone()
+                    }
+                } else {
+                    m.content.clone()
+                };
                 serde_json::json!({
                     "role": "user",
-                    "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
+                    "content": format!("<tool_result>\n{}\n</tool_result>", content),
                 })
             } else {
                 serde_json::json!({"role": m.role, "content": m.content})
@@ -1141,24 +1130,21 @@ pub async fn process_queue_orchestrator(
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
-            let (history_snapshot, protocol): (Vec<ChatMessage>, crate::config::ToolProtocol) = {
+            let history_snapshot: Vec<ChatMessage> = {
                 let s = state.lock().await;
-                (
-                    s.history
-                        .iter()
-                        .filter(|m| {
-                            matches!(m.role.as_str(), "user" | "assistant" | "tool")
-                                && !m.content.starts_with('/')
-                        })
-                        .cloned()
-                        .collect(),
-                    s.config.tool_protocol,
-                )
+                s.history
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.role.as_str(), "user" | "assistant" | "tool")
+                            && !m.content.starts_with('/')
+                    })
+                    .cloned()
+                    .collect()
             };
 
             let system_prompt = format!(
                 "{}\n\n{}",
-                crate::tools::tool_system_prompt(true, protocol),
+                crate::tools::tool_system_prompt(true, crate::config::ToolProtocol::Json),
                 crate::context::environment_context()
             );
             let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -1166,11 +1152,28 @@ pub async fn process_queue_orchestrator(
                 "content": system_prompt.clone(),
             })];
             let mut first_user = true;
-            msgs.extend(history_snapshot.into_iter().map(|m| {
+            let history_len = history_snapshot.len();
+            msgs.extend(history_snapshot.into_iter().enumerate().map(|(idx, m)| {
                 if m.role == "tool" {
+                    let is_old = history_len.saturating_sub(idx) > 6;
+                    let content = if is_old && m.content.len() > 2000 {
+                        let lines: Vec<&str> = m.content.lines().collect();
+                        if lines.len() > 20 {
+                            format!(
+                                "{}\n... (truncated {} lines of old tool output to save context) ...\n{}",
+                                lines.iter().take(8).copied().collect::<Vec<_>>().join("\n"),
+                                lines.len().saturating_sub(16),
+                                lines.iter().skip(lines.len() - 8).copied().collect::<Vec<_>>().join("\n")
+                            )
+                        } else {
+                            m.content.clone()
+                        }
+                    } else {
+                        m.content.clone()
+                    };
                     serde_json::json!({
                         "role": "user",
-                        "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
+                        "content": format!("<tool_result>\n{}\n</tool_result>", content),
                     })
                 } else if m.role == "user" && first_user {
                     first_user = false;
@@ -1532,18 +1535,11 @@ pub async fn process_queue_orchestrator(
                     .push(ChatMessage::new("assistant", &final_content));
 
                 let feedback = "tool_error: The tool call block was malformed or could not be parsed. \
-Please output a single, complete, valid tool call block inside a ```tool fenced block. \
-Ensure you use either JSON format:\n\n\
+Please output a single, complete, valid tool call block inside a ```tool fenced block using JSON format:\n\n\
 ```tool\n\
 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
 ```\n\n\
-or XML format:\n\n\
-```tool\n\
-<tool_call name=\"tool_name\">\n\
-  <arg_name>arg_val</arg_name>\n\
-</tool_call>\n\
-```\n\n\
-Make sure tags match exactly, do not omit '<' or '>', and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans.";
+Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans.";
 
                 s.history
                     .push(ChatMessage::new("tool", feedback.to_string()));
