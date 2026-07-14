@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1230,9 +1230,10 @@ editing files, running commands, and explaining code.\n\n\
 - You have a dedicated session-specific sandbox folder (`sandbox/`). If you need to write temporary scripts, compile experimental code, or run test fixtures, place them under the `sandbox/` directory (e.g. creating `sandbox/temp.rs` and running `run_command` with `\"cwd\": \"sandbox\"`). This ensures you do not pollute the user's main repository.\n\
 - If you generate reports, architectural designs, or documentation that should persist for the user, write them under the `artifacts/` directory (e.g. `artifacts/plan.md`).\n\n\
 # Asynchronous Background Tasks\n\
-- For slow-running commands (like test suites, cargo builds, or network calls), you can run them in the background by setting `\"background\": true` in the `run_command` tool. The tool will return a task ID and complete immediately. Yield control, and the system will automatically wake you up with a system message containing the command output once the background task finishes.\n\n\
+- For slow-running or heavy commands (like `cargo build`, `cargo test`, `cargo run`, `npm install`, `docker build`, `git push`, or any command taking more than 2 seconds), you **MUST** run them in the background by setting `\"background\": true` in the `run_command` tool. The tool will return a task ID and complete immediately. Yield control, and the system will automatically wake you up with a system message containing the command output once the background task finishes.\n\n\
 # How to work\n\
 - Be concise and direct. No filler, no preamble.\n\
+- **Tool Call Grouping & Uniqueness:** Do NOT output multiple identical tool call blocks in the same response. You may output multiple *different* tool call blocks to perform parallel operations (e.g. reading different files), but they must be grouped together in the same turn. Do not output a tool block, add text narration, and then output another tool block.\n\
 - Explore before editing. Use `grep` to search code, `glob` to find files by \
 name, and `read_file` to read relevant sections. Understand the surrounding \
 code and project conventions before changing anything.\n\
@@ -1291,6 +1292,26 @@ Read-only tools (grep, glob, list_directory, read_file) run immediately.\n\n",
             "- {}: {}. Arguments: {}\n",
             t.name, t.description, t.arguments
         ));
+    }
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(tools) = client.get_tools() {
+                for tool in tools {
+                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let desc = tool
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+                    let schema = tool.get("inputSchema").unwrap_or(&serde_json::Value::Null);
+                    p.push_str(&format!(
+                        "- {}: {}. Arguments: {}\n",
+                        name,
+                        desc,
+                        serde_json::to_string(schema).unwrap_or_default()
+                    ));
+                }
+            }
+        }
     }
     if include_agent_tools {
         p.push_str(
@@ -1427,19 +1448,51 @@ fn parse_tool_calls_impl(
                 }
             }
 
-            // 3. Fallback: single braced JSON
+            // 3. Fallback: scan for matching braced JSON objects
             if out.is_empty() {
-                if let Some(first_brace) = search_text.find('{') {
-                    if let Some(last_brace) = search_text.rfind('}') {
-                        if last_brace > first_brace {
-                            if let Ok(json) = serde_json::from_str::<Value>(
-                                search_text[first_brace..=last_brace].trim(),
-                            ) {
-                                if let Some(res) = extract_tool_call(&json) {
-                                    out.push(res);
-                                }
+                let mut current_pos = 0;
+                while let Some(start_idx) = search_text[current_pos..].find('{') {
+                    let start = current_pos + start_idx;
+                    let mut brace_count = 0;
+                    let mut end = None;
+                    let bytes = search_text.as_bytes();
+                    let mut in_string = false;
+                    let mut escaped = false;
+
+                    for i in start..bytes.len() {
+                        let c = bytes[i] as char;
+                        if in_string {
+                            if escaped {
+                                escaped = false;
+                            } else if c == '\\' {
+                                escaped = true;
+                            } else if c == '"' {
+                                in_string = false;
+                            }
+                        } else if c == '"' {
+                            in_string = true;
+                        } else if c == '{' {
+                            brace_count += 1;
+                        } else if c == '}' {
+                            brace_count -= 1;
+                            if brace_count == 0 {
+                                end = Some(i);
+                                break;
                             }
                         }
+                    }
+
+                    if let Some(end_idx) = end {
+                        if let Ok(json) =
+                            serde_json::from_str::<Value>(&search_text[start..=end_idx])
+                        {
+                            if let Some(res) = extract_tool_call(&json) {
+                                out.push(res);
+                            }
+                        }
+                        current_pos = end_idx + 1;
+                    } else {
+                        current_pos = start + 1;
                     }
                 }
             }
@@ -1495,15 +1548,25 @@ fn parse_tool_calls_impl(
 }
 
 pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
-    let first_try = parse_tool_calls_impl(text, protocol);
-    if !first_try.is_empty() {
-        return first_try;
+    let mut raw_calls = parse_tool_calls_impl(text, protocol);
+    if raw_calls.is_empty() {
+        let fallback = match protocol {
+            crate::config::ToolProtocol::Json => crate::config::ToolProtocol::Xml,
+            crate::config::ToolProtocol::Xml => crate::config::ToolProtocol::Json,
+        };
+        raw_calls = parse_tool_calls_impl(text, fallback);
     }
-    let fallback = match protocol {
-        crate::config::ToolProtocol::Json => crate::config::ToolProtocol::Xml,
-        crate::config::ToolProtocol::Xml => crate::config::ToolProtocol::Json,
-    };
-    parse_tool_calls_impl(text, fallback)
+
+    let mut unique_calls = Vec::new();
+    for call in raw_calls {
+        if !unique_calls
+            .iter()
+            .any(|(n, a)| n == &call.0 && a == &call.1)
+        {
+            unique_calls.push(call);
+        }
+    }
+    unique_calls
 }
 
 pub fn parse_tool_call(
@@ -1514,6 +1577,55 @@ pub fn parse_tool_call(
 }
 
 pub fn execute(name: &str, args: &Value) -> String {
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(tools) = client.get_tools() {
+                if tools
+                    .iter()
+                    .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
+                {
+                    let handle = tokio::runtime::Handle::current();
+                    let client_clone = Arc::clone(client);
+                    let name_owned = name.to_string();
+                    let args_clone = args.clone();
+
+                    let res = handle.block_on(async move {
+                        client_clone
+                            .call(
+                                "tools/call",
+                                serde_json::json!({
+                                    "name": name_owned,
+                                    "arguments": args_clone
+                                }),
+                            )
+                            .await
+                    });
+
+                    return match res {
+                        Ok(val) => {
+                            if let Some(content_arr) = val
+                                .get("result")
+                                .and_then(|r| r.get("content"))
+                                .and_then(|c| c.as_array())
+                            {
+                                let mut text_parts = Vec::new();
+                                for item in content_arr {
+                                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                        text_parts.push(text.to_string());
+                                    }
+                                }
+                                text_parts.join("\n")
+                            } else {
+                                serde_json::to_string_pretty(&val).unwrap_or_default()
+                            }
+                        }
+                        Err(e) => format!("error: MCP tool call failed: {e}"),
+                    };
+                }
+            }
+        }
+    }
+
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
             Ok(out) => out,
@@ -1926,6 +2038,21 @@ mod tests {
         assert!(parse_tool_call("just a normal reply").is_none());
         assert!(parse_tool_call("<tool_call>not json</tool_call>").is_none());
         assert!(parse_tool_call("<think>{\"name\": \"get_time\"}</think>").is_none());
+    }
+
+    #[test]
+    fn test_parse_tool_call_robust_fallback() {
+        let text = "Here it is: {\"name\": \"get_time\", \"arguments\": {}} Hope this helps!";
+        let res = parse_tool_calls(text);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "get_time");
+
+        let text = "First: {\"name\": \"get_time\", \"arguments\": {}} and second: {\"name\": \"read_file\", \"arguments\": {\"path\": \"x\"}}";
+        let res = parse_tool_calls(text);
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "get_time");
+        assert_eq!(res[1].0, "read_file");
+        assert_eq!(res[1].1.get("path").unwrap().as_str().unwrap(), "x");
     }
 
     #[test]

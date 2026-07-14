@@ -2,6 +2,7 @@ mod app;
 mod clipboard;
 mod config;
 mod context;
+mod mcp;
 mod network;
 mod notifications;
 mod raw_cli;
@@ -181,6 +182,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     });
+
+    // Spawn startup initialization of enabled MCP servers
+    {
+        let s = app_state.lock().await;
+        for srv in &s.config.mcp_servers {
+            if srv.enabled {
+                let name = srv.name.clone();
+                tokio::spawn(async move {
+                    let _ = crate::mcp::start_server_by_name(&name).await;
+                });
+            }
+        }
+    }
 
     crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
 
@@ -368,6 +382,177 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.show_history_picker = false;
                             }
                             _ => {}
+                        }
+                        drop(s);
+                        continue;
+                    }
+
+                    if s.show_mcp_config {
+                        if let Some(ref mut edit_state) = s.mcp_edit_state {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    s.mcp_edit_state = None;
+                                }
+                                KeyCode::Up => {
+                                    edit_state.active_field = if edit_state.active_field == 0 {
+                                        2
+                                    } else {
+                                        edit_state.active_field - 1
+                                    };
+                                }
+                                KeyCode::Down | KeyCode::Tab => {
+                                    edit_state.active_field = if edit_state.active_field == 2 {
+                                        0
+                                    } else {
+                                        edit_state.active_field + 1
+                                    };
+                                }
+                                KeyCode::Char(c) => {
+                                    let field = match edit_state.active_field {
+                                        0 => &mut edit_state.name_input,
+                                        1 => &mut edit_state.command_input,
+                                        _ => &mut edit_state.args_input,
+                                    };
+                                    field.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    let field = match edit_state.active_field {
+                                        0 => &mut edit_state.name_input,
+                                        1 => &mut edit_state.command_input,
+                                        _ => &mut edit_state.args_input,
+                                    };
+                                    field.pop();
+                                }
+                                KeyCode::Enter => {
+                                    let name = edit_state.name_input.trim().to_string();
+                                    let command = edit_state.command_input.trim().to_string();
+                                    let args = edit_state
+                                        .args_input
+                                        .split_whitespace()
+                                        .map(|s| s.to_string())
+                                        .collect::<Vec<_>>();
+
+                                    if !name.is_empty() && !command.is_empty() {
+                                        let new_srv = crate::config::McpServerConfig {
+                                            name: name.clone(),
+                                            command,
+                                            args,
+                                            env: std::collections::HashMap::new(),
+                                            enabled: true,
+                                        };
+
+                                        if edit_state.is_add {
+                                            s.config.mcp_servers.push(new_srv);
+                                        } else if let Some(idx) = edit_state.edit_index {
+                                            if idx < s.config.mcp_servers.len() {
+                                                let old_name =
+                                                    s.config.mcp_servers[idx].name.clone();
+                                                s.config.mcp_servers[idx] = new_srv;
+                                                if old_name != name {
+                                                    crate::mcp::shutdown_server(&old_name).await;
+                                                }
+                                            }
+                                        }
+
+                                        crate::config::save_entire_config(&s.config);
+
+                                        let name_clone = name.clone();
+                                        tokio::spawn(async move {
+                                            let _ =
+                                                crate::mcp::start_server_by_name(&name_clone).await;
+                                        });
+
+                                        s.mcp_edit_state = None;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    s.show_mcp_config = false;
+                                }
+                                KeyCode::Up => {
+                                    let len = s.config.mcp_servers.len();
+                                    if len > 0 {
+                                        s.mcp_picker_index = if s.mcp_picker_index == 0 {
+                                            len - 1
+                                        } else {
+                                            s.mcp_picker_index - 1
+                                        };
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    let len = s.config.mcp_servers.len();
+                                    if len > 0 {
+                                        s.mcp_picker_index = if s.mcp_picker_index + 1 >= len {
+                                            0
+                                        } else {
+                                            s.mcp_picker_index + 1
+                                        };
+                                    }
+                                }
+                                KeyCode::Char('a') | KeyCode::Char('A') => {
+                                    s.mcp_edit_state = Some(crate::app::McpEditState {
+                                        is_add: true,
+                                        edit_index: None,
+                                        name_input: String::new(),
+                                        command_input: String::new(),
+                                        args_input: String::new(),
+                                        active_field: 0,
+                                        cursor_pos: 0,
+                                    });
+                                }
+                                KeyCode::Char('e') | KeyCode::Char('E') => {
+                                    let idx = s.mcp_picker_index;
+                                    if let Some(srv) = s.config.mcp_servers.get(idx) {
+                                        s.mcp_edit_state = Some(crate::app::McpEditState {
+                                            is_add: false,
+                                            edit_index: Some(idx),
+                                            name_input: srv.name.clone(),
+                                            command_input: srv.command.clone(),
+                                            args_input: srv.args.join(" "),
+                                            active_field: 0,
+                                            cursor_pos: srv.name.len(),
+                                        });
+                                    }
+                                }
+                                KeyCode::Char('d') | KeyCode::Char('D') => {
+                                    let idx = s.mcp_picker_index;
+                                    if idx < s.config.mcp_servers.len() {
+                                        let removed = s.config.mcp_servers.remove(idx);
+                                        crate::config::save_entire_config(&s.config);
+                                        let name_clone = removed.name.clone();
+                                        tokio::spawn(async move {
+                                            crate::mcp::shutdown_server(&name_clone).await;
+                                        });
+                                        if s.mcp_picker_index >= s.config.mcp_servers.len()
+                                            && s.mcp_picker_index > 0
+                                        {
+                                            s.mcp_picker_index -= 1;
+                                        }
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let idx = s.mcp_picker_index;
+                                    if let Some(srv) = s.config.mcp_servers.get_mut(idx) {
+                                        srv.enabled = !srv.enabled;
+                                        let name_clone = srv.name.clone();
+                                        let enabled = srv.enabled;
+                                        crate::config::save_entire_config(&s.config);
+                                        tokio::spawn(async move {
+                                            if enabled {
+                                                let _ =
+                                                    crate::mcp::start_server_by_name(&name_clone)
+                                                        .await;
+                                            } else {
+                                                crate::mcp::shutdown_server(&name_clone).await;
+                                            }
+                                        });
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                         drop(s);
                         continue;
