@@ -94,7 +94,12 @@ fn is_type(s: &str) -> bool {
     ) || (!s.is_empty() && s.chars().next().unwrap().is_uppercase())
 }
 
-fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
+fn highlight_rust_line_with_colors<'a>(
+    line: &str,
+    default_fg: Color,
+    bg_color: Color,
+    show_picker: bool,
+) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
@@ -106,7 +111,6 @@ fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
     let color_number = Color::Rgb(209, 154, 102); // Orange
     let color_macro = Color::Rgb(97, 175, 239); // Blue
     let color_fn = Color::Rgb(97, 175, 239); // Blue
-    let color_bg = COLOR_ELEMENT;
 
     while i < chars.len() {
         // Comments
@@ -114,7 +118,7 @@ fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
             let comment_text: String = chars[i..].iter().collect();
             spans.push(Span::styled(
                 comment_text,
-                get_themed_style(color_comment, color_bg, Modifier::empty(), show_picker),
+                get_themed_style(color_comment, bg_color, Modifier::empty(), show_picker),
             ));
             break;
         }
@@ -140,7 +144,7 @@ fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
             }
             spans.push(Span::styled(
                 s,
-                get_themed_style(color_string, color_bg, Modifier::empty(), show_picker),
+                get_themed_style(color_string, bg_color, Modifier::empty(), show_picker),
             ));
             continue;
         }
@@ -166,7 +170,7 @@ fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
             }
             spans.push(Span::styled(
                 s,
-                get_themed_style(color_string, color_bg, Modifier::empty(), show_picker),
+                get_themed_style(color_string, bg_color, Modifier::empty(), show_picker),
             ));
             continue;
         }
@@ -185,7 +189,7 @@ fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
             }
             spans.push(Span::styled(
                 num,
-                get_themed_style(color_number, color_bg, Modifier::empty(), show_picker),
+                get_themed_style(color_number, bg_color, Modifier::empty(), show_picker),
             ));
             continue;
         }
@@ -206,15 +210,15 @@ fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
             let style = if is_macro {
                 ident.push('!');
                 i += 1;
-                get_themed_style(color_macro, color_bg, Modifier::BOLD, show_picker)
+                get_themed_style(color_macro, bg_color, Modifier::BOLD, show_picker)
             } else if is_keyword(&ident) {
-                get_themed_style(color_keyword, color_bg, Modifier::BOLD, show_picker)
+                get_themed_style(color_keyword, bg_color, Modifier::BOLD, show_picker)
             } else if is_type(&ident) {
-                get_themed_style(color_type, color_bg, Modifier::empty(), show_picker)
+                get_themed_style(color_type, bg_color, Modifier::empty(), show_picker)
             } else if is_fn {
-                get_themed_style(color_fn, color_bg, Modifier::empty(), show_picker)
+                get_themed_style(color_fn, bg_color, Modifier::empty(), show_picker)
             } else {
-                get_themed_style(COLOR_TEXT, color_bg, Modifier::empty(), show_picker)
+                get_themed_style(default_fg, bg_color, Modifier::empty(), show_picker)
             };
 
             spans.push(Span::styled(ident, style));
@@ -227,11 +231,60 @@ fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
         i += 1;
         spans.push(Span::styled(
             symbol,
-            get_themed_style(COLOR_TEXT, color_bg, Modifier::empty(), show_picker),
+            get_themed_style(default_fg, bg_color, Modifier::empty(), show_picker),
         ));
     }
 
     spans
+}
+
+fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span<'a>> {
+    highlight_rust_line_with_colors(line, COLOR_TEXT, COLOR_ELEMENT, show_picker)
+}
+
+fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: bool) -> Line<'a> {
+    let (prefix, code) = if line.is_empty() {
+        (' ', "")
+    } else {
+        let mut chars = line.chars();
+        let first = chars.next().unwrap();
+        if first == '+' || first == '-' || first == ' ' {
+            (first, chars.as_str())
+        } else {
+            (' ', line)
+        }
+    };
+
+    let bg_color = match prefix {
+        '+' => Color::Rgb(24, 40, 24), // Dark Green
+        '-' => Color::Rgb(48, 20, 20), // Dark Red
+        _ => COLOR_ELEMENT,            // Dark Gray
+    };
+
+    let default_fg = match prefix {
+        '+' => Color::Rgb(160, 240, 160), // Light Green
+        '-' => Color::Rgb(240, 150, 150), // Light Red
+        _ => COLOR_TEXT,                  // Default text color
+    };
+
+    let spans = highlight_rust_line_with_colors(code, default_fg, bg_color, show_picker);
+
+    let prefix_str = format!("{} ", prefix);
+    let mut final_spans = vec![Span::styled(
+        prefix_str,
+        get_themed_style(default_fg, bg_color, Modifier::BOLD, show_picker),
+    )];
+    final_spans.extend(spans);
+
+    let current_width: usize = final_spans.iter().map(|s| s.content.width()).sum();
+    if current_width < width {
+        final_spans.push(Span::styled(
+            " ".repeat(width - current_width),
+            get_themed_style(default_fg, bg_color, Modifier::empty(), show_picker),
+        ));
+    }
+
+    Line::from(final_spans)
 }
 
 const COLOR_BG: Color = Color::Rgb(21, 23, 26);
@@ -1065,34 +1118,15 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
 
             if let Some(ref diff) = msg.diff {
+                let content_width = (inner_area.width as usize).saturating_sub(6);
                 for line_str in diff.lines() {
-                    let style = if line_str.starts_with('+') {
-                        Style::default().fg(Color::Rgb(40, 167, 69))
-                    } else if line_str.starts_with('-') {
-                        Style::default().fg(Color::Rgb(220, 53, 69))
-                    } else {
-                        Style::default().fg(COLOR_MUTED)
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            "  ",
-                            get_themed_style(
-                                COLOR_SECONDARY,
-                                COLOR_BG,
-                                Modifier::empty(),
-                                show_picker,
-                            ),
-                        ),
-                        Span::styled(
-                            line_str.to_string(),
-                            get_themed_style(
-                                style.fg.unwrap_or(COLOR_MUTED),
-                                COLOR_BG,
-                                style.add_modifier,
-                                show_picker,
-                            ),
-                        ),
-                    ]));
+                    let line = highlight_diff_line(line_str, content_width, show_picker);
+                    let mut new_spans = vec![Span::styled(
+                        "  ",
+                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
+                    )];
+                    new_spans.extend(line.spans);
+                    lines.push(Line::from(new_spans));
                 }
             }
             lines.push(Line::from(""));
@@ -2534,6 +2568,7 @@ pub fn extract_selection(
 }
 
 fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
+    let show_picker = state.modal_open();
     let confirmations = match &state.pending_tool_confirmation {
         Some(c) if !c.is_empty() => c,
         _ => return,
@@ -2654,23 +2689,12 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 .lines()
                 .take(modal_chunks[7].height as usize)
                 .map(|l| {
-                    let display: String = l.chars().take(inner_area.width as usize - 4).collect();
-                    let style = if l.starts_with('+') {
-                        Style::default().fg(Color::Rgb(40, 167, 69))
-                    } else if l.starts_with('-') {
-                        Style::default().fg(Color::Rgb(220, 53, 69))
-                    } else {
-                        Style::default()
-                            .fg(COLOR_MUTED)
-                            .add_modifier(Modifier::ITALIC)
-                    };
-                    Line::from(Span::styled(format!("  {display}"), style))
+                    let width = (inner_area.width as usize).saturating_sub(4);
+                    highlight_diff_line(l, width, show_picker)
                 })
                 .collect();
             f.render_widget(
-                Paragraph::new(preview_lines)
-                    .style(Style::default().bg(COLOR_ELEMENT))
-                    .wrap(Wrap { trim: false }),
+                Paragraph::new(preview_lines).wrap(Wrap { trim: false }),
                 modal_chunks[7],
             );
         }
