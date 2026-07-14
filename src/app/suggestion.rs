@@ -9,6 +9,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Cancel active stream or queued prompt",
     },
     CommandInfo {
+        name: "/change_title",
+        desc: "Rename the current session title",
+    },
+    CommandInfo {
         name: "/clear",
         desc: "Clear conversation history",
     },
@@ -54,7 +58,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/parser",
-        desc: "Show or set current tool protocol (json, xml)",
+        desc: "Show or set current tool protocol (json only)",
     },
     CommandInfo {
         name: "/provider",
@@ -62,7 +66,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/protocol",
-        desc: "Show or set current tool protocol (json, xml)",
+        desc: "Show or set current tool protocol (json only)",
     },
     CommandInfo {
         name: "/quit",
