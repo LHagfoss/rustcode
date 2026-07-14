@@ -1,0 +1,74 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            name: rustcode-linux-x86_64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            name: rustcode-macos-aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            name: rustcode-macos-x86_64
+          - os: windows-2025
+            target: x86_64-pc-windows-gnu
+            name: rustcode-windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-action@master
+        with:
+          toolchain: stable
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      # Linux needs libsqlite3-dev for rusqlite bundling
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Package artifacts
+      - name: Package Linux / macOS binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
+          chmod +x ${{ matrix.name }}
+          tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
+          Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}.tar.gz
+            ${{ matrix.name }}.zip
