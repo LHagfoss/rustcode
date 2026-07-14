@@ -350,6 +350,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 
     let right_spans = if state.history.is_empty() {
         vec![
+            Span::styled("   ", Style::default()),
             Span::styled(
                 "tab",
                 get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
@@ -398,6 +399,9 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         };
 
         let mut right_spans = Vec::new();
+
+        // Add leading padding for visual spacing at start
+        right_spans.push(Span::styled("   ", Style::default()));
 
         let tps_label = format_tokens_info(state).0;
         let tps_value = format_tokens_info(state).1;

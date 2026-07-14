@@ -415,6 +415,14 @@ fn has_intended_tool_call(content: &str) -> bool {
 }
 
 fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
+    // If the model already produced a valid tool call, we don't need to continue text generation.
+    // We should execute the tool and get its output first.
+    if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Json).is_empty()
+        || !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Xml).is_empty()
+    {
+        return false;
+    }
+
     if finish_reason == Some("length") {
         return true;
     }

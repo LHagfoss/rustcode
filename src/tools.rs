@@ -1448,19 +1448,51 @@ fn parse_tool_calls_impl(
                 }
             }
 
-            // 3. Fallback: single braced JSON
+            // 3. Fallback: scan for matching braced JSON objects
             if out.is_empty() {
-                if let Some(first_brace) = search_text.find('{') {
-                    if let Some(last_brace) = search_text.rfind('}') {
-                        if last_brace > first_brace {
-                            if let Ok(json) = serde_json::from_str::<Value>(
-                                search_text[first_brace..=last_brace].trim(),
-                            ) {
-                                if let Some(res) = extract_tool_call(&json) {
-                                    out.push(res);
-                                }
+                let mut current_pos = 0;
+                while let Some(start_idx) = search_text[current_pos..].find('{') {
+                    let start = current_pos + start_idx;
+                    let mut brace_count = 0;
+                    let mut end = None;
+                    let bytes = search_text.as_bytes();
+                    let mut in_string = false;
+                    let mut escaped = false;
+
+                    for i in start..bytes.len() {
+                        let c = bytes[i] as char;
+                        if in_string {
+                            if escaped {
+                                escaped = false;
+                            } else if c == '\\' {
+                                escaped = true;
+                            } else if c == '"' {
+                                in_string = false;
+                            }
+                        } else if c == '"' {
+                            in_string = true;
+                        } else if c == '{' {
+                            brace_count += 1;
+                        } else if c == '}' {
+                            brace_count -= 1;
+                            if brace_count == 0 {
+                                end = Some(i);
+                                break;
                             }
                         }
+                    }
+
+                    if let Some(end_idx) = end {
+                        if let Ok(json) =
+                            serde_json::from_str::<Value>(&search_text[start..=end_idx])
+                        {
+                            if let Some(res) = extract_tool_call(&json) {
+                                out.push(res);
+                            }
+                        }
+                        current_pos = end_idx + 1;
+                    } else {
+                        current_pos = start + 1;
                     }
                 }
             }
@@ -2006,6 +2038,21 @@ mod tests {
         assert!(parse_tool_call("just a normal reply").is_none());
         assert!(parse_tool_call("<tool_call>not json</tool_call>").is_none());
         assert!(parse_tool_call("<think>{\"name\": \"get_time\"}</think>").is_none());
+    }
+
+    #[test]
+    fn test_parse_tool_call_robust_fallback() {
+        let text = "Here it is: {\"name\": \"get_time\", \"arguments\": {}} Hope this helps!";
+        let res = parse_tool_calls(text);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "get_time");
+
+        let text = "First: {\"name\": \"get_time\", \"arguments\": {}} and second: {\"name\": \"read_file\", \"arguments\": {\"path\": \"x\"}}";
+        let res = parse_tool_calls(text);
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].0, "get_time");
+        assert_eq!(res[1].0, "read_file");
+        assert_eq!(res[1].1.get("path").unwrap().as_str().unwrap(), "x");
     }
 
     #[test]
