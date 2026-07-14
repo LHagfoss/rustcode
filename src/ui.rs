@@ -935,29 +935,35 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
 
 fn format_tool_call_brief(name: &str, args: &serde_json::Value) -> String {
     match name {
-        "read_file" => {
+        "view_file" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            if let Some(search) = args.get("search").and_then(|v| v.as_str()) {
-                format!("read_file: search \"{}\" in {}", search, path)
-            } else if let Some(start) = args.get("start_line").and_then(|v| v.as_i64()) {
-                format!("read_file: read {} starting at line {}", path, start)
-            } else if args.get("ranges").is_some() {
-                format!("read_file: read ranges in {}", path)
+            let start = args.get("start_line").and_then(|v| v.as_i64()).unwrap_or(1);
+            let end = args.get("end_line").and_then(|v| v.as_i64());
+            if let Some(e) = end {
+                format!("view_file: view {} lines {}-{}", path, start, e)
             } else {
-                format!("read_file: read {}", path)
+                format!("view_file: view {} starting at line {}", path, start)
             }
         }
-        "create_file" => {
+        "replace_file_content" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("create_file: create {}", path)
+            let start = args.get("start_line").and_then(|v| v.as_i64()).unwrap_or(0);
+            let end = args.get("end_line").and_then(|v| v.as_i64()).unwrap_or(0);
+            format!("replace_file_content: replace {} lines {}-{}", path, start, end)
         }
-        "write_file" => {
+        "multi_replace_file_content" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("write_file: overwrite {}", path)
+            let count = args.get("replacements").and_then(|r| r.as_array()).map(|a| a.len()).unwrap_or(0);
+            format!("multi_replace_file_content: apply {} edits to {}", count, path)
         }
-        "edit" => {
+        "write_to_file" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("edit: modify {}", path)
+            let overwrite = args.get("overwrite").and_then(|o| o.as_bool()).unwrap_or(false);
+            if overwrite {
+                format!("write_to_file: overwrite {}", path)
+            } else {
+                format!("write_to_file: create {}", path)
+            }
         }
         "delete_file" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
@@ -2723,6 +2729,9 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
             .split(inner_area);
 
         let action_label = match confirmation.tool_name.as_str() {
+            "write_to_file" => "Write to file",
+            "replace_file_content" => "Replace file content",
+            "multi_replace_file_content" => "Apply multi-replace",
             "create_file" => "Create file",
             "write_file" => "Overwrite file",
             "delete_file" => "Delete file",
@@ -2882,6 +2891,9 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         let mut tool_lines = Vec::new();
         for (i, c) in confirmations.iter().enumerate() {
             let action = match c.tool_name.as_str() {
+                "write_to_file" => "Write to file",
+                "replace_file_content" => "Replace file content",
+                "multi_replace_file_content" => "Apply multi-replace",
                 "create_file" => "Create file",
                 "write_file" => "Overwrite file",
                 "delete_file" => "Delete file",

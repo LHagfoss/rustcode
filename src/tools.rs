@@ -185,48 +185,7 @@ pub const TOOLS: &[Tool] = &[
         handler: list_directory,
         requires_confirmation: false,
     },
-    Tool {
-        name: "read_file",
-        description: "Read a small chunk of a file, or search inside it. \
-                      Never returns whole files: use start_line for paging, search for matches, \
-                      or ranges for multiple specific sections",
-        arguments: "{\"path\": \"file to read\", \
-                     \"start_line\": optional number to page from (default 1), \
-                     \"search\": \"optional text - returns only matching lines\", \
-                     \"ranges\": \"optional list of {start: line, end: line} objects to read multiple sections\"}",
-        handler: read_file,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "create_file",
-        description: "Create a new file with content. Fails if the file already \
-                      exists — use write_file to overwrite. Creates parent \
-                      directories automatically",
-        arguments: "{\"path\": \"file to create\", \"content\": \"file content\"}",
-        handler: create_file,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "write_file",
-        description: "Overwrite an existing file with new content. Fails if the \
-                      file does not exist — use create_file for new files",
-        arguments: "{\"path\": \"file to overwrite\", \"content\": \"new content\"}",
-        handler: write_file,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "edit",
-        description: "Surgically replace text in an existing file using robust block matching. \
-                      Finds a `search_block` and replaces it with a `replace_block`. \
-                      Resilient to indentation changes. Supports optional line-number fallback.",
-        arguments: "{\"path\": \"file to edit\", \
-                      \"search_block\": \"text to find (include enough context for uniqueness)\", \
-                      \"replace_block\": \"text to replace it with\", \
-                      \"start_line\": \"optional line number for start of block\", \
-                      \"end_line\": \"optional line number for end of block\"}",
-        handler: edit,
-        requires_confirmation: true,
-    },
+
     Tool {
         name: "delete_file",
         description: "Delete a file from the filesystem",
@@ -577,9 +536,6 @@ fn list_directory(args: &Value) -> Result<String, String> {
     }
 }
 
-const MAX_READ_LINES: usize = 40;
-const MAX_SEARCH_HITS: usize = 8;
-const SEARCH_CONTEXT_LINES: usize = 2;
 const MAX_LINE_CHARS: usize = 160;
 
 fn truncate_line(line: &str) -> String {
@@ -591,403 +547,21 @@ fn truncate_line(line: &str) -> String {
     }
 }
 
-fn read_file(args: &Value) -> Result<String, String> {
-    let path = args
-        .get("path")
-        .and_then(|p| p.as_str())
-        .ok_or("missing 'path' argument")?;
-    let resolved_path = resolve_tool_path(path);
-    let content = std::fs::read_to_string(&resolved_path)
-        .map_err(|e| format!("cannot read '{path}': {e}"))?;
-    let lines: Vec<&str> = content.lines().collect();
-    let total = lines.len();
 
-    if let Some(ranges_val) = args.get("ranges").and_then(|r| r.as_array()) {
-        let mut out = format!("{path} ({total} lines):\n");
-        for (i, range_val) in ranges_val.iter().enumerate() {
-            if let Some(range_obj) = range_val.as_object() {
-                let start = range_obj
-                    .get("start")
-                    .and_then(parse_json_number)
-                    .map(|v| v as usize);
-                let end = range_obj
-                    .get("end")
-                    .and_then(parse_json_number)
-                    .map(|v| v as usize);
-                if let (Some(s), Some(e)) = (start, end) {
-                    if s >= 1 && e >= s && s <= total {
-                        let actual_end = e.min(total);
-                        out.push_str(&format!(
-                            "\n--- Range {}: lines {s}-{actual_end} ---\n",
-                            i + 1
-                        ));
-                        for (idx, line) in lines[s - 1..actual_end].iter().enumerate() {
-                            out.push_str(&format!("{}: {}\n", s + idx, truncate_line(line)));
-                        }
-                    } else {
-                        out.push_str(&format!(
-                            "\n--- Range {}: invalid range {s}-{e} ---\n",
-                            i + 1
-                        ));
-                    }
-                } else {
-                    out.push_str(&format!(
-                        "\n--- Range {}: missing start or end ---\n",
-                        i + 1
-                    ));
-                }
-            }
-        }
-        return Ok(out.trim_end().to_string());
-    }
 
-    if let Some(query) = args.get("search").and_then(|s| s.as_str()) {
-        let needle = query.to_lowercase();
-        let hit_indices: Vec<usize> = lines
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.to_lowercase().contains(&needle))
-            .map(|(i, _)| i)
-            .collect();
-        if hit_indices.is_empty() {
-            return Ok(format!("{path} ({total} lines): no matches for '{query}'"));
-        }
-        let shown = hit_indices.len().min(MAX_SEARCH_HITS);
-        let mut out = format!(
-            "{path} ({total} lines): {} match(es) for '{query}'",
-            hit_indices.len()
-        );
-        if hit_indices.len() > shown {
-            out.push_str(&format!(", showing first {shown}"));
-        }
-        out.push('\n');
 
-        let mut printed_up_to = 0usize;
-        for &idx in &hit_indices[..shown] {
-            let end = (idx + SEARCH_CONTEXT_LINES).min(total - 1);
-            for i in idx..=end {
-                if i + 1 > printed_up_to {
-                    out.push_str(&format!("{}: {}\n", i + 1, truncate_line(lines[i])));
-                    printed_up_to = i + 1;
-                }
-            }
-        }
-        return Ok(out.trim_end().to_string());
-    }
 
-    let start = args
-        .get("start_line")
-        .and_then(parse_json_number)
-        .unwrap_or(1)
-        .max(1) as usize;
-    if start > total {
-        return Ok(format!("{path} has only {total} lines (asked for {start})"));
-    }
-    let end = (start + MAX_READ_LINES - 1).min(total);
-    let mut out = format!("{path}: lines {start}-{end} of {total}\n");
-    for (i, line) in lines[start - 1..end].iter().enumerate() {
-        out.push_str(&format!("{}: {}\n", start + i, truncate_line(line)));
-    }
-    if end < total {
-        out.push_str(&format!(
-            "(truncated - call read_file again with \"start_line\": {} for more)",
-            end + 1
-        ));
-    }
-    Ok(out)
-}
 
-fn create_file(args: &Value) -> Result<String, String> {
-    let path = args
-        .get("path")
-        .and_then(|p| p.as_str())
-        .ok_or("missing 'path' argument")?;
-    let content = args
-        .get("content")
-        .and_then(|c| c.as_str())
-        .ok_or("missing 'content' argument")?;
 
-    let resolved_path = resolve_tool_path(path);
-    if resolved_path.exists() {
-        return Err(format!(
-            "'{path}' already exists — use write_file to overwrite it"
-        ));
-    }
 
-    if let Some(parent) = resolved_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
-    }
-    std::fs::write(&resolved_path, content).map_err(|e| format!("cannot create '{path}': {e}"))?;
-    let lines = content.lines().count().max(1);
-    Ok(format!(
-        "created '{path}' ({lines} lines, {} bytes)",
-        content.len()
-    ))
-}
-
-fn write_file(args: &Value) -> Result<String, String> {
-    let path = args
-        .get("path")
-        .and_then(|p| p.as_str())
-        .ok_or("missing 'path' argument")?;
-    let content = args
-        .get("content")
-        .and_then(|c| c.as_str())
-        .ok_or("missing 'content' argument")?;
-
-    let resolved_path = resolve_tool_path(path);
-    if !resolved_path.exists() {
-        return Err(format!(
-            "'{path}' does not exist — use create_file for new files"
-        ));
-    }
-    if resolved_path.is_dir() {
-        return Err(format!("'{path}' is a directory, not a file"));
-    }
-    std::fs::write(&resolved_path, content).map_err(|e| format!("cannot write '{path}': {e}"))?;
-    let lines = content.lines().count().max(1);
-    Ok(format!(
-        "wrote '{path}' ({lines} lines, {} bytes)",
-        content.len()
-    ))
-}
-
-fn find_partial_match_error(content: &str, old_string: &str) -> String {
-    let old_lines: Vec<&str> = old_string.lines().collect();
-    let first_line = old_lines.iter().find(|l| !l.trim().is_empty());
-    if let Some(first) = first_line {
-        let escaped = regex::escape(first);
-        let parts: Vec<&str> = escaped.split_whitespace().collect();
-        if !parts.is_empty() {
-            let pattern = parts.join(r"\s+");
-            if let Ok(re) = Regex::new(&pattern) {
-                if let Some(m) = re.find(content) {
-                    let char_idx = m.start();
-                    let line_number =
-                        content[..char_idx].chars().filter(|&c| c == '\n').count() + 1;
-
-                    let file_lines: Vec<&str> = content.lines().collect();
-                    let start_idx = line_number.saturating_sub(1);
-                    let end_idx = (start_idx + old_lines.len()).min(file_lines.len());
-                    let actual_context = file_lines[start_idx..end_idx].join("\n");
-
-                    return format!(
-                        "error: 'old_string' not found in file. However, a partial match for the first line was found at line {line_number}.\n\n\
-                        Your 'old_string' was:\n\
-                        {old_string}\n\n\
-                        The file content starting at line {line_number} is:\n\
-                        {actual_context}\n\n\
-                        Please check for whitespace, indentation, or character differences."
-                    );
-                }
-            }
-        }
-    }
-
-    "error: 'old_string' not found in file. Make sure it matches the file exactly (whitespace, indentation, quotes). Use read_file to check the exact text.".to_string()
-}
 
 /// Normalizes text by trimming trailing whitespace from each line.
-fn normalize_text(text: &str) -> String {
-    text.lines()
-        .map(|l| l.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+
 
 /// Finds the byte range of all matches of a block of text in content using indentation-insensitive matching.
-fn find_block_ranges(content: &str, search_block: &str) -> Vec<std::ops::Range<usize>> {
-    let search_lines: Vec<&str> = search_block.lines().collect();
-    if search_lines.is_empty() {
-        return Vec::new();
-    }
 
-    let mut line_starts = Vec::new();
-    let mut last_pos = 0;
-    for (i, c) in content.char_indices() {
-        if c == '\n' {
-            line_starts.push(last_pos);
-            last_pos = i + 1;
-        }
-    }
-    line_starts.push(last_pos);
 
-    let file_lines: Vec<&str> = content.lines().collect();
-    let mut matches = Vec::new();
 
-    for i in 0..=file_lines.len().saturating_sub(search_lines.len()) {
-        if file_lines[i].trim_end() != search_lines[0].trim_end() {
-            continue;
-        }
-
-        let f0_indent = file_lines[i].len() - file_lines[i].trim_start().len();
-        let s0_indent = search_lines[0].len() - search_lines[0].trim_start().len();
-        let delta = (f0_indent as isize) - (s0_indent as isize);
-
-        let mut match_found = true;
-        for j in 1..search_lines.len() {
-            if i + j >= file_lines.len()
-                || file_lines[i + j].trim_end() != search_lines[j].trim_end()
-            {
-                match_found = false;
-                break;
-            }
-
-            let fj_indent = file_lines[i + j].len() - file_lines[i + j].trim_start().len();
-            let sj_indent = search_lines[j].len() - search_lines[j].trim_start().len();
-            if (fj_indent as isize) - (sj_indent as isize) != delta {
-                match_found = false;
-                break;
-            }
-        }
-
-        if match_found {
-            let start = line_starts[i];
-            let last_line_idx = i + search_lines.len() - 1;
-            let end = line_starts[last_line_idx] + file_lines[last_line_idx].len();
-            matches.push(start..end);
-        }
-    }
-    matches
-}
-
-fn edit(args: &Value) -> Result<String, String> {
-    let path = args
-        .get("path")
-        .and_then(|p| p.as_str())
-        .ok_or("missing 'path' argument")?;
-    let search_block = args
-        .get("search_block")
-        .or_else(|| args.get("old_string"))
-        .and_then(|s| s.as_str())
-        .ok_or("missing 'search_block' or 'old_string' argument")?;
-    let replace_block = args
-        .get("replace_block")
-        .or_else(|| args.get("new_string"))
-        .and_then(|s| s.as_str())
-        .ok_or("missing 'replace_block' or 'new_string' argument")?;
-    let replace_all = args
-        .get("replace_all")
-        .and_then(parse_json_bool)
-        .unwrap_or(false);
-    let start_line = args
-        .get("start_line")
-        .and_then(parse_json_number)
-        .map(|v| v as usize);
-    let end_line = args
-        .get("end_line")
-        .and_then(parse_json_number)
-        .map(|v| v as usize);
-
-    if search_block.is_empty() {
-        return Err("search_block must not be empty".to_string());
-    }
-    if search_block == replace_block {
-        return Err("search_block and replace_block are identical — nothing to do".to_string());
-    }
-
-    let resolved_path = resolve_tool_path(path);
-    if !resolved_path.exists() {
-        return Err(format!("'{path}' does not exist"));
-    }
-    if resolved_path.is_dir() {
-        return Err(format!("'{path}' is a directory, not a file"));
-    }
-    let content = std::fs::read_to_string(&resolved_path)
-        .map_err(|e| format!("cannot read '{path}': {e}"))?;
-
-    let mut matches = find_block_ranges(&content, search_block);
-
-    if matches.is_empty() {
-        if let (Some(s), Some(e)) = (start_line, end_line) {
-            let file_lines: Vec<&str> = content.lines().collect();
-            if s >= 1 && e >= s && s <= file_lines.len() {
-                // Sanity check: does the trimmed content match search_block?
-                let actual_content = file_lines[s - 1..e.min(file_lines.len())].join("\n");
-                if normalize_text(&actual_content) == normalize_text(search_block) {
-                    // Calculate byte range for these lines
-                    let mut line_starts = Vec::new();
-                    let mut last_pos = 0;
-                    for c in content.chars() {
-                        if c == '\n' {
-                            line_starts.push(last_pos);
-                            last_pos += 1;
-                        } else {
-                            last_pos += c.len_utf8();
-                        }
-                    }
-                    line_starts.push(last_pos);
-
-                    let start_byte = line_starts[s - 1];
-                    let end_byte = if e < line_starts.len() {
-                        line_starts[e]
-                    } else {
-                        content.len()
-                    };
-                    matches.push(start_byte..end_byte);
-                }
-            }
-        }
-    }
-
-    // 3. Fallback to substring matching and regex whitespace-insensitive matching (for backwards compatibility & replace_all)
-    if matches.is_empty() {
-        // Try exact matches first
-        matches = content
-            .match_indices(search_block)
-            .map(|(idx, s)| idx..idx + s.len())
-            .collect();
-
-        // If no exact matches, try whitespace-insensitive regex matching
-        if matches.is_empty() {
-            let escaped = regex::escape(search_block);
-            let parts: Vec<&str> = escaped.split_whitespace().collect();
-            if !parts.is_empty() {
-                let pattern = parts.join(r"\s+");
-                if let Ok(re) = Regex::new(&pattern) {
-                    matches = re.find_iter(&content).map(|m| m.range()).collect();
-                }
-            }
-        }
-    }
-
-    if matches.is_empty() {
-        return Err(find_partial_match_error(&content, search_block));
-    }
-
-    if matches.len() > 1 && !replace_all {
-        return Err(format!(
-            "'old_string' appears {} times in '{path}'. Add more surrounding context to make it unique, or set \"replace_all\": true.",
-            matches.len()
-        ));
-    }
-
-    let mut new_content = content.clone();
-    for m in matches.iter().rev() {
-        new_content.replace_range(m.clone(), replace_block);
-    }
-
-    std::fs::write(&resolved_path, &new_content)
-        .map_err(|e| format!("cannot write '{path}': {e}"))?;
-
-    // Async auto-format: run 'cargo fmt' in background without blocking the response
-    let path_clone = resolved_path.to_string_lossy().to_string();
-    std::thread::spawn(move || {
-        let _ = std::process::Command::new("cargo")
-            .args(["fmt", "--", &path_clone])
-            .output();
-    });
-
-    let changed = matches.len();
-    Ok(format!(
-        "edited '{path}' ({} replacement{}, {} -> {} bytes)",
-        changed,
-        if changed == 1 { "" } else { "s" },
-        content.len(),
-        new_content.len()
-    ))
-}
 
 fn search_web(args: &Value) -> Result<String, String> {
     let query = args
@@ -1990,11 +1564,11 @@ mod tests {
     #[test]
     fn test_parse_tool_calls_multiple() {
         let text = "<tool_call>{\"name\": \"get_time\", \"arguments\": {}}</tool_call>\n\
-                    <tool_call>{\"name\": \"read_file\", \"arguments\": {\"path\": \"main.rs\"}}</tool_call>";
+                    <tool_call>{\"name\": \"view_file\", \"arguments\": {\"path\": \"main.rs\"}}</tool_call>";
         let calls = parse_tool_calls(text);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, "get_time");
-        assert_eq!(calls[1].0, "read_file");
+        assert_eq!(calls[1].0, "view_file");
         assert_eq!(calls[1].1.get("path").unwrap().as_str().unwrap(), "main.rs");
     }
 
@@ -2025,9 +1599,9 @@ mod tests {
 
     #[test]
     fn test_parse_tool_call_fallbacks() {
-        let text = "<think>some thought</think>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"README.md\"}}";
+        let text = "<think>some thought</think>\n{\"name\": \"view_file\", \"arguments\": {\"path\": \"README.md\"}}";
         let (name, args) = parse_tool_call(text).unwrap();
-        assert_eq!(name, "read_file");
+        assert_eq!(name, "view_file");
         assert_eq!(args.get("path").unwrap().as_str().unwrap(), "README.md");
 
         let text = "Use this tool:\n```json\n{\"name\": \"delete_file\", \"arguments\": {\"path\": \"/tmp/test\"}}\n```";
@@ -2050,20 +1624,20 @@ mod tests {
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].0, "get_time");
 
-        let text = "First: {\"name\": \"get_time\", \"arguments\": {}} and second: {\"name\": \"read_file\", \"arguments\": {\"path\": \"x\"}}";
+        let text = "First: {\"name\": \"get_time\", \"arguments\": {}} and second: {\"name\": \"view_file\", \"arguments\": {\"path\": \"x\"}}";
         let res = parse_tool_calls(text);
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].0, "get_time");
-        assert_eq!(res[1].0, "read_file");
+        assert_eq!(res[1].0, "view_file");
         assert_eq!(res[1].1.get("path").unwrap().as_str().unwrap(), "x");
     }
 
     #[test]
     fn test_parse_tool_call_pseudo_xml() {
-        let text = "```tool<arg_key>name</arg_key><arg_value>read_file</arg_value><arg_key>path</arg_key><arg_value>src/main.rs</arg_value>```";
+        let text = "```tool<arg_key>name</arg_key><arg_value>view_file</arg_value><arg_key>path</arg_key><arg_value>src/main.rs</arg_value>```";
         let res = parse_tool_calls(text);
         assert_eq!(res.len(), 1);
-        assert_eq!(res[0].0, "read_file");
+        assert_eq!(res[0].0, "view_file");
         assert_eq!(
             res[0].1.get("path").unwrap().as_str().unwrap(),
             "src/main.rs"
@@ -2107,57 +1681,7 @@ mod tests {
         assert!(out.contains("unknown tool"));
     }
 
-    fn temp_file(name: &str, lines: usize) -> std::path::PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("rustcode-tool-{name}-{}", std::process::id()));
-        let body: String = (1..=lines).map(|i| format!("line number {i}\n")).collect();
-        std::fs::write(&path, body).unwrap();
-        path
-    }
 
-    #[test]
-    fn test_read_file_chunks_and_paginates() {
-        let path = temp_file("page", 100);
-        let out = execute("read_file", &serde_json::json!({"path": path}));
-        assert!(out.contains("lines 1-40 of 100"));
-        assert!(out.contains("start_line"));
-        assert!(!out.contains("line number 41"));
-
-        let out = execute(
-            "read_file",
-            &serde_json::json!({"path": path, "start_line": 90}),
-        );
-        assert!(out.contains("lines 90-100 of 100"));
-        assert!(!out.contains("truncated"));
-    }
-
-    #[test]
-    fn test_read_file_search() {
-        let path = temp_file("search", 100);
-        let out = execute(
-            "read_file",
-            &serde_json::json!({"path": path, "search": "number 42"}),
-        );
-        assert!(out.contains("1 match(es)"));
-        assert!(out.contains("42: line number 42"));
-
-        let out = execute(
-            "read_file",
-            &serde_json::json!({"path": path, "search": "zzz"}),
-        );
-        assert!(out.contains("no matches"));
-    }
-
-    #[test]
-    fn test_read_file_missing_args() {
-        let out = execute("read_file", &serde_json::json!({}));
-        assert!(out.contains("missing 'path'"));
-        let out = execute(
-            "read_file",
-            &serde_json::json!({"path": "/nope/nothing.txt"}),
-        );
-        assert!(out.contains("cannot read"));
-    }
 
     #[test]
     fn test_system_prompt_lists_tools() {
@@ -2184,71 +1708,7 @@ mod tests {
         assert!(!is_agent_tool("run_command"));
     }
 
-    #[test]
-    fn test_create_file_basic() {
-        let dir = std::env::temp_dir().join(format!("rustcode-create-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = dir.join("sub").join("hello.txt");
-        let out = execute(
-            "create_file",
-            &serde_json::json!({"path": path.to_str().unwrap(), "content": "hello world\n"}),
-        );
-        assert!(out.contains("created"), "got: {out}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world\n");
 
-        let out = execute(
-            "create_file",
-            &serde_json::json!({"path": path.to_str().unwrap(), "content": "nope"}),
-        );
-        assert!(out.contains("already exists"), "got: {out}");
-        assert!(out.contains("write_file"), "cross-tool hint missing: {out}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_write_file_basic() {
-        let path = std::env::temp_dir().join(format!("rustcode-write-{}", std::process::id()));
-        std::fs::write(&path, "old content").unwrap();
-        let out = execute(
-            "write_file",
-            &serde_json::json!({"path": path.to_str().unwrap(), "content": "new content\nline 2\n"}),
-        );
-        assert!(out.contains("wrote"), "got: {out}");
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "new content\nline 2\n"
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn test_write_file_nonexistent() {
-        let out = execute(
-            "write_file",
-            &serde_json::json!({"path": "/tmp/rustcode-nope-12345.txt", "content": "x"}),
-        );
-        assert!(out.contains("does not exist"), "got: {out}");
-        assert!(
-            out.contains("create_file"),
-            "cross-tool hint missing: {out}"
-        );
-    }
-
-    #[test]
-    fn test_create_file_missing_args() {
-        let out = execute("create_file", &serde_json::json!({}));
-        assert!(out.contains("missing 'path'"));
-        let out = execute("create_file", &serde_json::json!({"path": "/tmp/x"}));
-        assert!(out.contains("missing 'content'"));
-    }
-
-    #[test]
-    fn test_write_file_missing_args() {
-        let out = execute("write_file", &serde_json::json!({}));
-        assert!(out.contains("missing 'path'"));
-        let out = execute("write_file", &serde_json::json!({"path": "/tmp/x"}));
-        assert!(out.contains("missing 'content'"));
-    }
 
     #[test]
     fn test_view_file_slicing() {
@@ -2543,165 +2003,6 @@ mod tests {
         assert!(out.contains("errmsg"), "got: {out}");
     }
 
-    fn edit_fixture(content: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rustcode-edit-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("target.txt");
-        std::fs::write(&path, content).unwrap();
-        path
-    }
-
-    #[test]
-    fn test_edit_unique_replace() {
-        let path = edit_fixture("line one\nline two\nline three\n");
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "line two",
-                "new_string": "LINE TWO"
-            }),
-        );
-        assert!(out.contains("edited"), "got: {out}");
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "line one\nLINE TWO\nline three\n"
-        );
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_edit_not_found() {
-        let path = edit_fixture("hello\n");
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "does not exist",
-                "new_string": "x"
-            }),
-        );
-        assert!(
-            out.starts_with("error:") && out.contains("not found"),
-            "got: {out}"
-        );
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_edit_whitespace_insensitive() {
-        let path = edit_fixture("fn  hello()   {\n\tprintln!(\"hi\");\n}\n");
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "fn hello() {\n    println!(\"hi\");\n}",
-                "new_string": "fn hello() { println!(\"hello\"); }"
-            }),
-        );
-        assert!(out.contains("edited"), "got: {out}");
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "fn hello() { println!(\"hello\"); }\n"
-        );
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_edit_partial_match_diagnostic() {
-        let path = edit_fixture("fn hello() {\n    println!(\"hi\");\n}\n");
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "fn hello() {\n    println!(\"wrong\");\n}",
-                "new_string": "x"
-            }),
-        );
-        assert!(out.starts_with("error:"), "got: {out}");
-        assert!(out.contains("partial match"), "got: {out}");
-        assert!(out.contains("line 1"), "got: {out}");
-        assert!(out.contains("println!(\"hi\");"), "got: {out}");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_edit_multiple_requires_replace_all() {
-        let path = edit_fixture("dup\ndup\ndup\n");
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "dup",
-                "new_string": "x"
-            }),
-        );
-        assert!(
-            out.starts_with("error:") && out.contains("3 times"),
-            "got: {out}"
-        );
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_edit_replace_all() {
-        let path = edit_fixture("dup\ndup\ndup\n");
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "dup",
-                "new_string": "x",
-                "replace_all": true
-            }),
-        );
-        assert!(out.contains("3 replacements"), "got: {out}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "x\nx\nx\n");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_edit_identical_strings() {
-        let path = edit_fixture("hello\n");
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": path.to_str().unwrap(),
-                "old_string": "hello",
-                "new_string": "hello"
-            }),
-        );
-        assert!(
-            out.starts_with("error:") && out.contains("identical"),
-            "got: {out}"
-        );
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_edit_missing_file() {
-        let out = execute(
-            "edit",
-            &serde_json::json!({
-                "path": "/tmp/rustcode-nope-edit-12345.txt",
-                "old_string": "a",
-                "new_string": "b"
-            }),
-        );
-        assert!(
-            out.starts_with("error:") && out.contains("does not exist"),
-            "got: {out}"
-        );
-    }
-
     #[test]
     fn test_list_directory_cap() {
         let dir = std::env::temp_dir().join(format!(
@@ -2729,10 +2030,10 @@ mod tests {
     fn test_needs_confirmation() {
         assert!(!needs_confirmation("get_time"));
         assert!(!needs_confirmation("list_directory"));
-        assert!(!needs_confirmation("read_file"));
-        assert!(needs_confirmation("create_file"));
-        assert!(needs_confirmation("write_file"));
-        assert!(needs_confirmation("edit"));
+        assert!(!needs_confirmation("view_file"));
+        assert!(needs_confirmation("write_to_file"));
+        assert!(needs_confirmation("replace_file_content"));
+        assert!(needs_confirmation("multi_replace_file_content"));
         assert!(needs_confirmation("delete_file"));
         assert!(needs_confirmation("move_file"));
         assert!(needs_confirmation("copy_file"));
