@@ -282,6 +282,48 @@ pub const TOOLS: &[Tool] = &[
         handler: get_project_map_tool,
         requires_confirmation: false,
     },
+    Tool {
+        name: "view_file",
+        description: "View the contents of a file. Supports line ranges (1-indexed) and optional byte offset if content is truncated.",
+        arguments: "{\"path\": \"absolute or relative path to file\", \
+                     \"start_line\": \"optional start line number, 1-indexed (default 1)\", \
+                     \"end_line\": \"optional end line number, 1-indexed (default start_line + 500)\", \
+                     \"content_offset\": \"optional byte offset into content\"}",
+        handler: view_file_tool,
+        requires_confirmation: false,
+    },
+    Tool {
+        name: "replace_file_content",
+        description: "Surgically edit a contiguous block of text in an existing file. \
+                      Requires specifying the line boundaries, the exact target content, \
+                      and the replacement content.",
+        arguments: "{\"path\": \"absolute or relative path to file\", \
+                     \"start_line\": \"1-indexed start line containing target content\", \
+                     \"end_line\": \"1-indexed end line containing target content\", \
+                     \"target_content\": \"precise block of code to edit (must match file exactly)\", \
+                     \"replacement_content\": \"complete replacement text for that block\"}",
+        handler: replace_file_content_tool,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "multi_replace_file_content",
+        description: "Apply multiple non-contiguous edits across a single file in a single tool call. \
+                      Specify each edit as a separate replacement chunk.",
+        arguments: "{\"path\": \"absolute or relative path to file\", \
+                     \"replacements\": \"array of objects, each containing: {start_line, end_line, target_content, replacement_content}\"}",
+        handler: multi_replace_file_content_tool,
+        requires_confirmation: true,
+    },
+    Tool {
+        name: "write_to_file",
+        description: "Create a new file or overwrite an existing file with complete content. \
+                      Creates parent directories automatically.",
+        arguments: "{\"path\": \"absolute or relative path to file\", \
+                     \"content\": \"entire contents to write\", \
+                     \"overwrite\": \"set true to allow overwriting an existing file (default false)\"}",
+        handler: write_to_file_tool,
+        requires_confirmation: true,
+    },
 ];
 
 pub const MAX_TOOL_ROUNDS: usize = 60;
@@ -2209,6 +2251,177 @@ mod tests {
     }
 
     #[test]
+    fn test_view_file_slicing() {
+        let path = std::env::temp_dir().join(format!("rustcode-view-{}", std::process::id()));
+        std::fs::write(&path, "line 1\nline 2\nline 3\nline 4\nline 5\n").unwrap();
+
+        let out = execute(
+            "view_file",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "start_line": 2,
+                "end_line": 4
+            }),
+        );
+        assert!(out.contains("Lines 2 to 4 of 5"), "got: {out}");
+        assert!(out.contains("2: line 2"), "got: {out}");
+        assert!(out.contains("3: line 3"), "got: {out}");
+        assert!(out.contains("4: line 4"), "got: {out}");
+        assert!(!out.contains("1: line 1"), "got: {out}");
+        assert!(!out.contains("5: line 5"), "got: {out}");
+
+        let out_offset = execute(
+            "view_file",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "start_line": 1,
+                "end_line": 2,
+                "content_offset": 7
+            }),
+        );
+        assert!(out_offset.contains("1: line 2"), "got: {out_offset}");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_replace_file_content_matching() {
+        let path = std::env::temp_dir().join(format!("rustcode-replace-{}", std::process::id()));
+        std::fs::write(&path, "line 1\nline 2\nline 3\nline 4\n").unwrap();
+
+        let out = execute(
+            "replace_file_content",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "start_line": 2,
+                "end_line": 3,
+                "target_content": "line 2\nline 3",
+                "replacement_content": "line 2_new\nline 3_new"
+            }),
+        );
+        assert!(out.contains("successfully replaced"), "got: {out}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "line 1\nline 2_new\nline 3_new\nline 4\n"
+        );
+
+        let out_fail = execute(
+            "replace_file_content",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "start_line": 2,
+                "end_line": 3,
+                "target_content": "wrong content",
+                "replacement_content": "whatever"
+            }),
+        );
+        assert!(out_fail.contains("error: Discrepancy"), "got: {out_fail}");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_multi_replace_file_descending_order() {
+        let path = std::env::temp_dir().join(format!("rustcode-multi-{}", std::process::id()));
+        std::fs::write(&path, "line 1\nline 2\nline 3\nline 4\n").unwrap();
+
+        let out = execute(
+            "multi_replace_file_content",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "replacements": [
+                    {
+                        "start_line": 2,
+                        "end_line": 2,
+                        "target_content": "line 2",
+                        "replacement_content": "line 2_new"
+                    },
+                    {
+                        "start_line": 4,
+                        "end_line": 4,
+                        "target_content": "line 4",
+                        "replacement_content": "line 4_new"
+                    }
+                ]
+            }),
+        );
+        assert!(
+            out.contains("successfully applied 2 replacements"),
+            "got: {out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "line 1\nline 2_new\nline 3\nline 4_new\n"
+        );
+
+        let out_overlap = execute(
+            "multi_replace_file_content",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "replacements": [
+                    {
+                        "start_line": 2,
+                        "end_line": 3,
+                        "target_content": "line 2_new\nline 3",
+                        "replacement_content": "x"
+                    },
+                    {
+                        "start_line": 3,
+                        "end_line": 4,
+                        "target_content": "line 3\nline 4_new",
+                        "replacement_content": "y"
+                    }
+                ]
+            }),
+        );
+        assert!(
+            out_overlap.contains("overlapping replacement ranges"),
+            "got: {out_overlap}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_write_to_file_overwrite_prevention() {
+        let path = std::env::temp_dir().join(format!("rustcode-write-to-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let out = execute(
+            "write_to_file",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "content": "hello"
+            }),
+        );
+        assert!(out.contains("wrote"), "got: {out}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+
+        let out_fail = execute(
+            "write_to_file",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "content": "new",
+                "overwrite": false
+            }),
+        );
+        assert!(out_fail.contains("already exists"), "got: {out_fail}");
+
+        let out_overwrite = execute(
+            "write_to_file",
+            &serde_json::json!({
+                "path": path.to_str().unwrap(),
+                "content": "new",
+                "overwrite": true
+            }),
+        );
+        assert!(out_overwrite.contains("wrote"), "got: {out_overwrite}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn test_delete_file() {
         let path = std::env::temp_dir().join(format!("rustcode-delete-{}", std::process::id()));
         std::fs::write(&path, "temp content").unwrap();
@@ -2735,4 +2948,298 @@ fn check_match(args: &serde_json::Value) -> Result<String, String> {
     }
 
     Ok(output)
+}
+
+struct ReplacementChunk {
+    start_line: usize,
+    end_line: usize,
+    target_content: String,
+    replacement_content: String,
+}
+
+fn view_file_tool(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let resolved_path = resolve_tool_path(path);
+    let start_line = args
+        .get("start_line")
+        .and_then(parse_json_number)
+        .map(|v| v as usize)
+        .unwrap_or(1);
+    let end_line = args
+        .get("end_line")
+        .and_then(parse_json_number)
+        .map(|v| v as usize)
+        .unwrap_or(start_line + 500);
+
+    let content_bytes =
+        std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+
+    let byte_offset = args
+        .get("content_offset")
+        .and_then(parse_json_number)
+        .map(|v| v as usize)
+        .unwrap_or(0);
+
+    if byte_offset >= content_bytes.len() && !content_bytes.is_empty() {
+        return Err(format!(
+            "content_offset {} exceeds file size {}",
+            byte_offset,
+            content_bytes.len()
+        ));
+    }
+
+    let sliced_content = String::from_utf8_lossy(&content_bytes[byte_offset..]);
+    let lines: Vec<&str> = sliced_content.lines().collect();
+    let total = lines.len();
+
+    if total == 0 {
+        return Ok(format!(
+            "[File: {}, Empty file, Bytes offset: {}]",
+            path, byte_offset
+        ));
+    }
+
+    if start_line < 1 || start_line > total {
+        return Err(format!(
+            "start_line {} is out of bounds (1 to {})",
+            start_line, total
+        ));
+    }
+
+    let actual_end = end_line.min(total);
+    let mut out = format!(
+        "[File: {}, Lines {} to {} of {}, Bytes offset: {}]\n",
+        path, start_line, actual_end, total, byte_offset
+    );
+
+    for (idx, line) in lines[start_line - 1..actual_end].iter().enumerate() {
+        out.push_str(&format!("{}: {}\n", start_line + idx, line));
+    }
+
+    if actual_end < total {
+        out.push_str("... content truncated (use end_line or content_offset to read more) ...\n");
+    }
+
+    Ok(out)
+}
+
+fn replace_file_content_tool(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let start_line = args
+        .get("start_line")
+        .and_then(parse_json_number)
+        .map(|v| v as usize)
+        .ok_or("missing 'start_line' argument")?;
+    let end_line = args
+        .get("end_line")
+        .and_then(parse_json_number)
+        .map(|v| v as usize)
+        .ok_or("missing 'end_line' argument")?;
+    let target_content = args
+        .get("target_content")
+        .and_then(|t| t.as_str())
+        .ok_or("missing 'target_content' argument")?;
+    let replacement_content = args
+        .get("replacement_content")
+        .and_then(|r| r.as_str())
+        .ok_or("missing 'replacement_content' argument")?;
+
+    let resolved_path = resolve_tool_path(path);
+    let content = std::fs::read_to_string(&resolved_path)
+        .map_err(|e| format!("cannot read '{path}': {e}"))?;
+
+    let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+    let total = file_lines.len();
+
+    if start_line < 1 || start_line > total || end_line < start_line || end_line > total {
+        return Err(format!(
+            "line range {start_line}-{end_line} is out of bounds (1-{total})"
+        ));
+    }
+
+    let segment = file_lines[start_line - 1..end_line].join("\n");
+    if segment.trim_end() != target_content.trim_end() {
+        let mut mismatch = format!(
+            "Discrepancy: target_content does not match file contents at {start_line}-{end_line}.\n"
+        );
+        mismatch.push_str("=== Expected (target_content) ===\n");
+        mismatch.push_str(target_content);
+        mismatch.push_str("\n=== Found in File ===\n");
+        mismatch.push_str(&segment);
+        mismatch.push_str("\n======================\n");
+        return Err(mismatch);
+    }
+
+    let has_trailing_newline = content.ends_with('\n');
+    let mut new_lines = Vec::new();
+    new_lines.extend_from_slice(&file_lines[..start_line - 1]);
+    new_lines.push(replacement_content.to_string());
+    new_lines.extend_from_slice(&file_lines[end_line..]);
+
+    let mut new_content = new_lines.join("\n");
+    if has_trailing_newline && !new_content.is_empty() {
+        new_content.push('\n');
+    }
+    std::fs::write(&resolved_path, &new_content)
+        .map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+    Ok(format!(
+        "successfully replaced lines {start_line}-{end_line} in '{path}'"
+    ))
+}
+
+fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let replacements_val = args
+        .get("replacements")
+        .and_then(|r| r.as_array())
+        .ok_or("missing 'replacements' array")?;
+
+    let resolved_path = resolve_tool_path(path);
+    let content = std::fs::read_to_string(&resolved_path)
+        .map_err(|e| format!("cannot read '{path}': {e}"))?;
+
+    let mut file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    let mut chunks = Vec::new();
+    for (i, r_val) in replacements_val.iter().enumerate() {
+        let obj = r_val
+            .as_object()
+            .ok_or(format!("replacement at index {i} is not an object"))?;
+        let start_line = obj
+            .get("start_line")
+            .and_then(parse_json_number)
+            .map(|v| v as usize)
+            .ok_or(format!("replacement index {i} missing 'start_line'"))?;
+        let end_line = obj
+            .get("end_line")
+            .and_then(parse_json_number)
+            .map(|v| v as usize)
+            .ok_or(format!("replacement index {i} missing 'end_line'"))?;
+        let target_content = obj
+            .get("target_content")
+            .and_then(|t| t.as_str())
+            .ok_or(format!("replacement index {i} missing 'target_content'"))?;
+        let replacement_content = obj
+            .get("replacement_content")
+            .and_then(|r| r.as_str())
+            .ok_or(format!(
+                "replacement index {i} missing 'replacement_content'"
+            ))?;
+        chunks.push(ReplacementChunk {
+            start_line,
+            end_line,
+            target_content: target_content.to_string(),
+            replacement_content: replacement_content.to_string(),
+        });
+    }
+
+    chunks.sort_by(|a, b| b.start_line.cmp(&a.start_line));
+
+    // Verify all ranges are disjoint
+    for idx in 0..chunks.len().saturating_sub(1) {
+        if chunks[idx].start_line <= chunks[idx + 1].end_line {
+            return Err(format!(
+                "overlapping replacement ranges: range {}-{} overlaps with range {}-{}",
+                chunks[idx + 1].start_line,
+                chunks[idx + 1].end_line,
+                chunks[idx].start_line,
+                chunks[idx].end_line
+            ));
+        }
+    }
+
+    // Validate matching target contents
+    for (i, chunk) in chunks.iter().enumerate() {
+        let total = file_lines.len();
+        if chunk.start_line < 1
+            || chunk.start_line > total
+            || chunk.end_line < chunk.start_line
+            || chunk.end_line > total
+        {
+            return Err(format!(
+                "replacement index {i} range {}-{} is out of bounds (1-{})",
+                chunk.start_line, chunk.end_line, total
+            ));
+        }
+        let segment = file_lines[chunk.start_line - 1..chunk.end_line].join("\n");
+        if segment.trim_end() != chunk.target_content.trim_end() {
+            let mut mismatch = format!(
+                "Discrepancy at replacement index {i} (lines {}-{}), target_content does not match file.\n",
+                chunk.start_line, chunk.end_line
+            );
+            mismatch.push_str("=== Expected (target_content) ===\n");
+            mismatch.push_str(&chunk.target_content);
+            mismatch.push_str("\n=== Found in File ===\n");
+            mismatch.push_str(&segment);
+            mismatch.push_str("\n======================\n");
+            return Err(mismatch);
+        }
+    }
+
+    // Apply descending edits
+    for chunk in chunks {
+        let mut new_lines = Vec::new();
+        new_lines.extend_from_slice(&file_lines[..chunk.start_line - 1]);
+        new_lines.push(chunk.replacement_content);
+        new_lines.extend_from_slice(&file_lines[chunk.end_line..]);
+        file_lines = new_lines;
+    }
+
+    let has_trailing_newline = content.ends_with('\n');
+    let mut new_content = file_lines.join("\n");
+    if has_trailing_newline && !new_content.is_empty() {
+        new_content.push('\n');
+    }
+    std::fs::write(&resolved_path, &new_content)
+        .map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+    Ok(format!(
+        "successfully applied {} replacements to '{path}'",
+        replacements_val.len()
+    ))
+}
+
+fn write_to_file_tool(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+    let content = args
+        .get("content")
+        .and_then(|c| c.as_str())
+        .ok_or("missing 'content' argument")?;
+    let overwrite = args
+        .get("overwrite")
+        .and_then(|o| o.as_bool())
+        .unwrap_or(false);
+
+    let resolved_path = resolve_tool_path(path);
+    if resolved_path.exists() && !overwrite {
+        return Err(format!(
+            "'{path}' already exists — set 'overwrite' to true to allow overwriting"
+        ));
+    }
+
+    if let Some(parent) = resolved_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create directories for '{path}': {e}"))?;
+    }
+
+    std::fs::write(&resolved_path, content).map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+    let lines = content.lines().count().max(1);
+    Ok(format!(
+        "wrote '{path}' ({lines} lines, {} bytes)",
+        content.len()
+    ))
 }
