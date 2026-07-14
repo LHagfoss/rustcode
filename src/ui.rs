@@ -1880,8 +1880,30 @@ fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
         list_lines.push(line);
     }
 
-    // Scrollable widget viewport viewport
-    let scroll_y = selected_idx.saturating_sub(3) as u16;
+    // Scrollable widget viewport
+    let list_height = modal_chunks[4].height as usize;
+    // Find the actual line index in list_lines for the selected item (accounting for group headers)
+    let mut list_line_idx = 0;
+    let mut target_list_idx: usize = 0;
+    for (i, item) in filtered_items.iter().enumerate() {
+        if i == 0 || item.group != filtered_items[i - 1].group {
+            list_line_idx += 2; // blank line + group header
+        }
+        if i == selected_idx {
+            target_list_idx = list_line_idx;
+            break;
+        }
+        list_line_idx += 1;
+    }
+    let total_lines = list_lines.len();
+    let scroll_y: u16 = if total_lines <= list_height {
+        0
+    } else {
+        let ideal = target_list_idx.saturating_sub(list_height / 3);
+        let lo = target_list_idx.saturating_sub(list_height - 1).max(0);
+        let hi = target_list_idx.min(total_lines - list_height);
+        ideal.clamp(lo, hi)
+    } as u16;
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL));
@@ -1982,7 +2004,16 @@ fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
         list_lines.push(line);
     }
 
-    let scroll_y = selected_idx.saturating_sub(3) as u16;
+    let list_height = modal_chunks[2].height as usize;
+    let total_lines = list_lines.len();
+    let scroll_y: u16 = if total_lines <= list_height {
+        0
+    } else {
+        let ideal = selected_idx.saturating_sub(list_height / 3);
+        let lo = selected_idx.saturating_sub(list_height - 1).max(0);
+        let hi = selected_idx.min(total_lines - list_height);
+        ideal.clamp(lo, hi)
+    } as u16;
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL));
@@ -2238,14 +2269,79 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         shortcut: "/model",
     },
     PaletteItem {
+        group: "Agent",
+        name: "Set context window",
+        shortcut: "/context",
+    },
+    PaletteItem {
+        group: "Agent",
+        name: "Set parser/tool protocol",
+        shortcut: "/parser",
+    },
+    PaletteItem {
+        group: "Agent",
+        name: "Configure provider profile",
+        shortcut: "/provider",
+    },
+    PaletteItem {
+        group: "Agent",
+        name: "Configure Ollama models",
+        shortcut: "/ollama",
+    },
+    PaletteItem {
+        group: "Agent",
+        name: "Configure MCP servers",
+        shortcut: "/mcp",
+    },
+    PaletteItem {
+        group: "Session",
+        name: "Change session title",
+        shortcut: "/change_title",
+    },
+    PaletteItem {
+        group: "Session",
+        name: "Clear conversation",
+        shortcut: "/clear",
+    },
+    PaletteItem {
+        group: "Session",
+        name: "Cancel active stream",
+        shortcut: "/cancel",
+    },
+    PaletteItem {
         group: "System",
-        name: "Help",
+        name: "Show help",
         shortcut: "/help",
+    },
+    PaletteItem {
+        group: "System",
+        name: "Show token usage stats",
+        shortcut: "/stats",
+    },
+    PaletteItem {
+        group: "System",
+        name: "Show token usage (alias)",
+        shortcut: "/usage",
+    },
+    PaletteItem {
+        group: "System",
+        name: "Show RAM usage",
+        shortcut: "/memory",
+    },
+    PaletteItem {
+        group: "System",
+        name: "List available tools",
+        shortcut: "/tools",
     },
     PaletteItem {
         group: "System",
         name: "Exit the app",
         shortcut: "ctrl+c",
+    },
+    PaletteItem {
+        group: "System",
+        name: "Quit the app",
+        shortcut: "/quit",
     },
 ];
 
@@ -2372,7 +2468,29 @@ fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
         list_lines.push(line);
     }
 
-    let scroll_y = selected_idx.saturating_sub(4) as u16;
+    let list_height = modal_chunks[4].height as usize;
+    // Find the actual line index in list_lines for the selected item (accounting for group headers)
+    let mut list_line_idx = 0;
+    let mut target_list_idx: usize = 0;
+    for (i, item) in filtered_items.iter().enumerate() {
+        if i == 0 || item.group != filtered_items[i - 1].group {
+            list_line_idx += 2; // blank line + group header
+        }
+        if i == selected_idx {
+            target_list_idx = list_line_idx;
+            break;
+        }
+        list_line_idx += 1;
+    }
+    let total_lines = list_lines.len();
+    let scroll_y: u16 = if total_lines <= list_height {
+        0
+    } else {
+        let ideal = target_list_idx.saturating_sub(list_height / 3);
+        let lo = target_list_idx.saturating_sub(list_height - 1).max(0);
+        let hi = target_list_idx.min(total_lines - list_height);
+        ideal.clamp(lo, hi)
+    } as u16;
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL));

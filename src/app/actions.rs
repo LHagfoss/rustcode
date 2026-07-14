@@ -228,15 +228,8 @@ pub async fn handle_enter(
             }
             "/protocol" | "/parser" => {
                 if tokens.len() < 2 {
-                    let current = match s.config.tool_protocol {
-                        crate::config::ToolProtocol::Json => "json",
-                        crate::config::ToolProtocol::Xml => "xml",
-                    };
-                    let msg = format!(
-                        "Current tool protocol: {}\nUse `/protocol xml` or `/protocol json` to switch the parser and instructions.",
-                        current
-                    );
-                    s.history.push(ChatMessage::new("system", msg));
+                    let msg = "Current tool protocol: json\nThe only supported format is JSON. Use /tool to toggle between tool-calling and plain text mode.";
+                    s.history.push(ChatMessage::new("system", msg.to_string()));
                 } else {
                     let new_proto = tokens[1].to_lowercase();
                     match new_proto.as_str() {
@@ -245,22 +238,14 @@ pub async fn handle_enter(
                             crate::config::save_entire_config(&s.config);
                             s.history.push(ChatMessage::new(
                                 "system",
-                                "Switched tool protocol to JSON (using JSON system instructions and JSON parser).".to_string()
-                            ));
-                        }
-                        "xml" => {
-                            s.config.tool_protocol = crate::config::ToolProtocol::Xml;
-                            crate::config::save_entire_config(&s.config);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                "Switched tool protocol to XML (using XML system instructions and XML parser).".to_string()
+                                "Switched tool protocol to JSON.".to_string(),
                             ));
                         }
                         _ => {
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
-                                    "Unknown protocol '{}'. Supported values: json, xml",
+                                    "Unknown protocol '{}'. Only 'json' is supported.",
                                     tokens[1]
                                 ),
                             ));

@@ -28,7 +28,6 @@ pub struct ModelProfile {
 #[serde(rename_all = "lowercase")]
 pub enum ToolProtocol {
     Json,
-    Xml,
 }
 
 impl Default for ToolProtocol {
@@ -233,8 +232,32 @@ fn session_title(history: &[ChatMessage]) -> String {
 }
 
 fn session_meta_from(path: PathBuf, history: &[ChatMessage]) -> SessionMeta {
+    // Try to load custom title from session directory
+    let title = if let Some(session_dir) = path.parent().and_then(|p| p.parent()) {
+        if session_dir
+            .components()
+            .last()
+            .map(|c| c.as_os_str() == SESSIONS_DIR)
+            .unwrap_or(false)
+        {
+            if let Some(session_id) = session_dir.file_name() {
+                if let Some(custom) = load_session_title(session_id.to_str().unwrap_or("")) {
+                    Some(custom)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     SessionMeta {
-        title: session_title(history),
+        title: title.unwrap_or_else(|| session_title(history)),
         when: history
             .first()
             .map(|m| m.timestamp.clone())
@@ -266,6 +289,26 @@ pub fn save_session_history(session_id: &str, history: &[ChatMessage]) {
             let _ = fs::write(session_dir.join("history.json"), json_str);
         }
     }
+}
+
+/// Save a custom title for a session.
+pub fn save_session_title(session_id: &str, title: &str) {
+    if let Some(dir) = get_config_dir() {
+        let session_dir = dir.join(SESSIONS_DIR).join(session_id);
+        let _ = fs::create_dir_all(&session_dir);
+        let _ = fs::write(session_dir.join("title.txt"), title);
+    }
+}
+
+/// Load a custom title for a session. Returns None if no custom title exists.
+pub fn load_session_title(session_id: &str) -> Option<String> {
+    if let Some(dir) = get_config_dir() {
+        let path = dir.join(SESSIONS_DIR).join(session_id).join("title.txt");
+        if path.exists() {
+            return fs::read_to_string(path).ok().map(|s| s.trim().to_string());
+        }
+    }
+    None
 }
 
 pub fn load_session_history_direct(session_id: &str) -> Vec<ChatMessage> {
