@@ -266,10 +266,10 @@ fn format_tokens_info(state: &AppState) -> (String, String) {
     if state.status == AppStatus::Streaming {
         if let Some(ref tracker) = state.stream_tracker {
             let (tps, _) = tracker.snapshot();
-            return ("Tokens/s: ".to_string(), format!("{:.1}", tps));
+            return ("Tps: ".to_string(), format!("{:.1}", tps));
         }
     }
-    ("Tokens/s: ".to_string(), "0.0".to_string())
+    ("Tps: ".to_string(), "0.0".to_string())
 }
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
@@ -369,8 +369,8 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             ),
         ]
     } else {
-        let total_tokens = if let Some(usage) = &state.current_token_usage {
-            usage.total_tokens
+        let (total_tokens, cached_tokens) = if let Some(usage) = &state.current_token_usage {
+            (usage.total_tokens, usage.cached_tokens)
         } else {
             let last_usage = state
                 .history
@@ -378,10 +378,10 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 .rev()
                 .find_map(|m| m.token_usage.as_ref());
             if let Some(u) = last_usage {
-                u.total_tokens
+                (u.total_tokens, u.cached_tokens)
             } else {
                 let chars: usize = state.history.iter().map(|m| m.content.len()).sum();
-                (chars / 4) as u32
+                ((chars / 4) as u32, None)
             }
         };
 
@@ -389,6 +389,21 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             format!("{:.1}K", total_tokens as f32 / 1000.0)
         } else {
             format!("{}", total_tokens)
+        };
+
+        let cached_str = if let Some(cached) = cached_tokens {
+            if cached > 0 {
+                let cached_formatted = if cached >= 1000 {
+                    format!("{:.1}K", cached as f32 / 1000.0)
+                } else {
+                    format!("{}", cached)
+                };
+                format!(" ({} cached)", cached_formatted)
+            } else {
+                "".to_string()
+            }
+        } else {
+            "".to_string()
         };
 
         let window = state.active_context_window();
@@ -416,20 +431,24 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             ));
         }
 
-        right_spans.extend_from_slice(&[
-            Span::styled(
-                "   context used: ",
+        right_spans.push(Span::styled(
+            "   Context: ",
+            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        ));
+        right_spans.push(Span::styled(
+            token_str,
+            get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+        ));
+        if !cached_str.is_empty() {
+            right_spans.push(Span::styled(
+                cached_str,
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-            ),
-            Span::styled(
-                token_str,
-                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
-            ),
-            Span::styled(
-                format!(" ({:.0}%)", pct),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-            ),
-        ]);
+            ));
+        }
+        right_spans.push(Span::styled(
+            format!(" ({:.0}%)", pct),
+            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        ));
 
         right_spans.push(Span::styled("   ", Style::default()));
         right_spans.push(Span::styled(

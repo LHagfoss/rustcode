@@ -319,6 +319,7 @@ pub async fn handle_enter(
                     let url = tokens[2].to_string();
                     let model = tokens[3].to_string();
                     let context_window = tokens.get(4).and_then(|t| parse_token_count(t));
+                    let engine = tokens.get(5).map(|s| s.to_string());
 
                     s.api_base_url = url.clone();
                     s.model_name = model.clone();
@@ -329,12 +330,16 @@ pub async fn handle_enter(
                         if context_window.is_some() {
                             profile.context_window = context_window;
                         }
+                        if engine.is_some() {
+                            profile.engine = engine;
+                        }
                     } else {
                         s.config.models.push(crate::config::ModelProfile {
                             name: name.clone(),
                             url,
                             model,
                             context_window,
+                            engine,
                         });
                     }
                     s.config.default = name.clone();
@@ -473,6 +478,7 @@ pub async fn handle_enter(
                             url,
                             model,
                             context_window: None,
+                            engine: Some("ollama".to_string()),
                         });
                     }
                     s.config.default = "ollama".to_string();
@@ -594,7 +600,7 @@ pub fn start_new_session(s: &mut AppState) {
 /// non-ollama endpoints, errors, or profiles that already have a window set.
 pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwest::Client) {
     tokio::spawn(async move {
-        let (name, url, model) = {
+        let (name, url, model, engine) = {
             let s = state.lock().await;
             let name = s.config.default.clone();
             let Some(profile) = s.config.models.iter().find(|m| m.name == name) else {
@@ -603,9 +609,16 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
             if profile.context_window.is_some() {
                 return;
             }
-            (name, profile.url.clone(), profile.model.clone())
+            (
+                name,
+                profile.url.clone(),
+                profile.model.clone(),
+                profile.engine.clone(),
+            )
         };
-        let Some(ctx) = crate::network::fetch_context_window(&client, &url, &model).await else {
+        let Some(ctx) =
+            crate::network::fetch_context_window(&client, &url, &model, engine.as_deref()).await
+        else {
             return;
         };
         let mut s = state.lock().await;
