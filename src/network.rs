@@ -553,6 +553,7 @@ async fn confirm_and_execute(
     name: &str,
     args: &serde_json::Value,
     display_name: &str,
+    bypass_confirm: bool,
 ) -> (String, Option<String>) {
     struct ToolCleanup {
         state: Arc<Mutex<AppState>>,
@@ -573,7 +574,9 @@ async fn confirm_and_execute(
 
     let diff_opt = get_diff_preview(name, args);
 
-    let needs_confirm = crate::tools::needs_confirmation(name) && !state.lock().await.auto_confirm;
+    let needs_confirm = !bypass_confirm
+        && crate::tools::needs_confirmation(name)
+        && !state.lock().await.auto_confirm;
     if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
         let tool_name = name.to_string();
@@ -631,12 +634,12 @@ async fn confirm_and_execute(
     let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
     {
         let mut s = state.lock().await;
-        s.pending_tool_confirmation = Some(ToolConfirmation {
+        s.pending_tool_confirmation = Some(vec![ToolConfirmation {
             tool_name: display_name.to_string(),
             path,
             content_preview: preview,
             content_bytes,
-        });
+        }]);
         s.tool_confirmation_response = Some(tx);
         s.status = AppStatus::AwaitingToolConfirmation;
     }
@@ -882,6 +885,7 @@ reply compact and information-dense.\n\n{}",
                     &name,
                     &args,
                     &format!("agent-{agent_id} · {name}"),
+                    false,
                 )
                 .await
             };
@@ -1239,36 +1243,99 @@ pub async fn process_queue_orchestrator(
                 if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
                     tool_rounds += 1;
 
-                    // Check if any tool call requires confirmation and auto_confirm is disabled
-                    let mut needs_confirmation = false;
-                    for (name, _) in &tool_calls {
-                        if crate::tools::needs_confirmation(name)
-                            && !state.lock().await.auto_confirm
-                        {
-                            needs_confirmation = true;
-                            break;
+                    // Gather all confirmations needed
+                    let mut confirmations = Vec::new();
+                    let auto_confirm = { state.lock().await.auto_confirm };
+
+                    if !auto_confirm {
+                        for (name, args) in &tool_calls {
+                            if crate::tools::needs_confirmation(name)
+                                && !crate::tools::is_agent_tool(name)
+                            {
+                                let path =
+                                    if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+                                        p.to_string()
+                                    } else if let Some(cmd) =
+                                        args.get("command").and_then(|c| c.as_str())
+                                    {
+                                        cmd.to_string()
+                                    } else if let (Some(src), Some(dest)) = (
+                                        args.get("src").and_then(|s| s.as_str()),
+                                        args.get("dest").and_then(|d| d.as_str()),
+                                    ) {
+                                        format!("{src} -> {dest}")
+                                    } else {
+                                        "?".to_string()
+                                    };
+
+                                let diff_opt = get_diff_preview(name, args);
+                                let (preview, content_bytes) = if let Some(ref d) = diff_opt {
+                                    (d.clone(), d.len())
+                                } else {
+                                    let content =
+                                        args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                                    let preview =
+                                        content.lines().take(6).collect::<Vec<_>>().join("\n");
+                                    (preview, content.len())
+                                };
+
+                                confirmations.push(crate::app::ToolConfirmation {
+                                    tool_name: name.clone(),
+                                    path,
+                                    content_preview: preview,
+                                    content_bytes,
+                                });
+                            }
                         }
                     }
 
-                    let results = if needs_confirmation {
+                    let mut approved = true;
+                    if !confirmations.is_empty() {
+                        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+                        {
+                            let mut s = state.lock().await;
+                            s.pending_tool_confirmation = Some(confirmations);
+                            s.tool_confirmation_response = Some(tx);
+                            s.status = AppStatus::AwaitingToolConfirmation;
+                        }
+
+                        let first_tool_name = &tool_calls[0].0;
+                        let _ = crate::notifications::notify_pending_confirmation(first_tool_name);
+
                         dbg_log!(
-                            "Executing {} tool calls sequentially due to confirmation UI requirements",
+                            "Awaiting user batch confirmation for {} tools",
                             tool_calls.len()
                         );
-                        let mut res = Vec::new();
-                        for (name, args) in &tool_calls {
-                            let (result, diff_opt) = if crate::tools::is_agent_tool(name) {
+                        approved = match rx.await {
+                            Ok(true) => {
+                                dbg_log!("User approved batch tool calls");
+                                true
+                            }
+                            Ok(false) => {
+                                dbg_log!("User denied batch tool calls");
+                                let _ = crate::notifications::notify_finished(
+                                    crate::notifications::FinishedStatus::Denied,
+                                );
+                                false
+                            }
+                            Err(_) => {
+                                dbg_log!("Confirmation channel closed during batch confirmation");
+                                false
+                            }
+                        };
+                    }
+
+                    let results = if !approved {
+                        tool_calls
+                            .iter()
+                            .map(|(name, _)| {
                                 (
-                                    handle_agent_tool(&client, &state, &cancel_token, name, args)
-                                        .await,
+                                    name.clone(),
+                                    "error: user denied this tool call".to_string(),
                                     None,
                                 )
-                            } else {
-                                confirm_and_execute(&state, &cancel_token, name, args, name).await
-                            };
-                            res.push((name.clone(), result, diff_opt));
-                        }
-                        res
+                            })
+                            .collect::<Vec<_>>()
                     } else {
                         dbg_log!("Executing {} tool calls in parallel", tool_calls.len());
                         let mut futures = Vec::new();
@@ -1300,6 +1367,7 @@ pub async fn process_queue_orchestrator(
                                         &name_clone,
                                         &args_clone,
                                         &name_clone,
+                                        true, // bypass confirmation
                                     )
                                     .await
                                 };
@@ -1590,5 +1658,32 @@ mod tests {
         assert_eq!(arr[1]["text"], "![image](file:///nonexistent/path.png)");
         assert_eq!(arr[2]["type"], "text");
         assert_eq!(arr[2]["text"], " interesting!");
+    }
+
+    #[tokio::test]
+    async fn test_confirm_and_execute_bypassed() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let args = serde_json::json!({
+            "path": "sandbox/test_bypass.txt",
+            "content": "bypassed content"
+        });
+
+        let (result, _) = confirm_and_execute(
+            &state,
+            &cancel_token,
+            "write_file",
+            &args,
+            "write_file",
+            true,
+        )
+        .await;
+        assert!(
+            result.contains("wrote")
+                || result.contains("created")
+                || result.contains("test_bypass.txt")
+        );
+
+        let _ = std::fs::remove_file("sandbox/test_bypass.txt");
     }
 }
