@@ -100,7 +100,7 @@ jobs:
                   echo "Computed SHA256: $SHA256"
 
                   # 2. Clone your tap repository
-                  git clone "https://${TAP_TOKEN}@github.com/${GH_USER}/homebrew-tap.git" tap-repo
+                  git clone "https://x-access-token:${TAP_TOKEN}@github.com/${GH_USER}/homebrew-tap.git" tap-repo
                   cd tap-repo
 
                   # 3. Create Formula directory if it doesn't exist yet
