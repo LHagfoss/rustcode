@@ -1519,16 +1519,24 @@ pub async fn process_queue_orchestrator(
 
                     let mut s = state.lock().await;
                     s.status = AppStatus::Streaming;
+                    let mut completed = false;
                     for (name, result, diff_opt) in results {
                         dbg_log!(
                             "Tool '{}' finished with result length: {} chars",
                             name,
                             result.len()
                         );
+                        if name == "complete_task" {
+                            completed = true;
+                        }
                         s.history.push(
                             ChatMessage::new("tool", format!("{name}: {result}"))
                                 .with_diff(diff_opt),
                         );
+                    }
+                    if completed {
+                        dbg_log!("complete_task called, turning off continuous mode");
+                        s.continuous_mode = false;
                     }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
@@ -1572,9 +1580,28 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 continue;
             }
 
+            let is_continuous = { state.lock().await.continuous_mode };
+            if is_continuous && !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
+                dbg_log!("Continuous mode active, assistant didn't call complete_task. Injecting prompt to continue.");
+                tool_rounds += 1;
+                let mut s = state.lock().await;
+                s.history.push(ChatMessage::new("assistant", final_content.clone()));
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "[System Reminder: Continuous mode is active. You have not called the 'complete_task' tool yet. If you are finished, you must call the 'complete_task' tool to end. If you are still working, continue executing the necessary tools to achieve the goal.]".to_string()
+                ));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.status = AppStatus::Streaming;
+                s.stream_tracker = Some(StreamTracker::new());
+                drop(s);
+                continue;
+            }
+
             dbg_log!("Finishing agent loop, writing final assistant reply");
 
             let mut s = state.lock().await;
+            s.continuous_mode = false;
             s.response_time = Some(prompt_start_time.elapsed());
             let mut msg = ChatMessage::new("assistant", final_content.clone());
             msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);

@@ -283,6 +283,13 @@ pub const TOOLS: &[Tool] = &[
         handler: write_to_file_tool,
         requires_confirmation: true,
     },
+    Tool {
+        name: "complete_task",
+        description: "Mark the continuous goal/task as successfully complete.",
+        arguments: "{\"result\": \"summary of what was achieved and final results\"}",
+        handler: complete_task_tool,
+        requires_confirmation: false,
+    },
 ];
 
 pub const MAX_TOOL_ROUNDS: usize = 60;
@@ -1882,6 +1889,22 @@ mod tests {
     }
 
     #[test]
+    fn test_complete_task_tool() {
+        let out = execute(
+            "complete_task",
+            &serde_json::json!({
+                "result": "Fixed 3 bugs and compiled successfully."
+            }),
+        );
+        assert!(out.contains("marked as complete"), "got: {out}");
+        assert!(out.contains("Fixed 3 bugs and compiled successfully."), "got: {out}");
+
+        // Missing argument
+        let out_fail = execute("complete_task", &serde_json::json!({}));
+        assert!(out_fail.contains("missing 'result'"), "got: {out_fail}");
+    }
+
+    #[test]
     fn test_delete_file() {
         let path = std::env::temp_dir().join(format!("rustcode-delete-{}", std::process::id()));
         std::fs::write(&path, "temp content").unwrap();
@@ -2543,4 +2566,12 @@ fn write_to_file_tool(args: &Value) -> Result<String, String> {
         "wrote '{path}' ({lines} lines, {} bytes)",
         content.len()
     ))
+}
+
+fn complete_task_tool(args: &Value) -> Result<String, String> {
+    let result = args
+        .get("result")
+        .and_then(|r| r.as_str())
+        .ok_or("missing 'result' argument")?;
+    Ok(format!("Task successfully marked as complete! Result: {result}"))
 }

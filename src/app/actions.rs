@@ -80,6 +80,23 @@ pub async fn handle_enter(
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
+            "/goal" => {
+                let goal_text = tokens[1..].join(" ");
+                if goal_text.trim().is_empty() {
+                    s.history.push(ChatMessage::new("system", "Usage: /goal <task description>"));
+                } else {
+                    s.continuous_mode = true;
+                    let goal_msg = format!("Goal: {}\n\nContinuous autoloop mode is active. You must execute tools in a loop to complete the goal, and call the 'complete_task' tool when you are fully finished.", goal_text);
+                    if let Some(m) = s.history.last_mut() {
+                        if m.role == "user" {
+                            m.content = goal_msg;
+                        }
+                    }
+                    s.input_buffer.clear();
+                    s.cursor_position = 0;
+                    return true;
+                }
+            }
             "/help" => {
                 let help = build_help_text();
                 s.history.push(ChatMessage::new("system", help));
@@ -798,5 +815,46 @@ mod tests {
         assert_eq!(parse_token_count("256K"), Some(256 * 1024));
         assert_eq!(parse_token_count("abc"), None);
         assert_eq!(parse_token_count(""), None);
+    }
+
+    #[tokio::test]
+    async fn test_goal_command_flow() {
+        use crate::app::state::AppState;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+
+        // Empty goal
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/goal ".to_string();
+        }
+        let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(!trigger);
+        {
+            let s = state.lock().await;
+            assert!(!s.continuous_mode);
+            assert!(s.history.last().unwrap().content.contains("Usage:"));
+        }
+
+        // Valid goal
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/goal fix build issues".to_string();
+            s.history.clear();
+        }
+        let trigger2 = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(trigger2);
+        {
+            let s = state.lock().await;
+            assert!(s.continuous_mode);
+            assert!(s.history.last().unwrap().content.contains("Goal: fix build issues"));
+            assert!(s.history.last().unwrap().content.contains("Continuous autoloop mode is active"));
+            assert!(s.input_buffer.is_empty());
+        }
     }
 }
