@@ -53,9 +53,6 @@ pub async fn handle_enter(
             return false;
         }
 
-        s.history.push(ChatMessage::new("user", raw_input.clone()));
-        crate::config::save_history(&s.history);
-
         let cmd = tokens[0];
         let mut should_exit = false;
 
@@ -97,11 +94,8 @@ pub async fn handle_enter(
                 } else {
                     s.continuous_mode = true;
                     let goal_msg = format!("Goal: {}\n\nContinuous autoloop mode is active. You must execute tools in a loop to complete the goal, and call the 'complete_task' tool when you are fully finished.", goal_text);
-                    if let Some(m) = s.history.last_mut() {
-                        if m.role == "user" {
-                            m.content = goal_msg;
-                        }
-                    }
+                    s.history.push(ChatMessage::new("user", goal_msg));
+                    crate::config::save_history(&s.history);
                     s.input_buffer.clear();
                     s.cursor_position = 0;
                     return true;
@@ -129,10 +123,7 @@ pub async fn handle_enter(
                     s.history_picker_sessions = sessions;
                     s.history_picker_index = 0;
                     let total = crate::config::list_sessions().len();
-                    if is_session_list_truncated(total) {
-                        s.history.push(ChatMessage::new("system",
-                            format!("Showing 50 of {} sessions. Use /delete_chat to clean up.", total),));
-                    }
+                    s.history_picker_truncated = is_session_list_truncated(total);
                     s.show_history_picker = true;
                 }
             }

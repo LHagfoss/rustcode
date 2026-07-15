@@ -1939,7 +1939,7 @@ fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
 fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
     // Confirmation overlay for delete (Ctrl+D)
     if let Some(del_idx) = state.pending_delete_session_idx {
-        let modal_area = centered_rect_fixed(50, 14, f.area());
+        let modal_area = centered_rect_fixed(60, 10, f.area());
         f.render_widget(Clear, modal_area);
         f.render_widget(
             Block::default()
@@ -1949,44 +1949,76 @@ fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
             modal_area,
         );
 
-        let inner = modal_area.inner(Margin {
+        let inner_area = modal_area.inner(Margin {
             vertical: 1,
-            horizontal: 2,
+            horizontal: 3,
         });
-        let chunks = Layout::default()
+        let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Title
+                Constraint::Length(1), // Header
                 Constraint::Length(1), // Spacer
-                Constraint::Length(1), // Body text
-                Constraint::Length(1), // Spacer
-                Constraint::Length(1), // Confirm buttons
+                Constraint::Length(1), // Session title line
+                Constraint::Length(1), // Session info line
+                Constraint::Min(1),    // Spacer
+                Constraint::Length(1), // Footer buttons
             ])
-            .split(inner);
+            .split(inner_area);
 
-        let title = format!("Delete session {}?", del_idx + 1);
+        let header_line = Line::from(vec![Span::styled(
+            "⚠ Delete session?",
+            Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD),
+        )]);
         f.render_widget(
-            Paragraph::new(title).style(Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD)),
-            chunks[0],
+            Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL)),
+            modal_chunks[0],
         );
-        // Spacer
-        f.render_widget(Clear, chunks[1]);
+
         if let Some(meta) = state.history_picker_sessions.get(del_idx) {
+            let title_line = Line::from(vec![
+                Span::styled("  session  ", Style::default().fg(COLOR_MUTED)),
+                Span::styled(
+                    &meta.title,
+                    Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD),
+                ),
+            ]);
             f.render_widget(
-                Paragraph::new(meta.title.clone()).style(Style::default().fg(COLOR_TEXT)),
-                chunks[2],
+                Paragraph::new(title_line).style(Style::default().bg(COLOR_PANEL)),
+                modal_chunks[2],
+            );
+
+            let info_line = Line::from(vec![
+                Span::styled("  info     ", Style::default().fg(COLOR_MUTED)),
+                Span::styled(
+                    format!("{} messages  ({})", meta.message_count, meta.when),
+                    Style::default().fg(COLOR_MUTED),
+                ),
+            ]);
+            f.render_widget(
+                Paragraph::new(info_line).style(Style::default().bg(COLOR_PANEL)),
+                modal_chunks[3],
             );
         }
-        // Spacer
-        f.render_widget(Clear, chunks[3]);
+
+        let footer_line = Line::from(vec![
+            Span::styled(
+                "  y / enter",
+                Style::default()
+                    .fg(COLOR_GREEN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" delete  ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                "n / esc",
+                Style::default()
+                    .fg(COLOR_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", Style::default().fg(COLOR_MUTED)),
+        ]);
         f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("y", Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD)),
-                Span::styled(":delete    ", Style::default().fg(COLOR_MUTED)),
-                Span::styled("n/esc", Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD)),
-                Span::styled(":cancel  ", Style::default().fg(COLOR_MUTED)),
-            ])).style(Style::default()),
-            chunks[4],
+            Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
+            modal_chunks[5],
         );
 
         return;
@@ -2085,12 +2117,18 @@ fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
         .style(Style::default().bg(COLOR_PANEL));
     f.render_widget(list_paragraph, modal_chunks[2]);
 
-    let footer_line = Line::from(vec![
+    let mut footer_spans = vec![
         Span::styled("select ", Style::default().fg(COLOR_TEXT)),
         Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED)),
         Span::styled("confirm ", Style::default().fg(COLOR_TEXT)),
-        Span::styled("enter", Style::default().fg(COLOR_MUTED)),
-    ]);
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED)),
+        Span::styled("delete ", Style::default().fg(COLOR_TEXT)),
+        Span::styled("ctrl+d", Style::default().fg(COLOR_MUTED)),
+    ];
+    if state.history_picker_truncated {
+        footer_spans.push(Span::styled("   (Truncated to 50 sessions. Use /delete_chat to clean up.)", Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD)));
+    }
+    let footer_line = Line::from(footer_spans);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
         modal_chunks[3],
