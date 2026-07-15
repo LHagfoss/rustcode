@@ -55,4 +55,4 @@ brew upgrade rustcode
 
 ## IMPORTANT
 
-If you wanna run `rustcode` using Apple FM you NEED to be on MacOS 27 and have XCode v27 for this to work. As this was introduced in the Beta version of MacOS 27.
+If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have XCode v27](https://developer.apple.com/videos/play/wwdc2026/334/) for this to work. As this was introduced in the Beta version of MacOS 27.
