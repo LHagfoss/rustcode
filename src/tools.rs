@@ -844,8 +844,8 @@ pub fn tool_system_prompt(
 - For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
 # Rules\n\
 - Be concise and direct. No filler or preamble.\n\
-- Explore first: use `grep`, `glob`, `read_file` to understand context before editing.\n\
-- Prefer targeted `edit` over `write_file`. Use paging with `read_file` (start_line).\n\
+- Explore first: use `grep`, `glob`, `view_file` to understand context before editing.\n\
+- Prefer targeted `replace_file_content` or `multi_replace_file_content` over `write_to_file`. Use paging with `view_file` (start_line/end_line).\n\
 - Match project code style.\n\
 - Only run tests/builds or commit/push code when explicitly requested by the user.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\n"
