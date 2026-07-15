@@ -33,9 +33,7 @@ jobs:
       - name: Install Rust (stable)
         shell: bash
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          # Source cargo env if available, otherwise just use PATH directly
-          [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable || true
 
       - name: Add target
         shell: bash
