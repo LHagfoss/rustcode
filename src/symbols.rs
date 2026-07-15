@@ -25,10 +25,10 @@ pub fn init_db() -> Result<Connection, String> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let conn =
+    let connection =
         Connection::open(&db_path).map_err(|e| format!("failed to open symbols database: {e}"))?;
 
-    conn.execute(
+    connection.execute(
         "CREATE TABLE IF NOT EXISTS symbols (
             project_root TEXT NOT NULL,
             path TEXT NOT NULL,
@@ -44,13 +44,13 @@ pub fn init_db() -> Result<Connection, String> {
     )
     .map_err(|e| format!("failed to create symbols table: {e}"))?;
 
-    conn.execute(
+    connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)",
         [],
     )
     .map_err(|e| format!("failed to create index on symbol name: {e}"))?;
 
-    Ok(conn)
+    Ok(connection)
 }
 
 fn extract_signature(node_text: &str) -> String {
