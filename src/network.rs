@@ -195,6 +195,24 @@ pub fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_tokens: u32
     dropped
 }
 
+/// If the message history has grown long (e.g. >= 4 messages), inject a brief
+/// system reminder right before the latest user message or tool result. This
+/// prevents the model from forgetting the core guidelines and tool formats
+/// due to attention dilution in long contexts.
+pub fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
+    if msgs.len() >= 4 {
+        let reminder = serde_json::json!({
+            "role": "system",
+            "content": "REMINDER: You are rustcode. Always follow your core instructions:\n\
+            - Be extremely concise and direct. No filler or preamble.\n\
+            - To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\
+            - Available tools: view_file, replace_file_content, multi_replace_file_content, write_to_file, delete_file, move_file, copy_file, list_directory, grep, glob, run_command, search_web, find_symbol, get_project_map."
+        });
+        let last_idx = msgs.len() - 1;
+        msgs.insert(last_idx, reminder);
+    }
+}
+
 fn parse_sse_line(line: &str) -> Option<&str> {
     if let Some(s) = line.strip_prefix("data: ") {
         if s == "[DONE]" || s.is_empty() {
@@ -861,6 +879,7 @@ reply compact and information-dense.\n\n{}",
         let window = { state.lock().await.active_context_window() };
         let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
         trim_msgs_to_budget(&mut msgs, budget);
+        inject_system_reminder(&mut msgs);
 
         stream_buffer.lock().await.content.clear();
         let (api_base_url, model_name) = {
@@ -1194,6 +1213,7 @@ pub async fn process_queue_orchestrator(
             let window = { state.lock().await.active_context_window() };
             let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
             let dropped = trim_msgs_to_budget(&mut msgs, budget);
+            inject_system_reminder(&mut msgs);
             if dropped > 0 {
                 dbg_log!(
                     "context budget {} tokens exceeded: dropped {} oldest message(s)",
@@ -1719,6 +1739,32 @@ mod tests {
         ];
         assert_eq!(trim_msgs_to_budget(&mut msgs2, 8192), 0);
         assert_eq!(msgs2.len(), 2);
+    }
+
+    #[test]
+    fn test_inject_system_reminder_logic() {
+        // Less than 4 messages: no reminder injected
+        let mut msgs: Vec<serde_json::Value> = vec![
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": "hello"}),
+            serde_json::json!({"role": "assistant", "content": "hi"}),
+        ];
+        inject_system_reminder(&mut msgs);
+        assert_eq!(msgs.len(), 3);
+
+        // 4 or more messages: reminder is injected right before the last message
+        let mut msgs2: Vec<serde_json::Value> = vec![
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": "hello"}),
+            serde_json::json!({"role": "assistant", "content": "hi"}),
+            serde_json::json!({"role": "user", "content": "tell me a story"}),
+        ];
+        inject_system_reminder(&mut msgs2);
+        assert_eq!(msgs2.len(), 5);
+        assert_eq!(msgs2[3]["role"], "system");
+        assert!(msgs2[3]["content"].as_str().unwrap().contains("REMINDER: You are rustcode."));
+        assert_eq!(msgs2[4]["role"], "user");
+        assert_eq!(msgs2[4]["content"], "tell me a story");
     }
 
     #[test]
