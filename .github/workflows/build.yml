@@ -93,7 +93,7 @@ jobs:
               env:
                   TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
                   TAG: ${{ github.ref_name }}
-                  GH_USER: "yourgithubusername"
+                  GH_USER: "lhagfoss"
               run: |
                   # 1. Calculate the SHA256 hash of the generated macos tarball
                   SHA256=$(sha256sum artifacts/rustcode-macos-aarch64.tar.gz | awk '{print $1}')
