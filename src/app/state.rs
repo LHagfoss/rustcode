@@ -248,6 +248,7 @@ pub struct AppState {
     pub auto_confirm: bool,
 
     pub subagents: Vec<SubAgent>,
+    pub continuous_mode: bool,
     pub next_subagent_id: u32,
 
     pub scroll_row: u16,
@@ -362,6 +363,7 @@ impl AppState {
             dragging_scrollbar: false,
             raw_cli_mode: false,
             tip_index: random_tip_index(),
+            continuous_mode: false,
         }
     }
 

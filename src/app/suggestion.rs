@@ -29,6 +29,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Exit the app",
     },
     CommandInfo {
+        name: "/goal",
+        desc: "Run a task in continuous autoloop mode until complete_task is called",
+    },
+    CommandInfo {
         name: "/help",
         desc: "Show help info",
     },
