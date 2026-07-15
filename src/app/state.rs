@@ -387,7 +387,7 @@ impl AppState {
         self.config
             .models
             .iter()
-            .find(|m| m.name == self.config.default)
+            .find(|m| m.name == self.config.default.big())
             .and_then(|p| p.context_window)
             .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW)
     }

@@ -51,9 +51,72 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct DefaultConfigTable {
+    #[serde(alias = "big_model")]
+    pub big: String,
+    #[serde(alias = "small_model")]
+    pub small: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum DefaultConfig {
+    Simple(String),
+    Table {
+        #[serde(alias = "big_model")]
+        big: String,
+        #[serde(alias = "small_model")]
+        small: String,
+    },
+    Array(Vec<DefaultConfigTable>),
+}
+
+impl DefaultConfig {
+    pub fn big(&self) -> &str {
+        match self {
+            DefaultConfig::Simple(s) => s,
+            DefaultConfig::Table { big, .. } => big,
+            DefaultConfig::Array(v) => {
+                if let Some(first) = v.first() {
+                    &first.big
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
+    pub fn small(&self) -> &str {
+        match self {
+            DefaultConfig::Simple(s) => s,
+            DefaultConfig::Table { small, .. } => small,
+            DefaultConfig::Array(v) => {
+                if let Some(first) = v.first() {
+                    &first.small
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
+    pub fn set_big(&mut self, new_big: String) {
+        match self {
+            DefaultConfig::Simple(s) => *s = new_big,
+            DefaultConfig::Table { big, .. } => *big = new_big,
+            DefaultConfig::Array(v) => {
+                if let Some(first) = v.first_mut() {
+                    first.big = new_big;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
-    pub default: String,
+    pub default: DefaultConfig,
     pub models: Vec<ModelProfile>,
     #[serde(default)]
     pub tool_protocol: ToolProtocol,
@@ -81,7 +144,7 @@ impl Default for UserSettings {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            default: "apple-fm".to_string(),
+            default: DefaultConfig::Simple("apple-fm".to_string()),
             models: vec![
                 ModelProfile {
                     name: "apple-fm".to_string(),
@@ -139,7 +202,17 @@ pub fn load_config() -> (String, String, AppConfig) {
     }
 }
 
-fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
+pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String) {
+    config
+        .models
+        .iter()
+        .find(|m| m.name == name)
+        .or_else(|| config.models.first())
+        .map(|p| (p.url.clone(), p.model.clone()))
+        .unwrap_or_else(|| default_endpoint(&AppConfig::default()))
+}
+
+pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
     let default_config = AppConfig::default();
 
     let file_path = dir.join(CONFIG_FILE);
@@ -169,13 +242,7 @@ fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
         }
     }
 
-    let (url, model) = config
-        .models
-        .iter()
-        .find(|m| m.name == config.default)
-        .or_else(|| config.models.first())
-        .map(|p| (p.url.clone(), p.model.clone()))
-        .unwrap_or_else(|| default_endpoint(&AppConfig::default()));
+    let (url, model) = resolve_model_endpoint(&config, config.default.big());
 
     (url, model, config)
 }
@@ -611,11 +678,11 @@ mod tests {
     fn test_config_save_load() {
         let dir = temp_dir("config");
         let mut config = AppConfig::default();
-        config.default = "ollama".to_string();
+        config.default = DefaultConfig::Simple("ollama".to_string());
         save_config_to(&dir, &config);
 
         let (url, model, loaded) = load_config_from(&dir);
-        assert_eq!(loaded.default, "ollama");
+        assert_eq!(loaded.default.big(), "ollama");
         let expected = &loaded.models.iter().find(|m| m.name == "ollama").unwrap();
         assert_eq!(url, expected.url);
         assert_eq!(model, expected.model);
@@ -625,7 +692,7 @@ mod tests {
     fn test_default_profile_is_source_of_truth() {
         let dir = temp_dir("latest");
         let mut config = AppConfig::default();
-        config.default = "ollama".to_string();
+        config.default = DefaultConfig::Simple("ollama".to_string());
         save_config_to(&dir, &config);
 
         let (url, model, _) = load_config_from(&dir);
@@ -717,5 +784,48 @@ mod tests {
         let loaded = load_session_file(&dir.join(HISTORY_FILE));
         assert_eq!(loaded.len(), HISTORY_LIMIT);
         assert_eq!(loaded[0].content, "msg 30");
+    }
+
+    #[test]
+    fn test_default_config_parsing() {
+        // String format
+        let toml_str1 = r#"default = "my-big-model""#;
+        #[derive(Deserialize)]
+        struct TempConfig {
+            default: DefaultConfig,
+        }
+        let parsed1: TempConfig = toml::from_str(toml_str1).unwrap();
+        assert_eq!(parsed1.default.big(), "my-big-model");
+        assert_eq!(parsed1.default.small(), "my-big-model");
+
+        // Table format
+        let toml_str2 = r#"
+            [default]
+            big_model = "my-big-model"
+            small_model = "my-small-model"
+        "#;
+        let parsed2: TempConfig = toml::from_str(toml_str2).unwrap();
+        assert_eq!(parsed2.default.big(), "my-big-model");
+        assert_eq!(parsed2.default.small(), "my-small-model");
+
+        // Table format (alternate names)
+        let toml_str2_alt = r#"
+            [default]
+            big = "alt-big"
+            small = "alt-small"
+        "#;
+        let parsed2_alt: TempConfig = toml::from_str(toml_str2_alt).unwrap();
+        assert_eq!(parsed2_alt.default.big(), "alt-big");
+        assert_eq!(parsed2_alt.default.small(), "alt-small");
+
+        // Double brackets format [[default]]
+        let toml_str3 = r#"
+            [[default]]
+            big_model = "my-big-model"
+            small_model = "my-small-model"
+        "#;
+        let parsed3: TempConfig = toml::from_str(toml_str3).unwrap();
+        assert_eq!(parsed3.default.big(), "my-big-model");
+        assert_eq!(parsed3.default.small(), "my-small-model");
     }
 }
