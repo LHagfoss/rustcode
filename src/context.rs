@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-const MAX_TREE_ENTRIES: usize = 60;
+const MAX_TREE_ENTRIES: usize = 30;
 const MAX_AGENTS_BYTES: usize = 8000;
 
 pub fn environment_context() -> String {
@@ -56,7 +56,7 @@ fn git_context(cwd: &str) -> Option<String> {
             out.push_str("- Working tree: clean\n");
         } else {
             let lines: Vec<&str> = trimmed.lines().collect();
-            let shown: Vec<&str> = lines.iter().take(40).copied().collect();
+            let shown: Vec<&str> = lines.iter().take(20).copied().collect();
             out.push_str(&format!(
                 "- Working tree: {} changed path(s)\n",
                 lines.len()
@@ -64,7 +64,7 @@ fn git_context(cwd: &str) -> Option<String> {
             out.push_str("```\n");
             out.push_str(&shown.join("\n"));
             if lines.len() > shown.len() {
-                out.push_str(&format!("\n... ({} more)", lines.len() - shown.len()));
+                out.push_str(&format!("\n... ({} more changed files truncated to save context)", lines.len() - shown.len()));
             }
             out.push_str("\n```\n");
         }
@@ -94,7 +94,18 @@ fn run_git(path: &Path, args: &[&str]) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
+    let stdout_str = String::from_utf8_lossy(&out.stdout).to_string();
+    let lines: Vec<&str> = stdout_str.lines().collect();
+    if lines.len() > 50 {
+        let truncated = lines[..50].join("\n");
+        let truncated_count = lines.len() - 50;
+        Some(format!(
+            "{}\n... (truncated {} lines of git output to prune context) ...\n",
+            truncated, truncated_count
+        ))
+    } else {
+        Some(stdout_str)
+    }
 }
 
 fn top_level_tree(cwd: &str) -> Option<String> {
@@ -123,7 +134,7 @@ fn top_level_tree(cwd: &str) -> Option<String> {
     let mut out = String::from("\n## Working directory tree (top level)\n\n");
     out.push_str(&shown.join("\n"));
     if total > shown.len() {
-        out.push_str(&format!("\n... ({} more entries)", total - shown.len()));
+        out.push_str(&format!("\n... ({} more entries truncated to save context)", total - shown.len()));
     }
     out.push('\n');
     Some(out)

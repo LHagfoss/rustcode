@@ -228,6 +228,8 @@ pub struct AppState {
     pub show_history_picker: bool,
     pub history_picker_index: usize,
     pub history_picker_sessions: Vec<crate::config::SessionMeta>,
+    pub history_picker_truncated: bool,
+    pub pending_delete_session_idx: Option<usize>,
     pub active_session_id: String,
 
     pub show_mcp_config: bool,
@@ -335,6 +337,8 @@ impl AppState {
             show_history_picker: false,
             history_picker_index: 0,
             history_picker_sessions: Vec::new(),
+            history_picker_truncated: false,
+            pending_delete_session_idx: None,
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,

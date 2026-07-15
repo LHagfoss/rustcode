@@ -43,6 +43,83 @@ async fn count_tokens(text: &str) -> Option<u32> {
         .ok()
 }
 
+async fn compact_history_to_budget(history: &mut [ChatMessage], budget: u32) {
+    if history.is_empty() {
+        return;
+    }
+
+    let mut tokens = Vec::with_capacity(history.len());
+    for m in history.iter() {
+        let t = count_tokens(&m.content).await.unwrap_or_else(|| (m.content.len() / 4) as u32);
+        tokens.push(t);
+    }
+
+    let mut total_tokens: u32 = tokens.iter().sum();
+    if total_tokens <= budget {
+        return;
+    }
+
+    dbg_log!(
+        "History tokens ({}) exceed budget ({}). Compacting older tool outputs.",
+        total_tokens,
+        budget
+    );
+
+    // Compact from oldest to newest (index 0 upwards)
+    for idx in 0..history.len() {
+        if total_tokens <= budget {
+            break;
+        }
+
+        let m = &mut history[idx];
+        if m.role == "tool" {
+            if m.content.contains("Tool output truncated:") {
+                continue;
+            }
+
+            let old_tokens = tokens[idx];
+            let tool_name = {
+                let parts: Vec<&str> = m.content.splitn(2, ':').collect();
+                if parts.len() > 1 { parts[0].trim().to_string() } else { "tool".to_string() }
+            };
+            let rest = {
+                let parts: Vec<&str> = m.content.splitn(2, ':').collect();
+                if parts.len() > 1 { parts[1].to_string() } else { String::new() }
+            };
+
+            let lines: Vec<&str> = rest.lines().collect();
+            if lines.len() > 2 {
+                // Try 2-line truncation first
+                let truncated_content = format!("{}: {}\n{}", tool_name, lines[0], lines[1]);
+                let truncated_tokens = count_tokens(&truncated_content).await.unwrap_or_else(|| (truncated_content.len() / 4) as u32);
+                
+                m.content = truncated_content;
+                tokens[idx] = truncated_tokens;
+                total_tokens = total_tokens.saturating_sub(old_tokens).saturating_add(truncated_tokens);
+
+                if total_tokens <= budget {
+                    break;
+                }
+            }
+
+            // If still over budget, clear completely
+            let old_tokens_current = tokens[idx];
+            let cleared_content = format!("{}: [Tool output truncated: {} tokens pruned to maintain context window]", tool_name, old_tokens);
+            let cleared_tokens = count_tokens(&cleared_content).await.unwrap_or_else(|| (cleared_content.len() / 4) as u32);
+
+            m.content = cleared_content;
+            tokens[idx] = cleared_tokens;
+            total_tokens = total_tokens.saturating_sub(old_tokens_current).saturating_add(cleared_tokens);
+        }
+    }
+
+    dbg_log!(
+        "Compact finished. New history tokens: {}",
+        total_tokens
+    );
+}
+
+
 async fn estimate_token_usage(messages: &[serde_json::Value], reply: &str) -> Option<TokenUsage> {
     let mut prompt_text = String::new();
     for msg in messages {
@@ -824,7 +901,7 @@ async fn run_subagent(
         if cancel_token.is_cancelled() {
             return "error: cancelled".to_string();
         }
-        let history_snapshot: Vec<ChatMessage> = {
+        let mut history_snapshot: Vec<ChatMessage> = {
             let s = state.lock().await;
             s.subagents
                 .iter()
@@ -835,6 +912,9 @@ async fn run_subagent(
         if history_snapshot.is_empty() {
             return format!("error: no subagent with id {agent_id}");
         }
+
+        let budget_token_limit = { state.lock().await.config.history_token_budget };
+        compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
         let protocol = { state.lock().await.config.tool_protocol };
         let system_prompt = format!(
@@ -849,28 +929,11 @@ reply compact and information-dense.\n\n{}",
             "role": "system",
             "content": system_prompt,
         })];
-        let history_len = history_snapshot.len();
-        msgs.extend(history_snapshot.iter().enumerate().map(|(idx, m)| {
+        msgs.extend(history_snapshot.iter().map(|m| {
             if m.role == "tool" {
-                let is_old = history_len.saturating_sub(idx) > 6;
-                let content = if is_old && m.content.len() > 2000 {
-                    let lines: Vec<&str> = m.content.lines().collect();
-                    if lines.len() > 20 {
-                        format!(
-                            "{}\n... (truncated {} lines of old tool output to save context) ...\n{}",
-                            lines.iter().take(8).copied().collect::<Vec<_>>().join("\n"),
-                            lines.len().saturating_sub(16),
-                            lines.iter().skip(lines.len() - 8).copied().collect::<Vec<_>>().join("\n")
-                        )
-                    } else {
-                        m.content.clone()
-                    }
-                } else {
-                    m.content.clone()
-                };
                 serde_json::json!({
                     "role": "user",
-                    "content": format!("<tool_result>\n{}\n</tool_result>", content),
+                    "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
                 })
             } else {
                 serde_json::json!({"role": m.role, "content": m.content})
@@ -1092,7 +1155,77 @@ async fn handle_agent_tool(
             push_status_line(&mut *state.lock().await, format!("agent-{id} done"));
             format!("(subagent id {id})\n{reply}")
         }
+        "set_goal" => {
+            let goal = args.get("goal").and_then(|g| g.as_str()).unwrap_or("");
+            if goal.is_empty() {
+                return "error: missing 'goal' argument".to_string();
+            }
+            let mut s = state.lock().await;
+            s.continuous_mode = true;
+            s.input_buffer.clear();
+            s.cursor_position = 0;
+            format!("Success: Goal set to '{}'. You are now in continuous autoloop mode. Continue executing tools to complete this goal, and call the 'complete_task' tool when fully done.", goal)
+        }
         _ => format!("error: unknown agent tool '{name}'"),
+    }
+}
+
+async fn evaluate_and_expand_prompt(
+    client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    prompt: &str,
+) -> Option<(bool, String)> {
+    let small_model_name = config.default.small();
+    let (url, model) = crate::config::resolve_model_endpoint(config, small_model_name);
+
+    let system_prompt = "You are a prompt optimizer and task classification assistant.\n\
+Given a user's coding prompt, determine if it is a complex or multi-step task that requires an autonomous agent loop (executing multiple tools to search, edit, compile, or test code) to complete.\n\
+If it is a multi-step task, expand the prompt to be detailed and structured, but do not override the user's original intent.\n\
+Return ONLY a valid JSON object matching this schema: {\"is_goal\": bool, \"expanded_prompt\": \"string\"}. No markdown formatting, no code fences.";
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    });
+
+    let res = client.post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .ok()?;
+
+    if !res.status().is_success() {
+        return None;
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ExpansionResult {
+        is_goal: bool,
+        expanded_prompt: String,
+    }
+
+    let json: serde_json::Value = res.json().await.ok()?;
+    let text = json.get("choices")?
+        .get(0)?
+        .get("message")?
+        .get("content")?
+        .as_str()?;
+
+    let cleaned = text.trim()
+        .strip_prefix("```json").unwrap_or(text)
+        .strip_prefix("```").unwrap_or(text)
+        .strip_suffix("```").unwrap_or(text)
+        .trim();
+
+    if let Ok(parsed) = serde_json::from_str::<ExpansionResult>(cleaned) {
+        Some((parsed.is_goal, parsed.expanded_prompt))
+    } else {
+        None
     }
 }
 
@@ -1104,7 +1237,7 @@ pub async fn process_queue_orchestrator(
 ) {
     dbg_log!("Orchestrator started");
     loop {
-        let next_prompt = {
+        let mut next_prompt = {
             let mut s = state.lock().await;
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
@@ -1122,6 +1255,38 @@ pub async fn process_queue_orchestrator(
             content: String::new(),
         }));
         let is_wakeup = next_prompt.starts_with("__task_wakeup__:");
+
+        let mut is_first_prompt = false;
+        if !is_wakeup {
+            let s = state.lock().await;
+            is_first_prompt = s.history.is_empty();
+        }
+
+        if is_first_prompt {
+            let config = {
+                let s = state.lock().await;
+                s.config.clone()
+            };
+            {
+                let mut s = state.lock().await;
+                push_status_line(&mut s, "Optimizing prompt and detecting goal status...".to_string());
+            }
+            if let Some((is_goal, expanded_prompt)) = evaluate_and_expand_prompt(&client, &config, &next_prompt).await {
+                let mut s = state.lock().await;
+                s.history.pop();
+                next_prompt = expanded_prompt;
+                if is_goal {
+                    s.continuous_mode = true;
+                    push_status_line(&mut s, "Continuous mode (/goal) activated automatically by prompt optimizer.".to_string());
+                } else {
+                    push_status_line(&mut s, "Prompt optimized by small model.".to_string());
+                }
+            } else {
+                let mut s = state.lock().await;
+                s.history.pop();
+            }
+        }
+
         {
             let mut s = state.lock().await;
             if is_wakeup {
@@ -1131,7 +1296,7 @@ pub async fn process_queue_orchestrator(
                     format!("Task {task_id} has finished running in the background."),
                 ));
             } else {
-                s.history.push(ChatMessage::new("user", next_prompt));
+                s.history.push(ChatMessage::new("user", next_prompt.clone()));
             }
             let active_id = s.active_session_id.clone();
             crate::config::save_session_history(&active_id, &s.history);
@@ -1149,7 +1314,7 @@ pub async fn process_queue_orchestrator(
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
-            let history_snapshot: Vec<ChatMessage> = {
+            let mut history_snapshot: Vec<ChatMessage> = {
                 let s = state.lock().await;
                 s.history
                     .iter()
@@ -1161,6 +1326,9 @@ pub async fn process_queue_orchestrator(
                     .collect()
             };
 
+            let budget_token_limit = { state.lock().await.config.history_token_budget };
+            compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
+
             let system_prompt = format!(
                 "{}\n\n{}",
                 crate::tools::tool_system_prompt(true, crate::config::ToolProtocol::Json),
@@ -1171,28 +1339,11 @@ pub async fn process_queue_orchestrator(
                 "content": system_prompt.clone(),
             })];
             let mut first_user = true;
-            let history_len = history_snapshot.len();
-            msgs.extend(history_snapshot.into_iter().enumerate().map(|(idx, m)| {
+            msgs.extend(history_snapshot.into_iter().map(|m| {
                 if m.role == "tool" {
-                    let is_old = history_len.saturating_sub(idx) > 6;
-                    let content = if is_old && m.content.len() > 2000 {
-                        let lines: Vec<&str> = m.content.lines().collect();
-                        if lines.len() > 20 {
-                            format!(
-                                "{}\n... (truncated {} lines of old tool output to save context) ...\n{}",
-                                lines.iter().take(8).copied().collect::<Vec<_>>().join("\n"),
-                                lines.len().saturating_sub(16),
-                                lines.iter().skip(lines.len() - 8).copied().collect::<Vec<_>>().join("\n")
-                            )
-                        } else {
-                            m.content.clone()
-                        }
-                    } else {
-                        m.content.clone()
-                    };
                     serde_json::json!({
                         "role": "user",
-                        "content": format!("<tool_result>\n{}\n</tool_result>", content),
+                        "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
                     })
                 } else if m.role == "user" && first_user {
                     first_user = false;

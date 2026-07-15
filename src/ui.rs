@@ -318,13 +318,8 @@ fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool)
 }
 
 fn model_label(state: &AppState) -> String {
-    let big = state.config.default.big();
-    let small = state.config.default.small();
-    if big == small {
-        big.to_string()
-    } else {
-        format!("{big} ({small})")
-    }
+    // Only show the main (big) model — hide the small model entirely.
+    state.config.default.big().to_string()
 }
 
 fn render_assistant_message<'a>(
@@ -501,11 +496,12 @@ fn render_assistant_message<'a>(
                 " · ",
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             ),
-            Span::styled(
-                model_name.to_string(),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-            ),
         ];
+
+        status_spans.push(Span::styled(
+            model_name.to_string(),
+            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        ));
 
         if let Some(ms) = response_time_ms {
             let secs = ms as f32 / 1000.0;
@@ -1225,7 +1221,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         };
 
         if state.current_response.is_empty() {
-            lines.push(Line::from(vec![
+            let mut status_spans: Vec<Span> = vec![
                 Span::styled(
                     "■ ",
                     get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::empty(), show_picker),
@@ -1238,11 +1234,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     " · ",
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
-                Span::styled(
-                    model_label(state),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                ),
-            ]));
+            ];
+
+            status_spans.push(Span::styled(
+                model_label(state),
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ));
+
+            lines.push(Line::from(status_spans));
         } else {
             render_assistant_message(
                 &state.current_response,
@@ -1938,6 +1937,61 @@ fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
 
 /// Render the session history picker modal overlay (/history).
 fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
+    // Confirmation overlay for delete (Ctrl+D)
+    if let Some(del_idx) = state.pending_delete_session_idx {
+        let modal_area = centered_rect_fixed(50, 14, f.area());
+        f.render_widget(Clear, modal_area);
+        f.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(COLOR_PRIMARY))
+                .style(Style::default().bg(COLOR_PANEL)),
+            modal_area,
+        );
+
+        let inner = modal_area.inner(Margin {
+            vertical: 1,
+            horizontal: 2,
+        });
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Title
+                Constraint::Length(1), // Spacer
+                Constraint::Length(1), // Body text
+                Constraint::Length(1), // Spacer
+                Constraint::Length(1), // Confirm buttons
+            ])
+            .split(inner);
+
+        let title = format!("Delete session {}?", del_idx + 1);
+        f.render_widget(
+            Paragraph::new(title).style(Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD)),
+            chunks[0],
+        );
+        // Spacer
+        f.render_widget(Clear, chunks[1]);
+        if let Some(meta) = state.history_picker_sessions.get(del_idx) {
+            f.render_widget(
+                Paragraph::new(meta.title.clone()).style(Style::default().fg(COLOR_TEXT)),
+                chunks[2],
+            );
+        }
+        // Spacer
+        f.render_widget(Clear, chunks[3]);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("y", Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD)),
+                Span::styled(":delete    ", Style::default().fg(COLOR_MUTED)),
+                Span::styled("n/esc", Style::default().fg(COLOR_TEXT).add_modifier(Modifier::BOLD)),
+                Span::styled(":cancel  ", Style::default().fg(COLOR_MUTED)),
+            ])).style(Style::default()),
+            chunks[4],
+        );
+
+        return;
+    }
+
     let sessions = &state.history_picker_sessions;
     let selected_idx = state
         .history_picker_index

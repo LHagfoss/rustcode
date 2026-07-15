@@ -57,6 +57,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Start a new conversation",
     },
     CommandInfo {
+        name: "/delete_chat",
+        desc: "Delete current session and start fresh",
+    },
+    CommandInfo {
         name: "/ollama",
         desc: "Configure or list Ollama models",
     },
