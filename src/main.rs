@@ -292,8 +292,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
+
                     let mut s = app_state.lock().await;
                     if s.show_history_picker {
+                        // Ctrl+D triggers delete confirmation overlay
+                        if key.modifiers.contains(event::KeyModifiers::CONTROL)
+                            && key.code == KeyCode::Char('d')
+                        {
+                            let idx = s.history_picker_index.min(
+                                s.history_picker_sessions.len().saturating_sub(1),
+                            );
+                            s.pending_delete_session_idx = Some(idx);
+                            drop(s);
+                            continue;
+                        }
+
+                        // Confirmation overlay for delete
+                        if let Some(del_idx) = s.pending_delete_session_idx {
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Enter => {
+                                    if let Some(meta) =
+                                        s.history_picker_sessions.get(del_idx).cloned()
+                                    {
+                                        crate::config::delete_session_file(&meta.path);
+                                    }
+                                    s.history_picker_sessions.remove(del_idx);
+                                    if !s.history_picker_sessions.is_empty()
+                                        && del_idx >= s.history_picker_sessions.len().saturating_sub(1)
+                                    {
+                                        s.history_picker_index = (del_idx as i64 - 1).max(0) as usize;
+                                    }
+                                    s.pending_delete_session_idx = None;
+                                    if s.history_picker_sessions.is_empty() {
+                                        s.show_history_picker = false;
+                                    }
+                                }
+                                KeyCode::Esc | KeyCode::Char('n') => {
+                                    s.pending_delete_session_idx = None;
+                                }
+                                _ => {}
+                            }
+                            drop(s);
+                            continue;
+                        }
+
                         match key.code {
                             KeyCode::Esc => {
                                 s.show_history_picker = false;
@@ -338,6 +380,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             _ => {}
                         }
+
                         drop(s);
                         continue;
                     }

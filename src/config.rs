@@ -124,6 +124,12 @@ pub struct AppConfig {
     pub last_active_session_id: Option<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default = "default_history_token_budget")]
+    pub history_token_budget: u32,
+}
+
+fn default_history_token_budget() -> u32 {
+    64000
 }
 
 #[allow(dead_code)]
@@ -164,6 +170,7 @@ impl Default for AppConfig {
             tool_protocol: ToolProtocol::default(),
             last_active_session_id: None,
             mcp_servers: Vec::new(),
+            history_token_budget: 64000,
         }
     }
 }

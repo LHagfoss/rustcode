@@ -836,7 +836,7 @@ fn copy_file(args: &Value) -> Result<String, String> {
 /// need app state), not by the sync handlers in TOOLS. Only offered to the
 /// main agent — subagents cannot spawn or message other agents.
 pub fn is_agent_tool(name: &str) -> bool {
-    matches!(name, "spawn_agent" | "send_agent")
+    matches!(name, "spawn_agent" | "send_agent" | "set_goal")
 }
 
 pub fn tool_system_prompt(
@@ -903,7 +903,8 @@ pub fn tool_system_prompt(
     if include_agent_tools {
         p.push_str(
             "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
-            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Send follow-up to subagent.\n",
+            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Send follow-up to subagent.\n\
+            - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n",
         );
     }
 

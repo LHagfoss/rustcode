@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode"
-version = "0.1.6"
+version = "0.1.8"
 dependencies = [
  "base64",
  "chrono",

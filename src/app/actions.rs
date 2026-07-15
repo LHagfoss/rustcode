@@ -76,6 +76,16 @@ pub async fn handle_enter(
                 *cancel_token = tokio_util::sync::CancellationToken::new();
                 start_new_session(&mut s);
             }
+            "/delete_chat" => {
+                cancel_token.cancel();
+                *cancel_token = tokio_util::sync::CancellationToken::new();
+                let session_id = s.active_session_id.clone();
+                if let Some(dir) = crate::config::get_active_session_dir(&session_id) {
+                    std::fs::remove_dir_all(&dir).ok();
+                }
+                start_new_session(&mut s);
+            }
+
             "/cancel" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
@@ -118,6 +128,11 @@ pub async fn handle_enter(
                 } else {
                     s.history_picker_sessions = sessions;
                     s.history_picker_index = 0;
+                    let total = crate::config::list_sessions().len();
+                    if is_session_list_truncated(total) {
+                        s.history.push(ChatMessage::new("system",
+                            format!("Showing 50 of {} sessions. Use /delete_chat to clean up.", total),));
+                    }
                     s.show_history_picker = true;
                 }
             }
@@ -591,7 +606,9 @@ pub fn check_memory_usage(s: &mut AppState) {
 }
 
 pub fn start_new_session(s: &mut AppState) {
-    crate::config::save_session_history(&s.active_session_id, &s.history);
+    if crate::config::session_has_content(&s.history) {
+        crate::config::save_session_history(&s.active_session_id, &s.history);
+    }
     s.history.clear();
     s.pending_queue.clear();
     s.current_response.clear();
@@ -606,7 +623,6 @@ pub fn start_new_session(s: &mut AppState) {
 
     // Switch to a new active session ID
     s.active_session_id = crate::config::create_new_session(&mut s.config);
-    crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
 /// Fill in the active profile's context window from the provider when the
@@ -671,9 +687,17 @@ pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
     {
         list.insert(0, live);
     }
+    const MAX_SESSIONS: usize = 50;
+    if list.len() > MAX_SESSIONS {
+        list.truncate(MAX_SESSIONS);
+    }
     list
 }
 
+/// Returns whether the session list was truncated at MAX_SESSIONS.
+pub fn is_session_list_truncated(total_sessions: usize) -> bool {
+    total_sessions > 50
+}
 pub fn resume_latest_session(s: &mut AppState) {
     let list = build_session_list(s);
     match list.first() {
@@ -698,8 +722,10 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
         return;
     }
 
-    // Save current active session history
-    crate::config::save_session_history(&s.active_session_id, &s.history);
+    // Save current active session history if it has content
+    if crate::config::session_has_content(&s.history) {
+        crate::config::save_session_history(&s.active_session_id, &s.history);
+    }
 
     // Extract session ID from the loaded path parent
     if let Some(parent) = meta.path.parent() {
