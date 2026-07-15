@@ -34,7 +34,8 @@ jobs:
         shell: bash
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          . "$HOME/.cargo/env"
+          # Source cargo env if available, otherwise just use PATH directly
+          [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
       - name: Add target
         shell: bash
