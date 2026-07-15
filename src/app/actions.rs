@@ -127,7 +127,7 @@ pub async fn handle_enter(
                 s.mcp_edit_state = None;
             }
             "/context" => {
-                let default_name = s.config.default.clone();
+                let default_name = s.config.default.big().to_string();
                 if tokens.len() >= 2 {
                     match parse_token_count(tokens[1]) {
                         Some(n) => {
@@ -293,7 +293,7 @@ pub async fn handle_enter(
                         let model = profile.model.clone();
                         s.api_base_url = url;
                         s.model_name = model;
-                        s.config.default = name.clone();
+                        s.config.default.set_big(name.clone());
                         crate::config::save_entire_config(&s.config);
                         s.history.push(ChatMessage::new(
                             "system",
@@ -301,7 +301,7 @@ pub async fn handle_enter(
                         ));
                     } else {
                         s.model_name = name.clone();
-                        let default_name = s.config.default.clone();
+                        let default_name = s.config.default.big().to_string();
                         if let Some(profile) =
                             s.config.models.iter_mut().find(|m| m.name == default_name)
                         {
@@ -344,7 +344,7 @@ pub async fn handle_enter(
                             engine,
                         });
                     }
-                    s.config.default = name.clone();
+                    s.config.default.set_big(name.clone());
                     crate::config::save_entire_config(&s.config);
                     s.history.push(ChatMessage::new(
                         "system",
@@ -356,7 +356,7 @@ pub async fn handle_enter(
                     s.api_base_url = url.clone();
                     s.model_name = model.clone();
 
-                    let default_name = s.config.default.clone();
+                    let default_name = s.config.default.big().to_string();
                     if let Some(profile) =
                         s.config.models.iter_mut().find(|m| m.name == default_name)
                     {
@@ -365,7 +365,7 @@ pub async fn handle_enter(
                     }
                     crate::config::save_entire_config(&s.config);
 
-                    let active_default = s.config.default.clone();
+                    let active_default = s.config.default.big().to_string();
                     let active_url = s.api_base_url.clone();
                     let active_model = s.model_name.clone();
                     s.history.push(ChatMessage::new(
@@ -483,7 +483,7 @@ pub async fn handle_enter(
                             engine: Some("ollama".to_string()),
                         });
                     }
-                    s.config.default = "ollama".to_string();
+                    s.config.default.set_big("ollama".to_string());
                     crate::config::save_entire_config(&s.config);
                     s.history.push(ChatMessage::new(
                         "system",
@@ -616,7 +616,7 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
     tokio::spawn(async move {
         let (name, url, model, engine) = {
             let s = state.lock().await;
-            let name = s.config.default.clone();
+            let name = s.config.default.big().to_string();
             let Some(profile) = s.config.models.iter().find(|m| m.name == name) else {
                 return;
             };
@@ -795,7 +795,7 @@ pub fn select_picker_model(s: &mut AppState) {
         let profile = filtered[idx];
         s.api_base_url = profile.url.clone();
         s.model_name = profile.model.clone();
-        s.config.default = profile.name.clone();
+        s.config.default.set_big(profile.name.clone());
         crate::config::save_entire_config(&s.config);
         s.history.push(ChatMessage::new(
             "system",

@@ -318,7 +318,13 @@ fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool)
 }
 
 fn model_label(state: &AppState) -> String {
-    state.config.default.clone()
+    let big = state.config.default.big();
+    let small = state.config.default.small();
+    if big == small {
+        big.to_string()
+    } else {
+        format!("{big} ({small})")
+    }
 }
 
 fn render_assistant_message<'a>(
