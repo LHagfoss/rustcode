@@ -93,11 +93,9 @@ jobs:
               env:
                   TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
                   TAG: ${{ github.ref_name }}
-                  # Replace this with your actual GitHub username / organization
-                  GH_USER: "lhagfoss"
+                  GH_USER: "yourgithubusername"
               run: |
                   # 1. Calculate the SHA256 hash of the generated macos tarball
-                  # Note: Adjust path to where the matrix artifacts were downloaded
                   SHA256=$(sha256sum artifacts/rustcode-macos-aarch64.tar.gz | awk '{print $1}')
                   echo "Computed SHA256: $SHA256"
 
@@ -105,22 +103,25 @@ jobs:
                   git clone "https://${TAP_TOKEN}@github.com/${GH_USER}/homebrew-tap.git" tap-repo
                   cd tap-repo
 
-                  # 3. Overwrite the formula file with the latest release info
+                  # 3. Create Formula directory if it doesn't exist yet
+                  mkdir -p Formula
+
+                  # 4. Overwrite the formula file with the latest release info
                   cat <<EOF > Formula/rustcode.rb
                   class Rustcode < Formula
-                    desc "Local LLM Agent Harness"
-                    homepage "https://github.com/${GH_USER}/rustcode"
-                    url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
-                    sha256 "${SHA256}"
-                    version "${TAG/v/}"
+                      desc "Local LLM Agent Harness"
+                      homepage "https://github.com/${GH_USER}/rustcode"
+                      url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
+                      sha256 "${SHA256}"
+                      version "${TAG/v/}"
 
-                    def install
+                      def install
                       bin.install "rustcode-macos-aarch64" => "rustcode"
-                    end
+                      end
                   end
                   EOF
 
-                  # 4. Commit and push the formula changes back to your tap repo
+                  # 5. Commit and push the formula changes back to your tap repo
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
                   git add Formula/rustcode.rb
