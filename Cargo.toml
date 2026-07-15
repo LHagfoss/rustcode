@@ -32,3 +32,17 @@ tree-sitter = "0.24.4"
 tree-sitter-rust = "0.23.2"
 unicode-width = "0.2.2"
 urlencoding = "2.1.3"
+
+[profile.release]
+opt-level = 3
+codegen-units = 16
+lto = "thin"
+strip = false
+
+# Overrides: Force heavy dependencies to compile fast, but keep your code optimized
+[profile.release.package.tokio]
+opt-level = 1
+[profile.release.package.reqwest]
+opt-level = 1
+[profile.release.package.rusqlite]
+opt-level = 1

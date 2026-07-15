@@ -48,6 +48,13 @@ async fn compact_history_to_budget(history: &mut [ChatMessage], budget: u32) {
         return;
     }
 
+    // Strip <think> blocks from all assistant messages first to free up budget and prevent distraction
+    for m in history.iter_mut() {
+        if m.role == "assistant" {
+            m.content = strip_think_blocks(&m.content);
+        }
+    }
+
     let mut tokens = Vec::with_capacity(history.len());
     for m in history.iter() {
         let t = count_tokens(&m.content).await.unwrap_or_else(|| (m.content.len() / 4) as u32);
@@ -1216,10 +1223,11 @@ Return ONLY a valid JSON object matching this schema: {\"is_goal\": bool, \"expa
         .get("content")?
         .as_str()?;
 
-    let cleaned = text.trim()
-        .strip_prefix("```json").unwrap_or(text)
-        .strip_prefix("```").unwrap_or(text)
-        .strip_suffix("```").unwrap_or(text)
+    let trimmed = text.trim();
+    let cleaned = trimmed
+        .strip_prefix("```json").unwrap_or(trimmed)
+        .strip_prefix("```").unwrap_or(trimmed)
+        .strip_suffix("```").unwrap_or(trimmed)
         .trim();
 
     if let Ok(parsed) = serde_json::from_str::<ExpansionResult>(cleaned) {
@@ -2034,5 +2042,16 @@ mod tests {
         );
 
         let _ = std::fs::remove_file("sandbox/test_bypass.txt");
+    }
+
+    #[tokio::test]
+    async fn test_compact_history_strips_thinking_blocks() {
+        let mut history = vec![
+            crate::app::ChatMessage::new("assistant", "<think>\nThinking about files...\n</think>\nHere is the answer"),
+            crate::app::ChatMessage::new("tool", "tool output"),
+        ];
+        compact_history_to_budget(&mut history, 5000).await;
+        assert_eq!(history[0].content, "\nHere is the answer");
+        assert_eq!(history[1].content, "tool output");
     }
 }
