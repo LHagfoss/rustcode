@@ -1,90 +1,128 @@
 permissions:
-  contents: write
+    contents: write
 
 name: Build
 
 on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+    push:
+        tags: ["v*"]
+    workflow_dispatch:
 
 env:
-  CARGO_TERM_COLOR: always
+    CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            name: rustcode-linux-x86_64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            name: rustcode-macos-aarch64
-          - os: windows-2025
-            target: x86_64-pc-windows-gnu
-            name: rustcode-windows-x86_64
+    build:
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os: ubuntu-24.04
+                      target: x86_64-unknown-linux-gnu
+                      name: rustcode-linux-x86_64
+                    - os: macos-latest
+                      target: aarch64-apple-darwin
+                      name: rustcode-macos-aarch64
+                    - os: windows-2025
+                      target: x86_64-pc-windows-gnu
+                      name: rustcode-windows-x86_64
 
-    steps:
-      - uses: actions/checkout@v4
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Install Rust (stable)
-        shell: bash
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable || true
+            - name: Install Rust (stable)
+              shell: bash
+              run: |
+                  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable || true
 
-      - name: Add target
-        shell: bash
-        run: rustup target add ${{ matrix.target }}
+            - name: Add target
+              shell: bash
+              run: rustup target add ${{ matrix.target }}
 
-      # Linux needs pkg-config + OpenSSL for rusqlite bundling
-      - name: Install Linux deps (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+            - name: Install Linux deps (Ubuntu)
+              if: runner.os == 'Linux'
+              run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 
-      - name: Build release
-        shell: bash
-        run: cargo build --release --target ${{ matrix.target }}
+            - name: Build release
+              shell: bash
+              run: cargo build --release --target ${{ matrix.target }}
 
-      # Package artifacts
-      - name: Package Linux / macOS binary
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
-          chmod +x ${{ matrix.name }}
-          tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
+            - name: Package Linux / macOS binary
+              if: runner.os != 'Windows'
+              shell: bash
+              run: |
+                  cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
+                  chmod +x ${{ matrix.name }}
+                  tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
 
-      - name: Package Windows binary
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
-          Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
+            - name: Package Windows binary
+              if: runner.os == 'Windows'
+              shell: powershell
+              run: |
+                  Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
+                  Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.name }}
-          path: |
-            ${{ matrix.name }}.tar.gz
-            ${{ matrix.name }}.zip
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ matrix.name }}
+                  path: |
+                      ${{ matrix.name }}.tar.gz
+                      ${{ matrix.name }}.zip
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
+    release:
+        if: startsWith(github.ref, 'refs/tags/v')
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+            - name: Download artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: artifacts/
+                  merge-multiple: true
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**/*
-          generate_release_notes: true
+            - name: Create GitHub Release
+              id: create_release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: artifacts/*
+                  generate_release_notes: true
+
+            - name: Update Homebrew Formula
+              env:
+                  TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+                  TAG: ${{ github.ref_name }}
+                  # Replace this with your actual GitHub username / organization
+                  GH_USER: "lhagfoss"
+              run: |
+                  # 1. Calculate the SHA256 hash of the generated macos tarball
+                  # Note: Adjust path to where the matrix artifacts were downloaded
+                  SHA256=$(sha256sum artifacts/rustcode-macos-aarch64.tar.gz | awk '{print $1}')
+                  echo "Computed SHA256: $SHA256"
+
+                  # 2. Clone your tap repository
+                  git clone "https://${TAP_TOKEN}@github.com/${GH_USER}/homebrew-tap.git" tap-repo
+                  cd tap-repo
+
+                  # 3. Overwrite the formula file with the latest release info
+                  cat <<EOF > Formula/rustcode.rb
+                  class Rustcode < Formula
+                    desc "Local LLM Agent Harness"
+                    homepage "https://github.com/${GH_USER}/rustcode"
+                    url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
+                    sha256 "${SHA256}"
+                    version "${TAG/v/}"
+
+                    def install
+                      bin.install "rustcode-macos-aarch64" => "rustcode"
+                    end
+                  end
+                  EOF
+
+                  # 4. Commit and push the formula changes back to your tap repo
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add Formula/rustcode.rb
+                  git commit -m "Update rustcode to ${TAG}"
+                  git push origin main

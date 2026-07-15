@@ -476,6 +476,18 @@ pub async fn handle_enter(
                     s.history.push(ChatMessage::new("system", "Usage:\n  /ollama list [url] - List available models\n  /ollama <url> <model> - Set 'ollama' profile URL and model"));
                 }
             }
+            "/change_title" => {
+                if tokens.len() < 2 {
+                    s.history.push(ChatMessage::new("system",
+                        "Usage:\n  /change_title <title> - Rename the current session",));
+                } else {
+                    let new_title = tokens[1..].join(" ");
+                    crate::config::save_session_title(&s.active_session_id, &new_title);
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!("Session title renamed to \"{}\"", new_title),));
+                }
+            }
             _ => {
                 s.history.push(ChatMessage::new(
                     "system",
