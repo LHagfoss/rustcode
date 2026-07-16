@@ -170,7 +170,7 @@ async fn prune_class(
     }
 }
 
-async fn compact_history_to_budget(history: &mut [ChatMessage], budget: u32) {
+pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budget: u32) {
     if history.is_empty() {
         return;
     }
@@ -1411,6 +1411,65 @@ Return ONLY a valid JSON object matching this schema: {\"is_goal\": bool, \"expa
     }
 }
 
+/// Generate a title from the first user message using the small model.
+/// Returns None if the message starts with '/' (slash command).
+pub async fn generate_title(
+    client: &reqwest::Client,
+    config: &crate::config::AppConfig,
+    first_message: &str,
+) -> Option<String> {
+    if first_message.trim().starts_with('/') {
+        return None;
+    }
+
+    let small_model_name = config.default.small();
+    let (url, model) = crate::config::resolve_model_endpoint(config, small_model_name);
+
+    let first_line = first_message.lines().next()?;
+    let prompt = format!(
+        "Generate a short, concise title (max 5 words) summarizing this user's coding request/intent. Do not use quotes, punctuation, or any introductory text. Return only the title itself.\n\nIntent: {}",
+        first_line.trim()
+    );
+
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": prompt
+    })];
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": 30,
+        "temperature": 0.3,
+    });
+
+    let res = client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .ok()?;
+
+    if !res.status().is_success() {
+        return None;
+    }
+
+    let json: serde_json::Value = res.json().await.ok()?;
+    let title = json.get("choices")?
+        .get(0)?
+        .get("message")?
+        .get("content")?
+        .as_str()?;
+
+    let cleaned_title = title.trim().trim_matches('"').trim().to_string();
+    if cleaned_title.is_empty() {
+        None
+    } else {
+        Some(cleaned_title)
+    }
+}
+
+
 #[allow(unused_assignments)]
 pub async fn process_queue_orchestrator(
     client: reqwest::Client,
@@ -1485,6 +1544,24 @@ pub async fn process_queue_orchestrator(
             s.current_response.clear();
             s.current_token_usage = None;
             s.response_time = None;
+        }
+
+        if is_first_prompt {
+            let client_clone = client.clone();
+            let config_clone = {
+                let s = state.lock().await;
+                s.config.clone()
+            };
+            let session_id = {
+                let s = state.lock().await;
+                s.active_session_id.clone()
+            };
+            let first_msg = next_prompt.clone();
+            tokio::spawn(async move {
+                if let Some(title) = generate_title(&client_clone, &config_clone, &first_msg).await {
+                    crate::config::save_session_title(&session_id, &title);
+                }
+            });
         }
 
         let prompt_start_time = std::time::Instant::now();
