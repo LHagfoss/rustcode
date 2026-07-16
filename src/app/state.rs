@@ -184,6 +184,16 @@ pub struct SubAgent {
     pub history: Vec<ChatMessage>,
 }
 
+/// One entry of the agent's persistent task plan, managed via the `todo_write` tool.
+/// The current list is re-injected into the system prompt every round so the agent
+/// can execute its plan across turns instead of re-planning from scratch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct TodoItem {
+    pub content: String,
+    pub status: String,   // "pending" | "in_progress" | "completed"
+    pub priority: String, // "high" | "medium" | "low"
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpEditState {
     pub is_add: bool,
@@ -252,6 +262,17 @@ pub struct AppState {
     pub subagents: Vec<SubAgent>,
     pub continuous_mode: bool,
     pub next_subagent_id: u32,
+
+    /// Persistent task plan, written via the `todo_write` agent tool.
+    pub todos: Vec<TodoItem>,
+
+    /// Canonical paths the agent has already read this session. Surfaced back to
+    /// the model each round so it doesn't re-read files already in context.
+    pub read_files: std::collections::HashSet<String>,
+
+    /// Signatures of recent read-only tool calls, used by the repeat-loop guard
+    /// to short-circuit identical re-reads (e.g. viewing the same file twice).
+    pub recent_read_calls: std::collections::VecDeque<String>,
 
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
@@ -350,6 +371,9 @@ impl AppState {
             active_session_id,
             subagents: Vec::new(),
             next_subagent_id: 1,
+            todos: Vec::new(),
+            read_files: std::collections::HashSet::new(),
+            recent_read_calls: std::collections::VecDeque::new(),
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             current_terminal_title: None,

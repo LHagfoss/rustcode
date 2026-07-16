@@ -610,6 +610,10 @@ pub fn start_new_session(s: &mut AppState) {
     s.status = AppStatus::Idle;
     s.subagents.clear();
     s.next_subagent_id = 1;
+    s.todos.clear();
+    s.read_files.clear();
+    s.recent_read_calls.clear();
+    s.continuous_mode = false;
     s.tip_index = crate::app::random_tip_index();
 
     // Switch to a new active session ID
