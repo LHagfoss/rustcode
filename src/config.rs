@@ -135,7 +135,7 @@ fn default_history_token_budget() -> u32 {
 }
 
 fn default_max_tool_rounds() -> usize {
-    60
+    1000
 }
 
 #[allow(dead_code)]
@@ -177,7 +177,7 @@ impl Default for AppConfig {
             last_active_session_id: None,
             mcp_servers: Vec::new(),
             history_token_budget: 64000,
-            max_tool_rounds: 60,
+            max_tool_rounds: 1000,
         }
     }
 }

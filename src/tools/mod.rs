@@ -35,7 +35,7 @@ pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTas
     TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-static WAKEUP_CALLBACK: OnceLock<Box<dyn Fn(String, String, String) + Send + Sync + 'static>> =
+pub(crate) static WAKEUP_CALLBACK: OnceLock<Box<dyn Fn(String, String, String) + Send + Sync + 'static>> =
     OnceLock::new();
 
 pub fn register_wakeup_callback<F>(cb: F)
@@ -115,7 +115,7 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
     PathBuf::from(raw_path)
 }
 
-fn parse_json_number(v: &Value) -> Option<u64> {
+pub(crate) fn parse_json_number(v: &Value) -> Option<u64> {
     if let Some(n) = v.as_u64() {
         Some(n)
     } else if let Some(s) = v.as_str() {
@@ -125,7 +125,7 @@ fn parse_json_number(v: &Value) -> Option<u64> {
     }
 }
 
-fn parse_json_bool(v: &Value) -> Option<bool> {
+pub(crate) fn parse_json_bool(v: &Value) -> Option<bool> {
     if let Some(b) = v.as_bool() {
         Some(b)
     } else if let Some(s) = v.as_str() {
@@ -153,46 +153,36 @@ pub struct Tool {
 pub const TOOLS: &[Tool] = &[
     Tool {
         name: "check_match",
-        description: "Check football match data from api-sports.io. \
-                     Useful for checking live scores during matches or finding specific games.\
-                     Example: check_match with team='Norway' and date='2026-07-11'",
-        arguments: "{\\"date\\": \"YYYY-MM-DD format required\\", \\"team\\": \"optional team name filter\\", \\"status\\": \"optional status (LIVE, FT, NS)\"}",
+        description: "Check football match data from api-sports.io.                      Useful for checking live scores during matches or finding specific games.                     Example: check_match with team='Norway' and date='2026-07-11'",
+        arguments: r#"{"date": "YYYY-MM-DD format required", "team": "optional team name filter", "status": "optional status (LIVE, FT, NS)"}"#,
         handler: misc::check_match,
         requires_confirmation: false,
     },
     Tool {
         name: "get_time",
         description: "Get the current local date and time",
-        arguments: "{} (no arguments)",
+        arguments: r#"{} (no arguments)"#,
         handler: misc::get_time,
         requires_confirmation: false,
     },
     Tool {
         name: "grep",
-        description: "Recursively search file contents with regex. Respects \
-                      .gitignore and skips hidden files. Use this to find where \
-                      functions, classes, strings, or patterns are defined or used",
-        arguments: "{\\"pattern\\": \"regex pattern\\", \
-                     \\"path\\": \"optional directory or file (default current dir)\\", \
-                     \\"include\\": \"optional file glob filter e.g. '*.rs'\\", \
-                     \\"ignore_case\\": optional bool (default false)}",
+        description: "Recursively search file contents with regex. Respects                       .gitignore and skips hidden files. Use this to find where                       functions, classes, strings, or patterns are defined or used",
+        arguments: r#"{"pattern": "regex pattern", "path": "optional directory or file (default current dir)", "include": "optional file glob filter e.g. '*.rs'", "ignore_case": optional bool (default false)}"#,
         handler: search::grep,
         requires_confirmation: false,
     },
     Tool {
         name: "glob",
-        description: "Find files by glob pattern (e.g. '**/*.rs', 'src/**/*.ts'). \
-                      Respects .gitignore and skips hidden files. Returns matching \
-                      paths, sorted. Use this to discover files by name",
-        arguments: "{\\"pattern\\": \"glob pattern\\", \
-                     \\"path\\": \"optional root directory (default current dir)\"}",
+        description: "Find files by glob pattern (e.g. '**/*.rs', 'src/**/*.ts').                       Respects .gitignore and skips hidden files. Returns matching                       paths, sorted. Use this to discover files by name",
+        arguments: r#"{"pattern": "glob pattern", "path": "optional root directory (default current dir)"}"#,
         handler: search::glob,
         requires_confirmation: false,
     },
     Tool {
         name: "list_directory",
         description: "List files in a directory",
-        arguments: "{\\"path\\": \"directory path, defaults to current dir\"}",
+        arguments: r#"{"path": "directory path, defaults to current dir"}"#,
         handler: search::list_directory,
         requires_confirmation: false,
     },
@@ -200,107 +190,337 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "delete_file",
         description: "Delete a file from the filesystem",
-        arguments: "{\\"path\\": \"file to delete\"}",
+        arguments: r#"{"path": "file to delete"}"#,
         handler: filesystem::delete_file,
         requires_confirmation: true,
     },
     Tool {
         name: "move_file",
         description: "Move or rename a file or directory to a new path",
-        arguments: "{\\"src\\": \"source path\\", \\"dest\\": \"destination path\"}",
+        arguments: r#"{"src": "source path", "dest": "destination path"}"#,
         handler: filesystem::move_file,
         requires_confirmation: true,
     },
     Tool {
         name: "copy_file",
         description: "Copy a file to a new path",
-        arguments: "{\\"src\\": \"source path to copy\\", \\"dest\\": \"destination path\"}",
+        arguments: r#"{"src": "source path to copy", "dest": "destination path"}"#,
         handler: filesystem::copy_file,
         requires_confirmation: true,
     },
     Tool {
         name: "run_command",
-        description: "Run a shell command and return its stdout/stderr and exit code. \
-                      Supports an optional working directory, environment overrides, and \
-                      a timeout (default 120s, killed on expiry). Output is capped. Use \
-                      for builds, tests, git, etc.",
-        arguments: "{\\"command\\": \"full shell command string\\", \
-                     \\"cwd\\": \"optional working directory (default current dir)\\", \
-                     \\"timeout_ms\\": \"optional timeout in ms (default 120000)\\", \
-                     \\"env\\": \"optional object of extra env vars\"}",
+        description: "Run a shell command and return its stdout/stderr and exit code.                       Supports an optional working directory, environment overrides, and                       a timeout (default 120s, killed on expiry). Output is capped. Use                       for builds, tests, git, etc.",
+        arguments: r#"{"command": "full shell command string", "cwd": "optional working directory (default current dir)", "timeout_ms": "optional timeout in ms (default 120000)", "env": "optional object of extra env vars"}"#,
         handler: exec::run_command,
         requires_confirmation: true,
     },
     Tool {
         name: "search_web",
         description: "Performs a web search to look up documentation, API details, or code patterns.",
-        arguments: "{\\"query\\": \"search query terms\\", \\"domain\\": \"optional domain filter e.g. 'docs.rs'\"}",
-        handler: search::search_web,
+        arguments: r#"{"query": "search query terms", "domain": "optional domain filter e.g. 'docs.rs'"}"#,
+        handler: misc::search_web,
         requires_confirmation: false,
     },
     Tool {
         name: "find_symbol",
         description: "Queries the codebase symbol index for matching structures, functions, enums, impls, traits, or modules. Returns definition location and signature.",
-        arguments: "{\\"query\\": \"search query string (fuzzy matching on symbol name)\"}",
+        arguments: r#"{"query": "search query string (fuzzy matching on symbol name)"}"#,
         handler: search::find_symbol_tool,
         requires_confirmation: false,
     },
     Tool {
         name: "get_project_map",
         description: "Generates a compressed map of all symbols and API signatures in the codebase to understand project structure.",
-        arguments: "{}",
+        arguments: r#"{}"#,
         handler: search::get_project_map_tool,
         requires_confirmation: false,
     },
     Tool {
         name: "view_file",
         description: "View the contents of a file. Supports line ranges (1-indexed) and optional byte offset if content is truncated.",
-        arguments: "{\\"path\\": \"absolute or relative path to file\\", \
-                     \\"start_line\\": \"optional start line number, 1-indexed (default 1)\\", \
-                     \\"end_line\\": \"optional end line number, 1-indexed (default start_line + 500)\\", \
-                     \\"content_offset\\": \"optional byte offset into content\"}",
+        arguments: r#"{"path": "absolute or relative path to file", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (default start_line + 500)", "content_offset": "optional byte offset into content"}"#,
         handler: filesystem::view_file_tool,
         requires_confirmation: false,
     },
     Tool {
         name: "replace_file_content",
-        description: "Surgically edit a contiguous block of text in an existing file. \
-                      Requires specifying the line boundaries, the exact target content, \
-                      and the replacement content.",
-        arguments: "{\\"path\\": \"absolute or relative path to file\\", \
-                     \\"start_line\\": \"1-indexed start line containing target content\\", \
-                     \\"end_line\\": \"1-indexed end line containing target content\\", \
-                     \\"target_content\\": \"precise block of code to edit (must match file exactly)\\", \
-                     \\"replacement_content\\": \"complete replacement text for that block\"}",
+        description: "Surgically edit a contiguous block of text in an existing file.                       Requires specifying the line boundaries, the exact target content,                       and the replacement content.",
+        arguments: r#"{"path": "absolute or relative path to file", "start_line": "1-indexed start line containing target content", "end_line": "1-indexed end line containing target content", "target_content": "precise block of code to edit (must match file exactly)", "replacement_content": "complete replacement text for that block"}"#,
         handler: filesystem::replace_file_content_tool,
         requires_confirmation: true,
     },
     Tool {
         name: "multi_replace_file_content",
-        description: "Apply multiple non-contiguous edits across a single file in a single tool call. \
-                      Specify each edit as a separate replacement chunk.",
-        arguments: "{\\"path\\": \"absolute or relative path to file\\", \
-                     \\"replacements\\": \"array of objects, each containing: {start_line, end_line, target_content, replacement_content}\"}",
+        description: "Apply multiple non-contiguous edits across a single file in a single tool call.                       Specify each edit as a separate replacement chunk.",
+        arguments: r#"{"path": "absolute or relative path to file", "replacements": "array of objects, each containing: {start_line, end_line, target_content, replacement_content}"}"#,
         handler: filesystem::multi_replace_file_content_tool,
         requires_confirmation: true,
     },
     Tool {
         name: "write_to_file",
-        description: "Create a new file or overwrite an existing file with complete content. \
-                      Creates parent directories automatically.",
-        arguments: "{\\"path\\": \"absolute or relative path to file\\", \
-                     \\"content\\": \"entire contents to write\\", \
-                     \\"overwrite\\": \"set true to allow overwriting an existing file (default false)\"}",
+        description: "Create a new file or overwrite an existing file with complete content.                       Creates parent directories automatically.",
+        arguments: r#"{"path": "absolute or relative path to file", "content": "entire contents to write", "overwrite": "set true to allow overwriting an existing file (default false)"}"#,
         handler: filesystem::write_to_file_tool,
         requires_confirmation: true,
     },
     Tool {
         name: "complete_task",
         description: "Mark the continuous goal/task as successfully complete.",
-        arguments: "{\\"result\\": \"summary of what was achieved and final results\"}",
+        arguments: r#"{"result": "summary of what was achieved and final results"}"#,
         handler: misc::complete_task_tool,
         requires_confirmation: false,
     },
 ];
-
+#[allow(dead_code)]
 pub const MAX_TOOL_ROUNDS: usize = 60;
+
+pub fn is_agent_tool(name: &str) -> bool {
+    matches!(name, "spawn_agent" | "send_agent" | "set_goal" | "todo_write")
+}
+
+pub fn tool_system_prompt(
+    include_agent_tools: bool,
+    protocol: crate::config::ToolProtocol,
+) -> String {
+    let mut p = String::new();
+
+    p.push_str(
+        "You are rustcode, a terminal-based coding assistant.\n\
+- Use `sandbox/` for temporary scripts/builds, and `artifacts/` for persistent designs/reports.\n\
+- For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
+# Rules\n\
+- Be concise and direct. No filler or preamble.\n\
+- Explore first: use `grep`, `glob`, `view_file` to understand context before editing.\n\
+- Prefer targeted `replace_file_content` or `multi_replace_file_content` over `write_to_file`. Use paging with `view_file` (start_line/end_line).\n\
+- Match project code style.\n\
+- Only run tests/builds or commit/push code when explicitly requested by the user.\n\
+- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\n\
+# Working memory & avoiding loops\n\
+- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk. Each round you are reminded of which files are already in context.\n\
+- Do not repeat a tool call you just made with the same arguments. If a read or search came up empty, change your query or your approach rather than retrying.\n\
+- For any multi-step task, FIRST call `todo_write` to lay out a short numbered plan, then execute each step in order. Update statuses as you go. Do not re-derive the whole plan each turn — trust the plan you wrote.\n\n"
+    );
+
+    p.push_str("# Tool Format\n");
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            p.push_str(
+                "To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\n\
+                ```tool\n\
+                {\"name\": \"tool_name\", \"arguments\": {...}}\n\
+                ```\n\n\
+                Rules:\n\
+                - Keys must be \"name\" and \"arguments\".\n\
+                - Pass correct type for arguments (no quotes for numbers/booleans).\n\n"
+            );
+        }
+    }
+
+    p.push_str("Available tools:\n");
+    for t in TOOLS {
+        p.push_str(&format!(
+            "- {} | Args: {} | {}\n",
+            t.name, t.arguments, t.description
+        ));
+    }
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(tools) = client.get_tools() {
+                for tool in tools {
+                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let desc = tool
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+                    let schema = tool.get("inputSchema").unwrap_or(&serde_json::Value::Null);
+                    p.push_str(&format!(
+                        "- {} | Args: {} | {}\n",
+                        name,
+                        serde_json::to_string(schema).unwrap_or_default(),
+                        desc
+                    ));
+                }
+            }
+        }
+    }
+    if include_agent_tools {
+        p.push_str(
+            "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
+            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Send follow-up to subagent.\n\
+            - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n\
+            - todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n",
+        );
+    }
+
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            p.push_str(
+                "\nExample (task — needs a tool):\n\
+User: Where is the agent loop implemented?\n\
+Assistant:\n\
+```tool\n\
+{\"name\": \"grep\", \"arguments\": {\"pattern\": \"agent loop\", \"include\": \"*.rs\"}}\n\
+```\n\n\
+Example (conversation — no tool):\n\
+User: hello, how are you?\n\
+Assistant: Hi! Ready to help with your code. What are you working on?\n",
+            );
+        }
+    }
+
+    p
+}
+
+fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
+    let name = json.get("name")?.as_str()?.to_string();
+    let args = json
+        .get("arguments")
+        .cloned()
+        .unwrap_or(Value::Object(Default::default()));
+    Some((name, args))
+}
+
+fn parse_tool_calls_impl(
+    text: &str,
+    protocol: crate::config::ToolProtocol,
+) -> Vec<(String, Value)> {
+    match protocol {
+        crate::config::ToolProtocol::Json => {
+            // Try to extract JSON objects from the response
+            let mut calls = Vec::new();
+            
+            // Look for ```tool blocks first
+            if let Some(start) = text.find("```tool") {
+                let rest = &text[start + 7..];
+                if let Some(end) = rest.find("```") {
+                    let tool_block = &rest[..end].trim();
+                    if !tool_block.is_empty() {
+                        if let Ok(json_value) = serde_json::from_str::<Value>(tool_block) {
+                            if let Some(call) = extract_tool_call(&json_value) {
+                                calls.push(call);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // If no tool blocks found, try to parse the whole text as JSON
+            if calls.is_empty() {
+                if let Ok(json_value) = serde_json::from_str::<Value>(text.trim()) {
+                    if let Some(call) = extract_tool_call(&json_value) {
+                        calls.push(call);
+                    }
+                }
+            }
+            
+            // Try to find JSON objects in the text
+            if calls.is_empty() {
+                let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
+                for mat in pattern.find_iter(text) {
+                    let json_str = mat.as_str();
+                    if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
+                        if let Some(call) = extract_tool_call(&json_value) {
+                            calls.push(call);
+                        }
+                    }
+                }
+            }
+            
+            // Deduplicate
+            calls.dedup();
+            calls
+        }
+    }
+}
+
+pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
+    let raw_calls = parse_tool_calls_impl(text, protocol);
+    let mut unique_calls = Vec::new();
+    for call in raw_calls {
+        if !unique_calls
+            .iter()
+            .any(|(n, a)| n == &call.0 && a == &call.1)
+        {
+            unique_calls.push(call);
+        }
+    }
+    unique_calls
+}
+
+pub fn parse_tool_call(
+    text: &str,
+    protocol: crate::config::ToolProtocol,
+) -> Option<(String, Value)> {
+    parse_tool_calls(text, protocol).into_iter().next()
+}
+
+pub fn execute(name: &str, args: &Value) -> String {
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(tools) = client.get_tools() {
+                if tools
+                    .iter()
+                    .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
+                {
+                    let handle = tokio::runtime::Handle::current();
+                    let client_clone = Arc::clone(client);
+                    let name_owned = name.to_string();
+                    let args_clone = args.clone();
+
+                    let res = handle.block_on(async move {
+                        client_clone
+                            .call(
+                                "tools/call",
+                                serde_json::json!({
+                                    "name": name_owned,
+                                    "arguments": args_clone
+                                }),
+                            )
+                            .await
+                    });
+
+                    return match res {
+                        Ok(val) => {
+                            if let Some(content_arr) = val
+                                .get("result")
+                                .and_then(|r| r.get("content"))
+                                .and_then(|c| c.as_array())
+                            {
+                                let mut text_parts = Vec::new();
+                                for item in content_arr {
+                                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                        text_parts.push(text.to_string());
+                                    }
+                                }
+                                text_parts.join("\n")
+                            } else {
+                                serde_json::to_string_pretty(&val).unwrap_or_default()
+                            }
+                        }
+                        Err(e) => format!("error: MCP tool call failed: {e}"),
+                    };
+                }
+            }
+        }
+    }
+
+    match TOOLS.iter().find(|t| t.name == name) {
+        Some(tool) => match (tool.handler)(args) {
+            Ok(out) => out,
+            Err(e) => format!("error: {e}"),
+        },
+        None => format!(
+            "error: unknown tool '{name}'. Available: {}",
+            TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+pub fn needs_confirmation(name: &str) -> bool {
+    TOOLS
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| t.requires_confirmation)
+        .unwrap_or(false)
+}
