@@ -43,87 +43,173 @@ async fn count_tokens(text: &str) -> Option<u32> {
         .ok()
 }
 
+/// Classify a stored tool result for compaction priority.
+/// Returns `None` for non-tool messages. Tool results are bucketed into:
+/// "throwaway" (run_command, grep, glob, list_directory, get_time,
+/// find_symbol, get_project_map, search_web) — pruned first; "file"
+/// (view_file contents) — pruned last; and "other".
+fn classify_tool_msg(m: &ChatMessage) -> Option<&'static str> {
+    if m.role != "tool" {
+        return None;
+    }
+    let name = m.content.split(':').next().unwrap_or("").trim();
+    Some(match name {
+        "run_command" | "grep" | "glob" | "list_directory" | "get_time"
+        | "find_symbol" | "get_project_map" | "search_web" => "throwaway",
+        "view_file" => "file",
+        _ => "other",
+    })
+}
+
+/// True when a tool result has already been reduced to a stub (nothing left to prune).
+fn is_fully_stubbed(m: &ChatMessage) -> bool {
+    let rest = m
+        .content
+        .split_once(':')
+        .map(|x| x.1)
+        .unwrap_or("")
+        .trim_start();
+    rest.starts_with("[Tool output truncated")
+        || rest.starts_with("[superseded")
+}
+
+/// Extract the path from an intact `view_file: [File: <path>, ...]` result.
+fn view_file_path_from_tool_msg(content: &str) -> Option<String> {
+    let rest = content.strip_prefix("view_file:")?;
+    let after = rest.split("[File:").nth(1)?;
+    let path = after.split(',').next()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+/// Collapse repeated reads of the same file: keep only the newest intact result per
+/// path and stub the older ones. Stops the read → prune → re-read cycle at its source.
+fn dedupe_view_file_reads(history: &mut [ChatMessage]) {
+    use std::collections::HashMap;
+    let mut keep_index: HashMap<String, usize> = HashMap::new();
+    for (idx, m) in history.iter().enumerate() {
+        if let Some(path) = view_file_path_from_tool_msg(&m.content) {
+            keep_index.insert(path, idx); // newest wins
+        }
+    }
+    for (idx, m) in history.iter_mut().enumerate() {
+        if let Some(path) = view_file_path_from_tool_msg(&m.content)
+            && keep_index.get(&path) != Some(&idx)
+        {
+            m.content = format!("view_file: [superseded by a later read of {path}]");
+        }
+    }
+}
+
+/// Reduce one tool message a single notch toward a stub (full → 2 lines → fully
+/// stubbed). Returns the new token count. Idempotent on already-stubbed messages.
+async fn reduce_tool_msg(m: &mut ChatMessage, current_tokens: u32) -> u32 {
+    let tool_name = m
+        .content
+        .split(':')
+        .next()
+        .unwrap_or("tool")
+        .trim()
+        .to_string();
+    let rest = m
+        .content
+        .split_once(':')
+        .map(|x| x.1)
+        .unwrap_or("")
+        .to_string();
+
+    if is_fully_stubbed(m) {
+        return current_tokens;
+    }
+
+    let lines: Vec<&str> = rest.lines().collect();
+    if lines.len() > 2 {
+        let truncated = format!("{}: {}\n{}", tool_name, lines[0], lines[1]);
+        let t = count_tokens(&truncated)
+            .await
+            .unwrap_or((truncated.len() / 4) as u32);
+        m.content = truncated;
+        t
+    } else {
+        let stubbed = format!(
+            "{}: [Tool output truncated: {} tokens pruned to maintain context window]",
+            tool_name, current_tokens
+        );
+        count_tokens(&stubbed)
+            .await
+            .unwrap_or((stubbed.len() / 4) as u32)
+    }
+}
+
+/// Repeatedly reduce the oldest non-stubbed tool result of `class` until under budget
+/// or the class is exhausted. Mutates `history`, `tokens`, and `total` in place.
+async fn prune_class(
+    history: &mut [ChatMessage],
+    tokens: &mut [u32],
+    total: &mut u32,
+    budget: u32,
+    class: &'static str,
+) {
+    while *total > budget {
+        let target = history
+            .iter()
+            .enumerate()
+            .find(|(_, m)| classify_tool_msg(m) == Some(class) && !is_fully_stubbed(m))
+            .map(|(i, _)| i);
+        let Some(idx) = target else { return; };
+        let before = tokens[idx];
+        let new_t = reduce_tool_msg(&mut history[idx], before).await;
+        if new_t >= before {
+            // Defensive: nothing more we can do here.
+            return;
+        }
+        *total = total.saturating_sub(before).saturating_add(new_t);
+        tokens[idx] = new_t;
+    }
+}
+
 async fn compact_history_to_budget(history: &mut [ChatMessage], budget: u32) {
     if history.is_empty() {
         return;
     }
 
-    // Strip <think> blocks from all assistant messages first to free up budget and prevent distraction
+    // Strip <think> blocks from all assistant messages first to free up budget.
     for m in history.iter_mut() {
         if m.role == "assistant" {
             m.content = strip_think_blocks(&m.content);
         }
     }
 
+    // Drop superseded reads of the same file before measuring tokens.
+    dedupe_view_file_reads(history);
+
     let mut tokens = Vec::with_capacity(history.len());
     for m in history.iter() {
-        let t = count_tokens(&m.content).await.unwrap_or_else(|| (m.content.len() / 4) as u32);
+        let t = count_tokens(&m.content)
+            .await
+            .unwrap_or_else(|| (m.content.len() / 4) as u32);
         tokens.push(t);
     }
-
-    let mut total_tokens: u32 = tokens.iter().sum();
-    if total_tokens <= budget {
+    let mut total: u32 = tokens.iter().sum();
+    if total <= budget {
         return;
     }
 
     dbg_log!(
-        "History tokens ({}) exceed budget ({}). Compacting older tool outputs.",
-        total_tokens,
+        "History tokens ({}) exceed budget ({}). Compacting tool outputs by priority.",
+        total,
         budget
     );
 
-    // Compact from oldest to newest (index 0 upwards)
-    for idx in 0..history.len() {
-        if total_tokens <= budget {
-            break;
-        }
+    // Prune lowest-value outputs first: throwaway snapshots, then file contents,
+    // then anything else still taking space. Each class is flattened oldest-first.
+    prune_class(history, &mut tokens, &mut total, budget, "throwaway").await;
+    prune_class(history, &mut tokens, &mut total, budget, "file").await;
+    prune_class(history, &mut tokens, &mut total, budget, "other").await;
 
-        let m = &mut history[idx];
-        if m.role == "tool" {
-            if m.content.contains("Tool output truncated:") {
-                continue;
-            }
-
-            let old_tokens = tokens[idx];
-            let tool_name = {
-                let parts: Vec<&str> = m.content.splitn(2, ':').collect();
-                if parts.len() > 1 { parts[0].trim().to_string() } else { "tool".to_string() }
-            };
-            let rest = {
-                let parts: Vec<&str> = m.content.splitn(2, ':').collect();
-                if parts.len() > 1 { parts[1].to_string() } else { String::new() }
-            };
-
-            let lines: Vec<&str> = rest.lines().collect();
-            if lines.len() > 2 {
-                // Try 2-line truncation first
-                let truncated_content = format!("{}: {}\n{}", tool_name, lines[0], lines[1]);
-                let truncated_tokens = count_tokens(&truncated_content).await.unwrap_or_else(|| (truncated_content.len() / 4) as u32);
-                
-                m.content = truncated_content;
-                tokens[idx] = truncated_tokens;
-                total_tokens = total_tokens.saturating_sub(old_tokens).saturating_add(truncated_tokens);
-
-                if total_tokens <= budget {
-                    break;
-                }
-            }
-
-            // If still over budget, clear completely
-            let old_tokens_current = tokens[idx];
-            let cleared_content = format!("{}: [Tool output truncated: {} tokens pruned to maintain context window]", tool_name, old_tokens);
-            let cleared_tokens = count_tokens(&cleared_content).await.unwrap_or_else(|| (cleared_content.len() / 4) as u32);
-
-            m.content = cleared_content;
-            tokens[idx] = cleared_tokens;
-            total_tokens = total_tokens.saturating_sub(old_tokens_current).saturating_add(cleared_tokens);
-        }
-    }
-
-    dbg_log!(
-        "Compact finished. New history tokens: {}",
-        total_tokens
-    );
+    dbg_log!("Compact finished. New history tokens: {}", total);
 }
 
 
@@ -295,6 +381,34 @@ pub fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
         let last_idx = msgs.len() - 1;
         msgs.insert(last_idx, reminder);
     }
+}
+
+/// Read-only tools whose results can be safely short-circuited by the repeat guard.
+fn is_read_only_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "view_file" | "list_directory" | "grep" | "glob" | "get_time"
+            | "find_symbol" | "get_project_map" | "search_web"
+    )
+}
+
+/// A canonical key identifying "the same call" for the repeat guard.
+fn tool_signature(name: &str, args: &serde_json::Value) -> String {
+    let key = match name {
+        // Bucket full/default reads together so paging can't bypass the guard.
+        "view_file" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            match args.get("end_line").and_then(|v| v.as_u64()) {
+                Some(e) => {
+                    let start = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1);
+                    format!("{path}|{start}-{e}")
+                }
+                None => format!("{path}|full"),
+            }
+        }
+        _ => serde_json::to_string(args).unwrap_or_default(),
+    };
+    format!("{name}:{key}")
 }
 
 fn parse_sse_line(line: &str) -> Option<&str> {
@@ -1173,6 +1287,49 @@ async fn handle_agent_tool(
             s.cursor_position = 0;
             format!("Success: Goal set to '{}'. You are now in continuous autoloop mode. Continue executing tools to complete this goal, and call the 'complete_task' tool when fully done.", goal)
         }
+        "todo_write" => {
+            let Some(arr) = args.get("todos").and_then(|t| t.as_array()) else {
+                return "error: missing 'todos' array argument".to_string();
+            };
+            let mut todos = Vec::with_capacity(arr.len());
+            for item in arr {
+                let Some(content) = item
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .filter(|c| !c.trim().is_empty())
+                else {
+                    return "error: each todo needs a non-empty 'content'".to_string();
+                };
+                let status = item
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("pending")
+                    .to_string();
+                let priority = item
+                    .get("priority")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("medium")
+                    .to_string();
+                todos.push(crate::app::TodoItem {
+                    content: content.to_string(),
+                    status,
+                    priority,
+                });
+            }
+            let summary = format!(
+                "Plan updated ({} item(s)): {}",
+                todos.len(),
+                todos
+                    .iter()
+                    .map(|t| format!("[{}] {}", t.status, t.content))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            );
+            let mut s = state.lock().await;
+            s.todos = todos;
+            drop(s);
+            summary
+        }
         _ => format!("error: unknown agent tool '{name}'"),
     }
 }
@@ -1337,11 +1494,52 @@ pub async fn process_queue_orchestrator(
             let budget_token_limit = { state.lock().await.config.history_token_budget };
             compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
-            let system_prompt = format!(
+            let (mut read_files, todos) = {
+                let s = state.lock().await;
+                let mut files: Vec<String> = s.read_files.iter().cloned().collect();
+                files.sort();
+                (files, s.todos.clone())
+            };
+
+            let mut system_prompt = format!(
                 "{}\n\n{}",
                 crate::tools::tool_system_prompt(true, crate::config::ToolProtocol::Json),
                 crate::context::environment_context()
             );
+
+            // Remind the agent which files it already has so it doesn't re-read them.
+            if !read_files.is_empty() {
+                system_prompt.push_str(&format!(
+                    "\n\n# Files already in context (do NOT re-read these unless they changed on disk)\n{}",
+                    read_files
+                        .drain(..)
+                        .map(|f| format!("- {f}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ));
+            }
+
+            // Re-inject the persistent task plan so the agent executes across turns
+            // instead of re-planning from scratch.
+            if !todos.is_empty() {
+                system_prompt.push_str(
+                    "\n\n# Your current task plan (execute in order; update via todo_write)\n",
+                );
+                for (i, t) in todos.iter().enumerate() {
+                    let mark = match t.status.as_str() {
+                        "completed" => "[x]",
+                        "in_progress" => "[~]",
+                        _ => "[ ]",
+                    };
+                    system_prompt.push_str(&format!(
+                        "{}. {} {} ({})\n",
+                        i + 1,
+                        mark,
+                        t.content,
+                        t.priority
+                    ));
+                }
+            }
             let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
                 "role": "system",
                 "content": system_prompt.clone(),
@@ -1638,7 +1836,25 @@ pub async fn process_queue_orchestrator(
                             let args_clone = args.clone();
 
                             let fut = async move {
-                                let (result, diff_opt) = if crate::tools::is_agent_tool(&name_clone)
+                                let sig = tool_signature(&name_clone, &args_clone);
+
+                                // Repeat-loop guard: short-circuit identical read-only
+                                // calls the agent already made recently (e.g. viewing the
+                                // same file twice). Their output is still in the context.
+                                let is_read_only = is_read_only_tool(&name_clone);
+                                let is_repeat = is_read_only && {
+                                    let s = state_clone.lock().await;
+                                    s.recent_read_calls.iter().any(|c| c == &sig)
+                                };
+
+                                let (result, diff_opt) = if is_repeat {
+                                    (
+                                        "You already ran this exact call recently and its output is still in the conversation above. \
+                                         Do not repeat it — pick a different action, change the query, or summarize/finish."
+                                            .to_string(),
+                                        None,
+                                    )
+                                } else if crate::tools::is_agent_tool(&name_clone)
                                 {
                                     (
                                         handle_agent_tool(
@@ -1662,6 +1878,25 @@ pub async fn process_queue_orchestrator(
                                     )
                                     .await
                                 };
+
+                                // Record this call so future identical read-only calls
+                                // are caught by the guard, and remember read file paths.
+                                if is_read_only && !is_repeat {
+                                    let mut s = state_clone.lock().await;
+                                    if !s.recent_read_calls.contains(&sig) {
+                                        s.recent_read_calls.push_back(sig);
+                                        while s.recent_read_calls.len() > 8 {
+                                            s.recent_read_calls.pop_front();
+                                        }
+                                    }
+                                    if name_clone == "view_file"
+                                        && let Some(p) =
+                                            args_clone.get("path").and_then(|p| p.as_str())
+                                    {
+                                        s.read_files.insert(p.to_string());
+                                    }
+                                }
+
                                 (name_clone, result, diff_opt)
                             };
                             futures.push(fut);
@@ -2053,5 +2288,123 @@ mod tests {
         compact_history_to_budget(&mut history, 5000).await;
         assert_eq!(history[0].content, "\nHere is the answer");
         assert_eq!(history[1].content, "tool output");
+    }
+
+    #[test]
+    fn test_view_file_path_extraction() {
+        let content = "view_file: [File: src/main.rs, Lines 1 to 500 of 1128, Bytes offset: 0]\n1: mod app;";
+        assert_eq!(
+            view_file_path_from_tool_msg(content),
+            Some("src/main.rs".to_string())
+        );
+        // Stubs and non-view_file messages yield None.
+        assert_eq!(
+            view_file_path_from_tool_msg("view_file: [Tool output truncated: 123 pruned]"),
+            None
+        );
+        assert_eq!(view_file_path_from_tool_msg("grep: some match"), None);
+        assert_eq!(view_file_path_from_tool_msg(""), None);
+    }
+
+    #[test]
+    fn test_classify_tool_msg() {
+        assert_eq!(
+            classify_tool_msg(&ChatMessage::new("tool", "run_command: done")),
+            Some("throwaway")
+        );
+        assert_eq!(
+            classify_tool_msg(&ChatMessage::new("tool", "grep: match")),
+            Some("throwaway")
+        );
+        assert_eq!(
+            classify_tool_msg(&ChatMessage::new("tool", "view_file: [File: x]")),
+            Some("file")
+        );
+        assert_eq!(
+            classify_tool_msg(&ChatMessage::new("tool", "check_match: 2-1")),
+            Some("other")
+        );
+        assert_eq!(classify_tool_msg(&ChatMessage::new("assistant", "hi")), None);
+    }
+
+    #[test]
+    fn test_dedupe_view_file_reads_keeps_newest() {
+        let mk = |content: &str| ChatMessage::new("tool", content);
+        let vf = |path: &str| {
+            format!("view_file: [File: {path}, Lines 1 to 10 of 10]\n1: a\n2: b")
+        };
+        let mut history = vec![
+            mk(&vf("src/main.rs")), // 0: old read -> stubbed
+            mk("grep: match"),      // 1: untouched
+            mk(&vf("src/main.rs")), // 2: superseded -> stubbed
+            mk(&vf("src/other.rs")), // 3: sole read -> kept
+            mk(&vf("src/main.rs")), // 4: newest read -> kept
+        ];
+        dedupe_view_file_reads(&mut history);
+        assert!(history[0].content.contains("[superseded"));
+        assert_eq!(history[1].content, "grep: match");
+        assert!(history[2].content.contains("[superseded"));
+        assert!(!history[3].content.contains("[superseded"));
+        assert!(!history[4].content.contains("[superseded"));
+        assert!(history[4].content.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_tool_signature_buckets_full_reads() {
+        let full_default = serde_json::json!({"path": "src/main.rs"});
+        let full_start1 = serde_json::json!({"path": "src/main.rs", "start_line": 1});
+        let paged = serde_json::json!({"path": "src/main.rs", "start_line": 500, "end_line": 1000});
+        let other = serde_json::json!({"path": "src/other.rs"});
+        // Two full/default reads of the same file collapse to one signature.
+        assert_eq!(
+            tool_signature("view_file", &full_default),
+            tool_signature("view_file", &full_start1)
+        );
+        // A distinct explicit page is its own signature.
+        assert_ne!(
+            tool_signature("view_file", &full_default),
+            tool_signature("view_file", &paged)
+        );
+        assert_ne!(
+            tool_signature("view_file", &full_default),
+            tool_signature("view_file", &other)
+        );
+    }
+
+    #[test]
+    fn test_is_read_only_tool() {
+        assert!(is_read_only_tool("view_file"));
+        assert!(is_read_only_tool("grep"));
+        assert!(!is_read_only_tool("write_to_file"));
+        assert!(!is_read_only_tool("run_command"));
+        assert!(!is_read_only_tool("todo_write"));
+    }
+
+    #[tokio::test]
+    async fn test_compact_prunes_throwaway_before_file_contents() {
+        // Large throwaway command output + small file contents.
+        let big_cmd = format!(
+            "run_command: {}",
+            (0..60)
+                .map(|i| format!("output line number {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let file = "view_file: [File: src/main.rs, Lines 1 to 5 of 5]\n1: a\n2: b\n3: c\n4: d\n5: e";
+        let file_original = file.to_string();
+        let mut history = vec![
+            ChatMessage::new("tool", big_cmd.clone()), // throwaway, oldest
+            ChatMessage::new("tool", file.to_string()), // file contents, newer
+        ];
+        // Budget forces compaction; the throwaway must absorb the cut so the file
+        // contents the agent is actively working on survive intact.
+        compact_history_to_budget(&mut history, 80).await;
+        assert_eq!(history[1].content, file_original, "file contents preserved");
+        assert_ne!(history[0].content, big_cmd, "throwaway was reduced");
+        assert!(
+            !history[0].content.contains("line number 59"),
+            "throwaway truncated: {}",
+            history[0].content
+        );
     }
 }

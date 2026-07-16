@@ -770,7 +770,9 @@ fn delete_file(args: &Value) -> Result<String, String> {
         .ok_or("missing 'path' argument")?;
     let resolved_path = resolve_tool_path(path);
     if !resolved_path.exists() {
-        return Err(format!("'{path}' does not exist"));
+        // Idempotent: a missing file is already in the desired state. Returning an
+        // error here used to derail the agent into confusion mid-task.
+        return Ok(format!("'{path}' does not exist (already gone)"));
     }
     if resolved_path.is_dir() {
         return Err(format!(
@@ -836,7 +838,7 @@ fn copy_file(args: &Value) -> Result<String, String> {
 /// need app state), not by the sync handlers in TOOLS. Only offered to the
 /// main agent — subagents cannot spawn or message other agents.
 pub fn is_agent_tool(name: &str) -> bool {
-    matches!(name, "spawn_agent" | "send_agent" | "set_goal")
+    matches!(name, "spawn_agent" | "send_agent" | "set_goal" | "todo_write")
 }
 
 pub fn tool_system_prompt(
@@ -855,7 +857,11 @@ pub fn tool_system_prompt(
 - Prefer targeted `replace_file_content` or `multi_replace_file_content` over `write_to_file`. Use paging with `view_file` (start_line/end_line).\n\
 - Match project code style.\n\
 - Only run tests/builds or commit/push code when explicitly requested by the user.\n\
-- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\n"
+- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\n\
+# Working memory & avoiding loops\n\
+- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk. Each round you are reminded of which files are already in context.\n\
+- Do not repeat a tool call you just made with the same arguments. If a read or search came up empty, change your query or your approach rather than retrying.\n\
+- For any multi-step task, FIRST call `todo_write` to lay out a short numbered plan, then execute each step in order. Update statuses as you go. Do not re-derive the whole plan each turn — trust the plan you wrote.\n\n"
     );
 
     p.push_str("# Tool Format\n");
@@ -904,7 +910,8 @@ pub fn tool_system_prompt(
         p.push_str(
             "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
             - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Send follow-up to subagent.\n\
-            - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n",
+            - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n\
+            - todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n",
         );
     }
 
