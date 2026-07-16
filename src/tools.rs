@@ -49,7 +49,7 @@ pub fn get_active_session_id() -> Option<String> {
     ACTIVE_SESSION_ID.with(|f| f.borrow().clone())
 }
 
-fn resolve_tool_path(raw_path: &str) -> PathBuf {
+pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
     let p = Path::new(raw_path);
 
     // Check if the path contains a component named "sandbox"

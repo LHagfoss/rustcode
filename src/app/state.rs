@@ -266,9 +266,10 @@ pub struct AppState {
     /// Persistent task plan, written via the `todo_write` agent tool.
     pub todos: Vec<TodoItem>,
 
-    /// Canonical paths the agent has already read this session. Surfaced back to
-    /// the model each round so it doesn't re-read files already in context.
-    pub read_files: std::collections::HashSet<String>,
+    /// File paths the agent has read this session, mapped to the file's mtime at
+    /// read time. Surfaced back to the model so it doesn't re-read unchanged files,
+    /// and used by the repeat guard to ALLOW re-reads when a file changed on disk.
+    pub read_file_mtimes: std::collections::HashMap<String, std::time::SystemTime>,
 
     /// Signatures of recent read-only tool calls, used by the repeat-loop guard
     /// to short-circuit identical re-reads (e.g. viewing the same file twice).
@@ -372,7 +373,7 @@ impl AppState {
             subagents: Vec::new(),
             next_subagent_id: 1,
             todos: Vec::new(),
-            read_files: std::collections::HashSet::new(),
+            read_file_mtimes: std::collections::HashMap::new(),
             recent_read_calls: std::collections::VecDeque::new(),
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
