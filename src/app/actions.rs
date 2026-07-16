@@ -249,6 +249,15 @@ pub async fn handle_enter(
 
                 s.history.push(ChatMessage::new("system", text));
             }
+            "/session" => {
+                let session_info = format!(
+                    "Session ID: {}\nToken budget (history_token_budget): {} tokens\nActive model: {}",
+                    s.active_session_id,
+                    s.config.history_token_budget,
+                    s.model_name
+                );
+                s.history.push(ChatMessage::new("system", session_info));
+            }
             "/protocol" | "/parser" => {
                 if tokens.len() < 2 {
                     let msg = "Current tool protocol: json\nThe only supported format is JSON. Use /tool to toggle between tool-calling and plain text mode.";

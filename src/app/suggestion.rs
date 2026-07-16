@@ -85,6 +85,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Resume most recent session",
     },
     CommandInfo {
+        name: "/session",
+        desc: "Show current session ID, token budget, and active model",
+    },
+    CommandInfo {
         name: "/stats",
         desc: "Show token usage and context statistics",
     },
