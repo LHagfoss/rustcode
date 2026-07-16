@@ -292,6 +292,7 @@ pub const TOOLS: &[Tool] = &[
     },
 ];
 
+#[allow(dead_code)]
 pub const MAX_TOOL_ROUNDS: usize = 60;
 
 fn get_time(_args: &Value) -> Result<String, String> {

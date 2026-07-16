@@ -44,7 +44,7 @@ pub async fn build_messages(state: &AppState) -> Vec<serde_json::Value> {
         .cloned()
         .collect();
 
-    let budget_token_limit = state.config.history_token_budget;
+    let budget_token_limit = state.get_history_token_budget();
     crate::network::compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
     let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({

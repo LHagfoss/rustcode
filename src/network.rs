@@ -1051,7 +1051,7 @@ async fn run_subagent(
             return format!("error: no subagent with id {agent_id}");
         }
 
-        let budget_token_limit = { state.lock().await.config.history_token_budget };
+        let budget_token_limit = { state.lock().await.get_history_token_budget() };
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
         let protocol = { state.lock().await.config.tool_protocol };
@@ -1570,6 +1570,8 @@ pub async fn process_queue_orchestrator(
         #[allow(unused_assignments)]
         let mut limit_reached = false;
         let mut last_sent_messages: Vec<serde_json::Value> = Vec::new();
+        let mut final_content = String::new();
+        let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
@@ -1585,7 +1587,7 @@ pub async fn process_queue_orchestrator(
                     .collect()
             };
 
-            let budget_token_limit = { state.lock().await.config.history_token_budget };
+            let budget_token_limit = { state.lock().await.get_history_token_budget() };
             compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
             let (mut read_files, todos) = {
@@ -1795,7 +1797,7 @@ pub async fn process_queue_orchestrator(
                 break;
             }
 
-            let final_content = accumulated_content;
+            final_content = accumulated_content;
             dbg_log!(
                 "Stream completed successfully. Content length: {} chars",
                 final_content.len()
@@ -1813,7 +1815,7 @@ pub async fn process_queue_orchestrator(
             let tool_calls = crate::tools::parse_tool_calls(&final_content, protocol);
             if !tool_calls.is_empty() {
                 dbg_log!("Parsed {} tool call requests", tool_calls.len());
-                if !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
+                if !cancel_token.is_cancelled() && tool_rounds < max_tool_rounds {
                     tool_rounds += 1;
 
                     // Gather all confirmations needed
@@ -2068,14 +2070,14 @@ pub async fn process_queue_orchestrator(
                     continue;
                 } else {
                     dbg_log!("Tool rounds exceeded MAX_TOOL_ROUNDS or cancelled");
-                    if !cancel_token.is_cancelled() && tool_rounds >= crate::tools::MAX_TOOL_ROUNDS
+                    if !cancel_token.is_cancelled() && tool_rounds >= max_tool_rounds
                     {
                         limit_reached = true;
                     }
                     break;
                 }
             } else if has_intended_tool_call(&final_content)
-                && tool_rounds < crate::tools::MAX_TOOL_ROUNDS
+                && tool_rounds < max_tool_rounds
             {
                 dbg_log!(
                     "Orchestrator: Detected malformed tool call, auto-correcting and retrying..."
@@ -2104,7 +2106,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             }
 
             let is_continuous = { state.lock().await.continuous_mode };
-            if is_continuous && !cancel_token.is_cancelled() && tool_rounds < crate::tools::MAX_TOOL_ROUNDS {
+            if is_continuous && !cancel_token.is_cancelled() && tool_rounds < max_tool_rounds {
                 dbg_log!("Continuous mode active, assistant didn't call complete_task. Injecting prompt to continue.");
                 tool_rounds += 1;
                 let mut s = state.lock().await;
@@ -2121,6 +2123,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 continue;
             }
 
+            break;
+        }
+
+        if !final_content.is_empty() {
             dbg_log!("Finishing agent loop, writing final assistant reply");
 
             let mut s = state.lock().await;
@@ -2135,7 +2141,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                     "system",
                     format!(
                         "⚠ Tool execution limit ({} rounds) reached. Type a message to continue or summarize.",
-                        crate::tools::MAX_TOOL_ROUNDS
+                        max_tool_rounds
                     ),
                 ));
             }
@@ -2177,7 +2183,6 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             let _ = crate::notifications::notify_finished(
                 crate::notifications::FinishedStatus::Success,
             );
-            break;
         }
 
         if cancel_token.is_cancelled() {

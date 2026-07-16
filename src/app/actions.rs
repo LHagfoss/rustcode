@@ -292,7 +292,7 @@ pub async fn handle_enter(
                 }
                 text.push_str(&format!(
                     "\n\nMax {} tool rounds per prompt. Add tools in src/tools.rs.",
-                    crate::tools::MAX_TOOL_ROUNDS
+                    s.config.max_tool_rounds
                 ));
                 s.history.push(ChatMessage::new("system", text));
             }

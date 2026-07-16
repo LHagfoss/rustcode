@@ -416,9 +416,25 @@ impl AppState {
         self.config
             .models
             .iter()
-            .find(|m| m.name == self.config.default.big())
+            .find(|m| m.model == self.model_name || m.name == self.model_name)
+            .or_else(|| {
+                self.config
+                    .models
+                    .iter()
+                    .find(|m| m.name == self.config.default.big())
+            })
             .and_then(|p| p.context_window)
             .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW)
+    }
+
+    pub fn get_history_token_budget(&self) -> u32 {
+        let cw = self.active_context_window();
+        // Use the larger of 75% of context window and the configured history_token_budget,
+        // but clamped to 85% of the context window.
+        let dynamic_budget = (cw as f64 * 0.75) as u32;
+        let budget = dynamic_budget.max(self.config.history_token_budget);
+        let limit = (cw as f64 * 0.85) as u32;
+        budget.min(limit)
     }
 
     fn clamp_cursor(&mut self) {
