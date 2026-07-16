@@ -10,6 +10,7 @@ pub(crate) use super::get_active_session_id;
 pub(crate) use super::parse_json_bool;
 pub(crate) use super::parse_json_number;
 pub(crate) use super::register_wakeup_callback;
+pub(crate) use super::get_background_tasks;
 pub(crate) use super::{BackgroundTaskInfo, WAKEUP_CALLBACK};
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;

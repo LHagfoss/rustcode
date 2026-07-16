@@ -265,11 +265,34 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
         .get("query")
         .and_then(|q| q.as_str())
         .ok_or("missing 'query' argument")?;
+
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot determine current directory: {e}"))?;
 
-    crate::symbols::update_index(&cwd);
-    crate::symbols::find_symbols(&cwd, query)
+    let _ = crate::symbols::update_index(&cwd);
+
+    let symbols = crate::symbols::find_symbol(&cwd, query)?;
+    if symbols.is_empty() {
+        return Ok(format!("No symbols found matching query '{}'.", query));
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Found {} symbols matching '{}':\n\n",
+        symbols.len(),
+        query
+    ));
+    for sym in symbols {
+        out.push_str(&format!(
+            "- {} ({}) in {} lines {}-{}\n",
+            sym.name,
+            sym.kind,
+            sym.path,
+            sym.start_line + 1,
+            sym.end_line + 1
+        ));
+    }
+    Ok(out)
 }
 
 pub fn get_project_map_tool(_args: &Value) -> Result<String, String> {
