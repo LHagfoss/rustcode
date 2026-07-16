@@ -392,6 +392,23 @@ fn is_read_only_tool(name: &str) -> bool {
     )
 }
 
+/// True only if we have read this file before AND its mtime is unchanged since.
+/// A re-read is allowed whenever the file is new, missing, or modified on disk —
+/// so the agent can always refresh after a (possibly partial) edit.
+fn view_file_unchanged_since_last_read(
+    stored: Option<std::time::SystemTime>,
+    current: Option<std::time::SystemTime>,
+) -> bool {
+    matches!((stored, current), (Some(a), Some(b)) if a == b)
+}
+
+/// Best-effort mtime of the resolved tool path (None if it can't be stat'd).
+fn path_mtime(raw_path: &str) -> Option<std::time::SystemTime> {
+    std::fs::metadata(crate::tools::resolve_tool_path(raw_path))
+        .and_then(|m| m.modified())
+        .ok()
+}
+
 /// A canonical key identifying "the same call" for the repeat guard.
 fn tool_signature(name: &str, args: &serde_json::Value) -> String {
     let key = match name {
@@ -1496,7 +1513,8 @@ pub async fn process_queue_orchestrator(
 
             let (mut read_files, todos) = {
                 let s = state.lock().await;
-                let mut files: Vec<String> = s.read_files.iter().cloned().collect();
+                let mut files: Vec<String> =
+                    s.read_file_mtimes.keys().cloned().collect();
                 files.sort();
                 (files, s.todos.clone())
             };
@@ -1836,21 +1854,49 @@ pub async fn process_queue_orchestrator(
                             let args_clone = args.clone();
 
                             let fut = async move {
-                                let sig = tool_signature(&name_clone, &args_clone);
-
-                                // Repeat-loop guard: short-circuit identical read-only
-                                // calls the agent already made recently (e.g. viewing the
-                                // same file twice). Their output is still in the context.
                                 let is_read_only = is_read_only_tool(&name_clone);
-                                let is_repeat = is_read_only && {
-                                    let s = state_clone.lock().await;
-                                    s.recent_read_calls.iter().any(|c| c == &sig)
-                                };
+
+                                // Repeat-loop guard for read-only tools. For view_file we go
+                                // further than a signature match: a re-read is only blocked when
+                                // the file is UNCHANGED on disk since the last read, so the agent
+                                // can always refresh after a (possibly partial) edit. Other
+                                // read-only tools use a signature window.
+                                let mut is_repeat = false;
+                                let mut view_path: Option<String> = None;
+                                let mut view_mtime: Option<std::time::SystemTime> = None;
+
+                                if is_read_only {
+                                    if name_clone == "view_file" {
+                                        if let Some(p) =
+                                            args_clone.get("path").and_then(|p| p.as_str())
+                                        {
+                                            let current = path_mtime(p);
+                                            let stored = {
+                                                let s = state_clone.lock().await;
+                                                s.read_file_mtimes.get(p).copied()
+                                            };
+                                            is_repeat =
+                                                view_file_unchanged_since_last_read(
+                                                    stored, current,
+                                                );
+                                            view_path = Some(p.to_string());
+                                            view_mtime = current;
+                                        }
+                                    } else {
+                                        let sig = tool_signature(&name_clone, &args_clone);
+                                        is_repeat = {
+                                            let s = state_clone.lock().await;
+                                            s.recent_read_calls.iter().any(|c| c == &sig)
+                                        };
+                                    }
+                                }
 
                                 let (result, diff_opt) = if is_repeat {
                                     (
-                                        "You already ran this exact call recently and its output is still in the conversation above. \
-                                         Do not repeat it — pick a different action, change the query, or summarize/finish."
+                                        "You already ran this call recently. For a file you just \
+                                         edited, its new contents are already reflected by your \
+                                         edit tool's result — re-reading is not needed. Otherwise \
+                                         pick a different action, change the query, or summarize/finish."
                                             .to_string(),
                                         None,
                                     )
@@ -1879,21 +1925,27 @@ pub async fn process_queue_orchestrator(
                                     .await
                                 };
 
-                                // Record this call so future identical read-only calls
-                                // are caught by the guard, and remember read file paths.
-                                if is_read_only && !is_repeat {
+                                // Record this call so future identical read-only calls are caught.
+                                {
                                     let mut s = state_clone.lock().await;
-                                    if !s.recent_read_calls.contains(&sig) {
-                                        s.recent_read_calls.push_back(sig);
-                                        while s.recent_read_calls.len() > 8 {
-                                            s.recent_read_calls.pop_front();
+                                    if let Some(p) = view_path {
+                                        if !is_repeat {
+                                            if let Some(mt) = view_mtime {
+                                                s.read_file_mtimes.insert(p, mt);
+                                            } else {
+                                                // File couldn't be stat'd (e.g. already gone);
+                                                // drop any stale entry so a later read is allowed.
+                                                s.read_file_mtimes.remove(&p);
+                                            }
                                         }
-                                    }
-                                    if name_clone == "view_file"
-                                        && let Some(p) =
-                                            args_clone.get("path").and_then(|p| p.as_str())
-                                    {
-                                        s.read_files.insert(p.to_string());
+                                    } else if is_read_only && !is_repeat {
+                                        let sig = tool_signature(&name_clone, &args_clone);
+                                        if !s.recent_read_calls.contains(&sig) {
+                                            s.recent_read_calls.push_back(sig);
+                                            while s.recent_read_calls.len() > 8 {
+                                                s.recent_read_calls.pop_front();
+                                            }
+                                        }
                                     }
                                 }
 
@@ -2378,6 +2430,20 @@ mod tests {
         assert!(!is_read_only_tool("write_to_file"));
         assert!(!is_read_only_tool("run_command"));
         assert!(!is_read_only_tool("todo_write"));
+    }
+
+    #[test]
+    fn test_view_file_repeat_is_mtime_aware() {
+        let t0 = std::time::SystemTime::now();
+        let t1 = t0 + std::time::Duration::from_secs(30);
+        // Never read before -> not a repeat (allow the first read).
+        assert!(!view_file_unchanged_since_last_read(None, Some(t0)));
+        // Read before, unchanged -> repeat (block redundant re-read).
+        assert!(view_file_unchanged_since_last_read(Some(t0), Some(t0)));
+        // Read before, file changed on disk -> not a repeat (allow refresh).
+        assert!(!view_file_unchanged_since_last_read(Some(t0), Some(t1)));
+        // File gone/unstatable after a read -> not a repeat (let it proceed/error naturally).
+        assert!(!view_file_unchanged_since_last_read(Some(t0), None));
     }
 
     #[tokio::test]
