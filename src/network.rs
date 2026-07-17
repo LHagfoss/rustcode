@@ -371,15 +371,27 @@ pub fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_tokens: u32
 /// due to attention dilution in long contexts.
 pub fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
     if msgs.len() >= 4 {
-        let reminder = serde_json::json!({
-            "role": "system",
-            "content": "REMINDER: You are rustcode. Always follow your core instructions:\n\
+        let reminder_text = "REMINDER: You are rustcode. Always follow your core instructions:\n\
             - Be extremely concise and direct. No filler or preamble.\n\
             - To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\
-            - Available tools: view_file, replace_file_content, multi_replace_file_content, write_to_file, delete_file, move_file, copy_file, list_directory, grep, glob, run_command, search_web, find_symbol, get_project_map."
-        });
-        let last_idx = msgs.len() - 1;
-        msgs.insert(last_idx, reminder);
+            - Available tools: view_file, replace_file_content, multi_replace_file_content, write_to_file, delete_file, move_file, copy_file, list_directory, grep, glob, run_command, search_web, find_symbol, get_project_map.";
+        
+        if let Some(last_msg) = msgs.last_mut() {
+            if let Some(content) = last_msg.get_mut("content") {
+                match content {
+                    serde_json::Value::String(s) => {
+                        *s = format!("{}\n\n{}", s, reminder_text);
+                    }
+                    serde_json::Value::Array(arr) => {
+                        arr.push(serde_json::json!({
+                            "type": "text",
+                            "text": format!("\n\n{}", reminder_text)
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
@@ -2307,7 +2319,7 @@ mod tests {
         inject_system_reminder(&mut msgs);
         assert_eq!(msgs.len(), 3);
 
-        // 4 or more messages: reminder is injected right before the last message
+        // 4 or more messages: reminder is appended to the last message
         let mut msgs2: Vec<serde_json::Value> = vec![
             serde_json::json!({"role": "system", "content": "sys"}),
             serde_json::json!({"role": "user", "content": "hello"}),
@@ -2315,11 +2327,9 @@ mod tests {
             serde_json::json!({"role": "user", "content": "tell me a story"}),
         ];
         inject_system_reminder(&mut msgs2);
-        assert_eq!(msgs2.len(), 5);
-        assert_eq!(msgs2[3]["role"], "system");
+        assert_eq!(msgs2.len(), 4);
         assert!(msgs2[3]["content"].as_str().unwrap().contains("REMINDER: You are rustcode."));
-        assert_eq!(msgs2[4]["role"], "user");
-        assert_eq!(msgs2[4]["content"], "tell me a story");
+        assert!(msgs2[3]["content"].as_str().unwrap().contains("tell me a story"));
     }
 
     #[test]

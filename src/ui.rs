@@ -1449,10 +1449,10 @@ fn render_welcome_screen(
             Constraint::Length(4),
             Constraint::Length(3),
             Constraint::Length(prompt_box_height),
-            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(2),
-            Constraint::Length(1),
             Constraint::Min(0),
         ])
         .split(f.area());
@@ -1642,7 +1642,7 @@ fn render_welcome_screen(
         });
     }
 
-    let hint_area = welcome_chunks[4];
+    let hint_area = welcome_chunks[5];
     let hint_box_width_area =
         ratatui::layout::Rect::new(prompt_box_area.x, hint_area.y, prompt_box_area.width, 1);
     let hint_text = Paragraph::new(Line::from(vec![
@@ -1667,7 +1667,7 @@ fn render_welcome_screen(
     .style(Style::default().bg(COLOR_BG));
     f.render_widget(hint_text, hint_box_width_area);
 
-    let tip_area = welcome_chunks[6];
+    let tip_area = welcome_chunks[7];
     let tip_text = crate::app::TIPS[state.tip_index % crate::app::TIPS.len()];
     let tip_full = format!("{tip_text}");
     let tip_prefix = "● ";
