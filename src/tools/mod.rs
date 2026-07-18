@@ -295,10 +295,11 @@ pub fn tool_system_prompt(
 - Prefer targeted `replace_file_content` or `multi_replace_file_content` over `write_to_file`. Use paging with `view_file` (start_line/end_line).\n\
 - Match project code style.\n\
 - Only run tests/builds or commit/push code when explicitly requested by the user.\n\
-- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\n\
+- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
+- When the task is complete, output a plain-text final summary (with no tool block).\n\n\
 # Working memory & avoiding loops\n\
 - File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk. Each round you are reminded of which files are already in context.\n\
-- Do not repeat a tool call you just made with the same arguments. If a read or search came up empty, change your query or your approach rather than retrying.\n\
+- Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.\n\
 - For any multi-step task, FIRST call `todo_write` to lay out a short numbered plan, then execute each step in order. Update statuses as you go. Do not re-derive the whole plan each turn — trust the plan you wrote.\n\n"
     );
 
@@ -306,7 +307,7 @@ pub fn tool_system_prompt(
     match protocol {
         crate::config::ToolProtocol::Json => {
             p.push_str(
-                "To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\n\
+                "To call a tool, output ONLY the fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\n\
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
@@ -381,33 +382,93 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     Some((name, args))
 }
 
+fn repair_json(s: &str) -> String {
+    let mut repaired = s.to_string();
+    repaired = repaired.trim_end().to_string();
+    if repaired.ends_with(',') {
+        repaired.pop();
+    }
+    
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut stack = Vec::new();
+    
+    for c in repaired.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' && in_string {
+            escaped = true;
+            continue;
+        }
+        if c == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if !in_string {
+            if c == '{' {
+                stack.push('}');
+            } else if c == '[' {
+                stack.push(']');
+            } else if c == '}' || c == ']' {
+                if let Some(&last) = stack.last() {
+                    if last == c {
+                        stack.pop();
+                    }
+                }
+            }
+        }
+    }
+    
+    if in_string {
+        repaired.push('"');
+    }
+    
+    while let Some(close_char) = stack.pop() {
+        repaired.push(close_char);
+    }
+    
+    repaired
+}
+
 fn parse_tool_calls_impl(
     text: &str,
     protocol: crate::config::ToolProtocol,
 ) -> Vec<(String, Value)> {
     match protocol {
         crate::config::ToolProtocol::Json => {
-            // Try to extract JSON objects from the response
             let mut calls = Vec::new();
             
-            // Look for ```tool blocks first
+            // Look for ```tool blocks first (supporting unclosed/truncated blocks)
+            let mut tool_block_to_parse = None;
             if let Some(start) = text.find("```tool") {
                 let rest = &text[start + 7..];
                 if let Some(end) = rest.find("```") {
-                    let tool_block = &rest[..end].trim();
-                    if !tool_block.is_empty() {
-                        if let Ok(json_value) = serde_json::from_str::<Value>(tool_block) {
-                            if let Some(call) = extract_tool_call(&json_value) {
-                                calls.push(call);
-                            }
-                        }
+                    tool_block_to_parse = Some(rest[..end].trim().to_string());
+                } else {
+                    tool_block_to_parse = Some(rest.trim().to_string());
+                }
+            }
+            
+            if let Some(block) = tool_block_to_parse {
+                let repaired = repair_json(&block);
+                if let Ok(json_value) = serde_json::from_str::<Value>(&repaired) {
+                    if let Some(call) = extract_tool_call(&json_value) {
+                        calls.push(call);
                     }
                 }
             }
             
-            // If no tool blocks found, try to parse the whole text as JSON
+            // If no tool blocks found, try to parse the whole text as JSON (with repair if it starts with '{')
             if calls.is_empty() {
-                if let Ok(json_value) = serde_json::from_str::<Value>(text.trim()) {
+                let cleaned = text.trim();
+                let to_parse = if cleaned.starts_with('{') {
+                    repair_json(cleaned)
+                } else {
+                    cleaned.to_string()
+                };
+                if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse) {
                     if let Some(call) = extract_tool_call(&json_value) {
                         calls.push(call);
                     }
@@ -427,7 +488,6 @@ fn parse_tool_calls_impl(
                 }
             }
             
-            // Deduplicate
             calls.dedup();
             calls
         }
@@ -523,4 +583,32 @@ pub fn needs_confirmation(name: &str) -> bool {
         .find(|t| t.name == name)
         .map(|t| t.requires_confirmation)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_repair_json() {
+        assert_eq!(repair_json("{\"name\": \"test\""), "{\"name\": \"test\"}");
+        assert_eq!(
+            repair_json("{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\""),
+            "{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\"}}"
+        );
+        assert_eq!(
+            repair_json("{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello"),
+            "{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello\"}}"
+        );
+    }
+    
+    #[test]
+    fn test_parse_truncated_tool_call() {
+        let text = "```tool\n{\"name\": \"write_to_file\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "write_to_file");
+        assert_eq!(calls[0].1.get("path").unwrap().as_str().unwrap(), "/foo");
+        assert_eq!(calls[0].1.get("content").unwrap().as_str().unwrap(), "hello");
+    }
 }

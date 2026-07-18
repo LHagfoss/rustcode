@@ -1,5 +1,103 @@
 use std::path::{Path, PathBuf};
 
+/// Snapshot of environment context for delta diffing.
+/// Stores the last-rendered context so subsequent rounds only send changes.
+#[derive(Clone, Default)]
+pub struct ContextSnapshot {
+    cwd: String,
+    platform: String,
+    date: String,
+    git_branch: Option<String>,
+    git_status_summary: Option<String>,
+    tree_entries: Vec<String>,
+    agent_doc: Option<String>,
+}
+
+impl ContextSnapshot {
+    /// Capture the current environment state.
+    pub fn capture() -> Self {
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "(unknown)".to_string());
+        let platform = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+        let date = chrono::Local::now().format("%A %Y-%m-%d").to_string();
+
+        let git_branch = run_git(std::path::Path::new(&cwd), &["rev-parse", "--abbrev-ref", "HEAD"])
+            .map(|s| s.trim().to_string());
+        let git_status_summary = run_git(std::path::Path::new(&cwd), &["status", "--short"])
+            .map(|s| {
+                let count = s.trim().lines().count();
+                if count == 0 { "clean".to_string() } else { format!("{} changed", count) }
+            });
+
+        let tree_entries = std::fs::read_dir(&cwd)
+            .ok()
+            .map(|entries| {
+                let mut names: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.starts_with('.') { return None; }
+                        let mut n = name;
+                        if e.file_type().ok().map(|t| t.is_dir()).unwrap_or(false) {
+                            n.push('/');
+                        }
+                        Some(n)
+                    })
+                    .collect();
+                names.sort();
+                names.truncate(MAX_TREE_ENTRIES);
+                names
+            })
+            .unwrap_or_default();
+
+        let agent_doc = load_agent_doc(&cwd);
+
+        Self { cwd, platform, date, git_branch, git_status_summary, tree_entries, agent_doc }
+    }
+
+    /// Produce a delta description of what changed between the previous snapshot and now.
+    /// Returns None if nothing changed.
+    pub fn diff(&self, current: &ContextSnapshot) -> Option<String> {
+        let mut changes = Vec::new();
+
+        if self.cwd != current.cwd {
+            changes.push(format!("Working directory changed: {} -> {}", self.cwd, current.cwd));
+        }
+        if self.date != current.date {
+            changes.push(format!("Date changed: {}", current.date));
+        }
+        if self.git_branch != current.git_branch {
+            changes.push(format!("Git branch changed: {:?} -> {:?}", self.git_branch, current.git_branch));
+        }
+        if self.git_status_summary != current.git_status_summary {
+            changes.push(format!("Git status: {}",
+                current.git_status_summary.as_deref().unwrap_or("unknown")));
+        }
+        if self.tree_entries != current.tree_entries {
+            let added: Vec<&String> = current.tree_entries.iter()
+                .filter(|e| !self.tree_entries.contains(e)).collect();
+            let removed: Vec<&String> = self.tree_entries.iter()
+                .filter(|e| !current.tree_entries.contains(e)).collect();
+            if !added.is_empty() {
+                changes.push(format!("New files/dirs: {}", added.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+            }
+            if !removed.is_empty() {
+                changes.push(format!("Removed files/dirs: {}", removed.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+            }
+        }
+        if self.agent_doc != current.agent_doc {
+            changes.push("Project instructions (AGENTS.md) changed.".to_string());
+        }
+
+        if changes.is_empty() {
+            None
+        } else {
+            Some(format!("# Environment Updates\n{}", changes.join("\n")))
+        }
+    }
+}
+
 const MAX_TREE_ENTRIES: usize = 30;
 const MAX_AGENTS_BYTES: usize = 8000;
 

@@ -5,6 +5,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
 
+#[path = "network/compaction.rs"]
+pub(crate) mod compaction;
+
 macro_rules! dbg_log {
     ($($arg:tt)*) => {{
         use std::io::Write;
@@ -71,6 +74,66 @@ fn is_fully_stubbed(m: &ChatMessage) -> bool {
         .trim_start();
     rest.starts_with("[Tool output truncated")
         || rest.starts_with("[superseded")
+}
+
+const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
+const MAX_TOOL_OUTPUT_LINES: usize = 1000;
+
+/// Truncate tool output at execution time if it exceeds size limits.
+/// Full output is saved to a temp file so the agent can still access it.
+fn truncate_tool_output(name: &str, result: String) -> String {
+    let bytes = result.len();
+    let lines: Vec<&str> = result.lines().collect();
+    let line_count = lines.len();
+
+    if bytes <= MAX_TOOL_OUTPUT_BYTES && line_count <= MAX_TOOL_OUTPUT_LINES {
+        return result;
+    }
+
+    // Save full output to temp file
+    let saved_path = save_full_tool_output(name, &result);
+
+    // Head+tail truncation: keep first 30% and last 30% of allowed lines
+    let max_lines = MAX_TOOL_OUTPUT_LINES.min(line_count);
+    let head_count = (max_lines * 3) / 10;
+    let tail_count = (max_lines * 3) / 10;
+
+    let head: String = lines[..head_count.min(line_count)].join("\n");
+    let tail: String = if tail_count > 0 && line_count > head_count + tail_count {
+        lines[line_count - tail_count..].join("\n")
+    } else {
+        String::new()
+    };
+
+    let omitted_lines = line_count.saturating_sub(head_count + tail_count);
+    let omitted_bytes = bytes.saturating_sub(head.len() + tail.len());
+
+    let path_note = match saved_path {
+        Some(p) => format!(" Full output saved to: {}\nUse grep to search the full content or view_file with line offsets to read specific sections.", p),
+        None => String::new(),
+    };
+
+    format!(
+        "{}\n\n... [{} lines / {} bytes truncated] ...\n\n{}{}",
+        head, omitted_lines, omitted_bytes, tail, 
+        format!("\n\n[Output truncated: {} bytes total, {} lines.{}]", bytes, line_count, path_note)
+    )
+}
+
+/// Save full tool output to a temp file, returning the path on success.
+fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
+    let dir = crate::config::get_config_dir()?.join("tool_output");
+    let _ = std::fs::create_dir_all(&dir);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::from_secs(0))
+        .as_millis();
+    let safe_name: String = name.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
+    let path = dir.join(format!("{ts}_{safe_name}.txt"));
+    match std::fs::write(&path, content) {
+        Ok(_) => Some(path.to_string_lossy().to_string()),
+        Err(_) => None,
+    }
 }
 
 /// Extract the path from an intact `view_file: [File: <path>, ...]` result.
@@ -792,57 +855,109 @@ fn is_reasoning_only(content: &str) -> bool {
 /// tool. `display_name` is what the modal shows — subagent calls prefix it
 /// with the agent id so the user knows who is asking.
 fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
-    if name == "edit" {
+    if name == "replace_file_content" {
         let search_block = args
-            .get("search_block")
+            .get("target_content")
             .and_then(|s| s.as_str())
             .unwrap_or("");
         let replace_block = args
-            .get("replace_block")
+            .get("replacement_content")
             .and_then(|s| s.as_str())
             .unwrap_or("");
 
         let diff = similar::TextDiff::from_lines(search_block, replace_block);
+        let old_slices: Vec<&str> = diff.iter_old_slices().collect();
+        let new_slices: Vec<&str> = diff.iter_new_slices().collect();
+
         let mut prev = String::new();
-        for change in diff.iter_all_changes() {
-            match change.tag() {
-                similar::ChangeTag::Delete => {
-                    prev.push('-');
-                    prev.push_str(change.value());
+        for op in diff.ops() {
+            let old_slice = &old_slices[op.old_range()];
+            let new_slice = &new_slices[op.new_range()];
+            match op.tag() {
+                similar::DiffTag::Equal => {
+                    for (o, n) in old_slice.iter().zip(new_slice.iter()) {
+                        prev.push_str(&format!(" {}\x00 {}\n", o.trim_end_matches('\n').trim_end_matches('\r'), n.trim_end_matches('\n').trim_end_matches('\r')));
+                    }
                 }
-                similar::ChangeTag::Insert => {
-                    prev.push('+');
-                    prev.push_str(change.value());
+                similar::DiffTag::Delete => {
+                    for o in old_slice {
+                        prev.push_str(&format!("-{}\x00~\n", o.trim_end_matches('\n').trim_end_matches('\r')));
+                    }
                 }
-                similar::ChangeTag::Equal => {
-                    prev.push(' ');
-                    prev.push_str(change.value());
+                similar::DiffTag::Insert => {
+                    for n in new_slice {
+                        prev.push_str(&format!("~\x00+{}\n", n.trim_end_matches('\n').trim_end_matches('\r')));
+                    }
+                }
+                similar::DiffTag::Replace => {
+                    let max_len = old_slice.len().max(new_slice.len());
+                    for i in 0..max_len {
+                        let o_val = old_slice.get(i);
+                        let n_val = new_slice.get(i);
+                        match (o_val, n_val) {
+                            (Some(o), Some(n)) => {
+                                prev.push_str(&format!("-{}\x00+{}\n", o.trim_end_matches('\n').trim_end_matches('\r'), n.trim_end_matches('\n').trim_end_matches('\r')));
+                            }
+                            (Some(o), None) => {
+                                prev.push_str(&format!("-{}\x00~\n", o.trim_end_matches('\n').trim_end_matches('\r')));
+                            }
+                            (None, Some(n)) => {
+                                prev.push_str(&format!("~\x00+{}\n", n.trim_end_matches('\n').trim_end_matches('\r')));
+                            }
+                            (None, None) => {}
+                        }
+                    }
                 }
             }
         }
         Some(prev)
-    } else if name == "write_file" || name == "create_file" {
+    } else if name == "write_to_file" {
         let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
         let old_content = std::fs::read_to_string(&path).unwrap_or_default();
         let new_content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
         let diff = similar::TextDiff::from_lines(&old_content, new_content);
+        let old_slices: Vec<&str> = diff.iter_old_slices().collect();
+        let new_slices: Vec<&str> = diff.iter_new_slices().collect();
+
         let mut prev = String::new();
         for group in diff.grouped_ops(3) {
             for op in group {
-                for change in diff.iter_changes(&op) {
-                    match change.tag() {
-                        similar::ChangeTag::Delete => {
-                            prev.push('-');
-                            prev.push_str(change.value());
+                let old_slice = &old_slices[op.old_range()];
+                let new_slice = &new_slices[op.new_range()];
+                match op.tag() {
+                    similar::DiffTag::Equal => {
+                        for (o, n) in old_slice.iter().zip(new_slice.iter()) {
+                            prev.push_str(&format!(" {}\x00 {}\n", o.trim_end_matches('\n').trim_end_matches('\r'), n.trim_end_matches('\n').trim_end_matches('\r')));
                         }
-                        similar::ChangeTag::Insert => {
-                            prev.push('+');
-                            prev.push_str(change.value());
+                    }
+                    similar::DiffTag::Delete => {
+                        for o in old_slice {
+                            prev.push_str(&format!("-{}\x00~\n", o.trim_end_matches('\n').trim_end_matches('\r')));
                         }
-                        similar::ChangeTag::Equal => {
-                            prev.push(' ');
-                            prev.push_str(change.value());
+                    }
+                    similar::DiffTag::Insert => {
+                        for n in new_slice {
+                            prev.push_str(&format!("~\x00+{}\n", n.trim_end_matches('\n').trim_end_matches('\r')));
+                        }
+                    }
+                    similar::DiffTag::Replace => {
+                        let max_len = old_slice.len().max(new_slice.len());
+                        for i in 0..max_len {
+                            let o_val = old_slice.get(i);
+                            let n_val = new_slice.get(i);
+                            match (o_val, n_val) {
+                                (Some(o), Some(n)) => {
+                                    prev.push_str(&format!("-{}\x00+{}\n", o.trim_end_matches('\n').trim_end_matches('\r'), n.trim_end_matches('\n').trim_end_matches('\r')));
+                                }
+                                (Some(o), None) => {
+                                    prev.push_str(&format!("-{}\x00~\n", o.trim_end_matches('\n').trim_end_matches('\r')));
+                                }
+                                (None, Some(n)) => {
+                                    prev.push_str(&format!("~\x00+{}\n", n.trim_end_matches('\n').trim_end_matches('\r')));
+                                }
+                                (None, None) => {}
+                            }
                         }
                     }
                 }
@@ -852,6 +967,139 @@ fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
     } else {
         None
     }
+}
+
+fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> std::path::PathBuf {
+    let raw_path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+        Some(p)
+    } else if let Some(s) = args.get("src").and_then(|s| s.as_str()) {
+        Some(s)
+    } else if let Some(d) = args.get("dest").and_then(|d| d.as_str()) {
+        Some(d)
+    } else {
+        None
+    };
+
+    let resolved = if let Some(rp) = raw_path {
+        crate::tools::resolve_tool_path(rp)
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
+
+    // Find project root from resolved path
+    let mut current = if resolved.is_dir() {
+        resolved.clone()
+    } else {
+        resolved.parent().map(|p| p.to_path_buf()).unwrap_or(resolved)
+    };
+
+    loop {
+        if current.join("Cargo.toml").exists() || current.join("tsconfig.json").exists() {
+            return current;
+        }
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+
+    std::env::current_dir().unwrap_or_default()
+}
+
+fn strip_ansi_escapes(s: &str) -> String {
+    if let Ok(re) = regex::Regex::new(r"\x1B\[[0-9;?]*[a-zA-Z]") {
+        re.replace_all(s, "").into_owned()
+    } else {
+        s.to_string()
+    }
+}
+
+async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
+    if cwd.join("Cargo.toml").exists() {
+        let mut cmd = tokio::process::Command::new("cargo");
+        cmd.args(["check", "--message-format=json"])
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return Some(format!("Failed to spawn cargo check: {e}")),
+        };
+
+        let timeout_duration = std::time::Duration::from_secs(5);
+        let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
+
+        let output = match output_res {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Some(format!("cargo check failed to run: {e}")),
+            Err(_) => return Some("cargo check timed out after 5 seconds".to_string()),
+        };
+
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        let mut errors = Vec::new();
+
+        for line in stdout_str.lines() {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                if val.get("reason").and_then(|r| r.as_str()) == Some("compiler-message") {
+                    if let Some(msg) = val.get("message") {
+                        if let Some(level) = msg.get("level").and_then(|l| l.as_str()) {
+                            if level == "error" {
+                                if let Some(rendered) = msg.get("rendered").and_then(|r| r.as_str()) {
+                                    errors.push(strip_ansi_escapes(rendered));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return Some(errors.join("\n"));
+        }
+    } else if cwd.join("tsconfig.json").exists() {
+        let mut cmd = tokio::process::Command::new("npx");
+        cmd.args(["tsc", "--noEmit"])
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return Some(format!("Failed to spawn npx tsc: {e}")),
+        };
+
+        let timeout_duration = std::time::Duration::from_secs(5);
+        let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
+
+        let output = match output_res {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Some(format!("npx tsc failed to run: {e}")),
+            Err(_) => return Some("npx tsc timed out after 5 seconds".to_string()),
+        };
+
+        if !output.status.success() {
+            let stdout_str = String::from_utf8_lossy(&output.stdout);
+            let stderr_str = String::from_utf8_lossy(&output.stderr);
+            let mut combined = String::new();
+            if !stdout_str.is_empty() {
+                combined.push_str(&stdout_str);
+            }
+            if !stderr_str.is_empty() {
+                if !combined.is_empty() {
+                    combined.push('\n');
+                }
+                combined.push_str(&stderr_str);
+            }
+            if !combined.is_empty() {
+                return Some(strip_ansi_escapes(&combined));
+            }
+        }
+    }
+
+    None
 }
 
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
@@ -887,7 +1135,7 @@ async fn confirm_and_execute(
     let needs_confirm = !bypass_confirm
         && crate::tools::needs_confirmation(name)
         && !state.lock().await.auto_confirm;
-    if !needs_confirm {
+    let mut result = if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
         let tool_name = name.to_string();
         {
@@ -909,7 +1157,7 @@ async fn confirm_and_execute(
             result
         });
 
-        let res = tokio::select! {
+        tokio::select! {
             res = run_fut => {
                 res.unwrap_or_else(|e| format!("tool panicked: {e}"))
             }
@@ -917,99 +1165,117 @@ async fn confirm_and_execute(
                 dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
                 "error: tool execution cancelled by user".to_string()
             }
+        }
+    } else {
+        dbg_log!("Tool '{}' requires confirmation", name);
+        let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+            p.to_string()
+        } else if let Some(cmd) = args.get("command").and_then(|c| c.as_str()) {
+            cmd.to_string()
+        } else if let (Some(src), Some(dest)) = (
+            args.get("src").and_then(|s| s.as_str()),
+            args.get("dest").and_then(|d| d.as_str()),
+        ) {
+            format!("{src} -> {dest}")
+        } else {
+            "?".to_string()
         };
-        return (res, diff_opt);
-    }
-
-    dbg_log!("Tool '{}' requires confirmation", name);
-    let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
-        p.to_string()
-    } else if let Some(cmd) = args.get("command").and_then(|c| c.as_str()) {
-        cmd.to_string()
-    } else if let (Some(src), Some(dest)) = (
-        args.get("src").and_then(|s| s.as_str()),
-        args.get("dest").and_then(|d| d.as_str()),
-    ) {
-        format!("{src} -> {dest}")
-    } else {
-        "?".to_string()
-    };
-    let (preview, content_bytes) = if let Some(ref d) = diff_opt {
-        (d.clone(), d.len())
-    } else {
-        let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
-        let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
-        (preview, content.len())
-    };
-    let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-    {
-        let mut s = state.lock().await;
-        s.pending_tool_confirmation = Some(vec![ToolConfirmation {
-            tool_name: display_name.to_string(),
-            path,
-            content_preview: preview,
-            content_bytes,
-        }]);
-        s.tool_confirmation_response = Some(tx);
-        s.status = AppStatus::AwaitingToolConfirmation;
-    }
-    // Notify the user via Ghostty / iTerm2 OSC sequence that a tool needs
-    // their approval. Harmless on other terminals.
-    let _ = crate::notifications::notify_pending_confirmation(name);
-    dbg_log!("Awaiting user confirmation for '{}'", name);
-    let result = match rx.await {
-        Ok(true) => {
-            dbg_log!("User approved tool call '{}', executing...", name);
-            let tool_name = name.to_string();
-            {
-                let mut s = state.lock().await;
-                s.pending_tool_confirmation = None;
-                s.status = AppStatus::Streaming;
-                s.stream_tracker = Some(StreamTracker::new());
-                s.running_tools.push(tool_name.clone());
-            }
-            let _cleanup = ToolCleanup {
-                state: Arc::clone(state),
-                tool_name,
-            };
-
-            let name_owned = name.to_string();
-            let args_owned = args.clone();
-            let session_id = { state.lock().await.active_session_id.clone() };
-            let run_fut = tokio::task::spawn_blocking(move || {
-                crate::tools::set_active_session_id(Some(session_id));
-                let result = crate::tools::execute(&name_owned, &args_owned);
-                crate::tools::set_active_session_id(None);
-                result
-            });
-
-            tokio::select! {
-                res = run_fut => {
-                    res.unwrap_or_else(|e| format!("tool panicked: {e}"))
+        let (preview, content_bytes) = if let Some(ref d) = diff_opt {
+            (d.clone(), d.len())
+        } else {
+            let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
+            (preview, content.len())
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        {
+            let mut s = state.lock().await;
+            s.pending_tool_confirmation = Some(vec![ToolConfirmation {
+                tool_name: display_name.to_string(),
+                path,
+                content_preview: preview,
+                content_bytes,
+            }]);
+            s.tool_confirmation_response = Some(tx);
+            s.status = AppStatus::AwaitingToolConfirmation;
+        }
+        // Notify the user via Ghostty / iTerm2 OSC sequence that a tool needs
+        // their approval. Harmless on other terminals.
+        let _ = crate::notifications::notify_pending_confirmation(name);
+        dbg_log!("Awaiting user confirmation for '{}'", name);
+        let res = match rx.await {
+            Ok(true) => {
+                dbg_log!("User approved tool call '{}', executing...", name);
+                let tool_name = name.to_string();
+                {
+                    let mut s = state.lock().await;
+                    s.pending_tool_confirmation = None;
+                    s.status = AppStatus::Streaming;
+                    s.stream_tracker = Some(StreamTracker::new());
+                    s.running_tools.push(tool_name.clone());
                 }
-                _ = cancel_token.cancelled() => {
-                    dbg_log!("Tool execution cancelled during spawn_blocking await");
-                    "error: tool execution cancelled by user".to_string()
+                let _cleanup = ToolCleanup {
+                    state: Arc::clone(state),
+                    tool_name,
+                };
+
+                let name_owned = name.to_string();
+                let args_owned = args.clone();
+                let session_id = { state.lock().await.active_session_id.clone() };
+                let run_fut = tokio::task::spawn_blocking(move || {
+                    crate::tools::set_active_session_id(Some(session_id));
+                    let result = crate::tools::execute(&name_owned, &args_owned);
+                    crate::tools::set_active_session_id(None);
+                    result
+                });
+
+                tokio::select! {
+                    res = run_fut => {
+                        res.unwrap_or_else(|e| format!("tool panicked: {e}"))
+                    }
+                    _ = cancel_token.cancelled() => {
+                        dbg_log!("Tool execution cancelled during spawn_blocking await");
+                        "error: tool execution cancelled by user".to_string()
+                    }
                 }
             }
+            Ok(false) => {
+                dbg_log!("User denied tool call '{}'", name);
+                let _ =
+                    crate::notifications::notify_finished(crate::notifications::FinishedStatus::Denied);
+                "error: user denied this tool call".to_string()
+            }
+            Err(_) => {
+                dbg_log!("Confirmation channel closed for '{}'", name);
+                "error: confirmation channel closed".to_string()
+            }
+        };
+        {
+            let mut s = state.lock().await;
+            s.pending_tool_confirmation = None;
+            s.status = AppStatus::Streaming;
+            s.stream_tracker = Some(StreamTracker::new());
         }
-        Ok(false) => {
-            dbg_log!("User denied tool call '{}'", name);
-            let _ =
-                crate::notifications::notify_finished(crate::notifications::FinishedStatus::Denied);
-            "error: user denied this tool call".to_string()
-        }
-        Err(_) => {
-            dbg_log!("Confirmation channel closed for '{}'", name);
-            "error: confirmation channel closed".to_string()
-        }
+        res
     };
+
+    if matches!(
+        name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
+    ) && !result.starts_with("error")
     {
-        let mut s = state.lock().await;
-        s.pending_tool_confirmation = None;
-        s.status = AppStatus::Streaming;
-        s.stream_tracker = Some(StreamTracker::new());
+        let cwd = get_tool_project_root(name, args);
+        if let Some(errors) = run_compiler_check(&cwd).await {
+            result.push_str("\n\nCompiler errors/warnings:\n");
+            result.push_str(&errors);
+        }
     }
+
     (result, diff_opt)
 }
 
@@ -1206,8 +1472,9 @@ reply compact and information-dense.\n\n{}",
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
+                let truncated_result = truncate_tool_output(&name, result);
                 a.history.push(
-                    ChatMessage::new("tool", format!("{name}: {result}")).with_diff(diff_opt),
+                    ChatMessage::new("tool", format!("{name}: {truncated_result}")).with_diff(diff_opt),
                 );
             }
             continue;
@@ -1587,6 +1854,20 @@ pub async fn process_queue_orchestrator(
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
+            // Try AI-driven compaction if history is long enough
+            {
+                let (api_url, model_name) = {
+                    let s = state.lock().await;
+                    (s.api_base_url.clone(), s.model_name.clone())
+                };
+                let mut s = state.lock().await;
+                if compaction::maybe_compact(&client, &api_url, &model_name, &mut s.history).await {
+                    dbg_log!("History compacted via AI summarization");
+                    crate::config::save_history(&s.history);
+                }
+                drop(s);
+            }
+
             let mut history_snapshot: Vec<ChatMessage> = {
                 let s = state.lock().await;
                 s.history
@@ -1610,11 +1891,27 @@ pub async fn process_queue_orchestrator(
                 (files, s.todos.clone())
             };
 
+            let current_snapshot = crate::context::ContextSnapshot::capture();
+            let context_section = {
+                let s = state.lock().await;
+                match &s.context_snapshot {
+                    Some(prev) => prev.diff(&current_snapshot)
+                        .unwrap_or_else(|| "# Environment\n(unchanged since session start)".to_string()),
+                    None => crate::context::environment_context(),
+                }
+            };
             let mut system_prompt = format!(
                 "{}\n\n{}",
                 crate::tools::tool_system_prompt(true, crate::config::ToolProtocol::Json),
-                crate::context::environment_context()
+                context_section
             );
+            // Store the snapshot if this is the first turn
+            {
+                let mut s = state.lock().await;
+                if s.context_snapshot.is_none() {
+                    s.context_snapshot = Some(current_snapshot);
+                }
+            }
 
             // Remind the agent which files it already has so it doesn't re-read them.
             if !read_files.is_empty() {
@@ -2066,8 +2363,9 @@ pub async fn process_queue_orchestrator(
                         if name == "complete_task" {
                             completed = true;
                         }
+                        let truncated_result = truncate_tool_output(&name, result);
                         s.history.push(
-                            ChatMessage::new("tool", format!("{name}: {result}"))
+                            ChatMessage::new("tool", format!("{name}: {truncated_result}"))
                                 .with_diff(diff_opt),
                         );
                     }
@@ -2564,5 +2862,19 @@ mod tests {
             "throwaway truncated: {}",
             history[0].content
         );
+    }
+
+    #[test]
+    fn test_strip_ansi_escapes() {
+        let input = "\x1B[31mError\x1B[0m: compile failed \x1B[1mline 5\x1B[0m";
+        let output = strip_ansi_escapes(input);
+        assert_eq!(output, "Error: compile failed line 5");
+    }
+
+    #[tokio::test]
+    async fn test_run_compiler_check_success() {
+        let cwd = std::env::current_dir().unwrap();
+        let check = run_compiler_check(&cwd).await;
+        assert!(check.is_none());
     }
 }

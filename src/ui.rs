@@ -248,7 +248,7 @@ fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: bool) -> Line<
     } else {
         let mut chars = line.chars();
         let first = chars.next().unwrap();
-        if first == '+' || first == '-' || first == ' ' {
+        if first == '+' || first == '-' || first == ' ' || first == '~' {
             (first, chars.as_str())
         } else {
             (' ', line)
@@ -258,18 +258,28 @@ fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: bool) -> Line<
     let bg_color = match prefix {
         '+' => Color::Rgb(24, 40, 24), // Dark Green
         '-' => Color::Rgb(48, 20, 20), // Dark Red
+        '~' => COLOR_BG,               // Matches bg color
         _ => COLOR_ELEMENT,            // Dark Gray
     };
 
     let default_fg = match prefix {
         '+' => Color::Rgb(160, 240, 160), // Light Green
         '-' => Color::Rgb(240, 150, 150), // Light Red
+        '~' => COLOR_BG,                  // Invisible prefix
         _ => COLOR_TEXT,                  // Default text color
     };
 
-    let spans = highlight_rust_line_with_colors(code, default_fg, bg_color, show_picker);
+    let spans = if prefix == '~' {
+        Vec::new()
+    } else {
+        highlight_rust_line_with_colors(code, default_fg, bg_color, show_picker)
+    };
 
-    let prefix_str = format!("{} ", prefix);
+    let prefix_str = if prefix == '~' {
+        "  ".to_string()
+    } else {
+        format!("{} ", prefix)
+    };
     let mut final_spans = vec![Span::styled(
         prefix_str,
         get_themed_style(default_fg, bg_color, Modifier::BOLD, show_picker),
@@ -278,9 +288,10 @@ fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: bool) -> Line<
 
     let current_width: usize = final_spans.iter().map(|s| s.content.width()).sum();
     if current_width < width {
+        let pad_width = width - current_width;
         final_spans.push(Span::styled(
-            " ".repeat(width - current_width),
-            get_themed_style(default_fg, bg_color, Modifier::empty(), show_picker),
+            " ".repeat(pad_width),
+            Style::default().bg(bg_color),
         ));
     }
 
@@ -1100,43 +1111,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
             ]));
 
-            // Command output is useful (test results, errors) but capped so it never
-            // floods the chat. Longer output is summarised by the line count above.
-            if tool_name == "run_command" && !tool_result.trim().is_empty() {
-                const MAX_PREVIEW: usize = 20;
-                let preview: Vec<&str> = tool_result.lines().take(MAX_PREVIEW).collect();
-                for line_str in preview {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            "  ",
-                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                        ),
-                        Span::styled(
-                            line_str.to_string(),
-                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                        ),
-                    ]));
-                }
-                if line_count > MAX_PREVIEW {
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("  … {} more lines", line_count - MAX_PREVIEW),
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
-                    )]));
-                }
-            }
-
-            if let Some(ref diff) = msg.diff {
-                let content_width = (inner_area.width as usize).saturating_sub(6);
-                for line_str in diff.lines() {
-                    let line = highlight_diff_line(line_str, content_width, show_picker);
-                    let mut new_spans = vec![Span::styled(
-                        "  ",
-                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
-                    )];
-                    new_spans.extend(line.spans);
-                    lines.push(Line::from(new_spans));
-                }
-            }
+            // Command output and diff previews are not displayed inline in the TUI chat history to keep it clean.
             lines.push(Line::from(""));
         } else if msg.role == "user" {
             lines.push(Line::from(""));
@@ -2798,7 +2773,9 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
 
     if confirmations.len() == 1 {
         let confirmation = &confirmations[0];
-        let modal_area = centered_rect_fixed(60, 16, f.area());
+        let width = if confirmation.content_preview.contains('\x00') { 120 } else { 60 };
+        let height = if confirmation.content_preview.contains('\x00') { 24 } else { 16 };
+        let modal_area = centered_rect_fixed(width, height, f.area());
 
         f.render_widget(Clear, modal_area);
 
@@ -2909,19 +2886,54 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         );
 
         if !confirmation.content_preview.is_empty() {
-            let preview_lines: Vec<Line> = confirmation
-                .content_preview
-                .lines()
-                .take(modal_chunks[7].height as usize)
-                .map(|l| {
-                    let width = (inner_area.width as usize).saturating_sub(4);
-                    highlight_diff_line(l, width, show_picker)
-                })
-                .collect();
-            f.render_widget(
-                Paragraph::new(preview_lines).wrap(Wrap { trim: false }),
-                modal_chunks[7],
-            );
+            let has_null = confirmation.content_preview.contains('\x00');
+            if has_null {
+                let diff_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(50),
+                        Constraint::Length(1), // Divider
+                        Constraint::Percentage(50),
+                    ])
+                    .split(modal_chunks[7]);
+                
+                let mut left_lines = Vec::new();
+                let mut right_lines = Vec::new();
+                
+                let half_width = (diff_chunks[0].width as usize).saturating_sub(2);
+                
+                for line in confirmation.content_preview.lines().take(modal_chunks[7].height as usize) {
+                    let parts: Vec<&str> = line.split('\x00').collect();
+                    if parts.len() == 2 {
+                        left_lines.push(highlight_diff_line(parts[0], half_width, show_picker));
+                        right_lines.push(highlight_diff_line(parts[1], half_width, show_picker));
+                    } else {
+                        left_lines.push(highlight_diff_line(line, half_width, show_picker));
+                        right_lines.push(Line::from(""));
+                    }
+                }
+                
+                f.render_widget(Paragraph::new(left_lines).wrap(Wrap { trim: false }), diff_chunks[0]);
+                
+                let divider_lines = vec![Line::from("│"); diff_chunks[1].height as usize];
+                f.render_widget(Paragraph::new(divider_lines).style(Style::default().fg(COLOR_MUTED)), diff_chunks[1]);
+                
+                f.render_widget(Paragraph::new(right_lines).wrap(Wrap { trim: false }), diff_chunks[2]);
+            } else {
+                let preview_lines: Vec<Line> = confirmation
+                    .content_preview
+                    .lines()
+                    .take(modal_chunks[7].height as usize)
+                    .map(|l| {
+                        let width = (inner_area.width as usize).saturating_sub(4);
+                        highlight_diff_line(l, width, show_picker)
+                    })
+                    .collect();
+                f.render_widget(
+                    Paragraph::new(preview_lines).wrap(Wrap { trim: false }),
+                    modal_chunks[7],
+                );
+            }
         }
 
         let footer_line = Line::from(vec![
