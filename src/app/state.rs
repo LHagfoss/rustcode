@@ -293,6 +293,9 @@ pub struct AppState {
     pub tip_index: usize,
 
     pub current_terminal_title: Option<String>,
+
+    /// Snapshot of environment context from the first turn, used for delta diffing.
+    pub context_snapshot: Option<crate::context::ContextSnapshot>,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -393,6 +396,7 @@ impl AppState {
             raw_cli_mode: false,
             tip_index: random_tip_index(),
             continuous_mode: false,
+            context_snapshot: None,
         }
     }
 
