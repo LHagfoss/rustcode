@@ -2326,21 +2326,28 @@ pub async fn process_queue_orchestrator(
                                 let mut view_mtime: Option<std::time::SystemTime> = None;
 
                                 if is_read_only {
-                                    if name_clone == "view_file" {
+                                                                    if name_clone == "view_file" {
                                         if let Some(p) =
                                             args_clone.get("path").and_then(|p| p.as_str())
                                         {
-                                            let current = path_mtime(p);
-                                            let stored = {
+                                            let sig = tool_signature(&name_clone, &args_clone);
+                                            let already_seen = {
                                                 let s = state_clone.lock().await;
-                                                s.read_file_mtimes.get(p).copied()
+                                                s.recent_read_calls.iter().any(|c| c == &sig)
                                             };
-                                            is_repeat =
-                                                view_file_unchanged_since_last_read(
-                                                    stored, current,
-                                                );
+                                            if already_seen {
+                                                let current = path_mtime(p);
+                                                let stored = {
+                                                    let s = state_clone.lock().await;
+                                                    s.read_file_mtimes.get(p).copied()
+                                                };
+                                                is_repeat =
+                                                    view_file_unchanged_since_last_read(
+                                                        stored, current,
+                                                    );
+                                            }
                                             view_path = Some(p.to_string());
-                                            view_mtime = current;
+                                            view_mtime = path_mtime(p);
                                         }
                                     } else {
                                         let sig = tool_signature(&name_clone, &args_clone);
@@ -2398,7 +2405,8 @@ pub async fn process_queue_orchestrator(
                                                 s.read_file_mtimes.remove(&p);
                                             }
                                         }
-                                    } else if is_read_only && !is_repeat {
+                                    }
+                                    if is_read_only && !is_repeat {
                                         let sig = tool_signature(&name_clone, &args_clone);
                                         if !s.recent_read_calls.contains(&sig) {
                                             s.recent_read_calls.push_back(sig);
