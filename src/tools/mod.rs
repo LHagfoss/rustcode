@@ -245,8 +245,8 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "replace_file_content",
-        description: "Surgically edit a contiguous block of text in an existing file.                       Requires specifying the line boundaries, the exact target content,                       and the replacement content.",
-        arguments: r#"{"path": "absolute or relative path to file", "start_line": "1-indexed start line containing target content", "end_line": "1-indexed end line containing target content", "target_content": "precise block of code to edit (must match file exactly)", "replacement_content": "complete replacement text for that block"}"#,
+        description: "Surgically edit a contiguous block of text in an existing file. Locates the block using target_content (semantic search-and-replace). start_line and end_line are optional helper fields.",
+        arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (must match file exactly)", "replacement_content": "complete replacement text for that block", "start_line": "optional 1-indexed start line containing target content", "end_line": "optional 1-indexed end line containing target content"}"#,
         handler: filesystem::replace_file_content_tool,
         requires_confirmation: true,
     },
@@ -292,12 +292,14 @@ pub fn tool_system_prompt(
 # Rules\n\
 - Be concise and direct. No filler or preamble.\n\
 - Explore first: use `grep`, `glob`, `view_file` to understand context before editing.\n\
-- Prefer targeted `replace_file_content` or `multi_replace_file_content` over `write_to_file`. Use paging with `view_file` (start_line/end_line).\n\
+- For editing, use `replace_file_content`. You do NOT need to specify `start_line` or `end_line` — simply copy the code block you want to edit exactly into `target_content` and it will be replaced. Avoid specifying line numbers for edits as they shift after modifications.\n\
+- DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
 - Match project code style.\n\
 - Only run tests/builds or commit/push code when explicitly requested by the user.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
 - When the task is complete, output a plain-text final summary (with no tool block).\n\n\
 # Working memory & avoiding loops\n\
+- If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.\n\
 - File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk. Each round you are reminded of which files are already in context.\n\
 - Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.\n\
 - For any multi-step task, FIRST call `todo_write` to lay out a short numbered plan, then execute each step in order. Update statuses as you go. Do not re-derive the whole plan each turn — trust the plan you wrote.\n\n"

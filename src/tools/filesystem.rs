@@ -164,13 +164,11 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     let start_line = args
         .get("start_line")
         .and_then(parse_json_number)
-        .map(|v| v as usize)
-        .ok_or("missing 'start_line' argument")?;
+        .map(|v| v as usize);
     let end_line = args
         .get("end_line")
         .and_then(parse_json_number)
-        .map(|v| v as usize)
-        .ok_or("missing 'end_line' argument")?;
+        .map(|v| v as usize);
     let target_content = args
         .get("target_content")
         .and_then(|t| t.as_str())
@@ -184,44 +182,89 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     let content = std::fs::read_to_string(&resolved_path)
         .map_err(|e| format!("cannot read '{path}': {e}"))?;
 
-    let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-    let total = file_lines.len();
+    // 1. If start_line and end_line are provided, try exact matching in that line range first
+    if let (Some(start), Some(end)) = (start_line, end_line) {
+        let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let total = file_lines.len();
 
-    if start_line < 1 || start_line > total || end_line < start_line || end_line > total {
+        if start >= 1 && start <= total && end >= start && end <= total {
+            let segment = file_lines[start - 1..end].join("\n");
+            if segment.trim_end() == target_content.trim_end() {
+                let has_trailing_newline = content.ends_with('\n');
+                let mut new_lines = Vec::new();
+                new_lines.extend_from_slice(&file_lines[..start - 1]);
+                new_lines.push(replacement_content.to_string());
+                new_lines.extend_from_slice(&file_lines[end..]);
+
+                let mut new_content = new_lines.join("\n");
+                if has_trailing_newline && !new_content.is_empty() {
+                    new_content.push('\n');
+                }
+                std::fs::write(&resolved_path, &new_content)
+                    .map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+                return Ok(format!(
+                    "successfully replaced lines {start}-{end} in '{path}'"
+                ));
+            }
+        }
+    }
+
+    // 2. Exact semantic matching anywhere in the file (helps if line numbers shifted)
+    let occurrences: Vec<_> = content.match_indices(target_content).collect();
+    if occurrences.len() == 1 {
+        let (index, _) = occurrences[0];
+        let mut new_content = content.clone();
+        new_content.replace_range(index..index + target_content.len(), replacement_content);
+        std::fs::write(&resolved_path, &new_content)
+            .map_err(|e| format!("cannot write '{path}': {e}"))?;
+        return Ok(format!(
+            "successfully replaced target_content in '{path}' (uniquely located in file)"
+        ));
+    } else if occurrences.len() > 1 {
         return Err(format!(
-            "line range {start_line}-{end_line} is out of bounds (1-{total})"
+            "Error: found {} matches for target_content in '{path}'. Please include more surrounding context lines to make it unique.",
+            occurrences.len()
         ));
     }
 
-    let segment = file_lines[start_line - 1..end_line].join("\n");
-    if segment.trim_end() != target_content.trim_end() {
-        let mut mismatch = format!(
-            "Discrepancy: target_content does not match file contents at {start_line}-{end_line}.\n"
-        );
-        mismatch.push_str("=== Expected (target_content) ===\n");
-        mismatch.push_str(target_content);
-        mismatch.push_str("\n=== Found in File ===\n");
-        mismatch.push_str(&segment);
-        mismatch.push_str("\n======================\n");
-        return Err(mismatch);
+    // 3. Normalized matching (ignoring line endings CRLF vs LF)
+    let clean_content = content.replace("\r\n", "\n");
+    let clean_target = target_content.replace("\r\n", "\n");
+    let clean_occurrences: Vec<_> = clean_content.match_indices(&clean_target).collect();
+
+    if clean_occurrences.len() == 1 {
+        let (index, _) = clean_occurrences[0];
+        let mut new_content = clean_content.clone();
+        new_content.replace_range(index..index + clean_target.len(), replacement_content);
+        std::fs::write(&resolved_path, &new_content)
+            .map_err(|e| format!("cannot write '{path}': {e}"))?;
+        return Ok(format!(
+            "successfully replaced target_content in '{path}' (matched with normalized line endings)"
+        ));
+    } else if clean_occurrences.len() > 1 {
+        return Err(format!(
+            "Error: found {} matches for target_content (with normalized newlines) in '{path}'. Please include more surrounding context.",
+            clean_occurrences.len()
+        ));
     }
 
-    let has_trailing_newline = content.ends_with('\n');
-    let mut new_lines = Vec::new();
-    new_lines.extend_from_slice(&file_lines[..start_line - 1]);
-    new_lines.push(replacement_content.to_string());
-    new_lines.extend_from_slice(&file_lines[end_line..]);
-
-    let mut new_content = new_lines.join("\n");
-    if has_trailing_newline && !new_content.is_empty() {
-        new_content.push('\n');
+    // 4. Mismatch feedback
+    let mut err_msg = format!(
+        "Error: target_content not found in '{path}'.\n\
+         Please ensure the code block matches exactly (including indentation and spaces)."
+    );
+    if let (Some(start), Some(end)) = (start_line, end_line) {
+        let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let total = file_lines.len();
+        if start >= 1 && start <= total && end >= start && end <= total {
+            let segment = file_lines[start - 1..end].join("\n");
+            err_msg.push_str("\n=== Found in File at specified lines ===\n");
+            err_msg.push_str(&segment);
+            err_msg.push_str("\n========================================\n");
+        }
     }
-    std::fs::write(&resolved_path, &new_content)
-        .map_err(|e| format!("cannot write '{path}': {e}"))?;
-
-    Ok(format!(
-        "successfully replaced lines {start_line}-{end_line} in '{path}'"
-    ))
+    Err(err_msg)
 }
 
 pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {

@@ -518,6 +518,74 @@ pub struct StreamBuffer {
     pub content: String,
 }
 
+fn align_alternating_messages(raw_msgs: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    if raw_msgs.is_empty() {
+        return raw_msgs;
+    }
+
+    let mut msgs = Vec::new();
+    let mut system_content = String::new();
+
+    // 1. Extract and merge all system messages
+    for msg in raw_msgs {
+        if let Some(role) = msg.get("role").and_then(|r| r.as_str()) {
+            if role == "system" {
+                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                    if !system_content.is_empty() {
+                        system_content.push_str("\n\n");
+                    }
+                    system_content.push_str(content);
+                }
+            } else {
+                msgs.push(msg);
+            }
+        }
+    }
+
+    let mut final_msgs = Vec::new();
+    if !system_content.is_empty() {
+        final_msgs.push(serde_json::json!({
+            "role": "system",
+            "content": system_content,
+        }));
+    }
+
+    if msgs.is_empty() {
+        return final_msgs;
+    }
+
+    // 2. Ensure the first message is a "user" message
+    let first_role = msgs[0].get("role").and_then(|r| r.as_str()).unwrap_or("user");
+    if first_role != "user" {
+        final_msgs.push(serde_json::json!({
+            "role": "user",
+            "content": "[Context initialization]",
+        }));
+    }
+
+    // 3. Alternate roles, merging consecutive same-role non-tool messages
+    for msg in msgs {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+        let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+
+        if let Some(last) = final_msgs.last_mut() {
+            let last_role = last.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+            if last_role == role && role != "tool" {
+                if let Some(last_content) = last.get_mut("content") {
+                    let mut new_content = last_content.as_str().unwrap_or("").to_string();
+                    new_content.push_str("\n\n");
+                    new_content.push_str(&content);
+                    *last_content = serde_json::Value::String(new_content);
+                }
+                continue;
+            }
+        }
+        final_msgs.push(msg);
+    }
+
+    final_msgs
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn stream_request(
     client: &reqwest::Client,
@@ -529,9 +597,10 @@ pub async fn stream_request(
     buffer: Arc<Mutex<StreamBuffer>>,
     quiet: bool,
 ) -> Result<Option<String>, String> {
+    let aligned_messages = align_alternating_messages(messages.to_vec());
     let payload = serde_json::json!({
         "model": model,
-        "messages": messages,
+        "messages": aligned_messages,
         "stream": true,
         "stream_options": {
             "include_usage": true
@@ -1861,8 +1930,11 @@ pub async fn process_queue_orchestrator(
                     (s.api_base_url.clone(), s.model_name.clone())
                 };
                 let mut s = state.lock().await;
-                if compaction::maybe_compact(&client, &api_url, &model_name, &mut s.history).await {
-                    dbg_log!("History compacted via AI summarization");
+                let budget = s.get_history_token_budget() as usize;
+                if compaction::maybe_compact(&client, &api_url, &model_name, &mut s.history, budget).await {
+                    dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
+                    s.recent_read_calls.clear();
+                    s.read_file_mtimes.clear();
                     crate::config::save_history(&s.history);
                 }
                 drop(s);
@@ -2876,5 +2948,23 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let check = run_compiler_check(&cwd).await;
         assert!(check.is_none());
+    }
+
+    #[test]
+    fn test_align_alternating_messages() {
+        let raw = vec![
+            serde_json::json!({"role": "system", "content": "Prompt"}),
+            serde_json::json!({"role": "system", "content": "Summary"}),
+            serde_json::json!({"role": "assistant", "content": "Grep"}),
+            serde_json::json!({"role": "user", "content": "Result"}),
+        ];
+        let aligned = align_alternating_messages(raw);
+        assert_eq!(aligned.len(), 4);
+        assert_eq!(aligned[0]["role"], "system");
+        assert_eq!(aligned[0]["content"], "Prompt\n\nSummary");
+        assert_eq!(aligned[1]["role"], "user");
+        assert_eq!(aligned[1]["content"], "[Context initialization]");
+        assert_eq!(aligned[2]["role"], "assistant");
+        assert_eq!(aligned[3]["role"], "user");
     }
 }

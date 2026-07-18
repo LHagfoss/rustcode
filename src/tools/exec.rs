@@ -16,11 +16,32 @@ pub(crate) use super::{BackgroundTaskInfo, WAKEUP_CALLBACK};
 const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
 
+fn is_shell_read_command(cmd: &str) -> bool {
+    let trimmed = cmd.trim();
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.is_empty() {
+        return false;
+    }
+    let binary = parts[0];
+    if matches!(binary, "cat" | "sed" | "head" | "tail" | "less" | "more") {
+        if trimmed.contains('>') || trimmed.contains("<<") || trimmed.contains('|') {
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
 pub fn run_command(args: &Value) -> Result<String, String> {
     let command_str = args
         .get("command")
         .and_then(|c| c.as_str())
         .ok_or("missing 'command' argument")?;
+
+    if is_shell_read_command(command_str) {
+        return Err("Do not use run_command with cat, sed, head, tail, or less/more to read files. Use the native 'view_file' tool instead. This keeps token usage low and allows the harness to manage file context correctly.".to_string());
+    }
+
     let cwd = args.get("cwd").and_then(|c| c.as_str());
     let timeout_ms = args
         .get("timeout_ms")

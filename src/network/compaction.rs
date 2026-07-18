@@ -1,7 +1,29 @@
 use crate::app::ChatMessage;
 
-const COMPACTION_THRESHOLD: usize = 20;
-const TAIL_MESSAGES_TO_KEEP: usize = 8;
+pub fn estimate_tokens(text: &str) -> usize {
+    text.chars().count().saturating_div(4)
+}
+
+pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
+    let mut total_tool_tokens = 0;
+    // Walk backward through history
+    for m in history.iter_mut().rev() {
+        if m.role == "tool" {
+            let tokens = estimate_tokens(&m.content);
+            total_tool_tokens += tokens;
+            // Protect the last ~30k tokens of tool outputs (approx 120k chars).
+            // Prune older ones to save context window space.
+            if total_tool_tokens > 30_000 && !m.content.contains("content cleared to save context") {
+                if let Some(pos) = m.content.find(": ") {
+                    let tool_name = &m.content[..pos];
+                    m.content = format!("{}: [Old tool result content cleared to save context]", tool_name);
+                } else {
+                    m.content = "[Old tool result content cleared to save context]".to_string();
+                }
+            }
+        }
+    }
+}
 
 /// Check if history needs compaction and compact if so.
 /// Returns true if compaction was performed.
@@ -10,13 +32,35 @@ pub async fn maybe_compact(
     url: &str,
     model: &str,
     history: &mut Vec<ChatMessage>,
+    budget: usize,
 ) -> bool {
-    if history.len() < COMPACTION_THRESHOLD {
+    // 1. First run local, zero-cost tool output pruning
+    prune_old_tool_outputs(history);
+
+    // 2. Estimate total tokens in the history
+    let total_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    if total_tokens < budget {
         return false;
     }
 
-    // Find how many messages to summarize (all except the tail)
-    let summarize_count = history.len().saturating_sub(TAIL_MESSAGES_TO_KEEP);
+    // Determine how many messages to summarize.
+    // We want to keep at least the 8 most recent messages verbatim, but also
+    // retain a recent suffix of up to 30% of the token budget verbatim.
+    let mut accumulated_tokens = 0;
+    let keep_token_limit = (budget as f64 * 0.3) as usize; // Keep 30% of budget verbatim
+
+    let mut keep_count = 0;
+    for m in history.iter().rev() {
+        let tokens = estimate_tokens(&m.content);
+        if accumulated_tokens + tokens <= keep_token_limit || keep_count < 8 {
+            accumulated_tokens += tokens;
+            keep_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    let summarize_count = history.len().saturating_sub(keep_count);
     if summarize_count < 4 {
         return false;
     }
