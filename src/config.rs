@@ -8,7 +8,6 @@ pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 
 const CONFIG_FILE: &str = "config.toml";
 const HISTORY_FILE: &str = "history.json";
-const HISTORY_LIMIT: usize = 50;
 const SESSIONS_DIR: &str = "sessions";
 #[allow(dead_code)]
 const MAX_SESSIONS: usize = 30;
@@ -28,6 +27,7 @@ pub struct ModelProfile {
 #[serde(rename_all = "lowercase")]
 pub enum ToolProtocol {
     Json,
+    Native,
 }
 
 impl Default for ToolProtocol {
@@ -276,8 +276,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
 
 fn save_history_to(dir: &Path, history: &[ChatMessage]) {
     let _ = fs::create_dir_all(dir);
-    let start_idx = history.len().saturating_sub(HISTORY_LIMIT);
-    if let Ok(json_str) = serde_json::to_string_pretty(&history[start_idx..]) {
+    if let Ok(json_str) = serde_json::to_string_pretty(history) {
         let _ = fs::write(dir.join(HISTORY_FILE), json_str);
     }
 }
@@ -365,8 +364,7 @@ pub fn save_session_history(session_id: &str, history: &[ChatMessage]) {
     if let Some(dir) = get_config_dir() {
         let session_dir = dir.join(SESSIONS_DIR).join(session_id);
         let _ = fs::create_dir_all(&session_dir);
-        let start_idx = history.len().saturating_sub(HISTORY_LIMIT);
-        if let Ok(json_str) = serde_json::to_string_pretty(&history[start_idx..]) {
+        if let Ok(json_str) = serde_json::to_string_pretty(history) {
             let _ = fs::write(session_dir.join("history.json"), json_str);
         }
     }
@@ -502,8 +500,7 @@ pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
     fs::create_dir_all(session_dir.join("sandbox")).ok()?;
     fs::create_dir_all(session_dir.join("artifacts")).ok()?;
     let path = session_dir.join("history.json");
-    let start_idx = history.len().saturating_sub(HISTORY_LIMIT);
-    let json_str = serde_json::to_string_pretty(&history[start_idx..]).ok()?;
+    let json_str = serde_json::to_string_pretty(history).ok()?;
     fs::write(&path, json_str).ok()?;
     prune_sessions(&dir);
     Some(path)
@@ -789,15 +786,15 @@ mod tests {
     }
 
     #[test]
-    fn test_history_capped_at_limit() {
-        let dir = temp_dir("history-cap");
+    fn test_history_persists_full_log() {
+        let dir = temp_dir("history-full");
         let msgs: Vec<ChatMessage> = (0..80)
             .map(|i| ChatMessage::new("user", format!("msg {}", i)))
             .collect();
         save_history_to(&dir, &msgs);
         let loaded = load_session_file(&dir.join(HISTORY_FILE));
-        assert_eq!(loaded.len(), HISTORY_LIMIT);
-        assert_eq!(loaded[0].content, "msg 30");
+        assert_eq!(loaded.len(), msgs.len());
+        assert_eq!(loaded[0].content, "msg 0");
     }
 
     #[test]

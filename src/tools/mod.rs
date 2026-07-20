@@ -1,15 +1,10 @@
-use globset::{Glob, GlobSetBuilder};
-use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 mod filesystem;
 mod search;
@@ -289,20 +284,21 @@ pub fn tool_system_prompt(
         "You are rustcode, a terminal-based coding assistant.\n\
 - Use `sandbox/` for temporary scripts/builds, and `artifacts/` for persistent designs/reports.\n\
 - For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
-# Rules\n\
-- Be concise and direct. No filler or preamble.\n\
-- Explore first: use `grep`, `glob`, `view_file` to understand context before editing.\n\
-- For editing, use `replace_file_content`. You do NOT need to specify `start_line` or `end_line` — simply copy the code block you want to edit exactly into `target_content` and it will be replaced. Avoid specifying line numbers for edits as they shift after modifications.\n\
-- DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
-- Match project code style.\n\
-- Only run tests/builds or commit/push code when explicitly requested by the user.\n\
-- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
-- When the task is complete, output a plain-text final summary (with no tool block).\n\n\
-# Working memory & avoiding loops\n\
-- If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.\n\
-- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk. Each round you are reminded of which files are already in context.\n\
-- Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.\n\
-- For any multi-step task, FIRST call `todo_write` to lay out a short numbered plan, then execute each step in order. Update statuses as you go. Do not re-derive the whole plan each turn — trust the plan you wrote.\n\n"
+# Rules
+- Be concise and direct. No filler or preamble. Execute tools immediately without conversational fluff.
+- Explore first: use `grep`, `glob`, `view_file` to understand context before editing.
+- For editing, use `replace_file_content`. You do NOT need to specify `start_line` or `end_line` — simply copy the code block you want to edit exactly into `target_content` and it will be replaced. Avoid specifying line numbers for edits as they shift after modifications.
+- DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.
+- Match project code style.
+- Only run tests/builds or commit/push code when explicitly requested by the user.
+- Read-only tools run immediately; modifying/destructive tools require confirmation.
+- When the task is complete, output a plain-text final summary (with no tool block).
+
+# Working memory & avoiding loops
+- If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
+- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk.
+- Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.
+- Use `todo_write` ONLY for complex code refactors or multi-stage tasks (3+ steps). For routine tasks, git operations, single-file edits, or simple questions, DO NOT use `todo_write` — execute tools directly. Do not update `todo_write` after every single command; only update it when completing major milestones.\n\n"
     );
 
     p.push_str("# Tool Format\n");
@@ -316,6 +312,15 @@ pub fn tool_system_prompt(
                 Rules:\n\
                 - Keys must be \"name\" and \"arguments\".\n\
                 - Pass correct type for arguments (no quotes for numbers/booleans).\n\n"
+            );
+        }
+        crate::config::ToolProtocol::Native => {
+            p.push_str(
+                "To call a tool, output ONLY the tool call tag using native format. Do not output any conversational text or narration before or after the tag.\n\n\
+                [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
+                Rules:\n\
+                - Format must be [TOOL_CALLS]tool_name[ARGS]{...}.\n\
+                - Arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
     }
@@ -365,6 +370,17 @@ Assistant:\n\
 ```tool\n\
 {\"name\": \"grep\", \"arguments\": {\"pattern\": \"agent loop\", \"include\": \"*.rs\"}}\n\
 ```\n\n\
+Example (conversation — no tool):\n\
+User: hello, how are you?\n\
+Assistant: Hi! Ready to help with your code. What are you working on?\n",
+            );
+        }
+        crate::config::ToolProtocol::Native => {
+            p.push_str(
+                "\nExample (task — needs a tool):\n\
+User: Where is the agent loop implemented?\n\
+Assistant:\n\
+[TOOL_CALLS]grep[ARGS]{\"pattern\": \"agent loop\", \"include\": \"*.rs\"}\n\n\
 Example (conversation — no tool):\n\
 User: hello, how are you?\n\
 Assistant: Hi! Ready to help with your code. What are you working on?\n",
@@ -434,66 +450,110 @@ fn repair_json(s: &str) -> String {
     repaired
 }
 
-fn parse_tool_calls_impl(
-    text: &str,
-    protocol: crate::config::ToolProtocol,
-) -> Vec<(String, Value)> {
-    match protocol {
-        crate::config::ToolProtocol::Json => {
-            let mut calls = Vec::new();
-            
-            // Look for ```tool blocks first (supporting unclosed/truncated blocks)
-            let mut tool_block_to_parse = None;
-            if let Some(start) = text.find("```tool") {
-                let rest = &text[start + 7..];
-                if let Some(end) = rest.find("```") {
-                    tool_block_to_parse = Some(rest[..end].trim().to_string());
+fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
+    if text.contains("[TOOL_CALLS]") {
+        let re = Regex::new(
+            r#"\[TOOL_CALLS\]\s*([a-zA-Z0-9_-]+)[\":]*\s*(?:\[ARGS\])?[\":]*\s*(\{[\s\S]*)"#,
+        )
+        .unwrap();
+        for chunk in text.split("[TOOL_CALLS]") {
+            let chunk = chunk.trim();
+            if chunk.is_empty() {
+                continue;
+            }
+            let full = format!("[TOOL_CALLS]{chunk}");
+            if let Some(caps) = re.captures(&full) {
+                let name = caps.get(1).unwrap().as_str().to_string();
+                let raw_args = caps.get(2).unwrap().as_str();
+
+                let repaired = repair_json(raw_args);
+                if let Ok(json_val) = serde_json::from_str::<Value>(&repaired) {
+                    calls.push((name, json_val));
                 } else {
-                    tool_block_to_parse = Some(rest.trim().to_string());
-                }
-            }
-            
-            if let Some(block) = tool_block_to_parse {
-                let repaired = repair_json(&block);
-                if let Ok(json_value) = serde_json::from_str::<Value>(&repaired) {
-                    if let Some(call) = extract_tool_call(&json_value) {
-                        calls.push(call);
-                    }
-                }
-            }
-            
-            // If no tool blocks found, try to parse the whole text as JSON (with repair if it starts with '{')
-            if calls.is_empty() {
-                let cleaned = text.trim();
-                let to_parse = if cleaned.starts_with('{') {
-                    repair_json(cleaned)
-                } else {
-                    cleaned.to_string()
-                };
-                if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse) {
-                    if let Some(call) = extract_tool_call(&json_value) {
-                        calls.push(call);
-                    }
-                }
-            }
-            
-            // Try to find JSON objects in the text
-            if calls.is_empty() {
-                let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
-                for mat in pattern.find_iter(text) {
-                    let json_str = mat.as_str();
-                    if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                        if let Some(call) = extract_tool_call(&json_value) {
-                            calls.push(call);
+                    let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
+                    if let Some(mat) = pattern.find(raw_args) {
+                        if let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str()) {
+                            calls.push((name, json_val));
                         }
                     }
                 }
             }
-            
-            calls.dedup();
-            calls
         }
     }
+}
+
+fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
+    let mut tool_block_to_parse = None;
+    if let Some(start) = text.find("```tool") {
+        let rest = &text[start + 7..];
+        if let Some(end) = rest.find("```") {
+            tool_block_to_parse = Some(rest[..end].trim().to_string());
+        } else {
+            tool_block_to_parse = Some(rest.trim().to_string());
+        }
+    }
+
+    if let Some(block) = tool_block_to_parse {
+        let repaired = repair_json(&block);
+        if let Ok(json_value) = serde_json::from_str::<Value>(&repaired) {
+            if let Some(call) = extract_tool_call(&json_value) {
+                calls.push(call);
+            }
+        }
+    }
+}
+
+fn parse_tool_calls_impl(
+    text: &str,
+    protocol: crate::config::ToolProtocol,
+) -> Vec<(String, Value)> {
+    let mut calls = Vec::new();
+
+    match protocol {
+        crate::config::ToolProtocol::Native => {
+            parse_tool_calls_tags(text, &mut calls);
+            if calls.is_empty() {
+                parse_tool_calls_fenced(text, &mut calls);
+            }
+        }
+        crate::config::ToolProtocol::Json => {
+            parse_tool_calls_fenced(text, &mut calls);
+            if calls.is_empty() {
+                parse_tool_calls_tags(text, &mut calls);
+            }
+        }
+    }
+
+    // If no tool blocks found, try to parse the whole text as JSON (with repair if it starts with '{')
+    if calls.is_empty() {
+        let cleaned = text.trim();
+        let to_parse = if cleaned.starts_with('{') {
+            repair_json(cleaned)
+        } else {
+            cleaned.to_string()
+        };
+        if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse) {
+            if let Some(call) = extract_tool_call(&json_value) {
+                calls.push(call);
+            }
+        }
+    }
+
+    // Try to find JSON objects in the text
+    if calls.is_empty() {
+        let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
+        for mat in pattern.find_iter(text) {
+            let json_str = mat.as_str();
+            if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
+                if let Some(call) = extract_tool_call(&json_value) {
+                    calls.push(call);
+                }
+            }
+        }
+    }
+
+    calls.dedup();
+    calls
 }
 
 pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
@@ -612,5 +672,25 @@ mod tests {
         assert_eq!(calls[0].0, "write_to_file");
         assert_eq!(calls[0].1.get("path").unwrap().as_str().unwrap(), "/foo");
         assert_eq!(calls[0].1.get("content").unwrap().as_str().unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_tag() {
+        let text1 = "Let me check...[TOOL_CALLS]glob[ARGS]{\"pattern\": \"**/*.rs\"}";
+        let calls1 = parse_tool_calls(text1, crate::config::ToolProtocol::Json);
+        assert_eq!(calls1.len(), 1);
+        assert_eq!(calls1[0].0, "glob");
+        assert_eq!(calls1[0].1.get("pattern").unwrap().as_str().unwrap(), "**/*.rs");
+
+        let text2 = "Let me check...[TOOL_CALLS]glob\":{\"pattern\":\"**/*.rs\"}";
+        let calls2 = parse_tool_calls(text2, crate::config::ToolProtocol::Json);
+        assert_eq!(calls2.len(), 1);
+        assert_eq!(calls2[0].0, "glob");
+        assert_eq!(calls2[0].1.get("pattern").unwrap().as_str().unwrap(), "**/*.rs");
+
+        let text3 = "Plan:[TOOL_CALLS]todo_write[ARGS]{\"todos\": [{\"content\": \"Fix bug\"}]}";
+        let calls3 = parse_tool_calls(text3, crate::config::ToolProtocol::Json);
+        assert_eq!(calls3.len(), 1);
+        assert_eq!(calls3[0].0, "todo_write");
     }
 }
