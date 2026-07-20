@@ -65,28 +65,80 @@ pub async fn maybe_compact(
         return false;
     }
 
-    let to_summarize: Vec<&ChatMessage> = history[..summarize_count].iter().collect();
-    let summary = match generate_summary(client, url, model, &to_summarize).await {
+    // Incremental compaction: if a prior summary already sits at the front of the
+    // range, preserve its facts and only summarize the messages that came after.
+    // Avoids re-compressing an already-compressed summary (which drifts and loses
+    // detail every pass).
+    let prior_summary = history
+        .iter()
+        .take(summarize_count)
+        .find(|m| m.role == "system" && m.content.starts_with(SUMMARY_MARKER))
+        .map(|m| {
+            m.content
+                .trim_start_matches(SUMMARY_MARKER)
+                .trim_start_matches('\n')
+                .to_string()
+        });
+
+    // Pin the original task (first user message) so the goal is never blurred away.
+    let first_user_task = history
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone());
+
+    // Only summarize messages that aren't the prior summary itself.
+    let to_summarize: Vec<&ChatMessage> = history[..summarize_count]
+        .iter()
+        .filter(|m| !(m.role == "system" && m.content.starts_with(SUMMARY_MARKER)))
+        .collect();
+
+    let summary = match generate_summary(
+        client,
+        url,
+        model,
+        prior_summary.as_deref(),
+        &to_summarize,
+    )
+    .await
+    {
         Some(s) => s,
         None => return false,
     };
 
-    // Replace the old messages with a single compaction summary
     let tail: Vec<ChatMessage> = history[summarize_count..].to_vec();
+    let task_in_tail = first_user_task
+        .as_ref()
+        .is_some_and(|t| tail.iter().any(|m| m.role == "user" && &m.content == t));
+
+    // Replace the summarized range with a single summary message.
     history.clear();
     history.push(ChatMessage::new(
         "system",
-        format!("[Session History Summary]\n{summary}\n[End Summary — the following messages are the most recent conversation]"),
+        format!("{SUMMARY_MARKER}\n{summary}\n[End Summary — the following messages are the most recent conversation]"),
     ));
+    // Re-inject the original task verbatim if it fell inside the summarized range.
+    if let Some(task) = first_user_task
+        && !task_in_tail
+    {
+        history.push(ChatMessage::new(
+            "system",
+            format!("[Original task — do not lose sight of this]\n{task}"),
+        ));
+    }
     history.extend(tail);
 
     true
 }
 
+/// Prefix that marks a compaction summary message, used to detect and preserve
+/// prior summaries during incremental compaction.
+const SUMMARY_MARKER: &str = "[Session History Summary]";
+
 async fn generate_summary(
     client: &reqwest::Client,
     url: &str,
     model: &str,
+    prior_summary: Option<&str>,
     messages: &[&ChatMessage],
 ) -> Option<String> {
     let mut conversation_text = String::new();
@@ -98,25 +150,38 @@ async fn generate_summary(
             "system" => "System",
             _ => "Unknown",
         };
-        // Limit each message to ~500 chars to keep the summarization prompt small
-        let content = if m.content.len() > 500 {
-            format!("{}... [truncated]", &m.content[..500])
+        // Limit each message to ~2000 chars to keep the prompt bounded. Use a
+        // char boundary (not a byte slice) — byte slicing panics when the cut
+        // lands inside a multi-byte UTF-8 sequence.
+        let content = if m.content.chars().count() > 2000 {
+            let head: String = m.content.chars().take(2000).collect();
+            format!("{head}... [truncated]")
         } else {
             m.content.clone()
         };
         conversation_text.push_str(&format!("{}:\n{}\n\n", role_label, content));
     }
 
+    // Incremental: hand the model the prior summary to fold in, so earlier facts
+    // survive instead of being re-compressed away.
+    let user_content = match prior_summary {
+        Some(prev) => format!(
+            "Existing summary of earlier context (preserve every fact, do NOT drop details):\n{prev}\n\n\
+             New messages since then to fold into the summary:\n\n{conversation_text}"
+        ),
+        None => format!("Summarize this conversation:\n\n{conversation_text}"),
+    };
+
     let payload = serde_json::json!({
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": "You are a conversation summarizer. Produce a concise 2-3 paragraph summary of the following coding session conversation. Focus on: what the user asked for, what files were modified/created, what tools were used and their key results, and what the current state of the work is. Be specific about file paths and code changes. Do NOT include tool call syntax or JSON."
+                "content": "You are a conversation summarizer for a coding session. Produce a concise bullet-point summary. Always preserve: the original user request/goal; every file read, created, or modified (with exact paths); key tool results, findings, and errors; and the current state of the work plus the next step. Be specific about file paths and code changes. Never invent facts and never drop facts from an existing summary. Do NOT include tool call syntax or JSON."
             },
             {
                 "role": "user",
-                "content": format!("Summarize this conversation:\n\n{}", conversation_text)
+                "content": user_content
             }
         ],
         "stream": false,
