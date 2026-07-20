@@ -936,11 +936,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if !text.is_empty() {
                                     crate::clipboard::copy_to_clipboard(&text);
                                 }
-                            } else if s.selecting && s.sel_start.is_some() {
-                                let start = s.sel_start.unwrap();
-                                let text =
-                                    ui::extract_selection(terminal.current_buffer_mut(), start, start);
-                                crate::clipboard::copy_to_clipboard(&text);
+                            } else if s.selecting {
+                                if let Some(start) = s.sel_start {
+                                    let text =
+                                        ui::extract_selection(terminal.current_buffer_mut(), start, start);
+                                    crate::clipboard::copy_to_clipboard(&text);
+                                }
                             }
                             s.clear_selection();
                         }
