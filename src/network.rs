@@ -1702,9 +1702,18 @@ async fn evaluate_and_expand_prompt(
     let (url, model) = crate::config::resolve_model_endpoint(config, small_model_name);
 
     let system_prompt = "You are a prompt optimizer and task classification assistant.\n\
-Given a user's coding prompt, determine if it is a complex or multi-step task that requires an autonomous agent loop (executing multiple tools to search, edit, compile, or test code) to complete.\n\
-If it is a multi-step task, expand the prompt to be detailed and structured, but do not override the user's original intent.\n\
-Return ONLY a valid JSON object matching this schema: {\"is_goal\": bool, \"expanded_prompt\": \"string\"}. No markdown formatting, no code fences.";
+Analyze the user's input and output ONLY a JSON object matching this schema: {\"is_goal\": boolean, \"expanded_prompt\": string}.\n\n\
+Rules:\n\
+- is_goal = false for greetings, casual chat, simple questions, or single-step requests.\n\
+- is_goal = true ONLY for multi-step coding tasks requiring editing files, fixing bugs, refactoring, building, or git workflows.\n\n\
+Examples:\n\
+Input: \"hello how are you\"\n\
+Output: {\"is_goal\": false, \"expanded_prompt\": \"hello how are you\"}\n\n\
+Input: \"what is rustcode\"\n\
+Output: {\"is_goal\": false, \"expanded_prompt\": \"what is rustcode\"}\n\n\
+Input: \"fix the scrollbar bug in ui.rs and run tests\"\n\
+Output: {\"is_goal\": true, \"expanded_prompt\": \"Fix the scrollbar rendering bug in src/ui.rs, update the scroll offset logic, and run tests to verify.\"}\n\n\
+Return ONLY valid JSON. No markdown code blocks. No introductory text.";
 
     let payload = serde_json::json!({
         "model": model,
@@ -1747,7 +1756,18 @@ Return ONLY a valid JSON object matching this schema: {\"is_goal\": bool, \"expa
         .trim();
 
     if let Ok(parsed) = serde_json::from_str::<ExpansionResult>(cleaned) {
-        Some((parsed.is_goal, parsed.expanded_prompt))
+        let p_lower = prompt.trim().to_lowercase();
+        let is_conversational = p_lower.starts_with("hello")
+            || p_lower.starts_with("hi")
+            || p_lower.starts_with("hey")
+            || p_lower.contains("how are you")
+            || p_lower.contains("who are you")
+            || p_lower.contains("what can you do")
+            || p_lower.starts_with("thanks")
+            || p_lower.starts_with("thank you");
+
+        let is_actual_goal = parsed.is_goal && !is_conversational;
+        Some((is_actual_goal, parsed.expanded_prompt))
     } else {
         None
     }
@@ -2493,7 +2513,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             }
 
             let is_continuous = { state.lock().await.continuous_mode };
-            if is_continuous && !cancel_token.is_cancelled() && tool_rounds < max_tool_rounds {
+            if is_continuous && !cancel_token.is_cancelled() && tool_rounds > 0 && tool_rounds < max_tool_rounds {
                 dbg_log!("Continuous mode active, assistant didn't call complete_task. Injecting prompt to continue.");
                 tool_rounds += 1;
                 let mut s = state.lock().await;
@@ -2508,6 +2528,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 s.stream_tracker = Some(StreamTracker::new());
                 drop(s);
                 continue;
+            } else if is_continuous && tool_rounds == 0 {
+                dbg_log!("Continuous mode active, but assistant gave a plain conversational reply (no tools used). Ending turn.");
+                let mut s = state.lock().await;
+                s.continuous_mode = false;
             }
 
             break;
