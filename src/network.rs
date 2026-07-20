@@ -645,7 +645,6 @@ pub async fn stream_request(
     let wrapped = StreamReader::new(stream);
     let mut reader = BufReader::with_capacity(4096, wrapped);
     let mut line_buf = String::with_capacity(4096);
-    let mut line_count = 0;
     let mut in_reasoning = false;
     let mut finish_reason: Option<String> = None;
 
@@ -670,8 +669,7 @@ pub async fn stream_request(
                         dbg_log!("stream_request: SSE stream read EOF (0 bytes)");
                         break;
                     }
-                    Ok(n) => {
-                        line_count += 1;
+                    Ok(_) => {
                         let trimmed = line_buf.trim();
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
