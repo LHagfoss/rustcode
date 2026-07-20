@@ -286,6 +286,9 @@ pub struct AppState {
     pub expanded_thoughts: std::collections::HashSet<usize>,
     pub thought_toggle_rows: Vec<(u16, usize)>,
 
+    /// Timestamp of the last escape key press (for double-esc detection)
+    pub last_escape_time: Option<std::time::Instant>,
+
     pub raw_cli_mode: bool,
     pub tip_index: usize,
 
@@ -386,6 +389,8 @@ impl AppState {
             selecting: false,
             expanded_thoughts: std::collections::HashSet::new(),
             thought_toggle_rows: Vec::new(),
+
+            last_escape_time: None,
 
             raw_cli_mode: false,
             tip_index: random_tip_index(),

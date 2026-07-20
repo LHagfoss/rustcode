@@ -765,13 +765,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.auto_confirm = !s.auto_confirm;
                         }
                         KeyCode::Esc => {
+                            let now = std::time::Instant::now();
                             let mut s = app_state.lock().await;
-                            if s.sel_start.is_some() || s.sel_end.is_some() {
-                                s.clear_selection();
-                            } else {
-                                drop(s);
-                                crate::app::handle_escape(&app_state, &mut current_cancel_token)
-                                    .await
+                            
+                            // Check if this is a double-esc (within 500ms)
+                            match s.last_escape_time {
+                                Some(last_time) if now.duration_since(last_time).as_millis() < 500 => {
+                                    drop(s);
+                                    crate::app::handle_escape(&app_state, &mut current_cancel_token)
+                                        .await;
+                                    needs_redraw = true;
+                                }
+                                _ => {
+                                    // Single esc: clear selection or input buffer only (no cancel)
+                                    if s.sel_start.is_some() || s.sel_end.is_some() {
+                                        s.clear_selection();
+                                    } else {
+                                        s.input_buffer.clear();
+                                        s.cursor_position = 0;
+                                    }
+                                    
+                                    // Update last escape time for double-esc detection
+                                    s.last_escape_time = Some(now);
+                                }
                             }
                         }
                         KeyCode::Up => {
