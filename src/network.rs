@@ -1747,7 +1747,18 @@ Return ONLY a valid JSON object matching this schema: {\"is_goal\": bool, \"expa
         .trim();
 
     if let Ok(parsed) = serde_json::from_str::<ExpansionResult>(cleaned) {
-        Some((parsed.is_goal, parsed.expanded_prompt))
+        let p_lower = prompt.trim().to_lowercase();
+        let is_conversational = p_lower.starts_with("hello")
+            || p_lower.starts_with("hi")
+            || p_lower.starts_with("hey")
+            || p_lower.contains("how are you")
+            || p_lower.contains("who are you")
+            || p_lower.contains("what can you do")
+            || p_lower.starts_with("thanks")
+            || p_lower.starts_with("thank you");
+
+        let is_actual_goal = parsed.is_goal && !is_conversational;
+        Some((is_actual_goal, parsed.expanded_prompt))
     } else {
         None
     }
@@ -2493,7 +2504,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             }
 
             let is_continuous = { state.lock().await.continuous_mode };
-            if is_continuous && !cancel_token.is_cancelled() && tool_rounds < max_tool_rounds {
+            if is_continuous && !cancel_token.is_cancelled() && tool_rounds > 0 && tool_rounds < max_tool_rounds {
                 dbg_log!("Continuous mode active, assistant didn't call complete_task. Injecting prompt to continue.");
                 tool_rounds += 1;
                 let mut s = state.lock().await;
@@ -2508,6 +2519,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 s.stream_tracker = Some(StreamTracker::new());
                 drop(s);
                 continue;
+            } else if is_continuous && tool_rounds == 0 {
+                dbg_log!("Continuous mode active, but assistant gave a plain conversational reply (no tools used). Ending turn.");
+                let mut s = state.lock().await;
+                s.continuous_mode = false;
             }
 
             break;
