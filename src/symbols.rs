@@ -25,8 +25,13 @@ pub fn init_db() -> Result<Connection, String> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let connection =
-        Connection::open(&db_path).map_err(|e| format!("failed to open symbols database: {e}"))?;
+    let connection = open_writable_db(&db_path).or_else(|_| {
+        let fallback = std::env::temp_dir().join("rustcode").join("symbols.db");
+        if let Some(parent) = fallback.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        open_writable_db(&fallback)
+    })?;
 
     connection.execute(
         "CREATE TABLE IF NOT EXISTS symbols (
@@ -53,6 +58,20 @@ pub fn init_db() -> Result<Connection, String> {
     Ok(connection)
 }
 
+/// Open a SQLite database only when it can accept writes. The normal location
+/// is the user's config directory; a temporary fallback keeps symbol search
+/// usable in read-only or sandboxed environments.
+fn open_writable_db(path: &Path) -> Result<Connection, String> {
+    let connection = Connection::open(path)
+        .map_err(|e| format!("failed to open symbols database: {e}"))?;
+    connection
+        // BEGIN IMMEDIATE alone can succeed against an existing read-only file;
+        // changing this harmless header field proves the database is writable.
+        .execute_batch("PRAGMA user_version = 1;")
+        .map_err(|e| format!("symbols database is not writable: {e}"))?;
+    Ok(connection)
+}
+
 fn extract_signature(node_text: &str) -> String {
     if let Some(idx) = node_text.find('{') {
         node_text[..idx].trim().to_string()
@@ -67,9 +86,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
 
     // 1. Gather all files and track mtimes
     let mut files = Vec::new();
-    let walker = ignore::WalkBuilder::new(root_dir)
-        .standard_filters(true)
-        .build();
+    let walker = ignore::WalkBuilder::new(root_dir).standard_filters(true).build();
 
     for entry in walker {
         let entry = match entry {
