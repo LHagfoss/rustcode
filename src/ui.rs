@@ -1115,7 +1115,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(""));
         } else if msg.role == "user" {
             lines.push(Line::from(""));
-            let content_width = (inner_area.width as usize).saturating_sub(4);
+            // Account for "▌ " prefix (2 characters) plus original padding
+            let content_width = (inner_area.width as usize).saturating_sub(6);
             let mut wrapped_lines = Vec::new();
             for raw_line in msg.content.lines() {
                 if raw_line.is_empty() {
