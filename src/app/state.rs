@@ -285,10 +285,7 @@ pub struct AppState {
     pub selecting: bool,
     pub expanded_thoughts: std::collections::HashSet<usize>,
     pub thought_toggle_rows: Vec<(u16, usize)>,
-    pub scrollbar_col: u16,
-    pub scrollbar_top: u16,
-    pub scrollbar_height: u16,
-    pub dragging_scrollbar: bool,
+
     pub raw_cli_mode: bool,
     pub tip_index: usize,
 
@@ -389,10 +386,7 @@ impl AppState {
             selecting: false,
             expanded_thoughts: std::collections::HashSet::new(),
             thought_toggle_rows: Vec::new(),
-            scrollbar_col: 0,
-            scrollbar_top: 0,
-            scrollbar_height: 0,
-            dragging_scrollbar: false,
+
             raw_cli_mode: false,
             tip_index: random_tip_index(),
             continuous_mode: false,
@@ -695,17 +689,5 @@ impl AppState {
         }
     }
 
-    /// Map a click on the scrollbar track to a scroll position and jump there.
-    pub fn scrollbar_drag_to(&mut self, row: u16) {
-        self.clear_selection();
-        let max = self.last_max_scroll;
-        if max == 0 || self.scrollbar_height <= 1 {
-            return;
-        }
-        let rel =
-            row.saturating_sub(self.scrollbar_top) as f32 / (self.scrollbar_height - 1) as f32;
-        let target = (rel.clamp(0.0, 1.0) * max as f32).round() as u16;
-        self.scroll_row = target.min(max);
-        self.is_scroll_locked_to_bottom = self.scroll_row >= max;
-    }
+
 }

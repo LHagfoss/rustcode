@@ -1044,30 +1044,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             needs_redraw = true;
                         }
                         MouseEventKind::Down(MouseButton::Left) if !modal => {
-                            let on_scrollbar = s.scrollbar_height > 0
-                                && mouse.column == s.scrollbar_col
-                                && mouse.row >= s.scrollbar_top
-                                && mouse.row < s.scrollbar_top + s.scrollbar_height;
-                            if on_scrollbar {
-                                s.dragging_scrollbar = true;
-                                s.scrollbar_drag_to(mouse.row);
-                            } else {
-                                s.sel_start = Some((mouse.column, mouse.row));
-                                s.sel_end = Some((mouse.column, mouse.row));
-                                s.selecting = true;
-                            }
-                            needs_redraw = true;
-                        }
-                        MouseEventKind::Drag(MouseButton::Left) if s.dragging_scrollbar => {
-                            s.scrollbar_drag_to(mouse.row);
+                            s.sel_start = Some((mouse.column, mouse.row));
+                            s.sel_end = Some((mouse.column, mouse.row));
+                            s.selecting = true;
                             needs_redraw = true;
                         }
                         MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
                             s.sel_end = Some((mouse.column, mouse.row));
-                            needs_redraw = true;
-                        }
-                        MouseEventKind::Up(MouseButton::Left) if s.dragging_scrollbar => {
-                            s.dragging_scrollbar = false;
                             needs_redraw = true;
                         }
                         MouseEventKind::Up(MouseButton::Left) if s.selecting => {

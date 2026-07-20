@@ -1314,40 +1314,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         }
     }
 
-    let conv = chunks[0];
-    let view_h = inner_area.height;
-    let content_h = total_wrapped_lines.max(1);
-    state.scrollbar_height = 0;
-    if content_h > view_h && max_scroll > 0 {
-        let sb_x = conv.x + conv.width.saturating_sub(1);
-        let sb_area = ratatui::layout::Rect::new(sb_x, conv.y, 1, view_h);
-        state.scrollbar_col = sb_x;
-        state.scrollbar_top = conv.y;
-        state.scrollbar_height = view_h;
-        let thumb_len = ((view_h as u32 * view_h as u32) / content_h as u32).max(1) as u16;
-        let track = view_h.saturating_sub(thumb_len);
-        let pos = if max_scroll == 0 {
-            0
-        } else {
-            ((scroll_offset as u64 * track as u64) / max_scroll as u64) as u16
-        };
-        let mut rows = Vec::with_capacity(view_h as usize);
-        for i in 0..view_h {
-            let (ch, color) = if i >= pos && i < pos + thumb_len {
-                ('█', COLOR_PRIMARY)
-            } else {
-                ('│', COLOR_BORDER)
-            };
-            rows.push(Line::from(Span::styled(
-                ch.to_string(),
-                Style::default().fg(color).bg(COLOR_BG),
-            )));
-        }
-        f.render_widget(
-            Paragraph::new(rows).style(Style::default().bg(COLOR_BG)),
-            sb_area,
-        );
-    }
+    let _conv = chunks[0];
+    let _view_h = inner_area.height;
+    let _content_h = total_wrapped_lines.max(1);
+
 }
 
 fn render_popup_menu(
