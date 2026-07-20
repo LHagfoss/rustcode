@@ -8,6 +8,12 @@ use tokio_util::io::StreamReader;
 #[path = "network/compaction.rs"]
 pub(crate) mod compaction;
 
+#[path = "network/retry.rs"]
+pub(crate) mod retry;
+
+#[path = "network/loop_detect.rs"]
+pub(crate) mod loop_detect;
+
 macro_rules! dbg_log {
     ($($arg:tt)*) => {{
         use std::io::Write;
@@ -22,28 +28,12 @@ macro_rules! dbg_log {
     }};
 }
 
-async fn count_tokens(text: &str) -> Option<u32> {
-    if text.trim().is_empty() {
-        return Some(0);
-    }
-    let mut cmd = tokio::process::Command::new("fm");
-    cmd.args(["token-count", "--quiet", text])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-
-    let child = cmd.spawn().ok()?;
-    let output_res =
-        tokio::time::timeout(std::time::Duration::from_secs(2), child.wait_with_output()).await;
-
-    let output = output_res.ok()?.ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    std::str::from_utf8(&output.stdout)
-        .ok()?
-        .trim()
-        .parse::<u32>()
-        .ok()
+/// Fast token estimate (~4 chars per token). Single source of truth for token
+/// sizing, shared with compaction. Deliberately approximate and synchronous —
+/// compaction and usage display only need a cheap size signal, not exact counts,
+/// so we skip the `fm token-count` subprocess (which added latency per message).
+fn count_tokens(text: &str) -> u32 {
+    compaction::estimate_tokens(text) as u32
 }
 
 /// Classify a stored tool result for compaction priority.
@@ -190,9 +180,7 @@ async fn reduce_tool_msg(m: &mut ChatMessage, current_tokens: u32) -> u32 {
     let lines: Vec<&str> = rest.lines().collect();
     if lines.len() > 2 {
         let truncated = format!("{}: {}\n{}", tool_name, lines[0], lines[1]);
-        let t = count_tokens(&truncated)
-            .await
-            .unwrap_or((truncated.len() / 4) as u32);
+        let t = count_tokens(&truncated);
         m.content = truncated;
         t
     } else {
@@ -201,8 +189,6 @@ async fn reduce_tool_msg(m: &mut ChatMessage, current_tokens: u32) -> u32 {
             tool_name, current_tokens
         );
         count_tokens(&stubbed)
-            .await
-            .unwrap_or((stubbed.len() / 4) as u32)
     }
 }
 
@@ -250,10 +236,7 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
 
     let mut tokens = Vec::with_capacity(history.len());
     for m in history.iter() {
-        let t = count_tokens(&m.content)
-            .await
-            .unwrap_or_else(|| (m.content.len() / 4) as u32);
-        tokens.push(t);
+        tokens.push(count_tokens(&m.content));
     }
     let mut total: u32 = tokens.iter().sum();
     if total <= budget {
@@ -298,9 +281,9 @@ async fn estimate_token_usage(messages: &[serde_json::Value], reply: &str) -> Op
             }
         }
     }
-    let prompt = count_tokens(&prompt_text).await?;
+    let prompt = count_tokens(&prompt_text);
     let full = prompt_text + reply + "\n";
-    let total = count_tokens(&full).await?;
+    let total = count_tokens(&full);
     Some(TokenUsage {
         prompt_tokens: prompt,
         completion_tokens: total.saturating_sub(prompt),
@@ -613,31 +596,70 @@ pub async fn stream_request(
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
-    let response = client.post(url).json(&payload).send().await.map_err(|e| {
-        let mut msg = format!("Request failed: {e}");
-        let mut src = std::error::Error::source(&e);
-        while let Some(cause) = src {
-            msg.push_str(&format!(": {cause}"));
-            src = cause.source();
+    // Establish the connection with retry/backoff on transient failures
+    // (429, 5xx, network blips). We only retry here, before any SSE bytes are
+    // read — retrying mid-stream would duplicate partial output.
+    let mut attempt = 0usize;
+    let response = loop {
+        if cancel_token.is_cancelled() {
+            return Err("cancelled".to_string());
         }
-        msg
-    })?;
-
-    dbg_log!(
-        "stream_request: Received response status: {}",
-        response.status()
-    );
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let err_body = response.text().await.unwrap_or_default();
-        dbg_log!(
-            "stream_request: Request failed with status {}. Body: {}",
-            status,
-            err_body
-        );
-        return Err(format!("{status} - {err_body}"));
-    }
+        match client.post(url).json(&payload).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                dbg_log!(
+                    "stream_request: Received response status: {}",
+                    resp.status()
+                );
+                break resp;
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let code = status.as_u16();
+                let err_body = resp.text().await.unwrap_or_default();
+                if retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES {
+                    let delay = retry::delay_for_attempt(attempt, code);
+                    dbg_log!(
+                        "stream_request: retryable status {} (attempt {}/{}), backing off {}ms",
+                        status,
+                        attempt + 1,
+                        retry::MAX_RETRIES,
+                        delay.as_millis()
+                    );
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                    continue;
+                }
+                dbg_log!(
+                    "stream_request: Request failed with status {}. Body: {}",
+                    status,
+                    err_body
+                );
+                return Err(format!("{status} - {err_body}"));
+            }
+            Err(e) => {
+                if retry::is_retryable_transport(&e) && attempt < retry::MAX_RETRIES {
+                    let delay = retry::delay_for_attempt(attempt, 0);
+                    dbg_log!(
+                        "stream_request: transient network error (attempt {}/{}), backing off {}ms: {}",
+                        attempt + 1,
+                        retry::MAX_RETRIES,
+                        delay.as_millis(),
+                        e
+                    );
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                    continue;
+                }
+                let mut msg = format!("Request failed: {e}");
+                let mut src = std::error::Error::source(&e);
+                while let Some(cause) = src {
+                    msg.push_str(&format!(": {cause}"));
+                    src = cause.source();
+                }
+                return Err(msg);
+            }
+        }
+    };
 
     let stream = response
         .bytes_stream()
@@ -1936,6 +1958,9 @@ pub async fn process_queue_orchestrator(
         let mut last_sent_messages: Vec<serde_json::Value> = Vec::new();
         let mut final_content = String::new();
         let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
+        // Detects repetitive tool-call patterns (exact / semantic / stagnation /
+        // churn) so continuous mode can't spin forever. One instance per task.
+        let mut loop_detector = loop_detect::LoopDetector::new(6);
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
@@ -2213,6 +2238,58 @@ pub async fn process_queue_orchestrator(
             let tool_calls = crate::tools::parse_tool_calls(&final_content, protocol);
             if !tool_calls.is_empty() {
                 dbg_log!("Parsed {} tool call requests", tool_calls.len());
+
+                // Loop detection: feed each requested call to the detector and
+                // keep the worst status. Abort stops auto-execution; Warning
+                // injects a nudge so the model changes approach.
+                let mut loop_status = loop_detect::LoopStatus::Ok;
+                for (name, args) in &tool_calls {
+                    let (exact, category) = loop_detect::signatures(name, args);
+                    let s = loop_detector.check(&exact, &category);
+                    if s.rank() > loop_status.rank() {
+                        loop_status = s;
+                    }
+                }
+                match loop_status {
+                    loop_detect::LoopStatus::Abort(n) => {
+                        dbg_log!("Loop detector: abort after {} repeats", n);
+                        let mut s = state.lock().await;
+                        s.history
+                            .push(ChatMessage::new("assistant", &final_content));
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "[Loop detected: the same action repeated {n} times without \
+                                 making progress. Automatic execution stopped. Try a different \
+                                 approach, or tell the user what you found and ask how to proceed.]"
+                            ),
+                        ));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        s.continuous_mode = false;
+                        s.status = AppStatus::Idle;
+                        drop(s);
+                        let _ = crate::notifications::notify_finished(
+                            crate::notifications::FinishedStatus::Success,
+                        );
+                        break;
+                    }
+                    loop_detect::LoopStatus::Warning(n) => {
+                        dbg_log!("Loop detector: warning at {} repeats", n);
+                        let mut s = state.lock().await;
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "[Loop warning: this action has repeated {n} times. If you are \
+                                 stuck, change your approach — a different query, a different tool, \
+                                 or summarize what you have and move on.]"
+                            ),
+                        ));
+                        drop(s);
+                    }
+                    loop_detect::LoopStatus::Ok => {}
+                }
+
                 if !cancel_token.is_cancelled() && tool_rounds < max_tool_rounds {
                     tool_rounds += 1;
 
@@ -2459,6 +2536,13 @@ pub async fn process_queue_orchestrator(
                         );
                         if name == "complete_task" {
                             completed = true;
+                        }
+                        // Output-stagnation signal: repeated identical results
+                        // (e.g. "No matches found") despite varied commands.
+                        if let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
+                            loop_detector.record_output(&result)
+                        {
+                            dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
                         }
                         let truncated_result = truncate_tool_output(&name, result);
                         s.history.push(
