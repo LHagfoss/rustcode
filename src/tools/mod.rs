@@ -1,15 +1,10 @@
-use globset::{Glob, GlobSetBuilder};
-use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 mod filesystem;
 mod search;
@@ -289,20 +284,21 @@ pub fn tool_system_prompt(
         "You are rustcode, a terminal-based coding assistant.\n\
 - Use `sandbox/` for temporary scripts/builds, and `artifacts/` for persistent designs/reports.\n\
 - For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
-# Rules\n\
-- Be concise and direct. No filler or preamble.\n\
-- Explore first: use `grep`, `glob`, `view_file` to understand context before editing.\n\
-- For editing, use `replace_file_content`. You do NOT need to specify `start_line` or `end_line` — simply copy the code block you want to edit exactly into `target_content` and it will be replaced. Avoid specifying line numbers for edits as they shift after modifications.\n\
-- DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
-- Match project code style.\n\
-- Only run tests/builds or commit/push code when explicitly requested by the user.\n\
-- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
-- When the task is complete, output a plain-text final summary (with no tool block).\n\n\
-# Working memory & avoiding loops\n\
-- If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.\n\
-- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk. Each round you are reminded of which files are already in context.\n\
-- Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.\n\
-- For any multi-step task, FIRST call `todo_write` to lay out a short numbered plan, then execute each step in order. Update statuses as you go. Do not re-derive the whole plan each turn — trust the plan you wrote.\n\n"
+# Rules
+- Be concise and direct. No filler or preamble. Execute tools immediately without conversational fluff.
+- Explore first: use `grep`, `glob`, `view_file` to understand context before editing.
+- For editing, use `replace_file_content`. You do NOT need to specify `start_line` or `end_line` — simply copy the code block you want to edit exactly into `target_content` and it will be replaced. Avoid specifying line numbers for edits as they shift after modifications.
+- DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.
+- Match project code style.
+- Only run tests/builds or commit/push code when explicitly requested by the user.
+- Read-only tools run immediately; modifying/destructive tools require confirmation.
+- When the task is complete, output a plain-text final summary (with no tool block).
+
+# Working memory & avoiding loops
+- If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
+- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk.
+- Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.
+- Use `todo_write` ONLY for complex code refactors or multi-stage tasks (3+ steps). For routine tasks, git operations, single-file edits, or simple questions, DO NOT use `todo_write` — execute tools directly. Do not update `todo_write` after every single command; only update it when completing major milestones.\n\n"
     );
 
     p.push_str("# Tool Format\n");
