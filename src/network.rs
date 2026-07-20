@@ -490,13 +490,13 @@ fn tool_signature(name: &str, args: &serde_json::Value) -> String {
         // Bucket full/default reads together so paging can't bypass the guard.
         "view_file" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            match args.get("end_line").and_then(|v| v.as_u64()) {
-                Some(e) => {
-                    let start = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1);
-                    format!("{path}|{start}-{e}")
-                }
-                None => format!("{path}|full"),
-            }
+            let start = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1);
+            let end_str = args
+                .get("end_line")
+                .and_then(|v| v.as_u64())
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "end".to_string());
+            format!("{path}|{start}-{end_str}")
         }
         _ => serde_json::to_string(args).unwrap_or_default(),
     };
@@ -673,10 +673,6 @@ pub async fn stream_request(
                     Ok(n) => {
                         line_count += 1;
                         let trimmed = line_buf.trim();
-                        if line_count % 50 == 0 || trimmed.starts_with("data:") || trimmed.is_empty() {
-
-                            dbg_log!("stream_request: Read SSE line {} ({} bytes): '{}'", line_count, n, trimmed);
-                        }
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
@@ -847,13 +843,13 @@ pub async fn stream_request(
 
 fn has_intended_tool_call(content: &str) -> bool {
     let lower = content.to_lowercase();
-    lower.contains("```tool") || lower.contains("```json")
+    lower.contains("```tool") || lower.contains("```json") || lower.contains("[tool_calls]")
 }
 
 fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     // If the model already produced a valid tool call, we don't need to continue text generation.
     // We should execute the tool and get its output first.
-    if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Json).is_empty() {
+    if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty() {
         return false;
     }
 
@@ -1835,6 +1831,8 @@ pub async fn process_queue_orchestrator(
             }
             s.status = AppStatus::Streaming;
             s.stream_tracker = Some(StreamTracker::new());
+            s.recent_read_calls.clear();
+            s.read_file_mtimes.clear();
             let prompt = s.pending_queue.remove(0);
             dbg_log!("Popped prompt from queue: '{}'", prompt);
             prompt
@@ -1972,9 +1970,10 @@ pub async fn process_queue_orchestrator(
                     None => crate::context::environment_context(),
                 }
             };
+            let protocol = { state.lock().await.config.tool_protocol };
             let mut system_prompt = format!(
                 "{}\n\n{}",
-                crate::tools::tool_system_prompt(true, crate::config::ToolProtocol::Json),
+                crate::tools::tool_system_prompt(true, protocol),
                 context_section
             );
             // Store the snapshot if this is the first turn

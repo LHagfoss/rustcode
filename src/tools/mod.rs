@@ -318,6 +318,15 @@ pub fn tool_system_prompt(
                 - Pass correct type for arguments (no quotes for numbers/booleans).\n\n"
             );
         }
+        crate::config::ToolProtocol::Native => {
+            p.push_str(
+                "To call a tool, output ONLY the tool call tag using native format. Do not output any conversational text or narration before or after the tag.\n\n\
+                [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
+                Rules:\n\
+                - Format must be [TOOL_CALLS]tool_name[ARGS]{...}.\n\
+                - Arguments must be a valid JSON object matching the tool parameters.\n\n"
+            );
+        }
     }
 
     p.push_str("Available tools:\n");
@@ -365,6 +374,17 @@ Assistant:\n\
 ```tool\n\
 {\"name\": \"grep\", \"arguments\": {\"pattern\": \"agent loop\", \"include\": \"*.rs\"}}\n\
 ```\n\n\
+Example (conversation — no tool):\n\
+User: hello, how are you?\n\
+Assistant: Hi! Ready to help with your code. What are you working on?\n",
+            );
+        }
+        crate::config::ToolProtocol::Native => {
+            p.push_str(
+                "\nExample (task — needs a tool):\n\
+User: Where is the agent loop implemented?\n\
+Assistant:\n\
+[TOOL_CALLS]grep[ARGS]{\"pattern\": \"agent loop\", \"include\": \"*.rs\"}\n\n\
 Example (conversation — no tool):\n\
 User: hello, how are you?\n\
 Assistant: Hi! Ready to help with your code. What are you working on?\n",
@@ -434,66 +454,110 @@ fn repair_json(s: &str) -> String {
     repaired
 }
 
-fn parse_tool_calls_impl(
-    text: &str,
-    protocol: crate::config::ToolProtocol,
-) -> Vec<(String, Value)> {
-    match protocol {
-        crate::config::ToolProtocol::Json => {
-            let mut calls = Vec::new();
-            
-            // Look for ```tool blocks first (supporting unclosed/truncated blocks)
-            let mut tool_block_to_parse = None;
-            if let Some(start) = text.find("```tool") {
-                let rest = &text[start + 7..];
-                if let Some(end) = rest.find("```") {
-                    tool_block_to_parse = Some(rest[..end].trim().to_string());
+fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
+    if text.contains("[TOOL_CALLS]") {
+        let re = Regex::new(
+            r#"\[TOOL_CALLS\]\s*([a-zA-Z0-9_-]+)[\":]*\s*(?:\[ARGS\])?[\":]*\s*(\{[\s\S]*)"#,
+        )
+        .unwrap();
+        for chunk in text.split("[TOOL_CALLS]") {
+            let chunk = chunk.trim();
+            if chunk.is_empty() {
+                continue;
+            }
+            let full = format!("[TOOL_CALLS]{chunk}");
+            if let Some(caps) = re.captures(&full) {
+                let name = caps.get(1).unwrap().as_str().to_string();
+                let raw_args = caps.get(2).unwrap().as_str();
+
+                let repaired = repair_json(raw_args);
+                if let Ok(json_val) = serde_json::from_str::<Value>(&repaired) {
+                    calls.push((name, json_val));
                 } else {
-                    tool_block_to_parse = Some(rest.trim().to_string());
-                }
-            }
-            
-            if let Some(block) = tool_block_to_parse {
-                let repaired = repair_json(&block);
-                if let Ok(json_value) = serde_json::from_str::<Value>(&repaired) {
-                    if let Some(call) = extract_tool_call(&json_value) {
-                        calls.push(call);
-                    }
-                }
-            }
-            
-            // If no tool blocks found, try to parse the whole text as JSON (with repair if it starts with '{')
-            if calls.is_empty() {
-                let cleaned = text.trim();
-                let to_parse = if cleaned.starts_with('{') {
-                    repair_json(cleaned)
-                } else {
-                    cleaned.to_string()
-                };
-                if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse) {
-                    if let Some(call) = extract_tool_call(&json_value) {
-                        calls.push(call);
-                    }
-                }
-            }
-            
-            // Try to find JSON objects in the text
-            if calls.is_empty() {
-                let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
-                for mat in pattern.find_iter(text) {
-                    let json_str = mat.as_str();
-                    if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                        if let Some(call) = extract_tool_call(&json_value) {
-                            calls.push(call);
+                    let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
+                    if let Some(mat) = pattern.find(raw_args) {
+                        if let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str()) {
+                            calls.push((name, json_val));
                         }
                     }
                 }
             }
-            
-            calls.dedup();
-            calls
         }
     }
+}
+
+fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
+    let mut tool_block_to_parse = None;
+    if let Some(start) = text.find("```tool") {
+        let rest = &text[start + 7..];
+        if let Some(end) = rest.find("```") {
+            tool_block_to_parse = Some(rest[..end].trim().to_string());
+        } else {
+            tool_block_to_parse = Some(rest.trim().to_string());
+        }
+    }
+
+    if let Some(block) = tool_block_to_parse {
+        let repaired = repair_json(&block);
+        if let Ok(json_value) = serde_json::from_str::<Value>(&repaired) {
+            if let Some(call) = extract_tool_call(&json_value) {
+                calls.push(call);
+            }
+        }
+    }
+}
+
+fn parse_tool_calls_impl(
+    text: &str,
+    protocol: crate::config::ToolProtocol,
+) -> Vec<(String, Value)> {
+    let mut calls = Vec::new();
+
+    match protocol {
+        crate::config::ToolProtocol::Native => {
+            parse_tool_calls_tags(text, &mut calls);
+            if calls.is_empty() {
+                parse_tool_calls_fenced(text, &mut calls);
+            }
+        }
+        crate::config::ToolProtocol::Json => {
+            parse_tool_calls_fenced(text, &mut calls);
+            if calls.is_empty() {
+                parse_tool_calls_tags(text, &mut calls);
+            }
+        }
+    }
+
+    // If no tool blocks found, try to parse the whole text as JSON (with repair if it starts with '{')
+    if calls.is_empty() {
+        let cleaned = text.trim();
+        let to_parse = if cleaned.starts_with('{') {
+            repair_json(cleaned)
+        } else {
+            cleaned.to_string()
+        };
+        if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse) {
+            if let Some(call) = extract_tool_call(&json_value) {
+                calls.push(call);
+            }
+        }
+    }
+
+    // Try to find JSON objects in the text
+    if calls.is_empty() {
+        let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
+        for mat in pattern.find_iter(text) {
+            let json_str = mat.as_str();
+            if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
+                if let Some(call) = extract_tool_call(&json_value) {
+                    calls.push(call);
+                }
+            }
+        }
+    }
+
+    calls.dedup();
+    calls
 }
 
 pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
@@ -612,5 +676,25 @@ mod tests {
         assert_eq!(calls[0].0, "write_to_file");
         assert_eq!(calls[0].1.get("path").unwrap().as_str().unwrap(), "/foo");
         assert_eq!(calls[0].1.get("content").unwrap().as_str().unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_tag() {
+        let text1 = "Let me check...[TOOL_CALLS]glob[ARGS]{\"pattern\": \"**/*.rs\"}";
+        let calls1 = parse_tool_calls(text1, crate::config::ToolProtocol::Json);
+        assert_eq!(calls1.len(), 1);
+        assert_eq!(calls1[0].0, "glob");
+        assert_eq!(calls1[0].1.get("pattern").unwrap().as_str().unwrap(), "**/*.rs");
+
+        let text2 = "Let me check...[TOOL_CALLS]glob\":{\"pattern\":\"**/*.rs\"}";
+        let calls2 = parse_tool_calls(text2, crate::config::ToolProtocol::Json);
+        assert_eq!(calls2.len(), 1);
+        assert_eq!(calls2[0].0, "glob");
+        assert_eq!(calls2[0].1.get("pattern").unwrap().as_str().unwrap(), "**/*.rs");
+
+        let text3 = "Plan:[TOOL_CALLS]todo_write[ARGS]{\"todos\": [{\"content\": \"Fix bug\"}]}";
+        let calls3 = parse_tool_calls(text3, crate::config::ToolProtocol::Json);
+        assert_eq!(calls3.len(), 1);
+        assert_eq!(calls3[0].0, "todo_write");
     }
 }

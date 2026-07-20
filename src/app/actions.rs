@@ -260,8 +260,11 @@ pub async fn handle_enter(
             }
             "/protocol" | "/parser" => {
                 if tokens.len() < 2 {
-                    let msg = "Current tool protocol: json\nThe only supported format is JSON. Use /tool to toggle between tool-calling and plain text mode.";
-                    s.history.push(ChatMessage::new("system", msg.to_string()));
+                    let msg = format!(
+                        "Current tool protocol: {:?}\nSupported formats: json, native. Use '/protocol native' or '/protocol json' to switch.",
+                        s.config.tool_protocol
+                    );
+                    s.history.push(ChatMessage::new("system", msg));
                 } else {
                     let new_proto = tokens[1].to_lowercase();
                     match new_proto.as_str() {
@@ -270,14 +273,22 @@ pub async fn handle_enter(
                             crate::config::save_entire_config(&s.config);
                             s.history.push(ChatMessage::new(
                                 "system",
-                                "Switched tool protocol to JSON.".to_string(),
+                                "Switched tool protocol to JSON (```tool).".to_string(),
+                            ));
+                        }
+                        "native" => {
+                            s.config.tool_protocol = crate::config::ToolProtocol::Native;
+                            crate::config::save_entire_config(&s.config);
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                "Switched tool protocol to Native ([TOOL_CALLS]).".to_string(),
                             ));
                         }
                         _ => {
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
-                                    "Unknown protocol '{}'. Only 'json' is supported.",
+                                    "Unknown protocol '{}'. Supported options are 'json' or 'native'.",
                                     tokens[1]
                                 ),
                             ));
