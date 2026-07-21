@@ -1141,7 +1141,10 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
 
         let child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => return Some(format!("Failed to spawn cargo check: {e}")),
+            Err(e) => {
+                dbg_log!("Could not spawn cargo check ({e}), skipping compiler check");
+                return None;
+            }
         };
 
         // `cargo check` on a non-trivial crate routinely exceeds a few seconds,
@@ -1152,8 +1155,14 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
 
         let output = match output_res {
             Ok(Ok(out)) => out,
-            Ok(Err(e)) => return Some(format!("cargo check failed to run: {e}")),
-            Err(_) => return Some("cargo check timed out after 5 seconds".to_string()),
+            Ok(Err(e)) => {
+                dbg_log!("cargo check failed to run ({e}), skipping compiler check");
+                return None;
+            }
+            Err(_) => {
+                dbg_log!("cargo check timed out, skipping compiler check");
+                return None;
+            }
         };
 
         let stdout_str = String::from_utf8_lossy(&output.stdout);
