@@ -1,3 +1,5 @@
+#[macro_use]
+mod logger;
 mod app;
 mod clipboard;
 mod config;

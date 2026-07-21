@@ -46,8 +46,11 @@ pub fn copy_to_clipboard(text: &str) -> bool {
         .collect();
 
     if clean.trim().is_empty() {
+        dbg_log!("[CLIPBOARD] Ignored copy request: text is empty or whitespace only");
         return false;
     }
+
+    dbg_log!("[CLIPBOARD] Copying {} bytes to system clipboard: {:?}", clean.len(), clean);
 
     // 1. Emit OSC 52 ANSI sequence to terminal (supported natively by iTerm2, Terminal.app, Alacritty, Kitty, WezTerm, Tmux)
     use base64::Engine;
@@ -66,8 +69,11 @@ pub fn copy_to_clipboard(text: &str) -> bool {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(clean.as_bytes());
         }
-        let _ = child.wait();
+        let status = child.wait();
+        dbg_log!("[CLIPBOARD] pbcopy wait result: {:?}", status);
         return true;
+    } else {
+        dbg_log!("[CLIPBOARD] Failed to spawn pbcopy process");
     }
     true
 }

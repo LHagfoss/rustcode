@@ -22,19 +22,7 @@ pub(crate) use helpers::{count_tokens, classify_tool_msg, parse_sse_line};
 pub(crate) mod messages;
 pub(crate) use messages::{RESPONSE_RESERVE_TOKENS, trim_msgs_to_budget, inject_system_reminder};
 
-macro_rules! dbg_log {
-    ($($arg:tt)*) => {{
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/rustcode-debug.log")
-        {
-            let now = chrono::Local::now().format("%H:%M:%S%.3f");
-            let _ = writeln!(f, "[{now}] {}", format!($($arg)*));
-        }
-    }};
-}
+
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
