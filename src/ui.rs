@@ -307,8 +307,8 @@ const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93);
 const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101);
 const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);
 const COLOR_BORDER: Color = Color::Rgb(72, 85, 89);
-/// Uniform text-selection background — a touch lighter than the panel.
-const COLOR_SELECTION: Color = Color::Rgb(45, 50, 56);
+/// Uniform text-selection background — vibrant selection blue for high visibility.
+const COLOR_SELECTION: Color = Color::Rgb(60, 95, 150);
 const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
 
 const LOGO: &[&str] = &[
