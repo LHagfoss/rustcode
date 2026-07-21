@@ -808,7 +808,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else if s.input_buffer.is_empty() {
                                 s.history_up();
                             } else {
-                                s.move_cursor_to_start();
+                                s.move_cursor_line_up();
                             }
                         }
                         KeyCode::Down => {
@@ -828,7 +828,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else if s.history_index.is_some() {
                                 s.history_down();
                             } else {
-                                s.move_cursor_to_end();
+                                s.move_cursor_line_down();
                             }
                         }
                         KeyCode::PageUp => {
@@ -865,7 +865,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Left => {
                             let mut s = app_state.lock().await;
-                            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                            let alt = key.modifiers.contains(event::KeyModifiers::ALT)
+                                || key.modifiers.contains(event::KeyModifiers::META);
+                            if alt {
                                 s.move_cursor_word_left();
                             } else {
                                 s.move_cursor_left();
@@ -873,7 +875,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Right => {
                             let mut s = app_state.lock().await;
-                            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                            let alt = key.modifiers.contains(event::KeyModifiers::ALT)
+                                || key.modifiers.contains(event::KeyModifiers::META);
+                            if alt {
                                 s.move_cursor_word_right();
                             } else {
                                 s.move_cursor_right();
@@ -1002,7 +1006,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Backspace => {
                             let mut s = app_state.lock().await;
-                            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                            let alt = key.modifiers.contains(event::KeyModifiers::ALT)
+                                || key.modifiers.contains(event::KeyModifiers::META);
+                            if alt {
                                 s.delete_word_backspace();
                             } else {
                                 s.delete_char_backspace();
@@ -1011,7 +1017,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Delete => {
                             let mut s = app_state.lock().await;
-                            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                            let alt = key.modifiers.contains(event::KeyModifiers::ALT)
+                                || key.modifiers.contains(event::KeyModifiers::META);
+                            if alt {
                                 s.delete_word_backspace();
                             } else {
                                 s.delete_char_delete();
