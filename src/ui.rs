@@ -2688,9 +2688,9 @@ fn highlight_selection(
     }
 
     let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
-        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
+        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x + 2, ca.x + ca.width.saturating_sub(2))
     } else {
-        (area.y, area.y + area.height.saturating_sub(1), area.x, area.x + width.saturating_sub(1))
+        (area.y + 1, area.y + area.height.saturating_sub(2), area.x + 2, area.x + width.saturating_sub(2))
     };
 
     let start_row = start.1.max(min_row).min(max_row);
@@ -2701,7 +2701,7 @@ fn highlight_selection(
         for col in (min_col..=max_col).rev() {
             if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
                 let sym = cell.symbol();
-                if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" {
+                if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" && sym != "▌" {
                     last_content_col = col;
                     break;
                 }
@@ -2742,9 +2742,9 @@ pub fn extract_selection(
     }
 
     let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
-        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
+        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x + 2, ca.x + ca.width.saturating_sub(2))
     } else {
-        (area.y, area.y + area.height.saturating_sub(1), area.x, area.x + width.saturating_sub(1))
+        (area.y + 1, area.y + area.height.saturating_sub(2), area.x + 2, area.x + width.saturating_sub(2))
     };
 
     let start_row = start.1.max(min_row).min(max_row);
@@ -2764,7 +2764,7 @@ pub fn extract_selection(
                 let sym = cell.symbol();
                 let filtered: String = sym
                     .chars()
-                    .filter(|&c| c != '\0' && !c.is_control())
+                    .filter(|&c| c != '\0' && !c.is_control() && c != '▌')
                     .collect();
                 line.push_str(&filtered);
             }
@@ -2795,7 +2795,9 @@ pub fn extract_selection(
             lines_out.push(trimmed.to_string());
         }
     }
-    lines_out.join("\n")
+    let res = lines_out.join("\n");
+    dbg_log!("[SELECTION] Extracted {} chars from selection range start={:?} end={:?}: {:?}", res.len(), start, end, res);
+    res
 }
 
 fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
