@@ -2697,22 +2697,34 @@ fn highlight_selection(
     let end_row = end.1.max(min_row).min(max_row);
 
     for row in start_row..=end_row {
-        let mut last_content_col = min_col;
+        let mut last_content_col = None;
         for col in (min_col..=max_col).rev() {
             if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
                 let sym = cell.symbol();
                 if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" && sym != "▌" {
-                    last_content_col = col;
+                    last_content_col = Some(col);
                     break;
                 }
             }
         }
+
+        // If this row has no text content at all (empty row, margin, or empty space below chat), skip it entirely!
+        let last_col = match last_content_col {
+            Some(c) => c,
+            None => continue,
+        };
+
         let col_from = if row == start_row { start.0.max(min_col).min(max_col) } else { min_col };
         let col_to = if row == end_row {
-            end.0.max(min_col).min(max_col).min(last_content_col)
+            end.0.max(min_col).min(max_col).min(last_col)
         } else {
-            last_content_col
+            last_col
         };
+
+        if col_from > col_to {
+            continue;
+        }
+
         for col in col_from..=col_to {
             if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
                 cell.set_fg(Color::Rgb(255, 255, 255));
