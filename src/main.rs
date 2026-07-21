@@ -932,7 +932,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
                                 let text =
-                                    ui::extract_selection(terminal.current_buffer_mut(), a, b);
+                                    ui::extract_selection(terminal.current_buffer_mut(), a, b, s.chat_area);
                                 if !text.is_empty() {
                                     crate::clipboard::copy_to_clipboard(&text);
                                 }
@@ -948,14 +948,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
                                 let text =
-                                    ui::extract_selection(terminal.current_buffer_mut(), a, b);
+                                    ui::extract_selection(terminal.current_buffer_mut(), a, b, s.chat_area);
                                 if !text.is_empty() {
                                     crate::clipboard::copy_to_clipboard(&text);
                                 }
                             } else if s.selecting {
                                 if let Some(start) = s.sel_start {
                                     let text =
-                                        ui::extract_selection(terminal.current_buffer_mut(), start, start);
+                                        ui::extract_selection(terminal.current_buffer_mut(), start, start, s.chat_area);
                                     crate::clipboard::copy_to_clipboard(&text);
                                 }
                             }
@@ -1082,7 +1082,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if a != b {
                                     // Dragged: copy on release, like selecting on a web page.
                                     let text =
-                                        ui::extract_selection(terminal.current_buffer_mut(), a, b);
+                                        ui::extract_selection(terminal.current_buffer_mut(), a, b, s.chat_area);
                                     if !text.is_empty() {
                                         crate::clipboard::copy_to_clipboard(&text);
                                     }
