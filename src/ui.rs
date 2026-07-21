@@ -1029,6 +1029,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     });
     let show_picker = state.modal_open();
     state.viewport_height = inner_area.height;
+    state.chat_area = Some(inner_area);
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -2661,14 +2662,19 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     // Painted last so it sits on top of everything, like a native selection.
     if !state.modal_open() {
         if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
-            highlight_selection(f, start, end);
+            highlight_selection(f, start, end, state.chat_area);
         }
     }
 }
 
 /// Inverts the cells covered by a text selection (screen coords), row-major, so it
 /// reads like selecting a paragraph on a web page rather than a rectangular block.
-fn highlight_selection(f: &mut Frame, start: (u16, u16), end: (u16, u16)) {
+fn highlight_selection(
+    f: &mut Frame,
+    start: (u16, u16),
+    end: (u16, u16),
+    chat_area: Option<ratatui::layout::Rect>,
+) {
     let (start, end) = if (start.1, start.0) <= (end.1, end.0) {
         (start, end)
     } else {
@@ -2680,12 +2686,19 @@ fn highlight_selection(f: &mut Frame, start: (u16, u16), end: (u16, u16)) {
     if width == 0 {
         return;
     }
-    for row in start.1..=end.1 {
-        if row < area.y || row >= area.y + area.height {
-            continue;
-        }
-        let mut last_content_col = area.x;
-        for col in (area.x..area.x + width).rev() {
+
+    let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
+        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
+    } else {
+        (area.y, area.y + area.height.saturating_sub(1), area.x, area.x + width.saturating_sub(1))
+    };
+
+    let start_row = start.1.max(min_row).min(max_row);
+    let end_row = end.1.max(min_row).min(max_row);
+
+    for row in start_row..=end_row {
+        let mut last_content_col = min_col;
+        for col in (min_col..=max_col).rev() {
             if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
                 let sym = cell.symbol();
                 if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" {
@@ -2694,16 +2707,13 @@ fn highlight_selection(f: &mut Frame, start: (u16, u16), end: (u16, u16)) {
                 }
             }
         }
-        let col_from = if row == start.1 { start.0 } else { area.x };
-        let col_to = if row == end.1 {
-            end.0.min(last_content_col)
+        let col_from = if row == start_row { start.0.max(min_col).min(max_col) } else { min_col };
+        let col_to = if row == end_row {
+            end.0.max(min_col).min(max_col).min(last_content_col)
         } else {
             last_content_col
         };
         for col in col_from..=col_to {
-            if col < area.x || col >= area.x + width {
-                continue;
-            }
             if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
                 cell.set_fg(Color::Rgb(255, 255, 255));
                 cell.set_bg(COLOR_SELECTION);
@@ -2718,6 +2728,7 @@ pub fn extract_selection(
     buf: &ratatui::buffer::Buffer,
     start: (u16, u16),
     end: (u16, u16),
+    chat_area: Option<ratatui::layout::Rect>,
 ) -> String {
     let (start, end) = if (start.1, start.0) <= (end.1, end.0) {
         (start, end)
@@ -2729,16 +2740,23 @@ pub fn extract_selection(
     if width == 0 {
         return String::new();
     }
-    let mut out = String::new();
-    for row in start.1..=end.1 {
-        if row < area.y || row >= area.y + area.height {
-            continue;
-        }
-        let col_from = if row == start.1 { start.0 } else { area.x };
-        let col_to = if row == end.1 {
-            end.0.min(area.x + width - 1)
+
+    let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
+        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
+    } else {
+        (area.y, area.y + area.height.saturating_sub(1), area.x, area.x + width.saturating_sub(1))
+    };
+
+    let start_row = start.1.max(min_row).min(max_row);
+    let end_row = end.1.max(min_row).min(max_row);
+
+    let mut lines_out = Vec::new();
+    for row in start_row..=end_row {
+        let col_from = if row == start_row { start.0.max(min_col).min(max_col) } else { min_col };
+        let col_to = if row == end_row {
+            end.0.max(min_col).min(max_col)
         } else {
-            area.x + width - 1
+            max_col
         };
         let mut line = String::new();
         for col in col_from..=col_to {
@@ -2753,9 +2771,10 @@ pub fn extract_selection(
         }
         let mut clean = line.trim_end();
 
-        // Strip leading UI border prefixes
+        // Strip leading UI border & header prefixes
         for prefix in &[
             "│ ", "│", "▌ ", "▌", "⚙ ", "⚙", "→ ", "→", "🦀 ", "🦀", "🌐 ", "🌐",
+            "+ Warning: ", "Warning: ", "+ Thought: ", "Thought: ", "Goal: ",
         ] {
             if clean.starts_with(prefix) {
                 clean = &clean[prefix.len()..];
@@ -2771,12 +2790,12 @@ pub fn extract_selection(
             }
         }
 
-        out.push_str(clean.trim_end());
-        if row != end.1 {
-            out.push('\n');
+        let trimmed = clean.trim();
+        if !trimmed.is_empty() {
+            lines_out.push(trimmed.to_string());
         }
     }
-    out
+    lines_out.join("\n")
 }
 
 fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
