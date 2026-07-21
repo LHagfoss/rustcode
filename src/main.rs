@@ -839,12 +839,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
-                            if s.input_buffer.is_empty() && s.history.is_empty() {
-                                s.show_model_picker = true;
-                            } else if s.active_suggestion_index.is_some() {
+                            if s.active_suggestion_index.is_some() {
                                 crate::app::apply_autocomplete(&mut s);
-                            } else {
+                            } else if s.input_buffer.starts_with('/') && !s.input_buffer.contains(' ') {
                                 s.cycle_suggestion();
+                            } else {
+                                // Toggle Agent Mode (Build vs Plan)
+                                s.agent_mode = match s.agent_mode {
+                                    crate::config::AgentMode::Build => crate::config::AgentMode::Plan,
+                                    crate::config::AgentMode::Plan => crate::config::AgentMode::Build,
+                                };
+                                s.config.agent_mode = s.agent_mode;
+                                crate::config::save_entire_config(&s.config);
+
+                                let notice = match s.agent_mode {
+                                    crate::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
+                                    crate::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
+                                };
+                                s.history.push(ChatMessage::new("system", notice.to_string()));
                             }
                         }
                         KeyCode::Left => {

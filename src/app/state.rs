@@ -280,6 +280,7 @@ pub struct AppState {
     pub last_max_scroll: u16,
     pub viewport_height: u16,
     pub mouse_capture_enabled: bool,
+    pub agent_mode: crate::config::AgentMode,
     pub chat_area: Option<ratatui::layout::Rect>,
     pub selected_text: Option<String>,
     pub sel_start: Option<(u16, u16)>,
@@ -335,6 +336,7 @@ impl AppState {
         let (api_base_url, model_name, mut config) = crate::config::load_config();
         let _ = crate::config::init_active_session(&mut config);
         let active_session_id = crate::config::create_new_session(&mut config);
+        let agent_mode = config.agent_mode;
         let history = Vec::new();
         let cwd_and_branch = get_cwd_and_branch();
 
@@ -386,6 +388,7 @@ impl AppState {
             last_max_scroll: 0,
             viewport_height: 0,
             mouse_capture_enabled: true,
+            agent_mode,
             chat_area: None,
             selected_text: None,
             sel_start: None,

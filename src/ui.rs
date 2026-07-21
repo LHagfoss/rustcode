@@ -1038,7 +1038,16 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     for (msg_idx, msg) in state.history.iter().enumerate() {
         if msg.role == "system" {
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
-            let first_line = msg.content.lines().next().unwrap_or("Warning");
+            let lower = msg.content.to_lowercase();
+            let is_warning = lower.contains("warning") || lower.contains("loop") || lower.contains("abort") || lower.contains("error");
+            let label = if is_warning { "Warning" } else { "Notice" };
+            let theme_color = if is_warning {
+                Color::Rgb(229, 192, 123)
+            } else {
+                Color::Rgb(100, 175, 235)
+            };
+
+            let first_line = msg.content.lines().next().unwrap_or(label);
             let preview = if first_line.len() > 65 {
                 format!("{}...", &first_line[..65])
             } else {
@@ -1052,16 +1061,16 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 Span::styled(
                     toggle,
                     get_themed_style(
-                        Color::Rgb(229, 192, 123),
+                        theme_color,
                         COLOR_BG,
                         Modifier::BOLD,
                         show_picker,
                     ),
                 ),
                 Span::styled(
-                    format!("Warning: {preview}"),
+                    format!("{label}: {preview}"),
                     get_themed_style(
-                        Color::Rgb(229, 192, 123),
+                        theme_color,
                         COLOR_BG,
                         Modifier::BOLD,
                         show_picker,
@@ -1075,7 +1084,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                         Span::styled(
                             "│ ",
                             get_themed_style(
-                                Color::Rgb(229, 192, 123),
+                                theme_color,
                                 COLOR_BG,
                                 Modifier::BOLD,
                                 show_picker,
@@ -1084,7 +1093,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                         Span::styled(
                             raw_line,
                             get_themed_style(
-                                Color::Rgb(229, 192, 123),
+                                theme_color,
                                 COLOR_BG,
                                 Modifier::empty(),
                                 show_picker,
@@ -1228,7 +1237,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         let label = if let Some(tool_name) = state.running_tools.first() {
             format!("Executing {tool_name}")
         } else {
-            "Build".to_string()
+            match state.agent_mode {
+                crate::config::AgentMode::Build => "Build".to_string(),
+                crate::config::AgentMode::Plan => "Plan".to_string(),
+            }
         };
 
         if state.current_response.is_empty() {
@@ -1591,10 +1603,19 @@ fn render_welcome_screen(
 
     box_lines.push(Line::from(""));
 
+    let agent_label = match state.agent_mode {
+        crate::config::AgentMode::Build => "Build",
+        crate::config::AgentMode::Plan => "Plan",
+    };
+    let agent_style = match state.agent_mode {
+        crate::config::AgentMode::Build => get_themed_style(COLOR_SECONDARY, COLOR_PANEL, Modifier::BOLD, show_picker),
+        crate::config::AgentMode::Plan => get_themed_style(Color::Rgb(229, 192, 123), COLOR_PANEL, Modifier::BOLD, show_picker),
+    };
+
     box_lines.push(Line::from(vec![
         Span::styled(
-            "Build",
-            get_themed_style(COLOR_SECONDARY, COLOR_PANEL, Modifier::BOLD, show_picker),
+            agent_label,
+            agent_style,
         ),
         Span::styled(
             " · ",

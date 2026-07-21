@@ -32,7 +32,7 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
 /// Applies history compaction to keep the prompt under token budget.
 pub async fn build_messages(state: &AppState) -> Vec<serde_json::Value> {
     let protocol = state.config.tool_protocol;
-    let system_prompt = crate::tools::tool_system_prompt(false, protocol);
+    let system_prompt = crate::tools::tool_system_prompt(false, protocol, state.agent_mode);
 
     let mut history_snapshot: Vec<ChatMessage> = state
         .history

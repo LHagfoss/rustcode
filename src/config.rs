@@ -169,6 +169,21 @@ pub struct AppConfig {
     pub history_token_budget: u32,
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: usize,
+    #[serde(default)]
+    pub agent_mode: AgentMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentMode {
+    Build,
+    Plan,
+}
+
+impl Default for AgentMode {
+    fn default() -> Self {
+        AgentMode::Build
+    }
 }
 
 fn default_history_token_budget() -> u32 {
@@ -235,6 +250,7 @@ impl Default for AppConfig {
             mcp_servers: Vec::new(),
             history_token_budget: 128000,
             max_tool_rounds: 1000,
+            agent_mode: AgentMode::default(),
         }
     }
 }
