@@ -584,6 +584,46 @@ impl AppState {
         self.cursor_position = self.input_buffer.len();
     }
 
+    pub fn move_cursor_line_up(&mut self) {
+        self.clamp_cursor();
+        let pos = self.cursor_position;
+        let before = &self.input_buffer[..pos];
+        let current_line_start = before.rfind('\n').map_or(0, |i| i + 1);
+        let col = before[current_line_start..].chars().count();
+
+        if current_line_start > 0 {
+            let prev_line_end = current_line_start - 1;
+            let prev_line_start = self.input_buffer[..prev_line_end].rfind('\n').map_or(0, |i| i + 1);
+            let prev_line = &self.input_buffer[prev_line_start..prev_line_end];
+            let prev_char_count = prev_line.chars().count();
+            let target_col = col.min(prev_char_count);
+            let target_byte_offset: usize = prev_line.chars().take(target_col).map(|c| c.len_utf8()).sum();
+            self.cursor_position = prev_line_start + target_byte_offset;
+        } else {
+            self.cursor_position = 0;
+        }
+    }
+
+    pub fn move_cursor_line_down(&mut self) {
+        self.clamp_cursor();
+        let pos = self.cursor_position;
+        let before = &self.input_buffer[..pos];
+        let current_line_start = before.rfind('\n').map_or(0, |i| i + 1);
+        let col = before[current_line_start..].chars().count();
+
+        if let Some(next_line_start_rel) = self.input_buffer[pos..].find('\n') {
+            let next_line_start = pos + next_line_start_rel + 1;
+            let next_line_end = self.input_buffer[next_line_start..].find('\n').map_or(self.input_buffer.len(), |i| next_line_start + i);
+            let next_line = &self.input_buffer[next_line_start..next_line_end];
+            let next_char_count = next_line.chars().count();
+            let target_col = col.min(next_char_count);
+            let target_byte_offset: usize = next_line.chars().take(target_col).map(|c| c.len_utf8()).sum();
+            self.cursor_position = next_line_start + target_byte_offset;
+        } else {
+            self.cursor_position = self.input_buffer.len();
+        }
+    }
+
     pub fn get_command_suggestion(&self) -> Option<String> {
         self.suggestion_cycle
             .get_completion_suffix(&self.input_buffer)
