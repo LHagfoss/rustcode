@@ -1036,27 +1036,61 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     for (msg_idx, msg) in state.history.iter().enumerate() {
         if msg.role == "system" {
-            for raw_line in msg.content.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "│ ",
-                        get_themed_style(
-                            Color::Rgb(229, 192, 123),
-                            COLOR_BG,
-                            Modifier::BOLD,
-                            show_picker,
-                        ),
+            let collapsed = !state.expanded_thoughts.contains(&msg_idx);
+            let first_line = msg.content.lines().next().unwrap_or("Warning");
+            let preview = if first_line.len() > 65 {
+                format!("{}...", &first_line[..65])
+            } else {
+                first_line.to_string()
+            };
+
+            let toggle = if collapsed { "+ " } else { "− " };
+            thought_clicks.push((lines.len(), msg_idx));
+
+            lines.push(Line::from(vec![
+                Span::styled(
+                    toggle,
+                    get_themed_style(
+                        Color::Rgb(229, 192, 123),
+                        COLOR_BG,
+                        Modifier::BOLD,
+                        show_picker,
                     ),
-                    Span::styled(
-                        raw_line,
-                        get_themed_style(
-                            Color::Rgb(229, 192, 123),
-                            COLOR_BG,
-                            Modifier::empty(),
-                            show_picker,
-                        ),
+                ),
+                Span::styled(
+                    format!("Warning: {preview}"),
+                    get_themed_style(
+                        Color::Rgb(229, 192, 123),
+                        COLOR_BG,
+                        Modifier::BOLD,
+                        show_picker,
                     ),
-                ]));
+                ),
+            ]));
+
+            if !collapsed {
+                for raw_line in msg.content.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            "│ ",
+                            get_themed_style(
+                                Color::Rgb(229, 192, 123),
+                                COLOR_BG,
+                                Modifier::BOLD,
+                                show_picker,
+                            ),
+                        ),
+                        Span::styled(
+                            raw_line,
+                            get_themed_style(
+                                Color::Rgb(229, 192, 123),
+                                COLOR_BG,
+                                Modifier::empty(),
+                                show_picker,
+                            ),
+                        ),
+                    ]));
+                }
             }
             lines.push(Line::from(""));
         } else if msg.role == "tool" {
