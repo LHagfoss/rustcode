@@ -2684,11 +2684,21 @@ fn highlight_selection(f: &mut Frame, start: (u16, u16), end: (u16, u16)) {
         if row < area.y || row >= area.y + area.height {
             continue;
         }
+        let mut last_content_col = area.x;
+        for col in (area.x..area.x + width).rev() {
+            if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
+                let sym = cell.symbol();
+                if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" {
+                    last_content_col = col;
+                    break;
+                }
+            }
+        }
         let col_from = if row == start.1 { start.0 } else { area.x };
         let col_to = if row == end.1 {
-            end.0
+            end.0.min(last_content_col)
         } else {
-            area.x + width - 1
+            last_content_col
         };
         for col in col_from..=col_to {
             if col < area.x || col >= area.x + width {
