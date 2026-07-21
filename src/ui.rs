@@ -2663,6 +2663,12 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     if !state.modal_open() {
         if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
             highlight_selection(f, start, end, state.chat_area);
+            let text = extract_selection(f.buffer_mut(), start, end, state.chat_area);
+            if !text.is_empty() {
+                state.selected_text = Some(text);
+            }
+        } else {
+            state.selected_text = None;
         }
     }
 }

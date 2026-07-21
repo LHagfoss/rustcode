@@ -927,39 +927,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.command_picker_search.clear();
                         }
 
-                        // Ctrl+Y copies the current app selection.
-                        KeyCode::Char('y') | KeyCode::Char('Y')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            let mut s = app_state.lock().await;
-                            if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
-                                let text =
-                                    ui::extract_selection(terminal.current_buffer_mut(), a, b, s.chat_area);
-                                if !text.is_empty() {
-                                    crate::clipboard::copy_to_clipboard(&text);
-                                }
-                            }
-                            s.clear_selection();
-                        }
-                        // Cmd+C or Ctrl+C also copies selected text
-                        KeyCode::Char('c') | KeyCode::Char('C')
+                        // Ctrl+Y, Cmd+C, or Ctrl+C copies the current app selection.
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('c') | KeyCode::Char('C')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL)
                                 || key.modifiers.contains(event::KeyModifiers::SUPER)
                                 || key.modifiers.contains(event::KeyModifiers::META) =>
                         {
                             let mut s = app_state.lock().await;
-                            if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
-                                let text =
-                                    ui::extract_selection(terminal.current_buffer_mut(), a, b, s.chat_area);
-                                if !text.is_empty() {
-                                    crate::clipboard::copy_to_clipboard(&text);
-                                }
-                            } else if s.selecting {
-                                if let Some(start) = s.sel_start {
-                                    let text =
-                                        ui::extract_selection(terminal.current_buffer_mut(), start, start, s.chat_area);
-                                    crate::clipboard::copy_to_clipboard(&text);
-                                }
+                            if let Some(text) = s.selected_text.clone() {
+                                dbg_log!("[MAIN] KeyCopy copying selected text ({} chars): {:?}", text.len(), text);
+                                crate::clipboard::copy_to_clipboard(&text);
                             }
                             s.clear_selection();
                         }
@@ -1083,9 +1060,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
                                 if a != b {
                                     // Dragged: copy on release, like selecting on a web page.
-                                    let text =
-                                        ui::extract_selection(terminal.current_buffer_mut(), a, b, s.chat_area);
-                                    if !text.is_empty() {
+                                    if let Some(text) = s.selected_text.take() {
+                                        dbg_log!("[MAIN] MouseUp copying selected text ({} chars): {:?}", text.len(), text);
                                         crate::clipboard::copy_to_clipboard(&text);
                                     }
                                 } else {
