@@ -405,32 +405,75 @@ fn render_assistant_message<'a>(
     }
 
     if !main_content.is_empty() {
+        let content_width = (viewport_width as usize).saturating_sub(8);
         let mut in_code_block = false;
         let display_lines: Vec<&str> = main_content.lines().collect();
+        let mut processed_lines = Vec::new();
+
         for raw_line in &display_lines {
             let is_code_fence = raw_line.trim_start().starts_with("```");
-            let mut spans = Vec::new();
-
             if is_code_fence {
-                let content_width = (viewport_width as usize).saturating_sub(6);
-                spans.push(Span::styled(
-                    pad_to_width(raw_line, content_width),
-                    get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                ));
                 in_code_block = !in_code_block;
+                processed_lines.push((true, raw_line.to_string()));
             } else if in_code_block {
-                let content_width = (viewport_width as usize).saturating_sub(6);
-                let mut line_spans = highlight_rust_line(raw_line, show_picker);
-                let current_width: usize = line_spans.iter().map(|s| s.content.width()).sum();
-                if current_width < content_width {
-                    line_spans.push(Span::styled(
-                        " ".repeat(content_width - current_width),
-                        get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                    ));
-                }
-                spans.extend(line_spans);
+                processed_lines.push((true, raw_line.to_string()));
             } else {
-                let mut chars = raw_line.chars().peekable();
+                // Word-wrap normal text line
+                if raw_line.trim().is_empty() {
+                    processed_lines.push((false, String::new()));
+                } else {
+                    let mut current = String::new();
+                    for word in raw_line.split_whitespace() {
+                        if current.is_empty() {
+                            current.push_str(word);
+                        } else if current.width() + 1 + word.width() <= content_width {
+                            current.push(' ');
+                            current.push_str(word);
+                        } else {
+                            processed_lines.push((false, current));
+                            current = word.to_string();
+                        }
+                    }
+                    if !current.is_empty() {
+                        processed_lines.push((false, current));
+                    }
+                }
+            }
+        }
+
+        for (is_code, line_str) in processed_lines {
+            if is_code {
+                let is_code_fence = line_str.trim_start().starts_with("```");
+                let mut spans = Vec::new();
+                let code_content_width = (viewport_width as usize).saturating_sub(6);
+                if is_code_fence {
+                    spans.push(Span::styled(
+                        pad_to_width(&line_str, code_content_width),
+                        get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                    ));
+                } else {
+                    let mut line_spans = highlight_rust_line(&line_str, show_picker);
+                    let current_width: usize = line_spans.iter().map(|s| s.content.width()).sum();
+                    if current_width < code_content_width {
+                        line_spans.push(Span::styled(
+                            " ".repeat(code_content_width - current_width),
+                            get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                        ));
+                    }
+                    spans.extend(line_spans);
+                }
+                lines.push(Line::from(spans));
+            } else {
+                // Render normal text block exactly like user chat block but with COLOR_PRIMARY left border
+                let mut spans = Vec::new();
+                
+                // Add 2 spaces left padding inside the bubble
+                spans.push(Span::styled(
+                    "  ",
+                    get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+                ));
+
+                let mut chars = line_str.chars().peekable();
                 let mut current = String::new();
                 let mut in_inline_code = false;
                 let mut in_bold = false;
@@ -438,15 +481,11 @@ fn render_assistant_message<'a>(
                 while let Some(c) = chars.next() {
                     if c == '`' {
                         if !current.is_empty() {
-                            let modifier = if in_bold {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            };
+                            let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
                             let style = if in_inline_code {
                                 get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                             } else {
-                                get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
+                                get_themed_style(COLOR_TEXT, COLOR_PANEL, modifier, show_picker)
                             };
                             spans.push(Span::styled(current.clone(), style));
                             current.clear();
@@ -455,15 +494,11 @@ fn render_assistant_message<'a>(
                     } else if c == '*' && chars.peek() == Some(&'*') {
                         chars.next();
                         if !current.is_empty() {
-                            let modifier = if in_bold {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            };
+                            let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
                             let style = if in_inline_code {
                                 get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                             } else {
-                                get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
+                                get_themed_style(COLOR_TEXT, COLOR_PANEL, modifier, show_picker)
                             };
                             spans.push(Span::styled(current.clone(), style));
                             current.clear();
@@ -475,20 +510,39 @@ fn render_assistant_message<'a>(
                 }
 
                 if !current.is_empty() {
-                    let modifier = if in_bold {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    };
+                    let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
                     let style = if in_inline_code {
                         get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                     } else {
-                        get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
+                        get_themed_style(COLOR_TEXT, COLOR_PANEL, modifier, show_picker)
                     };
                     spans.push(Span::styled(current, style));
                 }
+
+                // Pad to full content_width so the COLOR_PANEL background fills the block
+                let current_width: usize = spans.iter().map(|s| s.content.width()).sum::<usize>().saturating_sub(2);
+                if current_width < content_width {
+                    spans.push(Span::styled(
+                        " ".repeat(content_width - current_width),
+                        get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+                    ));
+                }
+
+                // Add 2 spaces right padding inside the bubble
+                spans.push(Span::styled(
+                    "  ",
+                    get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+                ));
+
+                let mut final_spans = vec![
+                    Span::styled(
+                        "▌ ",
+                        get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::empty(), show_picker),
+                    ),
+                ];
+                final_spans.extend(spans);
+                lines.push(Line::from(final_spans));
             }
-            lines.push(Line::from(spans));
         }
         lines.push(Line::from(""));
     }
@@ -1159,8 +1213,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(""));
         } else if msg.role == "user" {
             lines.push(Line::from(""));
-            // Account for "▌ " prefix (2 characters) plus original padding
-            let content_width = (inner_area.width as usize).saturating_sub(6);
+            // Account for "▌ " prefix (2 characters) plus internal bubble padding (4 characters) plus margins (2 characters)
+            let content_width = (inner_area.width as usize).saturating_sub(8);
             let mut wrapped_lines = Vec::new();
             for raw_line in msg.content.lines() {
                 if raw_line.is_empty() {
@@ -1185,14 +1239,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
 
             for line_str in wrapped_lines {
-                let line_str = pad_to_width(&line_str, content_width);
+                let padded_text = pad_to_width(&line_str, content_width);
                 lines.push(Line::from(vec![
                     Span::styled(
                         "▌ ",
                         get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                     ),
                     Span::styled(
-                        line_str,
+                        format!("  {padded_text}  "),
                         get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
                     ),
                 ]));
