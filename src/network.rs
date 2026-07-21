@@ -16,7 +16,7 @@ pub(crate) mod loop_detect;
 
 #[path = "network/helpers.rs"]
 pub(crate) mod helpers;
-pub(crate) use helpers::{count_tokens, classify_tool_msg};
+pub(crate) use helpers::{count_tokens, classify_tool_msg, parse_sse_line};
 
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
@@ -435,17 +435,6 @@ fn tool_signature(name: &str, args: &serde_json::Value) -> String {
         _ => serde_json::to_string(args).unwrap_or_default(),
     };
     format!("{name}:{key}")
-}
-
-fn parse_sse_line(line: &str) -> Option<&str> {
-    if let Some(s) = line.strip_prefix("data: ") {
-        if s == "[DONE]" || s.is_empty() {
-            return None;
-        }
-        Some(s)
-    } else {
-        None
-    }
 }
 
 pub struct StreamBuffer {
@@ -2613,7 +2602,25 @@ pub async fn process_queue_orchestrator(
                             };
                             futures.push(fut);
                         }
-                        join_all(futures).await
+                        let mut results = join_all(futures).await;
+                        if made_edits {
+                            let root = edit_root
+                                .clone()
+                                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                            if let Some(compiler_errors) = run_compiler_check(&root).await {
+                                dbg_log!("Inline compiler check detected errors after edit");
+                                let mut snippet = compiler_errors;
+                                if snippet.len() > 3000 {
+                                    snippet.truncate(3000);
+                                    snippet.push_str("\n... (compiler output truncated) ...");
+                                }
+                                if let Some((_, res, _)) = results.iter_mut().find(|(n, _, _)| is_mutating_tool(n)) {
+                                    res.push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
+                                    res.push_str(&snippet);
+                                }
+                            }
+                        }
+                        results
                     };
 
                     if cancel_token.is_cancelled() {
