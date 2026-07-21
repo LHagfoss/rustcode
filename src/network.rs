@@ -14,6 +14,14 @@ pub(crate) mod retry;
 #[path = "network/loop_detect.rs"]
 pub(crate) mod loop_detect;
 
+#[path = "network/helpers.rs"]
+pub(crate) mod helpers;
+pub(crate) use helpers::{count_tokens, classify_tool_msg};
+
+#[path = "network/messages.rs"]
+pub(crate) mod messages;
+pub(crate) use messages::{RESPONSE_RESERVE_TOKENS, trim_msgs_to_budget, inject_system_reminder};
+
 macro_rules! dbg_log {
     ($($arg:tt)*) => {{
         use std::io::Write;
@@ -28,31 +36,16 @@ macro_rules! dbg_log {
     }};
 }
 
-/// Fast token estimate (~4 chars per token). Single source of truth for token
-/// sizing, shared with compaction. Deliberately approximate and synchronous —
-/// compaction and usage display only need a cheap size signal, not exact counts,
-/// so we skip the `fm token-count` subprocess (which added latency per message).
-fn count_tokens(text: &str) -> u32 {
-    compaction::estimate_tokens(text) as u32
-}
+/// Injected as a system directive for the final wrap-up turn after a loop is
+/// detected. Disables tools and forces a prose answer so the user gets a
+/// summary instead of a silently aborted session. Ported from opencode's
+/// `MAX_STEPS_PROMPT`.
+const FORCE_ANSWER_PROMPT: &str = "CRITICAL — you are stuck in a loop. Tools are now DISABLED for this turn. \
+Do NOT emit any tool calls (no reads, writes, edits, searches). Respond with TEXT ONLY, and include: \
+a short statement that you stopped to avoid looping, a summary of what you found or accomplished so far, \
+any remaining tasks, and a recommendation for what to do next. This overrides all other instructions.";
 
-/// Classify a stored tool result for compaction priority.
-/// Returns `None` for non-tool messages. Tool results are bucketed into:
-/// "throwaway" (run_command, grep, glob, list_directory, get_time,
-/// find_symbol, get_project_map, search_web) — pruned first; "file"
-/// (view_file contents) — pruned last; and "other".
-fn classify_tool_msg(m: &ChatMessage) -> Option<&'static str> {
-    if m.role != "tool" {
-        return None;
-    }
-    let name = m.content.split(':').next().unwrap_or("").trim();
-    Some(match name {
-        "run_command" | "grep" | "glob" | "list_directory" | "get_time"
-        | "find_symbol" | "get_project_map" | "search_web" => "throwaway",
-        "view_file" => "file",
-        _ => "other",
-    })
-}
+
 
 /// True when a tool result has already been reduced to a stub (nothing left to prune).
 fn is_fully_stubbed(m: &ChatMessage) -> bool {
@@ -137,8 +130,6 @@ fn view_file_path_from_tool_msg(content: &str) -> Option<String> {
     Some(path.to_string())
 }
 
-/// Collapse repeated reads of the same file: keep only the newest intact result per
-/// path and stub the older ones. Stops the read → prune → re-read cycle at its source.
 fn dedupe_view_file_reads(history: &mut [ChatMessage]) {
     use std::collections::HashMap;
     let mut keep_index: HashMap<String, usize> = HashMap::new();
@@ -386,60 +377,6 @@ pub async fn fetch_context_window(
     None
 }
 
-pub const RESPONSE_RESERVE_TOKENS: u32 = 1024;
-
-fn estimate_msg_chars(msg: &serde_json::Value) -> usize {
-    match msg.get("content") {
-        Some(serde_json::Value::String(s)) => s.len(),
-        Some(other) => other.to_string().len(),
-        None => 0,
-    }
-}
-
-/// Drop the oldest non-system messages until the payload fits the token
-/// budget (~4 chars/token), keeping the system prompt and the latest
-/// exchange. Returns how many messages were dropped.
-pub fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_tokens: u32) -> usize {
-    let budget_chars = budget_tokens as usize * 4;
-    let mut total: usize = msgs.iter().map(estimate_msg_chars).sum();
-    let mut dropped = 0;
-    while total > budget_chars && msgs.len() > 3 {
-        total -= estimate_msg_chars(&msgs[1]);
-        msgs.remove(1);
-        dropped += 1;
-    }
-    dropped
-}
-
-/// If the message history has grown long (e.g. >= 4 messages), inject a brief
-/// system reminder right before the latest user message or tool result. This
-/// prevents the model from forgetting the core guidelines and tool formats
-/// due to attention dilution in long contexts.
-pub fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
-    if msgs.len() >= 4 {
-        let reminder_text = "REMINDER: You are rustcode. Always follow your core instructions:\n\
-            - Be extremely concise and direct. No filler or preamble.\n\
-            - To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\
-            - Available tools: view_file, replace_file_content, multi_replace_file_content, write_to_file, delete_file, move_file, copy_file, list_directory, grep, glob, run_command, search_web, find_symbol, get_project_map.";
-        
-        if let Some(last_msg) = msgs.last_mut() {
-            if let Some(content) = last_msg.get_mut("content") {
-                match content {
-                    serde_json::Value::String(s) => {
-                        *s = format!("{}\n\n{}", s, reminder_text);
-                    }
-                    serde_json::Value::Array(arr) => {
-                        arr.push(serde_json::json!({
-                            "type": "text",
-                            "text": format!("\n\n{}", reminder_text)
-                        }));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-}
 
 /// Read-only tools whose results can be safely short-circuited by the repeat guard.
 fn is_read_only_tool(name: &str) -> bool {
@@ -447,6 +384,20 @@ fn is_read_only_tool(name: &str) -> bool {
         name,
         "view_file" | "list_directory" | "grep" | "glob" | "get_time"
             | "find_symbol" | "get_project_map" | "search_web"
+    )
+}
+
+/// Tools that write to the filesystem — the ones whose result runs a compiler
+/// check and that the finish gate cares about.
+fn is_mutating_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
     )
 }
 
@@ -588,13 +539,39 @@ pub async fn stream_request(
         "stream_options": {
             "include_usage": true
         },
-        "temperature": 0.7,
+        // Low temperature for the main agent loop: this drives structured
+        // tool-calling and code edits, where 0.7 makes small models incoherent
+        // and prone to token-level repetition collapse (e.g. a regex degenerating
+        // into `.*?\n` repeated hundreds of times). This is sent explicitly
+        // because a request value overrides the model's Modelfile PARAMETER, so
+        // the server-side temperature can't be relied on. Keep it low.
+        "temperature": 0.2,
         "max_tokens": 4096,
+        // Guard against runaway repetition even at low temperature.
+        "frequency_penalty": 0.3,
     });
     dbg_log!(
         "stream_request: Request payload: {}",
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
+
+    let resolved_url = {
+        let trimmed = url.trim_end_matches('/');
+        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}/chat/completions")
+        }
+    };
+
+    let api_key = {
+        let s = state.lock().await;
+        s.config
+            .models
+            .iter()
+            .find(|m| m.url == url || m.name == s.model_name || m.endpoint_url() == resolved_url)
+            .and_then(|m| m.resolved_api_key())
+    };
 
     // Establish the connection with retry/backoff on transient failures
     // (429, 5xx, network blips). We only retry here, before any SSE bytes are
@@ -604,7 +581,13 @@ pub async fn stream_request(
         if cancel_token.is_cancelled() {
             return Err("cancelled".to_string());
         }
-        match client.post(url).json(&payload).send().await {
+        let mut req = client.post(&resolved_url).json(&payload);
+        if let Some(ref key) = api_key {
+            req = req
+                .header("Authorization", format!("Bearer {key}"))
+                .header("X-Api-Key", key);
+        }
+        match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 dbg_log!(
                     "stream_request: Received response status: {}",
@@ -927,6 +910,56 @@ fn strip_think_blocks(content: &str) -> String {
     out
 }
 
+/// Strip tool-call syntax from model text, leaving only human-readable prose.
+/// Under the JSON tool protocol a model emits tool calls as text (```tool
+/// fences or Mistral `[TOOL_CALLS]...[ARGS]{...}`), so on the forced wrap-up
+/// turn — where we refuse to execute anything — we must remove that syntax
+/// before saving, or the "answer" is a raw tool call. Returns the trimmed prose.
+fn strip_tool_call_syntax(content: &str) -> String {
+    let mut out = strip_think_blocks(content);
+
+    // Remove ```tool ... ``` / ```json ... ``` fenced blocks.
+    for fence in ["```tool", "```json"] {
+        while let Some(start) = out.to_lowercase().find(fence) {
+            if let Some(rel_end) = out[start + fence.len()..].find("```") {
+                let end = start + fence.len() + rel_end + 3;
+                out.replace_range(start..end, "");
+            } else {
+                out.truncate(start); // unclosed fence — drop the remainder
+                break;
+            }
+        }
+    }
+
+    // Remove Mistral-style `[TOOL_CALLS]name[ARGS]{...}` spans (drop to end of
+    // the JSON object if we can find the matching brace, else to end of string).
+    while let Some(start) = out.find("[TOOL_CALLS]") {
+        let after = &out[start..];
+        let end = after
+            .find('{')
+            .and_then(|b| {
+                let mut depth = 0i32;
+                for (i, c) in after[b..].char_indices() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(start + b + i + 1);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            })
+            .unwrap_or(out.len());
+        out.replace_range(start..end, "");
+    }
+
+    out.trim().to_string()
+}
+
 /// True when the turn is nothing but reasoning: a non-empty response whose only
 /// content is `<think>` blocks, leaving no answer or tool call to act on.
 fn is_reasoning_only(content: &str) -> bool {
@@ -1100,9 +1133,30 @@ fn strip_ansi_escapes(s: &str) -> String {
     }
 }
 
+/// Resolve a build tool to an absolute path. GUI-launched apps (and some
+/// spawned environments) don't inherit the shell PATH, so a bare
+/// `Command::new("cargo")` fails with ENOENT even though the tool is installed.
+/// Check the canonical install locations first, then fall back to the bare
+/// name (which relies on PATH) so terminal launches still work.
+fn resolve_bin(name: &str) -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{home}/.cargo/bin/{name}"),
+        format!("/opt/homebrew/bin/{name}"),
+        format!("/usr/local/bin/{name}"),
+        format!("/usr/bin/{name}"),
+    ];
+    for c in candidates {
+        if std::path::Path::new(&c).exists() {
+            return std::path::PathBuf::from(c);
+        }
+    }
+    std::path::PathBuf::from(name)
+}
+
 async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
     if cwd.join("Cargo.toml").exists() {
-        let mut cmd = tokio::process::Command::new("cargo");
+        let mut cmd = tokio::process::Command::new(resolve_bin("cargo"));
         cmd.args(["check", "--message-format=json"])
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
@@ -1113,7 +1167,10 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
             Err(e) => return Some(format!("Failed to spawn cargo check: {e}")),
         };
 
-        let timeout_duration = std::time::Duration::from_secs(5);
+        // `cargo check` on a non-trivial crate routinely exceeds a few seconds,
+        // especially the first run after edits. Too short a timeout leaves the
+        // agent blind to compile errors — the whole point of this check.
+        let timeout_duration = std::time::Duration::from_secs(120);
         let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
 
         let output = match output_res {
@@ -1145,7 +1202,7 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
             return Some(errors.join("\n"));
         }
     } else if cwd.join("tsconfig.json").exists() {
-        let mut cmd = tokio::process::Command::new("npx");
+        let mut cmd = tokio::process::Command::new(resolve_bin("npx"));
         cmd.args(["tsc", "--noEmit"])
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
@@ -1156,7 +1213,7 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
             Err(e) => return Some(format!("Failed to spawn npx tsc: {e}")),
         };
 
-        let timeout_duration = std::time::Duration::from_secs(5);
+        let timeout_duration = std::time::Duration::from_secs(120);
         let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
 
         let output = match output_res {
@@ -1961,6 +2018,18 @@ pub async fn process_queue_orchestrator(
         // Detects repetitive tool-call patterns (exact / semantic / stagnation /
         // churn) so continuous mode can't spin forever. One instance per task.
         let mut loop_detector = loop_detect::LoopDetector::new(6);
+        // When a loop is detected we don't just stop — we run one more turn with
+        // a directive that disables tools and forces a prose summary, so the user
+        // gets an answer instead of a silent dead-end. Set on the turn *before*
+        // that final wrap-up turn.
+        let mut force_final = false;
+        // Finish gate: if the model edited code this task, don't let it declare
+        // done on a red build. Track that an edit was requested and the project
+        // root to compile-check, plus a retry budget so the gate can't loop.
+        let mut made_edits = false;
+        let mut edit_root: Option<std::path::PathBuf> = None;
+        let mut finish_gate_retries: u32 = 0;
+        const MAX_FINISH_GATE_RETRIES: u32 = 2;
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
@@ -2234,6 +2303,35 @@ pub async fn process_queue_orchestrator(
                 break;
             }
 
+            // This is the forced wrap-up turn after a detected loop: tools were
+            // disabled via the injected directive. Push whatever prose the model
+            // produced and stop — never parse or execute tool calls here, or we'd
+            // risk re-entering the loop we just broke out of.
+            if force_final {
+                dbg_log!("Loop wrap-up: recording forced text answer and finishing");
+                // The model may ignore "tools disabled" and emit a tool call as
+                // text anyway. Strip that syntax so we never save a raw tool call
+                // as the answer; if nothing useful remains, synthesize a fallback
+                // so the user gets a real explanation instead of a dead stop.
+                let prose = strip_tool_call_syntax(&final_content);
+                let answer = if prose.is_empty() {
+                    "I stopped because I was repeating the same actions without making \
+                     progress (a loop). I could not complete this task automatically. \
+                     What I gathered is in the context above; consider narrowing the task \
+                     or giving me a more specific next step."
+                        .to_string()
+                } else {
+                    prose
+                };
+                let mut s = state.lock().await;
+                s.history.push(ChatMessage::new("assistant", &answer));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.continuous_mode = false;
+                s.status = AppStatus::Idle;
+                break;
+            }
+
             let protocol = { state.lock().await.config.tool_protocol };
             let tool_calls = crate::tools::parse_tool_calls(&final_content, protocol);
             if !tool_calls.is_empty() {
@@ -2249,30 +2347,29 @@ pub async fn process_queue_orchestrator(
                     if s.rank() > loop_status.rank() {
                         loop_status = s;
                     }
+                    // Remember that code was touched, and where, so the finish
+                    // gate can compile-check before accepting a "done".
+                    if is_mutating_tool(name) {
+                        made_edits = true;
+                        edit_root = Some(get_tool_project_root(name, args));
+                    }
                 }
                 match loop_status {
                     loop_detect::LoopStatus::Abort(n) => {
-                        dbg_log!("Loop detector: abort after {} repeats", n);
+                        dbg_log!("Loop detector: abort after {} repeats — forcing wrap-up turn", n);
+                        // Don't stop silently. Record the looping turn, then inject
+                        // a directive that disables tools and demands a prose
+                        // summary, and run exactly one more turn (`force_final`).
                         let mut s = state.lock().await;
                         s.history
                             .push(ChatMessage::new("assistant", &final_content));
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!(
-                                "[Loop detected: the same action repeated {n} times without \
-                                 making progress. Automatic execution stopped. Try a different \
-                                 approach, or tell the user what you found and ask how to proceed.]"
-                            ),
-                        ));
+                        s.history
+                            .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
                         crate::config::save_history(&s.history);
                         s.current_response.clear();
-                        s.continuous_mode = false;
-                        s.status = AppStatus::Idle;
                         drop(s);
-                        let _ = crate::notifications::notify_finished(
-                            crate::notifications::FinishedStatus::Success,
-                        );
-                        break;
+                        force_final = true;
+                        continue;
                     }
                     loop_detect::LoopStatus::Warning(n) => {
                         dbg_log!("Loop detector: warning at {} repeats", n);
@@ -2454,10 +2551,11 @@ pub async fn process_queue_orchestrator(
 
                                 let (result, diff_opt) = if is_repeat {
                                     (
-                                        "You already ran this call recently. For a file you just \
-                                         edited, its new contents are already reflected by your \
-                                         edit tool's result — re-reading is not needed. Otherwise \
-                                         pick a different action, change the query, or summarize/finish."
+                                        "You already ran this exact call — its result is in the \
+                                         context above. Re-reading gives no new information. Stop \
+                                         searching and either answer the user in prose now, or take \
+                                         a genuinely different action (a new file, a new query, or \
+                                         an edit)."
                                             .to_string(),
                                         None,
                                     )
@@ -2616,6 +2714,46 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 dbg_log!("Continuous mode active, but assistant gave a plain conversational reply (no tools used). Ending turn.");
                 let mut s = state.lock().await;
                 s.continuous_mode = false;
+            }
+
+            // Finish gate: the model wants to stop with a prose answer. If it
+            // edited code this task, don't accept "done" on a red build — run a
+            // compile check and, if it fails, hand the errors back and force
+            // another round. Skip on the forced wrap-up turn (tools already
+            // disabled) and once the retry budget is spent, so we can't spin.
+            if made_edits
+                && !force_final
+                && !cancel_token.is_cancelled()
+                && finish_gate_retries < MAX_FINISH_GATE_RETRIES
+                && tool_rounds < max_tool_rounds
+            {
+                let root = edit_root
+                    .clone()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                dbg_log!("Finish gate: compile-checking {} before accepting done", root.display());
+                if let Some(errors) = run_compiler_check(&root).await {
+                    finish_gate_retries += 1;
+                    tool_rounds += 1;
+                    dbg_log!("Finish gate: build is RED, forcing a fix round ({}/{})", finish_gate_retries, MAX_FINISH_GATE_RETRIES);
+                    let mut s = state.lock().await;
+                    s.history
+                        .push(ChatMessage::new("assistant", final_content.clone()));
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "[Finish blocked — the build does not compile. You cannot report this \
+                             task as done while there are compiler errors. Fix them, then finish. \
+                             Compiler errors:\n{errors}]"
+                        ),
+                    ));
+                    crate::config::save_history(&s.history);
+                    s.current_response.clear();
+                    s.status = AppStatus::Streaming;
+                    s.stream_tracker = Some(StreamTracker::new());
+                    drop(s);
+                    continue;
+                }
+                dbg_log!("Finish gate: build is green, accepting done");
             }
 
             break;

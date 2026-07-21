@@ -368,6 +368,8 @@ pub async fn handle_enter(
                             model,
                             context_window,
                             engine,
+                            api_key: None,
+                            env_key: None,
                         });
                     }
                     s.config.default.set_big(name.clone());
@@ -507,6 +509,8 @@ pub async fn handle_enter(
                             model,
                             context_window: None,
                             engine: Some("ollama".to_string()),
+                            api_key: None,
+                            env_key: None,
                         });
                     }
                     s.config.default.set_big("ollama".to_string());

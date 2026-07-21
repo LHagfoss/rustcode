@@ -11,9 +11,14 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
         if m.role == "tool" {
             let tokens = estimate_tokens(&m.content);
             total_tool_tokens += tokens;
-            // Protect the last ~30k tokens of tool outputs (approx 120k chars).
-            // Prune older ones to save context window space.
-            if total_tool_tokens > 30_000 && !m.content.contains("content cleared to save context") {
+            // Protect the last ~90k tokens of tool outputs (approx 360k chars).
+            // Prune older ones to save context window space. Sized for the 128k
+            // main model's ~108k budget so a whole large source file (e.g. a
+            // 32k-token network.rs) stays fully in context instead of being
+            // wiped mid-read — the amnesia that made the agent re-read forever.
+            // NOTE: still a fixed cap; if you run a small-context model as the
+            // main model, lower this to fit its window.
+            if total_tool_tokens > 90_000 && !m.content.contains("content cleared to save context") {
                 if let Some(pos) = m.content.find(": ") {
                     let tool_name = &m.content[..pos];
                     m.content = format!("{}: [Old tool result content cleared to save context]", tool_name);
