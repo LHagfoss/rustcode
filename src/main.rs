@@ -805,8 +805,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         current - 1
                                     });
                                 }
-                            } else {
+                            } else if s.input_buffer.is_empty() {
                                 s.history_up();
+                            } else {
+                                s.move_cursor_to_start();
                             }
                         }
                         KeyCode::Down => {
@@ -823,8 +825,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             current + 1
                                         });
                                 }
-                            } else {
+                            } else if s.history_index.is_some() {
                                 s.history_down();
+                            } else {
+                                s.move_cursor_to_end();
                             }
                         }
                         KeyCode::PageUp => {
@@ -998,12 +1002,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Backspace => {
                             let mut s = app_state.lock().await;
-                            s.delete_char_backspace();
+                            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                                s.delete_word_backspace();
+                            } else {
+                                s.delete_char_backspace();
+                            }
                             s.reset_suggestion_cycle();
                         }
                         KeyCode::Delete => {
                             let mut s = app_state.lock().await;
-                            s.delete_char_delete();
+                            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                                s.delete_word_backspace();
+                            } else {
+                                s.delete_char_delete();
+                            }
                             s.reset_suggestion_cycle();
                         }
                         _ => {}
@@ -1050,10 +1062,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match mouse.kind {
                         MouseEventKind::ScrollUp if !modal => {
                             s.scroll_up(3);
+                            if s.selecting {
+                                s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
+                            }
                             needs_redraw = true;
                         }
                         MouseEventKind::ScrollDown if !modal => {
                             s.scroll_down(3);
+                            if s.selecting {
+                                s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
+                            }
                             needs_redraw = true;
                         }
                         MouseEventKind::Down(MouseButton::Left) if !modal => {
