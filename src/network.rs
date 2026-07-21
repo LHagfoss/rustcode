@@ -1232,6 +1232,28 @@ async fn confirm_and_execute(
     display_name: &str,
     bypass_confirm: bool,
 ) -> (String, Option<String>) {
+    // Plan Mode Enforcement: block mutating/writing tools
+    {
+        let s = state.lock().await;
+        if s.agent_mode == crate::config::AgentMode::Plan && matches!(
+            name,
+            "replace_file_content"
+                | "multi_replace_file_content"
+                | "write_to_file"
+                | "delete_file"
+                | "move_file"
+                | "copy_file"
+        ) {
+            return (
+                "error: Plan mode is active. Code editing and file modification tools are disabled in Plan mode. \
+                 I can read, search, and design solutions, but I cannot modify files right now. \
+                 If you want me to implement these changes, please switch to Build mode (press Tab)."
+                    .to_string(),
+                None,
+            );
+        }
+    }
+
     struct ToolCleanup {
         state: Arc<Mutex<AppState>>,
         tool_name: String,
@@ -1452,12 +1474,13 @@ async fn run_subagent(
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
         let protocol = { state.lock().await.config.tool_protocol };
+        let agent_mode = { state.lock().await.agent_mode };
         let system_prompt = format!(
             "{}\n\nYou are subagent {agent_id}, working for a main agent in the same \
 rustcode session. Complete the task you were given, then reply in plain text \
 with NO tool call — that reply is returned to the main agent. Keep the final \
 reply compact and information-dense.\n\n{}",
-            crate::tools::tool_system_prompt(false, protocol),
+            crate::tools::tool_system_prompt(false, protocol, agent_mode),
             crate::context::environment_context()
         );
         let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -2060,9 +2083,10 @@ pub async fn process_queue_orchestrator(
                 }
             };
             let protocol = { state.lock().await.config.tool_protocol };
+            let agent_mode = { state.lock().await.agent_mode };
             let mut system_prompt = format!(
                 "{}\n\n{}",
-                crate::tools::tool_system_prompt(true, protocol),
+                crate::tools::tool_system_prompt(true, protocol, agent_mode),
                 context_section
             );
             // Store the snapshot if this is the first turn

@@ -277,8 +277,18 @@ pub fn is_agent_tool(name: &str) -> bool {
 pub fn tool_system_prompt(
     include_agent_tools: bool,
     protocol: crate::config::ToolProtocol,
+    agent_mode: crate::config::AgentMode,
 ) -> String {
     let mut p = String::new();
+
+    if agent_mode == crate::config::AgentMode::Plan {
+        p.push_str(
+            "CRITICAL: You are operating in PLAN MODE (Read-only / Design mode).\n\
+             - File writing, editing, or deletion tools are disabled.\n\
+             - You can read files and grep the codebase to design solutions, but you CANNOT write or modify files.\n\
+             - Under no circumstances should you call write or edit tools. Explain the plan, and tell the user to switch to Build Mode (press Tab) if they want you to implement the changes.\n\n"
+        );
+    }
 
     p.push_str(
         "You are rustcode, a terminal-based coding assistant.\n\
