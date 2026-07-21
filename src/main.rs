@@ -1057,17 +1057,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             needs_redraw = true;
                         }
                         MouseEventKind::Down(MouseButton::Left) if !modal => {
-                            s.sel_start = Some((mouse.column, mouse.row));
-                            s.sel_end = Some((mouse.column, mouse.row));
+                            s.sel_start = Some((mouse.column, mouse.row + s.scroll_row));
+                            s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
                             s.selecting = true;
                             needs_redraw = true;
                         }
                         MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
-                            s.sel_end = Some((mouse.column, mouse.row));
+                            let mut target_row = mouse.row + s.scroll_row;
+                            if let Some(ca) = s.chat_area {
+                                if mouse.row < ca.y {
+                                    s.scroll_up(1);
+                                    target_row = ca.y + s.scroll_row;
+                                } else if mouse.row >= ca.y + ca.height {
+                                    s.scroll_down(1);
+                                    target_row = (ca.y + ca.height).saturating_sub(1) + s.scroll_row;
+                                }
+                            }
+                            s.sel_end = Some((mouse.column, target_row));
                             needs_redraw = true;
                         }
                         MouseEventKind::Up(MouseButton::Left) if s.selecting => {
-                            s.sel_end = Some((mouse.column, mouse.row));
+                            let mut target_row = mouse.row + s.scroll_row;
+                            if let Some(ca) = s.chat_area {
+                                target_row = target_row.max(ca.y + s.scroll_row).min((ca.y + ca.height).saturating_sub(1) + s.scroll_row);
+                            }
+                            s.sel_end = Some((mouse.column, target_row));
                             s.selecting = false;
                             if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
                                 if a != b {
@@ -1080,8 +1094,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // A plain click: toggle a thought if one sits on this
                                     // row, otherwise just clear any existing selection.
                                     s.clear_selection();
+                                    let click_screen_row = b.1.saturating_sub(s.scroll_row);
                                     if let Some(&(_, idx)) =
-                                        s.thought_toggle_rows.iter().find(|(row, _)| *row == b.1)
+                                        s.thought_toggle_rows.iter().find(|(row, _)| *row == click_screen_row)
                                     {
                                         s.toggle_thought(idx);
                                     }

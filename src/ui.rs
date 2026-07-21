@@ -2799,8 +2799,8 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     // Painted last so it sits on top of everything, like a native selection.
     if !state.modal_open() {
         if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
-            highlight_selection(f, start, end, state.chat_area);
-            let text = extract_selection(f.buffer_mut(), start, end, state.chat_area);
+            highlight_selection(f, start, end, state.chat_area, state.scroll_row);
+            let text = extract_selection(f.buffer_mut(), start, end, state.chat_area, state.scroll_row);
             if !text.is_empty() {
                 state.selected_text = Some(text);
             }
@@ -2810,19 +2810,22 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     }
 }
 
-/// Inverts the cells covered by a text selection (screen coords), row-major, so it
-/// reads like selecting a paragraph on a web page rather than a rectangular block.
 fn highlight_selection(
     f: &mut Frame,
     start: (u16, u16),
     end: (u16, u16),
     chat_area: Option<ratatui::layout::Rect>,
+    scroll_row: u16,
 ) {
-    let (start, end) = if (start.1, start.0) <= (end.1, end.0) {
-        (start, end)
+    let screen_start_y = start.1.saturating_sub(scroll_row);
+    let screen_end_y = end.1.saturating_sub(scroll_row);
+
+    let (screen_start, screen_end) = if (screen_start_y, start.0) <= (screen_end_y, end.0) {
+        ((start.0, screen_start_y), (end.0, screen_end_y))
     } else {
-        (end, start)
+        ((end.0, screen_end_y), (start.0, screen_start_y))
     };
+
     let buf = f.buffer_mut();
     let area = buf.area;
     let width = area.width;
@@ -2836,8 +2839,13 @@ fn highlight_selection(
         (area.y + 1, area.y + area.height.saturating_sub(2), area.x + 2, area.x + width.saturating_sub(2))
     };
 
-    let start_row = start.1.max(min_row).min(max_row);
-    let end_row = end.1.max(min_row).min(max_row);
+    // If the selection is completely scrolled off-screen, don't draw anything
+    if screen_start.1 > max_row || screen_end.1 < min_row {
+        return;
+    }
+
+    let start_row = screen_start.1.max(min_row).min(max_row);
+    let end_row = screen_end.1.max(min_row).min(max_row);
 
     for row in start_row..=end_row {
         let mut last_content_col = None;
@@ -2857,9 +2865,9 @@ fn highlight_selection(
             None => continue,
         };
 
-        let col_from = if row == start_row { start.0.max(min_col).min(max_col) } else { min_col };
+        let col_from = if row == start_row { screen_start.0.max(min_col).min(max_col) } else { min_col };
         let col_to = if row == end_row {
-            end.0.max(min_col).min(max_col).min(last_col)
+            screen_end.0.max(min_col).min(max_col).min(last_col)
         } else {
             last_col
         };
@@ -2884,12 +2892,17 @@ pub fn extract_selection(
     start: (u16, u16),
     end: (u16, u16),
     chat_area: Option<ratatui::layout::Rect>,
+    scroll_row: u16,
 ) -> String {
-    let (start, end) = if (start.1, start.0) <= (end.1, end.0) {
-        (start, end)
+    let screen_start_y = start.1.saturating_sub(scroll_row);
+    let screen_end_y = end.1.saturating_sub(scroll_row);
+
+    let (screen_start, screen_end) = if (screen_start_y, start.0) <= (screen_end_y, end.0) {
+        ((start.0, screen_start_y), (end.0, screen_end_y))
     } else {
-        (end, start)
+        ((end.0, screen_end_y), (start.0, screen_start_y))
     };
+
     let area = buf.area;
     let width = area.width;
     if width == 0 {
@@ -2902,14 +2915,18 @@ pub fn extract_selection(
         (area.y + 1, area.y + area.height.saturating_sub(2), area.x + 2, area.x + width.saturating_sub(2))
     };
 
-    let start_row = start.1.max(min_row).min(max_row);
-    let end_row = end.1.max(min_row).min(max_row);
+    if screen_start.1 > max_row || screen_end.1 < min_row {
+        return String::new();
+    }
+
+    let start_row = screen_start.1.max(min_row).min(max_row);
+    let end_row = screen_end.1.max(min_row).min(max_row);
 
     let mut lines_out = Vec::new();
     for row in start_row..=end_row {
-        let col_from = if row == start_row { start.0.max(min_col).min(max_col) } else { min_col };
+        let col_from = if row == start_row { screen_start.0.max(min_col).min(max_col) } else { min_col };
         let col_to = if row == end_row {
-            end.0.max(min_col).min(max_col)
+            screen_end.0.max(min_col).min(max_col)
         } else {
             max_col
         };
