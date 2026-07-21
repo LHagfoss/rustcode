@@ -35,6 +35,31 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
             Some(cmd) => normalize_command(cmd),
             None => exact.clone(),
         }
+    } else if name == "view_file" {
+        // Re-reading the *same region* of a file is a loop; reading *different*
+        // regions to collect scattered code is legitimate work. Bucket the start
+        // line coarsely (per 200 lines) so cosmetic ±N range shifts over the same
+        // area collapse to one category, while genuinely distinct parts of a big
+        // file stay distinct and don't trip the detector prematurely.
+        match args.get("path").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            Some(path) => {
+                let start = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
+                format!("view_file:{path}#{}", start / 200)
+            }
+            None => exact.clone(),
+        }
+    } else if matches!(name, "list_directory" | "grep" | "glob" | "find_symbol") {
+        // No line ranges — same target = same intent. Falls back to `exact` if
+        // no identifiable target.
+        let target = args
+            .get("path")
+            .or_else(|| args.get("pattern"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        match target {
+            Some(t) => format!("{name}:{t}"),
+            None => exact.clone(),
+        }
     } else {
         exact.clone()
     };
@@ -193,9 +218,11 @@ impl LoopDetector {
     /// Record one tool call. Returns the worst of the exact, category, and
     /// frequency signals.
     pub fn check(&mut self, exact: &str, category: &str) -> LoopStatus {
-        let n = self
-            .exact
-            .record(exact)
+        let exact_count = self.exact.record(exact);
+        if exact_count >= 3 {
+            return LoopStatus::Abort(exact_count);
+        }
+        let n = exact_count
             .max(self.category.record(category))
             .max(self.frequency.record(category));
         self.classify(n)
@@ -232,23 +259,52 @@ mod tests {
     }
 
     #[test]
+    fn view_file_range_shifting_shares_category() {
+        // Same file, different line ranges = one intent. Range-shifting must not
+        // dodge the loop detector.
+        let (e1, c1) = signatures("view_file", &json!({"path": "src/network.rs", "start_line": 1, "end_line": 100}));
+        let (e2, c2) = signatures("view_file", &json!({"path": "src/network.rs", "start_line": 50, "end_line": 150}));
+        assert_ne!(e1, e2, "exact signatures should differ by range");
+        assert_eq!(c1, c2, "same region should collapse to one category");
+        assert_eq!(c1, "view_file:src/network.rs#0");
+    }
+
+    #[test]
+    fn view_file_distinct_regions_stay_distinct() {
+        // Reading far-apart parts of a big file is legit paging, not a loop.
+        let (_, c1) = signatures("view_file", &json!({"path": "src/big.rs", "start_line": 40, "end_line": 240}));
+        let (_, c2) = signatures("view_file", &json!({"path": "src/big.rs", "start_line": 1400, "end_line": 1600}));
+        assert_ne!(c1, c2, "distinct regions must not share a category");
+    }
+
+    #[test]
+    fn view_file_same_region_churn_aborts() {
+        let mut d = LoopDetector::new(4); // warn at 2, abort at 4
+        let mut last = LoopStatus::Ok;
+        // Cosmetic shifts over the same ~250-region: all bucket 1.
+        for start in [250, 260, 250, 255] {
+            let (e, c) = signatures(
+                "view_file",
+                &json!({"path": "src/big.rs", "start_line": start, "end_line": start + 50}),
+            );
+            last = d.check(&e, &c);
+        }
+        assert_eq!(last, LoopStatus::Abort(4));
+    }
+
+    #[test]
     fn non_bash_tool_uses_exact() {
-        let (exact, cat) = signatures("view_file", &json!({"path": "src/main.rs"}));
+        let (exact, cat) = signatures("write_to_file", &json!({"path": "src/main.rs"}));
         assert_eq!(exact, cat);
-        assert!(exact.starts_with("view_file:"));
+        assert!(exact.starts_with("write_to_file:"));
     }
 
     #[test]
     fn exact_repeat_warns_then_aborts() {
-        let mut d = LoopDetector::new(6); // warn at 3, abort at 6
-        for _ in 0..2 {
-            assert_eq!(d.check("x", "x"), LoopStatus::Ok);
-        }
-        assert_eq!(d.check("x", "x"), LoopStatus::Warning(3));
-        for _ in 0..2 {
-            let _ = d.check("x", "x");
-        }
-        assert_eq!(d.check("x", "x"), LoopStatus::Abort(6));
+        let mut d = LoopDetector::new(6);
+        assert_eq!(d.check("x", "x"), LoopStatus::Ok);
+        assert_eq!(d.check("x", "x"), LoopStatus::Ok);
+        assert_eq!(d.check("x", "x"), LoopStatus::Abort(3));
     }
 
     #[test]

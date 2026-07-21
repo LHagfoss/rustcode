@@ -249,6 +249,20 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         ));
     }
 
+    // 3.5. Fuzzy matching (line-trimmed & block anchor fallback ala OpenCode)
+    if let Some((start_byte, end_byte)) = find_fuzzy_span(&clean_content, &clean_target) {
+        let mut new_content = clean_content.clone();
+        let end_byte = end_byte.min(new_content.len());
+        if start_byte <= end_byte {
+            new_content.replace_range(start_byte..end_byte, replacement_content);
+            std::fs::write(&resolved_path, &new_content)
+                .map_err(|e| format!("cannot write '{path}': {e}"))?;
+            return Ok(format!(
+                "successfully replaced target_content in '{path}' (matched via fuzzy block/line-trimmed alignment)"
+            ));
+        }
+    }
+
     // 4. Mismatch feedback
     let mut err_msg = format!(
         "Error: target_content not found in '{path}'.\n\
@@ -265,6 +279,101 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         }
     }
     Err(err_msg)
+}
+
+fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
+    let content_lines: Vec<&str> = content.lines().collect();
+    let target_lines: Vec<&str> = target.lines().collect();
+
+    if target_lines.is_empty() || content_lines.is_empty() {
+        return None;
+    }
+
+    // 1. Line-trimmed match (ignores per-line leading/trailing whitespace)
+    let mut matches = Vec::new();
+    if content_lines.len() >= target_lines.len() {
+        for i in 0..=(content_lines.len() - target_lines.len()) {
+            let window = &content_lines[i..i + target_lines.len()];
+            let matches_trimmed = window
+                .iter()
+                .zip(target_lines.iter())
+                .all(|(c, t)| c.trim() == t.trim());
+            if matches_trimmed {
+                matches.push((i, i + target_lines.len()));
+            }
+        }
+    }
+
+    if matches.len() == 1 {
+        let (start_idx, end_idx) = matches[0];
+        let byte_start = get_byte_offset_of_line(&content_lines, start_idx);
+        let byte_end = get_byte_offset_of_line_end(&content_lines, end_idx - 1, content.len());
+        return Some((byte_start, byte_end));
+    }
+
+    // 2. Block-anchor match for multi-line blocks (>= 3 lines)
+    if target_lines.len() >= 3 {
+        let first_anchor = target_lines[0].trim();
+        let last_anchor = target_lines[target_lines.len() - 1].trim();
+        let target_len = target_lines.len();
+
+        let mut anchor_matches = Vec::new();
+        for i in 0..content_lines.len() {
+            if content_lines[i].trim() != first_anchor {
+                continue;
+            }
+            for j in (i + 2)..content_lines.len() {
+                if content_lines[j].trim() == last_anchor {
+                    let block_len = j - i + 1;
+                    if (block_len as isize - target_len as isize).abs() <= 2 {
+                        let inner_content = &content_lines[i + 1..j];
+                        let inner_target = &target_lines[1..target_lines.len() - 1];
+                        let min_len = inner_content.len().min(inner_target.len());
+                        if min_len > 0 {
+                            let matched_count = inner_content
+                                .iter()
+                                .take(min_len)
+                                .zip(inner_target.iter().take(min_len))
+                                .filter(|(c, t)| c.trim() == t.trim())
+                                .count();
+                            let ratio = matched_count as f32 / min_len as f32;
+                            if ratio >= 0.6 {
+                                anchor_matches.push((i, j + 1));
+                            }
+                        } else {
+                            anchor_matches.push((i, j + 1));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        if anchor_matches.len() == 1 {
+            let (start_idx, end_idx) = anchor_matches[0];
+            let byte_start = get_byte_offset_of_line(&content_lines, start_idx);
+            let byte_end = get_byte_offset_of_line_end(&content_lines, end_idx - 1, content.len());
+            return Some((byte_start, byte_end));
+        }
+    }
+
+    None
+}
+
+fn get_byte_offset_of_line(lines: &[&str], line_idx: usize) -> usize {
+    let mut offset = 0;
+    for i in 0..line_idx {
+        offset += lines[i].len() + 1;
+    }
+    offset
+}
+
+fn get_byte_offset_of_line_end(lines: &[&str], line_idx: usize, total_len: usize) -> usize {
+    let mut offset = 0;
+    for i in 0..=line_idx {
+        offset += lines[i].len() + 1;
+    }
+    offset.min(total_len)
 }
 
 pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {

@@ -21,6 +21,47 @@ pub struct ModelProfile {
     pub context_window: Option<u32>,
     #[serde(default)]
     pub engine: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub env_key: Option<String>,
+}
+
+impl ModelProfile {
+    pub fn endpoint_url(&self) -> String {
+        let trimmed = self.url.trim_end_matches('/');
+        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}/chat/completions")
+        }
+    }
+
+    pub fn resolved_api_key(&self) -> Option<String> {
+        if let Some(ref env_name) = self.env_key {
+            if let Ok(val) = std::env::var(env_name) {
+                if !val.trim().is_empty() {
+                    return Some(val);
+                }
+            }
+        }
+        if let Some(ref k) = self.api_key {
+            if let Some(var_name) = k.strip_prefix("env:") {
+                if let Ok(val) = std::env::var(var_name) {
+                    if !val.trim().is_empty() {
+                        return Some(val);
+                    }
+                }
+            } else if let Ok(val) = std::env::var(k) {
+                if !val.trim().is_empty() {
+                    return Some(val);
+                }
+            } else if !k.trim().is_empty() {
+                return Some(k.clone());
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,7 +172,7 @@ pub struct AppConfig {
 }
 
 fn default_history_token_budget() -> u32 {
-    64000
+    128000
 }
 
 fn default_max_tool_rounds() -> usize {
@@ -156,27 +197,43 @@ impl Default for UserSettings {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            default: DefaultConfig::Simple("apple-fm".to_string()),
+            default: DefaultConfig::Table {
+                big: "qwen3.6-dense".to_string(),
+                small: "minicpm5".to_string(),
+            },
             models: vec![
                 ModelProfile {
-                    name: "apple-fm".to_string(),
-                    url: "http://127.0.0.1:1976/v1/chat/completions".to_string(),
-                    model: "system".to_string(),
-                    context_window: Some(MAX_CONTEXT_TOKENS),
-                    engine: Some("llamacpp".to_string()),
+                    name: "qwen3.6-dense".to_string(),
+                    url: "http://100.90.28.23:11434/v1/chat/completions".to_string(),
+                    model: "qwen3.6:27b-coding-mxfp8".to_string(),
+                    context_window: Some(128000),
+                    engine: Some("ollama".to_string()),
+                    api_key: None,
+                    env_key: None,
                 },
                 ModelProfile {
-                    name: "ollama".to_string(),
+                    name: "minicpm5".to_string(),
                     url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
-                    model: "llama3.2:latest".to_string(),
-                    context_window: Some(32768),
+                    model: "openbmb/minicpm5".to_string(),
+                    context_window: Some(32000),
                     engine: Some("ollama".to_string()),
+                    api_key: None,
+                    env_key: None,
+                },
+                ModelProfile {
+                    name: "tinkerer".to_string(),
+                    url: "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1/chat/completions".to_string(),
+                    model: "thinkingmachines/Inkling".to_string(),
+                    context_window: Some(128000),
+                    engine: Some("tinker".to_string()),
+                    api_key: None,
+                    env_key: Some("TINKER_API_KEY".to_string()),
                 },
             ],
             tool_protocol: ToolProtocol::default(),
             last_active_session_id: None,
             mcp_servers: Vec::new(),
-            history_token_budget: 64000,
+            history_token_budget: 128000,
             max_tool_rounds: 1000,
         }
     }
@@ -689,12 +746,12 @@ mod tests {
     fn test_config_save_load() {
         let dir = temp_dir("config");
         let mut config = AppConfig::default();
-        config.default = DefaultConfig::Simple("ollama".to_string());
+        config.default = DefaultConfig::Simple("minicpm5".to_string());
         save_config_to(&dir, &config);
 
         let (url, model, loaded) = load_config_from(&dir);
-        assert_eq!(loaded.default.big(), "ollama");
-        let expected = &loaded.models.iter().find(|m| m.name == "ollama").unwrap();
+        assert_eq!(loaded.default.big(), "minicpm5");
+        let expected = &loaded.models.iter().find(|m| m.name == "minicpm5").unwrap();
         assert_eq!(url, expected.url);
         assert_eq!(model, expected.model);
     }
@@ -703,11 +760,11 @@ mod tests {
     fn test_default_profile_is_source_of_truth() {
         let dir = temp_dir("latest");
         let mut config = AppConfig::default();
-        config.default = DefaultConfig::Simple("ollama".to_string());
+        config.default = DefaultConfig::Simple("minicpm5".to_string());
         save_config_to(&dir, &config);
 
         let (url, model, _) = load_config_from(&dir);
-        let expected = &config.models.iter().find(|m| m.name == "ollama").unwrap();
+        let expected = &config.models.iter().find(|m| m.name == "minicpm5").unwrap();
         assert_eq!(url, expected.url);
         assert_eq!(model, expected.model);
     }
@@ -723,7 +780,7 @@ mod tests {
             loaded
                 .models
                 .iter()
-                .find(|m| m.name == "apple-fm")
+                .find(|m| m.name == "qwen3.6-dense")
                 .unwrap()
                 .context_window,
             Some(4096)
