@@ -1,5 +1,24 @@
 # Changelog
 
+## [v0.1.15] - 2025-07-11
+
+### Features
+- Add right-aligned [Copy] badge to code blocks and clean code extraction for /copy
+- Add goal mode completion green banner when continuous autoloop completes
+- Add @ file reference autocomplete popup and tab completion
+- Add unified green/red inline diff rendering for file edits
+
+### Fixes
+- Support Ctrl+Backspace for backward word deletion and explain Ghostty macos-option-as-alt setting
+- Enable PushKeyboardEnhancementFlags for Ghostty and handle raw DEL events cleanly
+- Support native macOS Option character compositions (∫, ƒ, ∂, \x7f, \x08, \x17) and Cmd+Backspace for word and line deletion
+- Update prompt box mode label dynamically on Tab toggle and map Mac main delete key with Option to backward word deletion
+- Ensure Option+Backspace deletes words backward while Option+Delete deletes words forward
+- Silently handle missing cargo binary during background compiler check instead of returning fake error to model
+
+### Chores
+- Add KEY_EVENT debug logging to trace Ghostty Option+Backspace events
+
 ## [v0.1.13] - 2025-07-11
 
 ### Features
