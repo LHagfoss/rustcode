@@ -976,20 +976,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char(c) => {
                             let mut s = app_state.lock().await;
                             let ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
-                            let alt = key.modifiers.contains(event::KeyModifiers::ALT);
-                            let cmd = key.modifiers.contains(event::KeyModifiers::SUPER)
+                            let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                                 || key.modifiers.contains(event::KeyModifiers::META);
+                            let cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
 
-                            if cmd {
-                                // Cmd/⌘ shortcuts are not text — never insert them.
-                            } else if alt && c == 'b' {
-                                s.move_cursor_word_left();
-                            } else if alt && c == 'f' {
-                                s.move_cursor_word_right();
-                            } else if alt && (c == '\x7f' || c == '\x08') {
-                                s.delete_word_backspace();
+                            if c == '\x7f' || c == '\x08' || c == '\x17' {
+                                // Option+Backspace, Ctrl+W, or raw DEL on Mac
+                                if alt || cmd || c == '\x17' || c == '\x7f' || c == '\x08' {
+                                    s.delete_word_backspace();
+                                } else {
+                                    s.delete_char_backspace();
+                                }
                                 s.reset_suggestion_cycle();
-                            } else if alt && c == 'd' {
+                            } else if cmd {
+                                if c == 'u' {
+                                    s.kill_line_to_start();
+                                    s.reset_suggestion_cycle();
+                                }
+                            } else if (alt && c == 'b') || c == '∫' {
+                                s.move_cursor_word_left();
+                            } else if (alt && c == 'f') || c == 'ƒ' {
+                                s.move_cursor_word_right();
+                            } else if (alt && c == 'd') || c == '∂' {
                                 s.delete_word_forward();
                                 s.reset_suggestion_cycle();
                             } else if ctrl && c == 'o' {
@@ -1005,7 +1013,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else if ctrl && c == 'w' {
                                 s.delete_word_backspace();
                                 s.reset_suggestion_cycle();
-                            } else if !ctrl && !alt {
+                            } else if !ctrl && !alt && !c.is_control() {
                                 s.insert_char(c);
                                 s.reset_suggestion_cycle();
                             }
@@ -1014,7 +1022,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                                 || key.modifiers.contains(event::KeyModifiers::META);
-                            if alt {
+                            let cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
+                            if cmd {
+                                s.kill_line_to_start();
+                            } else if alt {
                                 s.delete_word_backspace();
                             } else {
                                 s.delete_char_backspace();
@@ -1025,7 +1036,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                                 || key.modifiers.contains(event::KeyModifiers::META);
-                            if alt {
+                            let cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
+                            if cmd {
+                                s.kill_line_to_start();
+                            } else if alt {
                                 s.delete_word_forward();
                             } else {
                                 s.delete_char_delete();
