@@ -2679,6 +2679,10 @@ pub async fn process_queue_orchestrator(
                     if completed {
                         dbg_log!("complete_task called, turning off continuous mode");
                         s.continuous_mode = false;
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            "🏁 Goal Accomplished! Continuous mode completed successfully. ✅".to_string(),
+                        ));
                     }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
