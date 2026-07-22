@@ -454,6 +454,9 @@ fn render_assistant_message<'a>(
                         pad_to_width(line_str, code_content_width),
                         get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
                     ));
+                    lines.push(Line::from(spans));
+                } else if line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@") {
+                    lines.push(highlight_diff_line(line_str, code_content_width, show_picker));
                 } else {
                     let mut line_spans = highlight_rust_line(line_str, show_picker);
                     let current_width: usize = line_spans.iter().map(|s| s.content.width()).sum();
@@ -464,8 +467,8 @@ fn render_assistant_message<'a>(
                         ));
                     }
                     spans.extend(line_spans);
+                    lines.push(Line::from(spans));
                 }
-                lines.push(Line::from(spans));
                 i += 1;
             } else {
                 // Gather contiguous normal text lines

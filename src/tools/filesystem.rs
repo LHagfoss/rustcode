@@ -156,6 +156,20 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
     Ok(out)
 }
 
+pub fn generate_unified_diff(target: &str, replacement: &str) -> String {
+    let diff = similar::TextDiff::from_lines(target, replacement);
+    let mut out = String::new();
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            similar::ChangeTag::Delete => "-",
+            similar::ChangeTag::Insert => "+",
+            similar::ChangeTag::Equal => " ",
+        };
+        out.push_str(&format!("{}{}", sign, change));
+    }
+    out
+}
+
 pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     let path = args
         .get("path")
@@ -182,6 +196,8 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     let content = std::fs::read_to_string(&resolved_path)
         .map_err(|e| format!("cannot read '{path}': {e}"))?;
 
+    let diff_text = generate_unified_diff(target_content, replacement_content);
+
     // 1. If start_line and end_line are provided, try exact matching in that line range first
     if let (Some(start), Some(end)) = (start_line, end_line) {
         let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
@@ -204,7 +220,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
                     .map_err(|e| format!("cannot write '{path}': {e}"))?;
 
                 return Ok(format!(
-                    "successfully replaced lines {start}-{end} in '{path}'"
+                    "successfully replaced lines {start}-{end} in '{path}'\n\n```diff\n{diff_text}\n```"
                 ));
             }
         }
@@ -219,7 +235,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         std::fs::write(&resolved_path, &new_content)
             .map_err(|e| format!("cannot write '{path}': {e}"))?;
         return Ok(format!(
-            "successfully replaced target_content in '{path}' (uniquely located in file)"
+            "successfully replaced target_content in '{path}' (uniquely located in file)\n\n```diff\n{diff_text}\n```"
         ));
     } else if occurrences.len() > 1 {
         return Err(format!(
@@ -240,7 +256,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         std::fs::write(&resolved_path, &new_content)
             .map_err(|e| format!("cannot write '{path}': {e}"))?;
         return Ok(format!(
-            "successfully replaced target_content in '{path}' (matched with normalized line endings)"
+            "successfully replaced target_content in '{path}' (matched with normalized line endings)\n\n```diff\n{diff_text}\n```"
         ));
     } else if clean_occurrences.len() > 1 {
         return Err(format!(
@@ -258,7 +274,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
             std::fs::write(&resolved_path, &new_content)
                 .map_err(|e| format!("cannot write '{path}': {e}"))?;
             return Ok(format!(
-                "successfully replaced target_content in '{path}' (matched via fuzzy block/line-trimmed alignment)"
+                "successfully replaced target_content in '{path}' (matched via fuzzy block/line-trimmed alignment)\n\n```diff\n{diff_text}\n```"
             ));
         }
     }
