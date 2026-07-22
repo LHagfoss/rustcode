@@ -1016,10 +1016,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                                 || key.modifiers.contains(event::KeyModifiers::META);
+                            let ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                             let cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
                             if cmd {
                                 s.kill_line_to_start();
-                            } else if alt {
+                            } else if alt || ctrl {
                                 s.delete_word_backspace();
                             } else {
                                 s.delete_char_backspace();
