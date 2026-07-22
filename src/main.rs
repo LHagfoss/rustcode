@@ -1193,10 +1193,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::Paste(text) => {
                     let mut s = app_state.lock().await;
                     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-                    for c in normalized.chars() {
-                        s.insert_char(c);
+                    if s.show_mcp_config {
+                        if let Some(ref mut edit_state) = s.mcp_edit_state {
+                            for c in normalized.chars() {
+                                if c != '\n' && c != '\r' {
+                                    edit_state.insert_char(c);
+                                }
+                            }
+                        }
+                    } else {
+                        for c in normalized.chars() {
+                            s.insert_char(c);
+                        }
+                        s.reset_suggestion_cycle();
                     }
-                    s.reset_suggestion_cycle();
                     needs_redraw = true;
                 }
                 Event::Resize(_, _) => {
