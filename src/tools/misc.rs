@@ -134,6 +134,62 @@ pub fn search_web(args: &Value) -> Result<String, String> {
         search_query.push_str(&format!(" site:{}", dom));
     }
 
+    let exa_key = std::env::var("EXA_API_KEY").unwrap_or_else(|_| "9a49efa5-675c-4684-94c0-3f96979aa2ac".to_string());
+    if !exa_key.is_empty() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+        let body = serde_json::json!({
+            "query": search_query,
+            "numResults": 5,
+            "useAutoprompt": true,
+            "contents": {
+                "text": {
+                    "maxCharacters": 1000
+                }
+            }
+        });
+
+        if let Ok(response) = client
+            .post("https://api.exa.ai/search")
+            .header("x-api-key", &exa_key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+        {
+            if response.status().is_success() {
+                if let Ok(res_json) = response.json::<serde_json::Value>() {
+                    if let Some(results) = res_json.get("results").and_then(|r| r.as_array()) {
+                        let mut out = String::new();
+                        out.push_str(&format!(
+                            "Web Search Results for '{}' (via Exa AI):\n\n",
+                            search_query
+                        ));
+                        for (i, r) in results.iter().enumerate() {
+                            let title = r.get("title").and_then(|t| t.as_str()).unwrap_or("No Title");
+                            let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                            let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                            let snippet = if text.len() > 300 { &text[..300] } else { text };
+
+                            out.push_str(&format!(
+                                "{}. {}\n   Snippet: {}\n   Source: {}\n\n",
+                                i + 1,
+                                title,
+                                snippet.trim(),
+                                url
+                            ));
+                        }
+                        if !results.is_empty() {
+                            return Ok(out);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
