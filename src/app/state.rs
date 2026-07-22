@@ -500,6 +500,19 @@ impl AppState {
         self.reset_suggestion_index();
     }
 
+    pub fn delete_word_forward(&mut self) {
+        self.history_index = None;
+        self.clamp_cursor();
+        let start = self.cursor_position;
+        self.move_cursor_word_right();
+        let end = self.cursor_position;
+        self.cursor_position = start;
+        if start < end {
+            self.input_buffer.replace_range(start..end, "");
+        }
+        self.reset_suggestion_index();
+    }
+
     pub fn kill_line_to_start(&mut self) {
         self.history_index = None;
         self.clamp_cursor();

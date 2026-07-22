@@ -986,6 +986,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.move_cursor_word_left();
                             } else if alt && c == 'f' {
                                 s.move_cursor_word_right();
+                            } else if alt && (c == '\x7f' || c == '\x08') {
+                                s.delete_word_backspace();
+                                s.reset_suggestion_cycle();
+                            } else if alt && c == 'd' {
+                                s.delete_word_forward();
+                                s.reset_suggestion_cycle();
                             } else if ctrl && c == 'o' {
                                 s.insert_char('\n');
                                 s.reset_suggestion_cycle();
@@ -1020,7 +1026,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let alt = key.modifiers.contains(event::KeyModifiers::ALT)
                                 || key.modifiers.contains(event::KeyModifiers::META);
                             if alt {
-                                s.delete_word_backspace();
+                                s.delete_word_forward();
                             } else {
                                 s.delete_char_delete();
                             }
