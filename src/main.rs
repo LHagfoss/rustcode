@@ -16,7 +16,7 @@ mod ui;
 use crate::app::{AppState, AppStatus, ChatMessage};
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, DisableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -383,39 +383,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if s.show_mcp_config {
                         if let Some(ref mut edit_state) = s.mcp_edit_state {
+                            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                            let alt = key.modifiers.contains(KeyModifiers::ALT);
+                            let super_key = key.modifiers.contains(KeyModifiers::SUPER);
+
                             match key.code {
                                 KeyCode::Esc => {
                                     s.mcp_edit_state = None;
                                 }
                                 KeyCode::Up => {
-                                    edit_state.active_field = if edit_state.active_field == 0 {
-                                        2
-                                    } else {
-                                        edit_state.active_field - 1
-                                    };
+                                    let prev = if edit_state.active_field == 0 { 2 } else { edit_state.active_field - 1 };
+                                    edit_state.set_active_field(prev);
                                 }
                                 KeyCode::Down | KeyCode::Tab => {
-                                    edit_state.active_field = if edit_state.active_field == 2 {
-                                        0
-                                    } else {
-                                        edit_state.active_field + 1
-                                    };
+                                    let next = (edit_state.active_field + 1) % 3;
+                                    edit_state.set_active_field(next);
                                 }
-                                KeyCode::Char(c) => {
-                                    let field = match edit_state.active_field {
-                                        0 => &mut edit_state.name_input,
-                                        1 => &mut edit_state.command_input,
-                                        _ => &mut edit_state.args_input,
-                                    };
-                                    field.push(c);
+                                KeyCode::Left => {
+                                    if alt || ctrl {
+                                        edit_state.move_cursor_word_left();
+                                    } else {
+                                        edit_state.move_cursor_left();
+                                    }
+                                }
+                                KeyCode::Right => {
+                                    if alt || ctrl {
+                                        edit_state.move_cursor_word_right();
+                                    } else {
+                                        edit_state.move_cursor_right();
+                                    }
+                                }
+                                KeyCode::Home => {
+                                    edit_state.move_cursor_home();
+                                }
+                                KeyCode::End => {
+                                    edit_state.move_cursor_end();
                                 }
                                 KeyCode::Backspace => {
-                                    let field = match edit_state.active_field {
-                                        0 => &mut edit_state.name_input,
-                                        1 => &mut edit_state.command_input,
-                                        _ => &mut edit_state.args_input,
-                                    };
-                                    field.pop();
+                                    if super_key {
+                                        edit_state.delete_line_left();
+                                    } else if alt || ctrl {
+                                        edit_state.delete_word_left();
+                                    } else {
+                                        edit_state.delete_char_left();
+                                    }
+                                }
+                                KeyCode::Delete => {
+                                    edit_state.delete_char_right();
+                                }
+                                KeyCode::Char(c) => {
+                                    if ctrl && (c == 'w' || c == 'W') {
+                                        edit_state.delete_word_left();
+                                    } else if ctrl && (c == 'u' || c == 'U') {
+                                        edit_state.delete_line_left();
+                                    } else if !ctrl && !super_key {
+                                        edit_state.insert_char(c);
+                                    }
                                 }
                                 KeyCode::Enter => {
                                     let name = edit_state.name_input.trim().to_string();
