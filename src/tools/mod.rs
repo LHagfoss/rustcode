@@ -265,8 +265,16 @@ pub const TOOLS: &[Tool] = &[
         arguments: r#"{"result": "summary of what was achieved and final results"}"#,
         handler: misc::complete_task_tool,
         requires_confirmation: false,
+     },
+    Tool {
+        name: "use_skill",
+        description: "Load a skill by name to get its instructions and available files.",
+        arguments: r#"{"name": "skill name"}"#,
+        handler: misc::use_skill,
+        requires_confirmation: false,
     },
 ];
+
 #[allow(dead_code)]
 pub const MAX_TOOL_ROUNDS: usize = 60;
 
@@ -280,6 +288,21 @@ pub fn tool_system_prompt(
     agent_mode: crate::config::AgentMode,
 ) -> String {
     let mut p = String::new();
+
+    let skills = crate::skills::discover_skills();
+    if !skills.is_empty() {
+        p.push_str("\n# Available Skills\n");
+        p.push_str("Skills provide specialized instructions and workflows for specific tasks.\n");
+        p.push_str("Use the 'use_skill' tool to load a skill when a task matches its description.\n\n");
+        p.push_str("<available_skills>\n");
+        for skill in &skills {
+            p.push_str("  <skill>\n");
+            p.push_str(&format!("    <name>{}</name>\n", skill.name));
+            p.push_str(&format!("    <description>{}</description>\n", skill.description));
+            p.push_str("  </skill>\n");
+        }
+        p.push_str("</available_skills>\n\n");
+    }
 
     if agent_mode == crate::config::AgentMode::Plan {
         p.push_str(

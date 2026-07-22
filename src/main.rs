@@ -8,6 +8,7 @@ mod mcp;
 mod network;
 mod notifications;
 mod raw_cli;
+mod skills;
 mod symbols;
 mod tools;
 mod ui;

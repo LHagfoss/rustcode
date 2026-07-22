@@ -267,3 +267,25 @@ pub fn search_web(args: &Value) -> Result<String, String> {
 
     Ok(out)
 }
+
+pub fn use_skill(args: &Value) -> Result<String, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing 'name' argument")?;
+
+    let skill = crate::skills::get_skill_content(name)
+        .ok_or_else(|| format!("Skill '{}' not found. Use the skills catalog to see available skills.", name))?;
+
+    let files = crate::skills::list_skill_files(&skill.path);
+    let mut out = format!("<skill_content name=\"{}\">\n", skill.name);
+    out.push_str(&skill.content);
+    if !files.is_empty() {
+        out.push_str("\n---\nFiles in skill directory:\n");
+        for f in &files {
+            out.push_str(&format!("  - {}\n", f));
+        }
+    }
+    out.push_str("</skill_content>\n");
+    Ok(out)
+}
