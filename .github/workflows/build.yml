@@ -79,14 +79,19 @@ jobs:
             - name: Download artifacts
               uses: actions/download-artifact@v4
               with:
-                  path: artifacts/
+                  # Removed the trailing slash to correctly flatten files
+                  # when using merge-multiple: true
+                  path: artifacts
                   merge-multiple: true
 
             - name: Create GitHub Release
               id: create_release
               uses: softprops/action-gh-release@v2
               with:
-                  files: artifacts/*
+                  # Targets only the archives inside the root artifacts directory
+                  files: |
+                      artifacts/*.tar.gz
+                      artifacts/*.zip
                   generate_release_notes: true
 
             - name: Update Homebrew Formula
@@ -95,7 +100,7 @@ jobs:
                   TAG: ${{ github.ref_name }}
                   GH_USER: "lhagfoss"
               run: |
-                  # 1. Calculate the SHA256 hash of the generated macos tarball
+                  # 1. Calculate the SHA256 hash (Now correctly maps to the root of artifacts)
                   SHA256=$(sha256sum artifacts/rustcode-macos-aarch64.tar.gz | awk '{print $1}')
                   echo "Computed SHA256: $SHA256"
 
