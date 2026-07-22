@@ -248,7 +248,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     needs_redraw = true;
-
                     if key.modifiers.contains(event::KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
                     {
@@ -754,6 +753,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     drop(s);
+                    dbg_log!("[KEY_EVENT] code={:?} modifiers={:?}", key.code, key.modifiers);
 
                     match key.code {
                         KeyCode::BackTab => {
