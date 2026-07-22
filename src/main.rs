@@ -68,18 +68,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         crossterm::style::Print("\x1b]0;rustcode · new session\x07")
     )?;
 
-    let keyboard_enhanced = matches!(
-        crossterm::terminal::supports_keyboard_enhancement(),
-        Ok(true)
+    let _ = execute!(
+        stdout,
+        event::PushKeyboardEnhancementFlags(
+            event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
     );
-    if keyboard_enhanced {
-        execute!(
-            stdout,
-            event::PushKeyboardEnhancementFlags(
-                event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            )
-        )?;
-    }
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -982,7 +976,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             if c == '\x7f' || c == '\x08' || c == '\x17' {
                                 // Option+Backspace, Ctrl+W, or raw DEL on Mac
-                                if alt || cmd || c == '\x17' || c == '\x7f' || c == '\x08' {
+                                if alt || cmd || c == '\x17' {
                                     s.delete_word_backspace();
                                 } else {
                                     s.delete_char_backspace();
