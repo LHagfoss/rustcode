@@ -89,6 +89,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show current session ID, token budget, and active model",
     },
     CommandInfo {
+        name: "/skills",
+        desc: "Show available skills and their locations",
+    },
+    CommandInfo {
         name: "/stats",
         desc: "Show token usage and context statistics",
     },
