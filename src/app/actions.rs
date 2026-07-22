@@ -598,6 +598,22 @@ pub fn apply_autocomplete(s: &mut AppState) {
             s.cursor_position = s.input_buffer.len();
         }
         s.active_suggestion_index = None;
+    } else if let Some((at_idx, at_query)) = crate::app::get_at_word_query(&s.input_buffer, s.cursor_position) {
+        let files = crate::app::list_project_file_paths(&at_query);
+        if !files.is_empty() {
+            let idx = s.active_suggestion_index.unwrap_or(0).min(files.len().saturating_sub(1));
+            let selected_file = &files[idx];
+            let mut new_buf = String::new();
+            new_buf.push_str(&s.input_buffer[..at_idx]);
+            new_buf.push_str(selected_file);
+            new_buf.push(' ');
+            let tail_idx = (at_idx + 1 + at_query.len()).min(s.input_buffer.len());
+            new_buf.push_str(&s.input_buffer[tail_idx..]);
+
+            s.cursor_position = at_idx + selected_file.len() + 1;
+            s.input_buffer = new_buf;
+        }
+        s.active_suggestion_index = None;
     }
 }
 

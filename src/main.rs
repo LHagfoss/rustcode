@@ -837,7 +837,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
-                            if s.active_suggestion_index.is_some() {
+                            let has_at = crate::app::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
+                            if s.active_suggestion_index.is_some() || has_at {
                                 crate::app::apply_autocomplete(&mut s);
                             } else if s.input_buffer.starts_with('/') && !s.input_buffer.contains(' ') {
                                 s.cycle_suggestion();

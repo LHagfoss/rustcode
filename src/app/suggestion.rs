@@ -180,3 +180,44 @@ impl SuggestionCycle {
         self.suggestion_index = None;
     }
 }
+
+pub fn list_project_file_paths(query: &str) -> Vec<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut files = Vec::new();
+    let query_lower = query.to_lowercase();
+
+    let walker = ignore::WalkBuilder::new(&cwd)
+        .hidden(true)
+        .git_ignore(true)
+        .max_depth(Some(6))
+        .build();
+
+    for result in walker {
+        if let Ok(entry) = result {
+            if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                if let Ok(rel) = entry.path().strip_prefix(&cwd) {
+                    let rel_str = rel.to_string_lossy().to_string();
+                    if query_lower.is_empty() || rel_str.to_lowercase().contains(&query_lower) {
+                        files.push(format!("@{}", rel_str));
+                        if files.len() >= 25 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    files
+}
+
+pub fn get_at_word_query(input_buffer: &str, cursor_pos: usize) -> Option<(usize, String)> {
+    let pos = cursor_pos.min(input_buffer.len());
+    let before = &input_buffer[..pos];
+    if let Some(at_idx) = before.rfind('@') {
+        let query = &before[at_idx + 1..];
+        if !query.contains(' ') && !query.contains('\n') {
+            return Some((at_idx, query.to_string()));
+        }
+    }
+    None
+}
