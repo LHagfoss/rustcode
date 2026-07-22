@@ -1537,6 +1537,49 @@ fn render_popup_menu(
     );
 }
 
+fn render_at_popup_menu(
+    f: &mut Frame,
+    state: &AppState,
+    file_matches: &[String],
+    area: ratatui::layout::Rect,
+) {
+    let mut popup_lines = Vec::new();
+    for (idx, file) in file_matches.iter().enumerate() {
+        let is_selected = state
+            .active_suggestion_index
+            .map(|i| i == idx)
+            .unwrap_or(false);
+
+        let line = if is_selected {
+            let left_text = format!("📄 {:<35}", file);
+            let total_len = left_text.len();
+            let padding_len = (area.width as usize).saturating_sub(total_len);
+            let full_text = format!("{}{}", left_text, " ".repeat(padding_len));
+
+            Line::from(Span::styled(
+                full_text,
+                Style::default()
+                    .fg(COLOR_BG)
+                    .bg(COLOR_SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else {
+            let left_text = format!("📄 {:<35}", file);
+            let padding_len = (area.width as usize).saturating_sub(left_text.len());
+
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL)),
+                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL)),
+            ])
+        };
+        popup_lines.push(line);
+    }
+    f.render_widget(
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL)),
+        area,
+    );
+}
+
 fn render_welcome_screen(
     f: &mut Frame,
     state: &AppState,
@@ -2773,6 +2816,14 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         let input_margin = render_input(f, &chunks, state);
         render_footer(f, &chunks, state);
 
+        let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
+            .unwrap_or((0, String::new()));
+        let at_files = if !at_query.is_empty() || state.input_buffer[..state.cursor_position.min(state.input_buffer.len())].ends_with('@') {
+            crate::app::list_project_file_paths(&at_query)
+        } else {
+            Vec::new()
+        };
+
         if !filtered_cmds.is_empty() {
             let input_inner = chunks[1].inner(input_margin);
             let popup_height = filtered_cmds.len() as u16;
@@ -2780,6 +2831,13 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             let popup_area =
                 ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
             render_popup_menu(f, state, &filtered_cmds, popup_area);
+        } else if !at_files.is_empty() {
+            let input_inner = chunks[1].inner(input_margin);
+            let popup_height = at_files.len().min(8) as u16;
+            let popup_y = chunks[1].y.saturating_sub(popup_height);
+            let popup_area =
+                ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
+            render_at_popup_menu(f, state, &at_files, popup_area);
         }
     }
 
