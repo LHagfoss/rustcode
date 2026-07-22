@@ -2404,7 +2404,9 @@ fn render_mcp_config_modal(f: &mut Frame, state: &AppState) {
 
             let is_active = edit_state.active_field == field_idx;
             let display_val = if is_active {
-                format!("{val}_")
+                let pos = edit_state.cursor_pos.min(val.len());
+                let (left, right) = val.split_at(pos);
+                format!("{left}█{right}")
             } else {
                 val.clone()
             };

@@ -205,6 +205,163 @@ pub struct McpEditState {
     pub cursor_pos: usize,
 }
 
+impl McpEditState {
+    pub fn new(is_add: bool, edit_index: Option<usize>, name: String, command: String, args: String) -> Self {
+        let cursor_pos = name.len();
+        Self {
+            is_add,
+            edit_index,
+            name_input: name,
+            command_input: command,
+            args_input: args,
+            active_field: 0,
+            cursor_pos,
+        }
+    }
+
+    pub fn active_buf_and_pos_mut(&mut self) -> (&mut String, &mut usize) {
+        match self.active_field {
+            0 => (&mut self.name_input, &mut self.cursor_pos),
+            1 => (&mut self.command_input, &mut self.cursor_pos),
+            _ => (&mut self.args_input, &mut self.cursor_pos),
+        }
+    }
+
+    pub fn active_buf_and_pos(&self) -> (&str, usize) {
+        match self.active_field {
+            0 => (&self.name_input, self.cursor_pos),
+            1 => (&self.command_input, self.cursor_pos),
+            _ => (&self.args_input, self.cursor_pos),
+        }
+    }
+
+    pub fn set_active_field(&mut self, field: usize) {
+        self.active_field = field % 3;
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = buf.len();
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        buf.insert(*pos, c);
+        *pos += c.len_utf8();
+    }
+
+    pub fn delete_char_left(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        if *pos > 0 {
+            if let Some(c) = buf[..*pos].chars().next_back() {
+                let len = c.len_utf8();
+                *pos -= len;
+                buf.remove(*pos);
+            }
+        }
+    }
+
+    pub fn delete_char_right(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        if *pos < buf.len() {
+            buf.remove(*pos);
+        }
+    }
+
+    pub fn delete_word_left(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        if *pos == 0 {
+            return;
+        }
+        let end = *pos;
+        let mut start = *pos;
+        while start > 0 && buf[..start].chars().next_back().map_or(false, |c| c.is_whitespace()) {
+            if let Some(c) = buf[..start].chars().next_back() {
+                start -= c.len_utf8();
+            }
+        }
+        while start > 0 && buf[..start].chars().next_back().map_or(false, |c| !c.is_whitespace()) {
+            if let Some(c) = buf[..start].chars().next_back() {
+                start -= c.len_utf8();
+            }
+        }
+        buf.drain(start..end);
+        *pos = start;
+    }
+
+    pub fn delete_line_left(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        buf.drain(0..*pos);
+        *pos = 0;
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        if *pos > 0 {
+            if let Some(c) = buf[..*pos].chars().next_back() {
+                *pos -= c.len_utf8();
+            }
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        if *pos < buf.len() {
+            if let Some(c) = buf[*pos..].chars().next() {
+                *pos += c.len_utf8();
+            }
+        }
+    }
+
+    pub fn move_cursor_word_left(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        let mut p = *pos;
+        while p > 0 && buf[..p].chars().next_back().map_or(false, |c| c.is_whitespace()) {
+            if let Some(c) = buf[..p].chars().next_back() {
+                p -= c.len_utf8();
+            }
+        }
+        while p > 0 && buf[..p].chars().next_back().map_or(false, |c| !c.is_whitespace()) {
+            if let Some(c) = buf[..p].chars().next_back() {
+                p -= c.len_utf8();
+            }
+        }
+        *pos = p;
+    }
+
+    pub fn move_cursor_word_right(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = (*pos).min(buf.len());
+        let mut p = *pos;
+        while p < buf.len() && buf[p..].chars().next().map_or(false, |c| c.is_whitespace()) {
+            if let Some(c) = buf[p..].chars().next() {
+                p += c.len_utf8();
+            }
+        }
+        while p < buf.len() && buf[p..].chars().next().map_or(false, |c| !c.is_whitespace()) {
+            if let Some(c) = buf[p..].chars().next() {
+                p += c.len_utf8();
+            }
+        }
+        *pos = p;
+    }
+
+    pub fn move_cursor_home(&mut self) {
+        let (_, pos) = self.active_buf_and_pos_mut();
+        *pos = 0;
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        let (buf, pos) = self.active_buf_and_pos_mut();
+        *pos = buf.len();
+    }
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
