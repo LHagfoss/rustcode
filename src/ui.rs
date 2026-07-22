@@ -334,7 +334,7 @@ fn model_label(state: &AppState) -> String {
 }
 
 fn render_assistant_message<'a>(
-    content: &str,
+    content: &'a str,
     response_time_ms: Option<u64>,
     model_name: &str,
     lines: &mut Vec<Line<'a>>,
@@ -344,6 +344,7 @@ fn render_assistant_message<'a>(
     thought_collapsed: bool,
     msg_index: Option<usize>,
     click_registry: &mut Vec<(usize, usize)>,
+    is_copied_recently: bool,
 ) {
     let mut think_content = None;
     let mut main_content = content;
@@ -365,52 +366,61 @@ fn render_assistant_message<'a>(
     }
 
     if let Some(think) = think_content {
-        let base = if let Some(ms) = response_time_ms {
+        let label = if let Some(ms) = response_time_ms {
             if ms >= 1000 {
-                format!("Thought: {:.1}s", ms as f32 / 1000.0)
+                format!("Thinking ({:.1}s)", ms as f32 / 1000.0)
             } else {
-                format!("Thought: {}ms", ms)
+                format!("Thinking ({}ms)", ms)
             }
         } else {
-            "Thought:".to_string()
+            "Thinking".to_string()
         };
-        // Streaming (no msg_index) shows thoughts live with no toggle chip.
-        let toggle = match msg_index {
-            Some(_) if thought_collapsed => "+ ",
-            Some(_) => "− ",
-            None => "",
-        };
+        let toggle = if thought_collapsed { "+ " } else { "− " };
         if let Some(idx) = msg_index {
             click_registry.push((lines.len(), idx));
         }
-        lines.push(Line::from(Span::styled(
-            format!("{}{}", toggle, base),
-            get_themed_style(
-                Color::Rgb(229, 192, 123),
-                COLOR_BG,
-                Modifier::empty(),
-                show_picker,
+
+        let first_line = think.lines().next().unwrap_or(&label);
+        let preview = if first_line.len() > 65 {
+            format!("{}...", &first_line[..65])
+        } else {
+            first_line.to_string()
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                toggle,
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
             ),
-        )));
+            Span::styled(
+                format!("{label}: {preview}"),
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+            ),
+        ]));
 
         if !thought_collapsed {
             for raw_line in think.lines() {
-                lines.push(Line::from(Span::styled(
-                    raw_line.to_string(),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "│ ",
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                    ),
+                    Span::styled(
+                        raw_line,
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    ),
+                ]));
             }
         }
         lines.push(Line::from(""));
     }
 
-    if !main_content.is_empty() {
-        let content_width = (viewport_width as usize).saturating_sub(8);
+    if !main_content.trim().is_empty() || is_generating {
+        let content_width = (viewport_width as usize).saturating_sub(10).max(10);
+        let mut processed_lines: Vec<(bool, String)> = Vec::new();
         let mut in_code_block = false;
-        let display_lines: Vec<&str> = main_content.lines().collect();
-        let mut processed_lines = Vec::new();
 
-        for raw_line in &display_lines {
+        for raw_line in main_content.lines() {
             let is_code_fence = raw_line.trim_start().starts_with("```");
             if is_code_fence {
                 in_code_block = !in_code_block;
@@ -418,7 +428,6 @@ fn render_assistant_message<'a>(
             } else if in_code_block {
                 processed_lines.push((true, raw_line.to_string()));
             } else {
-                // Word-wrap normal text line
                 if raw_line.trim().is_empty() {
                     processed_lines.push((false, String::new()));
                 } else {
@@ -444,15 +453,25 @@ fn render_assistant_message<'a>(
         let mut i = 0;
         while i < processed_lines.len() {
             if processed_lines[i].0 {
-                // Code block line - render directly
                 let line_str = &processed_lines[i].1;
                 let is_code_fence = line_str.trim_start().starts_with("```");
                 let mut spans = Vec::new();
                 let code_content_width = (viewport_width as usize).saturating_sub(6);
                 if is_code_fence {
+                    let button_badge = if is_copied_recently { " 📋 [Copied!] " } else { " 📋 [Copy] " };
+                    let button_color = if is_copied_recently { Color::Rgb(152, 195, 121) } else { COLOR_SECONDARY };
+                    let fence_text = line_str.trim();
+                    let left_len = fence_text.len();
+                    let right_len = button_badge.len();
+                    let pad_len = code_content_width.saturating_sub(left_len + right_len);
+
                     spans.push(Span::styled(
-                        pad_to_width(line_str, code_content_width),
+                        format!("{}{}", fence_text, " ".repeat(pad_len)),
                         get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                    ));
+                    spans.push(Span::styled(
+                        button_badge,
+                        get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
                     ));
                     lines.push(Line::from(spans));
                 } else if line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@") {
@@ -1355,6 +1374,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 continue;
             }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
+            let is_copied_recently = state.last_copy_time.map_or(false, |t| t.elapsed().as_secs() < 2);
             render_assistant_message(
                 &msg.content,
                 msg.response_time_ms,
@@ -1366,6 +1386,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 collapsed,
                 Some(msg_idx),
                 &mut thought_clicks,
+                is_copied_recently,
             );
             lines.push(Line::from(""));
         }
@@ -1404,6 +1425,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
             lines.push(Line::from(status_spans));
         } else {
+            let is_copied_recently = state.last_copy_time.map_or(false, |t| t.elapsed().as_secs() < 2);
             render_assistant_message(
                 &state.current_response,
                 None,
@@ -1415,6 +1437,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 false,
                 None,
                 &mut thought_clicks,
+                is_copied_recently,
             );
 
             lines.push(Line::from(vec![

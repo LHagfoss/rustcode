@@ -246,6 +246,7 @@ pub struct AppState {
     pub mcp_picker_index: usize,
     pub mcp_edit_state: Option<McpEditState>,
 
+    pub last_copy_time: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
@@ -371,6 +372,7 @@ impl AppState {
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
+            last_copy_time: None,
             pending_tool_confirmation: None,
             tool_confirmation_response: None,
             running_tools: Vec::new(),

@@ -787,6 +787,25 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
+pub fn extract_code_blocks_or_content(content: &str) -> String {
+    let mut code_lines = Vec::new();
+    let mut in_block = false;
+    for line in content.lines() {
+        if line.trim_start().starts_with("```") {
+            in_block = !in_block;
+            continue;
+        }
+        if in_block {
+            code_lines.push(line);
+        }
+    }
+    if !code_lines.is_empty() {
+        code_lines.join("\n")
+    } else {
+        content.to_string()
+    }
+}
+
 pub fn copy_last_reply(s: &mut AppState) {
     let last_reply = s
         .history
@@ -796,10 +815,12 @@ pub fn copy_last_reply(s: &mut AppState) {
         .map(|m| m.content.clone());
 
     if let Some(content) = last_reply {
-        if crate::clipboard::copy_to_clipboard(&content) {
+        let clean_text = extract_code_blocks_or_content(&content);
+        if crate::clipboard::copy_to_clipboard(&clean_text) {
+            s.last_copy_time = Some(std::time::Instant::now());
             s.history.push(ChatMessage::new(
                 "system",
-                "Copied last assistant reply to clipboard",
+                "Copied code/reply to clipboard ✅",
             ));
         } else {
             s.history
