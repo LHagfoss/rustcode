@@ -1015,10 +1015,14 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
 
     let build_y = input_inner.y + input_inner.height.saturating_sub(1);
     let build_area = ratatui::layout::Rect::new(input_inner.x, build_y, input_inner.width, 1);
+    let (mode_label, mode_color) = match state.agent_mode {
+        crate::config::AgentMode::Build => ("Build", COLOR_SECONDARY),
+        crate::config::AgentMode::Plan => ("Plan", Color::Rgb(229, 192, 123)),
+    };
     let build_line = Line::from(vec![
         Span::styled(
-            "Build",
-            get_themed_style(COLOR_SECONDARY, COLOR_PANEL, Modifier::BOLD, show_picker),
+            mode_label,
+            get_themed_style(mode_color, COLOR_PANEL, Modifier::BOLD, show_picker),
         ),
         Span::styled(
             " · ",
