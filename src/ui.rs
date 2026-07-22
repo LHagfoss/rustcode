@@ -1136,6 +1136,21 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     for (msg_idx, msg) in state.history.iter().enumerate() {
         if msg.role == "system" {
+            if msg.content.contains("🏁") || msg.content.contains("Goal Accomplished") {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        " 🏁 ",
+                        Style::default().fg(Color::Rgb(152, 195, 121)).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" {} ", msg.content),
+                        Style::default().fg(Color::Rgb(152, 195, 121)).bg(COLOR_PANEL).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                continue;
+            }
+
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             let lower = msg.content.to_lowercase();
             let is_warning = lower.contains("warning") || lower.contains("loop") || lower.contains("abort") || lower.contains("error");
