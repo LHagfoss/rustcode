@@ -1919,17 +1919,30 @@ async fn optimize_first_prompt(
         let mut s = state.lock().await;
         push_status_line(&mut s, "Optimizing prompt and detecting goal status...".to_string());
     }
+    let original_prompt = next_prompt.clone();
     if let Some((is_goal, expanded_prompt)) =
         evaluate_and_expand_prompt(client, &config, next_prompt).await
     {
         let mut s = state.lock().await;
         s.history.pop();
-        *next_prompt = expanded_prompt;
+        let small_model_name = config.default.small().to_string();
+        *next_prompt = expanded_prompt.clone();
+
         if is_goal {
             s.continuous_mode = true;
-            push_status_line(&mut s, "Continuous mode (/goal) activated automatically by prompt optimizer.".to_string());
-        } else {
-            push_status_line(&mut s, "Prompt optimized by small model.".to_string());
+            push_status_line(
+                &mut s,
+                format!(
+                    "Continuous mode (/goal) activated automatically by prompt optimizer ({small_model_name}).\nOriginal: \"{original_prompt}\"\nOptimized: \"{expanded_prompt}\""
+                ),
+            );
+        } else if original_prompt.trim() != expanded_prompt.trim() {
+            push_status_line(
+                &mut s,
+                format!(
+                    "Prompt optimized by small model ({small_model_name}).\nOriginal: \"{original_prompt}\"\nOptimized: \"{expanded_prompt}\""
+                ),
+            );
         }
     } else {
         let mut s = state.lock().await;
