@@ -420,10 +420,19 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
 
 fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     let name = json.get("name")?.as_str()?.to_string();
-    let args = json
-        .get("arguments")
-        .cloned()
-        .unwrap_or(Value::Object(Default::default()));
+    let args = if let Some(args_val) = json.get("arguments") {
+        args_val.clone()
+    } else if let Some(obj) = json.as_object() {
+        let mut map = serde_json::Map::new();
+        for (k, v) in obj {
+            if k != "name" {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+        Value::Object(map)
+    } else {
+        Value::Object(Default::default())
+    };
     Some((name, args))
 }
 
