@@ -27,6 +27,7 @@ pub fn notify_pending_confirmation(details: &str) -> std::io::Result<()> {
 #[derive(Debug)]
 pub enum FinishedStatus {
     Success,
+    Warning,
     Cancelled,
     Denied,
     Error(String),
@@ -37,6 +38,9 @@ pub fn notify_finished(status: FinishedStatus) -> std::io::Result<()> {
     match status {
         FinishedStatus::Success => {
             notify("rustcode", "Task complete.")?;
+        }
+        FinishedStatus::Warning => {
+            notify("rustcode", "Warning: task completed with issues.")?;
         }
         FinishedStatus::Cancelled | FinishedStatus::Denied => {
             notify("rustcode", "Operation cancelled or denied.")?;

@@ -1181,7 +1181,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             let lower = msg.content.to_lowercase();
-            let is_warning = lower.contains("warning") || lower.contains("loop") || lower.contains("abort") || lower.contains("error");
+            let is_prompt_opt = lower.contains("prompt optimized") || lower.contains("activated automatically");
+            let is_warning = !is_prompt_opt && (lower.contains("warning") || lower.contains("loop") || lower.contains("abort") || lower.contains("error"));
             let label = if is_warning { "Warning" } else { "Notice" };
             let theme_color = if is_warning {
                 Color::Rgb(229, 192, 123)
