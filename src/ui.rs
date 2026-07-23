@@ -306,7 +306,6 @@ const COLOR_MUTED: Color = Color::Rgb(136, 146, 154);
 const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93);
 const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101);
 const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);
-const COLOR_BORDER: Color = Color::Rgb(72, 85, 89);
 /// Uniform text-selection background — vibrant selection blue for high visibility.
 const COLOR_SELECTION: Color = Color::Rgb(60, 95, 150);
 const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
@@ -349,8 +348,8 @@ fn render_assistant_message<'a>(
     let mut think_content = None;
     let mut main_content = content;
 
-    if content.contains("<think>") {
-        if let Some(start_idx) = content.find("<think>") {
+    if content.contains("<think>")
+        && let Some(start_idx) = content.find("<think>") {
             if let Some(real_end_idx) = content[start_idx..].find("</think>") {
                 let end_idx = start_idx + real_end_idx;
                 let think_part = &content[start_idx + 7..end_idx];
@@ -363,7 +362,6 @@ fn render_assistant_message<'a>(
                 main_content = "";
             }
         }
-    }
 
     if let Some(think) = think_content {
         let label = if let Some(ms) = response_time_ms {
@@ -665,12 +663,11 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
 
 /// Returns ("Tokens/s: ", "N.N") with the live rate when streaming, or "0.0" when not.
 fn format_tokens_info(state: &AppState) -> (String, String) {
-    if state.status == AppStatus::Streaming {
-        if let Some(ref tracker) = state.stream_tracker {
+    if state.status == AppStatus::Streaming
+        && let Some(ref tracker) = state.stream_tracker {
             let (tps, _) = tracker.snapshot();
             return ("Tps: ".to_string(), format!("{:.1}", tps));
         }
-    }
     ("Tps: ".to_string(), "0.0".to_string())
 }
 
@@ -702,8 +699,8 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         let mut spans = Vec::new();
 
         for i in 0..6 {
-            let dist = (i as isize - pulse_center as isize).abs() as usize;
-            let level = if dist >= 5 { 0 } else { 5 - dist };
+            let dist = (i as isize - pulse_center as isize).unsigned_abs();
+            let level = 5_usize.saturating_sub(dist);
             let color = colors[level];
             spans.push(Span::styled(
                 "■",
@@ -1374,7 +1371,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 continue;
             }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
-            let is_copied_recently = state.last_copy_time.map_or(false, |t| t.elapsed().as_secs() < 2);
+            let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
             render_assistant_message(
                 &msg.content,
                 msg.response_time_ms,
@@ -1425,7 +1422,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
             lines.push(Line::from(status_spans));
         } else {
-            let is_copied_recently = state.last_copy_time.map_or(false, |t| t.elapsed().as_secs() < 2);
+            let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
             render_assistant_message(
                 &state.current_response,
                 None,
@@ -1686,7 +1683,7 @@ fn render_welcome_screen(
         logo_area,
     );
 
-    let box_padding = (width.saturating_sub(box_width) / 2) as u16;
+    let box_padding = width.saturating_sub(box_width) / 2 ;
     let box_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -1875,7 +1872,7 @@ fn render_welcome_screen(
 
     let tip_area = welcome_chunks[7];
     let tip_text = crate::app::TIPS[state.tip_index % crate::app::TIPS.len()];
-    let tip_full = format!("{tip_text}");
+    let tip_full = tip_text.to_string();
     let tip_prefix = "● ";
     let prefix_w = tip_prefix.width();
     let tip_w = tip_full.width();
@@ -2117,7 +2114,7 @@ fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
         0
     } else {
         let ideal = target_list_idx.saturating_sub(list_height / 3);
-        let lo = target_list_idx.saturating_sub(list_height - 1).max(0);
+        let lo = target_list_idx.saturating_sub(list_height - 1);
         let hi = target_list_idx.min(total_lines - list_height);
         ideal.clamp(lo, hi)
     } as u16;
@@ -2314,7 +2311,7 @@ fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
         0
     } else {
         let ideal = selected_idx.saturating_sub(list_height / 3);
-        let lo = selected_idx.saturating_sub(list_height - 1).max(0);
+        let lo = selected_idx.saturating_sub(list_height - 1);
         let hi = selected_idx.min(total_lines - list_height);
         ideal.clamp(lo, hi)
     } as u16;
@@ -2799,7 +2796,7 @@ fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
         0
     } else {
         let ideal = target_list_idx.saturating_sub(list_height / 3);
-        let lo = target_list_idx.saturating_sub(list_height - 1).max(0);
+        let lo = target_list_idx.saturating_sub(list_height - 1);
         let hi = target_list_idx.min(total_lines - list_height);
         ideal.clamp(lo, hi)
     } as u16;

@@ -95,7 +95,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         };
 
         let path = entry.path();
-        if path.is_file() && path.extension().map_or(false, |ext| ext == "rs") {
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
             let relative_path = path
                 .strip_prefix(root_dir)
                 .unwrap_or(path)
@@ -282,10 +282,8 @@ pub fn find_symbol(root_dir: &Path, query: &str) -> Result<Vec<SymbolInfo>, Stri
         .map_err(|e| e.to_string())?;
 
     let mut out = Vec::new();
-    for row in rows {
-        if let Ok(sym) = row {
-            out.push(sym);
-        }
+    for sym in rows.flatten() {
+        out.push(sym);
     }
 
     Ok(out)
@@ -316,13 +314,11 @@ pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
 
     let mut map_by_file = std::collections::BTreeMap::new();
-    for row in rows {
-        if let Ok((path, name, kind, signature)) = row {
-            map_by_file
-                .entry(path)
-                .or_insert_with(Vec::new)
-                .push((name, kind, signature));
-        }
+    for (path, name, kind, signature) in rows.flatten() {
+        map_by_file
+            .entry(path)
+            .or_insert_with(Vec::new)
+            .push((name, kind, signature));
     }
 
     let mut out = String::new();

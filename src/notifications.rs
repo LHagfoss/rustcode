@@ -6,8 +6,8 @@ use std::io::{self, IsTerminal, Write};
 /// which support the OSC 777 notification sequence.
 pub fn notify(title: &str, body: &str) -> std::io::Result<()> {
     if io::stdout().is_terminal() {
-        let clean_title = title.replace(|c| c == ';' || c == '\n' || c == '\r', " ");
-        let clean_body = body.replace(|c| c == ';' || c == '\n' || c == '\r', " ");
+        let clean_title = title.replace([';', '\n', '\r'], " ");
+        let clean_body = body.replace([';', '\n', '\r'], " ");
         let mut stdout = io::stdout();
         write!(
             stdout,

@@ -28,7 +28,7 @@ pub fn discover_skills() -> Vec<SkillInfo> {
         home.join(".agents/skills"),
     ];
 
-    for dir in local_dirs.iter().map(PathBuf::from).chain(global_dirs.into_iter()) {
+    for dir in local_dirs.iter().map(PathBuf::from).chain(global_dirs) {
         scan_skill_dir(&dir, &mut skills);
     }
 
@@ -50,8 +50,8 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillInfo>) {
         let path = entry.path();
         if path.is_dir() {
             let skill_md = path.join("SKILL.md");
-            if skill_md.exists() {
-                if let Ok(content) = fs::read_to_string(&skill_md) {
+            if skill_md.exists()
+                && let Ok(content) = fs::read_to_string(&skill_md) {
                     let (name, description) = parse_frontmatter(&content);
                     skills.push(SkillInfo {
                         name,
@@ -60,7 +60,6 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillInfo>) {
                         content,
                     });
                 }
-            }
         }
     }
 }
@@ -81,10 +80,10 @@ fn parse_frontmatter(content: &str) -> (String, String) {
 
         for line in frontmatter.lines() {
             let line = line.trim();
-            if line.starts_with("name:") {
-                name = line[5..].trim().to_string();
-            } else if line.starts_with("description:") {
-                description = line[12..].trim().to_string();
+            if let Some(rest) = line.strip_prefix("name:") {
+                name = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("description:") {
+                description = rest.trim().to_string();
             }
         }
 
@@ -113,11 +112,10 @@ pub fn list_skill_files(skill_dir: &Path) -> Vec<String> {
     if let Ok(entries) = fs::read_dir(skill_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+            if path.is_file()
+                && let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
                     files.push(fname.to_string());
                 }
-            }
         }
     }
     files.sort();

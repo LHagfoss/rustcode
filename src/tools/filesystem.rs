@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // Re-exports needed by filesystem tools
 pub(crate) use super::parse_json_number;
@@ -377,18 +377,11 @@ fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
 }
 
 fn get_byte_offset_of_line(lines: &[&str], line_idx: usize) -> usize {
-    let mut offset = 0;
-    for i in 0..line_idx {
-        offset += lines[i].len() + 1;
-    }
-    offset
+    lines[..line_idx].iter().map(|l| l.len() + 1).sum()
 }
 
 fn get_byte_offset_of_line_end(lines: &[&str], line_idx: usize, total_len: usize) -> usize {
-    let mut offset = 0;
-    for i in 0..=line_idx {
-        offset += lines[i].len() + 1;
-    }
+    let offset: usize = lines[..=line_idx].iter().map(|l| l.len() + 1).sum();
     offset.min(total_len)
 }
 
@@ -441,7 +434,7 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
         });
     }
 
-    chunks.sort_by(|a, b| b.start_line.cmp(&a.start_line));
+    chunks.sort_by_key(|c| std::cmp::Reverse(c.start_line));
 
     // Verify all ranges are disjoint
     for idx in 0..chunks.len().saturating_sub(1) {

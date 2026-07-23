@@ -32,11 +32,10 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smo
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let mut model_override = None;
-    if let Some(pos) = args.iter().position(|arg| arg == "--model" || arg == "-m") {
-        if pos + 1 < args.len() {
+    if let Some(pos) = args.iter().position(|arg| arg == "--model" || arg == "-m")
+        && pos + 1 < args.len() {
             model_override = Some(args[pos + 1].clone());
         }
-    }
 
     if args.iter().any(|arg| arg == "--raw" || arg == "-r") {
         let prompt_idx = args
@@ -82,8 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::config::archive_live_history();
 
     let mut app_state_struct = AppState::new();
-    if let Some(ref m_name) = model_override {
-        if let Some(profile) = app_state_struct
+    if let Some(ref m_name) = model_override
+        && let Some(profile) = app_state_struct
             .config
             .models
             .iter()
@@ -92,7 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app_state_struct.api_base_url = profile.url.clone();
             app_state_struct.model_name = profile.model.clone();
         }
-    }
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
     let client = reqwest::Client::builder()
@@ -460,8 +458,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                         if edit_state.is_add {
                                             s.config.mcp_servers.push(new_srv);
-                                        } else if let Some(idx) = edit_state.edit_index {
-                                            if idx < s.config.mcp_servers.len() {
+                                        } else if let Some(idx) = edit_state.edit_index
+                                            && idx < s.config.mcp_servers.len() {
                                                 let old_name =
                                                     s.config.mcp_servers[idx].name.clone();
                                                 s.config.mcp_servers[idx] = new_srv;
@@ -469,7 +467,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     crate::mcp::shutdown_server(&old_name).await;
                                                 }
                                             }
-                                        }
 
                                         crate::config::save_entire_config(&s.config);
 

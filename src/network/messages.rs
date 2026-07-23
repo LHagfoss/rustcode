@@ -1,5 +1,3 @@
-use super::*;
-
 pub(crate) const RESPONSE_RESERVE_TOKENS: u32 = 1024;
 
 fn estimate_msg_chars(msg: &serde_json::Value) -> usize {
@@ -36,8 +34,8 @@ pub(crate) fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
              - To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\
              - Available tools: view_file, replace_file_content, multi_replace_file_content, write_to_file, delete_file, move_file, copy_file, list_directory, grep, glob, run_command, search_web, find_symbol, get_project_map.";
         
-        if let Some(last_msg) = msgs.last_mut() {
-            if let Some(content) = last_msg.get_mut("content") {
+        if let Some(last_msg) = msgs.last_mut()
+            && let Some(content) = last_msg.get_mut("content") {
                 match content {
                     serde_json::Value::String(s) => {
                         *s = format!("{}\n\n{}", s, reminder_text);
@@ -51,6 +49,5 @@ pub(crate) fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
                     _ => {}
                 }
             }
-        }
     }
 }
