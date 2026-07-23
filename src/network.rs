@@ -1903,6 +1903,83 @@ pub async fn generate_title(
 }
 
 
+/// First-prompt only: run the small-model prompt optimizer / goal detector.
+/// Pops the placeholder status message and, on success, replaces `next_prompt`
+/// with the expanded prompt (and may flip continuous mode on).
+async fn optimize_first_prompt(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    next_prompt: &mut String,
+) {
+    let config = {
+        let s = state.lock().await;
+        s.config.clone()
+    };
+    {
+        let mut s = state.lock().await;
+        push_status_line(&mut s, "Optimizing prompt and detecting goal status...".to_string());
+    }
+    if let Some((is_goal, expanded_prompt)) =
+        evaluate_and_expand_prompt(client, &config, next_prompt).await
+    {
+        let mut s = state.lock().await;
+        s.history.pop();
+        *next_prompt = expanded_prompt;
+        if is_goal {
+            s.continuous_mode = true;
+            push_status_line(&mut s, "Continuous mode (/goal) activated automatically by prompt optimizer.".to_string());
+        } else {
+            push_status_line(&mut s, "Prompt optimized by small model.".to_string());
+        }
+    } else {
+        let mut s = state.lock().await;
+        s.history.pop();
+    }
+}
+
+/// Push the incoming prompt (user message, or a background-task wakeup system
+/// note) onto history, persist it, and reset the per-response scratch fields.
+async fn record_prompt_to_history(
+    state: &Arc<Mutex<AppState>>,
+    is_wakeup: bool,
+    next_prompt: &str,
+) {
+    let mut s = state.lock().await;
+    if is_wakeup {
+        let task_id = next_prompt.strip_prefix("__task_wakeup__:").unwrap_or("");
+        s.history.push(ChatMessage::new(
+            "system",
+            format!("Task {task_id} has finished running in the background."),
+        ));
+    } else {
+        s.history.push(ChatMessage::new("user", next_prompt.to_string()));
+    }
+    let active_id = s.active_session_id.clone();
+    crate::config::save_session_history(&active_id, &s.history);
+    s.current_response.clear();
+    s.current_token_usage = None;
+    s.response_time = None;
+}
+
+/// Fire-and-forget: generate a session title from the first user message.
+async fn spawn_title_generation(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    first_msg: String,
+) {
+    let client_clone = client.clone();
+    // Captured before spawn so title reflects the session as of this prompt.
+    let (config_clone, session_id) = {
+        let s = state.lock().await;
+        (s.config.clone(), s.active_session_id.clone())
+    };
+    tokio::spawn(async move {
+        if let Some(title) = generate_title(&client_clone, &config_clone, &first_msg).await {
+            crate::config::save_session_title(&session_id, &title);
+        }
+    });
+}
+
 #[allow(unused_assignments)]
 pub async fn process_queue_orchestrator(
     client: reqwest::Client,
@@ -1939,64 +2016,13 @@ pub async fn process_queue_orchestrator(
         }
 
         if is_first_prompt {
-            let config = {
-                let s = state.lock().await;
-                s.config.clone()
-            };
-            {
-                let mut s = state.lock().await;
-                push_status_line(&mut s, "Optimizing prompt and detecting goal status...".to_string());
-            }
-            if let Some((is_goal, expanded_prompt)) = evaluate_and_expand_prompt(&client, &config, &next_prompt).await {
-                let mut s = state.lock().await;
-                s.history.pop();
-                next_prompt = expanded_prompt;
-                if is_goal {
-                    s.continuous_mode = true;
-                    push_status_line(&mut s, "Continuous mode (/goal) activated automatically by prompt optimizer.".to_string());
-                } else {
-                    push_status_line(&mut s, "Prompt optimized by small model.".to_string());
-                }
-            } else {
-                let mut s = state.lock().await;
-                s.history.pop();
-            }
+            optimize_first_prompt(&client, &state, &mut next_prompt).await;
         }
 
-        {
-            let mut s = state.lock().await;
-            if is_wakeup {
-                let task_id = next_prompt.strip_prefix("__task_wakeup__:").unwrap_or("");
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!("Task {task_id} has finished running in the background."),
-                ));
-            } else {
-                s.history.push(ChatMessage::new("user", next_prompt.clone()));
-            }
-            let active_id = s.active_session_id.clone();
-            crate::config::save_session_history(&active_id, &s.history);
-            s.current_response.clear();
-            s.current_token_usage = None;
-            s.response_time = None;
-        }
+        record_prompt_to_history(&state, is_wakeup, &next_prompt).await;
 
         if is_first_prompt {
-            let client_clone = client.clone();
-            let config_clone = {
-                let s = state.lock().await;
-                s.config.clone()
-            };
-            let session_id = {
-                let s = state.lock().await;
-                s.active_session_id.clone()
-            };
-            let first_msg = next_prompt.clone();
-            tokio::spawn(async move {
-                if let Some(title) = generate_title(&client_clone, &config_clone, &first_msg).await {
-                    crate::config::save_session_title(&session_id, &title);
-                }
-            });
+            spawn_title_generation(&client, &state, next_prompt.clone()).await;
         }
 
         let prompt_start_time = std::time::Instant::now();
