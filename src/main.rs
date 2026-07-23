@@ -1140,9 +1140,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             needs_redraw = true;
                         }
                         MouseEventKind::Down(MouseButton::Left) if !modal => {
-                            s.sel_start = Some((mouse.column, mouse.row + s.scroll_row));
-                            s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
-                            s.selecting = true;
+                            let inside_chat = if let Some(ca) = s.chat_area {
+                                mouse.row >= ca.y && mouse.row < ca.y + ca.height &&
+                                mouse.column >= ca.x && mouse.column < ca.x + ca.width
+                            } else {
+                                true
+                            };
+                            if inside_chat {
+                                s.sel_start = Some((mouse.column, mouse.row + s.scroll_row));
+                                s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
+                                s.selecting = true;
+                            } else {
+                                s.clear_selection();
+                            }
                             needs_redraw = true;
                         }
                         MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
