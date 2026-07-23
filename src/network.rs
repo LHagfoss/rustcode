@@ -2756,20 +2756,9 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
 
             let is_continuous = { state.lock().await.continuous_mode };
             if is_continuous && !cancel_token.is_cancelled() && tool_rounds > 0 && tool_rounds < max_tool_rounds {
-                dbg_log!("Continuous mode active, assistant didn't call complete_task. Injecting prompt to continue.");
-                tool_rounds += 1;
+                dbg_log!("Continuous mode active, assistant responded with text prose. Ending continuous mode turn.");
                 let mut s = state.lock().await;
-                s.history.push(ChatMessage::new("assistant", final_content.clone()));
-                s.history.push(ChatMessage::new(
-                    "system",
-                    "[System Reminder: Continuous mode is active. You have not called the 'complete_task' tool yet. If you are finished, you must call the 'complete_task' tool to end. If you are still working, continue executing the necessary tools to achieve the goal.]".to_string()
-                ));
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
-                s.status = AppStatus::Streaming;
-                s.stream_tracker = Some(StreamTracker::new());
-                drop(s);
-                continue;
+                s.continuous_mode = false;
             } else if is_continuous && tool_rounds == 0 {
                 dbg_log!("Continuous mode active, but assistant gave a plain conversational reply (no tools used). Ending turn.");
                 let mut s = state.lock().await;
