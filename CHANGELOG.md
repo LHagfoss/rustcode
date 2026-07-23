@@ -1,5 +1,36 @@
 # Changelog
 
+## [v0.1.16] - 2026-07-24
+
+### Features
+- Add manage_task tool for background task management
+- Add /skills slash command and Exa AI integration
+- Complete Skills feature with discovery scanner and prompt catalog injection
+- Render syntax-highlighted code diffs in chat history
+- Show original vs optimized prompt diff in status banner
+- Bring rich keyboard navigation to MCP edit modal
+
+### Fixes
+- Enforce finish gate compile check on complete_task
+- Support both buckets and quotaBuckets JSON keys
+- Fix system message notice banner classification
+- Fix proxy URL resolution and API key lookup
+- Fallback model matching in fetch_model_quota
+- Send Authorization Bearer header in /quota command
+- Break orchestrator loop immediately on complete_task
+- Terminate continuous mode on plain text response
+- Fail fast on interactive sudo commands
+- Display complete_task result string as assistant reply
+- Preserve 100% exact user prompt
+- Distinguish prompt optimizer status from warning banners
+- Auto-repair loose tool JSON args and dedupe file reads
+- Restrict text selection to chat viewport
+- Route bracketed paste events to active modal
+
+### Chores
+- Fix clippy warnings and hoist regexes
+- Cleanup and refactor orchestrator prologue
+
 ## [v0.1.15] - 2025-07-11
 
 ### Features
