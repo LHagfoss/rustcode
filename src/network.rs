@@ -2692,6 +2692,28 @@ pub async fn process_queue_orchestrator(
                         );
                     }
                     if completed {
+                        // Finish gate check: verify the project builds cleanly before accepting completion
+                        if made_edits {
+                            let root = edit_root
+                                .clone()
+                                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                            if let Some(errors) = run_compiler_check(&root).await {
+                                dbg_log!("complete_task finish gate failed with compiler errors");
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!(
+                                        "[Finish blocked — the build does not compile. You cannot report this \
+                                         task as done while there are compiler errors. Fix them, then finish. \
+                                         Compiler errors:\n{errors}]"
+                                    ),
+                                ));
+                                crate::config::save_history(&s.history);
+                                s.current_response.clear();
+                                drop(s);
+                                continue;
+                            }
+                        }
+
                         dbg_log!("complete_task called, turning off continuous mode and breaking loop immediately");
                         s.continuous_mode = false;
                         s.status = AppStatus::Idle;
