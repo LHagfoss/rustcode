@@ -197,10 +197,17 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "run_command",
-        description: "Run a shell command and return its stdout/stderr and exit code.                       Supports an optional working directory, environment overrides, and                       a timeout (default 120s, killed on expiry). Output is capped. Use                       for builds, tests, git, etc.",
-        arguments: r#"{"command": "full shell command string", "cwd": "optional working directory (default current dir)", "timeout_ms": "optional timeout in ms (default 120000)", "env": "optional object of extra env vars"}"#,
+        description: "Run a shell command and return its stdout/stderr and exit code.                       Supports an optional working directory, environment overrides, timeout (default 120s),                       and background execution ('background': true to run asynchronously in background). Use for builds, tests, dev servers, etc.",
+        arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
         handler: exec::run_command,
         requires_confirmation: true,
+    },
+    Tool {
+        name: "manage_task",
+        description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill').",
+        arguments: r#"{"action": "list, status, or kill", "task_id": "required for status/kill"}"#,
+        handler: exec::manage_task_tool,
+        requires_confirmation: false,
     },
     Tool {
         name: "search_web",

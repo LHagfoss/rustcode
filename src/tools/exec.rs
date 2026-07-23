@@ -229,6 +229,74 @@ pub fn run_command(args: &Value) -> Result<String, String> {
     Ok(result.trim_end().to_string())
 }
 
+pub fn manage_task_tool(args: &Value) -> Result<String, String> {
+    let action = args
+        .get("action")
+        .and_then(|a| a.as_str())
+        .ok_or("missing 'action' argument (must be 'list', 'status', or 'kill')")?;
+
+    let tasks_lock = get_background_tasks();
+    let mut tasks = tasks_lock.lock().map_err(|e| format!("failed to lock background tasks: {e}"))?;
+
+    match action {
+        "list" => {
+            if tasks.is_empty() {
+                return Ok("No running background tasks.".to_string());
+            }
+            let mut out = String::from("Running background tasks:\n");
+            for (id, info) in tasks.iter() {
+                let elapsed = info.start_time.elapsed().as_secs();
+                let pid_str = info.child_pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string());
+                out.push_str(&format!(
+                    "- TaskId: {}, PID: {}, Runtime: {}s, Command: {}\n",
+                    id, pid_str, elapsed, info.command
+                ));
+            }
+            Ok(out.trim_end().to_string())
+        }
+        "status" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(|t| t.as_str())
+                .ok_or("missing 'task_id' argument for status action")?;
+
+            if let Some(info) = tasks.get(task_id) {
+                let elapsed = info.start_time.elapsed().as_secs();
+                let pid_str = info.child_pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string());
+                Ok(format!(
+                    "TaskId: {}, Status: RUNNING, PID: {}, Runtime: {}s, Command: {}",
+                    task_id, pid_str, elapsed, info.command
+                ))
+            } else {
+                Ok(format!("TaskId '{task_id}' is not running (finished or cancelled)."))
+            }
+        }
+        "kill" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(|t| t.as_str())
+                .ok_or("missing 'task_id' argument for kill action")?;
+
+            if let Some(info) = tasks.remove(task_id) {
+                if let Some(pid) = info.child_pid {
+                    #[cfg(target_os = "windows")]
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                    #[cfg(not(target_os = "windows"))]
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .output();
+                }
+                Ok(format!("Task '{task_id}' terminated successfully."))
+            } else {
+                Err(format!("Task '{task_id}' not found."))
+            }
+        }
+        _ => Err(format!("Unknown action '{action}'. Supported actions: list, status, kill.")),
+    }
+}
+
 fn run_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> Result<Output, String> {
     let mut child = cmd
         .spawn()
