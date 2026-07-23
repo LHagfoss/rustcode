@@ -1298,7 +1298,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
             ]));
 
-            // Command output and diff previews are not displayed inline in the TUI chat history to keep it clean.
+            if let Some(ref diff) = msg.diff {
+                let code_content_width = (inner_area.width as usize).saturating_sub(6);
+                for diff_line in diff.lines() {
+                    lines.push(highlight_diff_line(diff_line, code_content_width, show_picker));
+                }
+            }
             lines.push(Line::from(""));
         } else if msg.role == "user" {
             lines.push(Line::from(""));
