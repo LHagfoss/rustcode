@@ -153,6 +153,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
 
+    {
+        let state_quota = Arc::clone(&app_state);
+        let client_quota = client.clone();
+        tokio::spawn(async move {
+            crate::network::fetch_model_quota(&client_quota, &state_quota).await;
+        });
+    }
+
     let mut needs_redraw = true;
     let mut last_draw = std::time::Instant::now();
     let mut was_responding = false;
