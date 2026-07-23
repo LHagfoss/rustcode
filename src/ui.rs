@@ -851,7 +851,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 
         if let Some(quota) = state.model_quota_remaining {
             let color = if quota > 50.0 {
-                Color::Rgb(100, 220, 120)
+                COLOR_PRIMARY
             } else if quota > 20.0 {
                 Color::Yellow
             } else {
