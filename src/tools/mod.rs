@@ -197,7 +197,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "run_command",
-        description: "Run a shell command and return its stdout/stderr and exit code.                       Supports an optional working directory, environment overrides, timeout (default 120s),                       and background execution ('background': true to run asynchronously in background). Use for builds, tests, dev servers, etc.",
+        description: "Run a shell command and return its stdout/stderr and exit code.                       Supports an optional working directory, environment overrides, timeout (default 120s),                       and background execution ('background': true). Note: Interactive 'sudo' requiring passwords is disabled; use non-privileged commands or 'sudo -n'.",
         arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
         handler: exec::run_command,
         requires_confirmation: true,
