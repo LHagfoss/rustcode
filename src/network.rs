@@ -2698,6 +2698,19 @@ pub async fn process_queue_orchestrator(
                             "system",
                             "🏁 Goal Accomplished! Continuous mode completed successfully. ✅".to_string(),
                         ));
+
+                        // Extract task result text from the complete_task call
+                        let task_result_summary = tool_calls
+                            .iter()
+                            .find(|(n, _)| n == "complete_task")
+                            .and_then(|(_, args)| args.get("result").and_then(|r| r.as_str()))
+                            .map(|s| s.to_string());
+
+                        if let Some(summary_text) = task_result_summary {
+                            if !summary_text.is_empty() {
+                                s.history.push(ChatMessage::new("assistant", summary_text));
+                            }
+                        }
                     }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();

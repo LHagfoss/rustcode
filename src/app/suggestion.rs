@@ -81,6 +81,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Exit the app",
     },
     CommandInfo {
+        name: "/quota",
+        desc: "Show model quota percentages",
+    },
+    CommandInfo {
         name: "/resume",
         desc: "Resume most recent session",
     },

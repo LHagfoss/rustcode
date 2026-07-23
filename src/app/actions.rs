@@ -57,6 +57,24 @@ pub async fn handle_enter(
         let mut should_exit = false;
 
         match cmd {
+            "/quota" => {
+                let client_clone = client.clone();
+                let state_clone = Arc::clone(state);
+                tokio::spawn(async move {
+                    match client_clone.get("http://localhost:3000/auth/status").send().await {
+                        Ok(res) => {
+                            if let Ok(text) = res.text().await {
+                                let mut s = state_clone.lock().await;
+                                s.history.push(ChatMessage::new("system", format!("Model Quota Status:\n{}", text)));
+                            }
+                        }
+                        Err(e) => {
+                            let mut s = state_clone.lock().await;
+                            s.history.push(ChatMessage::new("system", format!("Failed to fetch quota: {}", e)));
+                        }
+                    }
+                });
+            }
             "/memory" => {
                 check_memory_usage(&mut s);
             }
