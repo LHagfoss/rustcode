@@ -2928,7 +2928,12 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         return;
     };
 
-    if let Some(quota_buckets) = json.get("quota").and_then(|q| q.get("quotaBuckets")).and_then(|b| b.as_array()) {
+    let quota_obj = json.get("quota");
+    let buckets_arr = quota_obj
+        .and_then(|q| q.get("buckets").or_else(|| q.get("quotaBuckets")))
+        .and_then(|b| b.as_array());
+
+    if let Some(quota_buckets) = buckets_arr {
         let mut matched_pct = None;
         for bucket in quota_buckets {
             if let Some(model_id) = bucket.get("modelId").and_then(|m| m.as_str()) {

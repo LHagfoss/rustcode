@@ -294,7 +294,12 @@ pub async fn handle_enter(
                         Ok(res) => {
                             if let Ok(json) = res.json::<serde_json::Value>().await {
                                 let mut text = String::from("📊 Model Quota Status:\n");
-                                if let Some(buckets) = json.get("quota").and_then(|q| q.get("quotaBuckets")).and_then(|b| b.as_array()) {
+                                let quota_obj = json.get("quota");
+                                let buckets_arr = quota_obj
+                                    .and_then(|q| q.get("buckets").or_else(|| q.get("quotaBuckets")))
+                                    .and_then(|b| b.as_array());
+
+                                if let Some(buckets) = buckets_arr {
                                     for b in buckets {
                                         if let (Some(m), Some(f)) = (b.get("modelId").and_then(|x| x.as_str()), b.get("remainingFraction").and_then(|x| x.as_f64())) {
                                             text.push_str(&format!("\n  • {}: {:.1}% remaining", m, f * 100.0));
