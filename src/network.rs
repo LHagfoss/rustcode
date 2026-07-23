@@ -2866,6 +2866,13 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             s.current_token_usage = usage;
             drop(s);
 
+            // Fetch live Gemini model quota from proxy endpoint
+            let state_quota = Arc::clone(&state);
+            let client_quota = client.clone();
+            tokio::spawn(async move {
+                fetch_model_quota(&client_quota, &state_quota).await;
+            });
+
             // Notify the user that the agent loop completed successfully.
             let _ = crate::notifications::notify_finished(
                 crate::notifications::FinishedStatus::Success,
@@ -2882,6 +2889,41 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
         }
     }
     dbg_log!("Orchestrator finished");
+}
+
+pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppState>>) {
+    let (url, model_name) = {
+        let s = state.lock().await;
+        (s.api_base_url.clone(), s.model_name.clone())
+    };
+
+    // Only query quota if using local gemini-proxy
+    if !url.contains("localhost:3000") && !url.contains("127.0.0.1:3000") {
+        return;
+    }
+
+    let status_url = format!("{}/auth/status", url.trim_end_matches('/'));
+    let Ok(res) = client.get(&status_url).send().await else {
+        return;
+    };
+    let Ok(json) = res.json::<serde_json::Value>().await else {
+        return;
+    };
+
+    if let Some(quota_buckets) = json.get("quota").and_then(|q| q.get("quotaBuckets")).and_then(|b| b.as_array()) {
+        for bucket in quota_buckets {
+            if let Some(model_id) = bucket.get("modelId").and_then(|m| m.as_str()) {
+                if model_id == model_name || model_name.contains(model_id) {
+                    if let Some(fraction) = bucket.get("remainingFraction").and_then(|f| f.as_f64()) {
+                        let pct = (fraction * 100.0) as f32;
+                        let mut s = state.lock().await;
+                        s.model_quota_remaining = Some(pct);
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
