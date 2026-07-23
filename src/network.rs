@@ -2894,21 +2894,33 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
 pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppState>>) {
     let (url, model_name, api_key_opt) = {
         let s = state.lock().await;
-        let big = s.config.default.big().to_string();
-        let key = s.config.models.iter().find(|m| m.name == big).and_then(|m| m.api_key.clone());
-        (s.api_base_url.clone(), s.model_name.clone(), key)
+        let active_url = s.api_base_url.clone();
+        let key = s
+            .config
+            .models
+            .iter()
+            .find(|m| m.url == active_url || m.model == s.model_name)
+            .and_then(|m| m.api_key.clone());
+        (active_url, s.model_name.clone(), key)
     };
 
-    // Only query quota if using local gemini-proxy
     if !url.contains("localhost:3000") && !url.contains("127.0.0.1:3000") {
         return;
     }
 
-    let status_url = format!("{}/auth/status", url.trim_end_matches('/'));
+    // Construct proxy base URL (remove /v1/chat/completions or trailing slashes)
+    let base_url = if let Some(idx) = url.find("/v1") {
+        &url[..idx]
+    } else {
+        url.trim_end_matches('/')
+    };
+    let status_url = format!("{}/auth/status", base_url);
+
     let mut req = client.get(&status_url);
     if let Some(key) = api_key_opt {
         req = req.header("Authorization", format!("Bearer {key}"));
     }
+
     let Ok(res) = req.send().await else {
         return;
     };
