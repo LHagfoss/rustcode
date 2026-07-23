@@ -2971,7 +2971,9 @@ fn highlight_selection(
         };
 
         let col_from = if row == start_row { screen_start.0.max(min_col).min(max_col) } else { min_col };
-        let col_to = if row == end_row {
+        let is_last_row = row == end_row;
+        let is_single_line = start_row == end_row;
+        let col_to = if is_last_row && is_single_line {
             screen_end.0.max(min_col).min(max_col).min(last_col)
         } else {
             last_col
