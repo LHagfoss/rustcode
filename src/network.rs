@@ -85,9 +85,7 @@ fn truncate_tool_output(name: &str, result: String) -> String {
     };
 
     format!(
-        "{}\n\n... [{} lines / {} bytes truncated] ...\n\n{}{}",
-        head, omitted_lines, omitted_bytes, tail, 
-        format!("\n\n[Output truncated: {} bytes total, {} lines.{}]", bytes, line_count, path_note)
+        "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]"
     )
 }
 
@@ -331,9 +329,9 @@ pub async fn fetch_context_window(
 
     // Fallback: try llama.cpp first, then Ollama
     let props_url = format!("{base}/props");
-    if let Ok(resp) = client.get(&props_url).send().await {
-        if resp.status().is_success() {
-            if let Ok(body) = resp.json::<serde_json::Value>().await {
+    if let Ok(resp) = client.get(&props_url).send().await
+        && resp.status().is_success()
+            && let Ok(body) = resp.json::<serde_json::Value>().await {
                 if let Some(n) = body
                     .get("default_generation_settings")
                     .and_then(|v| v.get("n_ctx"))
@@ -345,8 +343,6 @@ pub async fn fetch_context_window(
                     return Some(n as u32);
                 }
             }
-        }
-    }
 
     let show_url = format!("{base}/api/show");
     let resp = client
@@ -655,8 +651,8 @@ pub async fn stream_request(
                         let trimmed = line_buf.trim();
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
-                                    if !choices.is_empty() {
+                                if let Some(choices) = val.get("choices").and_then(|c| c.as_array())
+                                    && !choices.is_empty() {
                                         if let Some(fr) = choices[0].get("finish_reason").and_then(|f| f.as_str()) {
                                             finish_reason = Some(fr.to_string());
                                         }
@@ -720,9 +716,8 @@ pub async fn stream_request(
                                             }
                                         }
                                     }
-                                }
-                                if let Some(usage) = val.get("usage").filter(|_| !quiet) {
-                                    if let (Some(p), Some(c), Some(t)) = (
+                                if let Some(usage) = val.get("usage").filter(|_| !quiet)
+                                    && let (Some(p), Some(c), Some(t)) = (
                                         usage.get("prompt_tokens").and_then(|v| v.as_u64()),
                                         usage.get("completion_tokens").and_then(|v| v.as_u64()),
                                         usage.get("total_tokens").and_then(|v| v.as_u64()),
@@ -740,7 +735,6 @@ pub async fn stream_request(
                                             cached_tokens: cached,
                                         });
                                     }
-                                }
                             } else {
                                 dbg_log!("stream_request: Failed to parse JSON from data payload: '{}'", json_str);
                             }
@@ -846,7 +840,7 @@ fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
 
     // Check for unclosed tool block
     let triple_backticks_count = content.matches("```").count();
-    if triple_backticks_count % 2 != 0 {
+    if !triple_backticks_count.is_multiple_of(2) {
         return true;
     }
 
@@ -1008,7 +1002,7 @@ fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
         Some(prev)
     } else if name == "write_to_file" {
         let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
-        let old_content = std::fs::read_to_string(&path).unwrap_or_default();
+        let old_content = std::fs::read_to_string(path).unwrap_or_default();
         let new_content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
         let diff = similar::TextDiff::from_lines(&old_content, new_content);
@@ -1069,11 +1063,7 @@ fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> std::path::Pa
         Some(p)
     } else if let Some(s) = args.get("src").and_then(|s| s.as_str()) {
         Some(s)
-    } else if let Some(d) = args.get("dest").and_then(|d| d.as_str()) {
-        Some(d)
-    } else {
-        None
-    };
+    } else { args.get("dest").and_then(|d| d.as_str()) };
 
     let resolved = if let Some(rp) = raw_path {
         crate::tools::resolve_tool_path(rp)
@@ -1103,11 +1093,9 @@ fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> std::path::Pa
 }
 
 fn strip_ansi_escapes(s: &str) -> String {
-    if let Ok(re) = regex::Regex::new(r"\x1B\[[0-9;?]*[a-zA-Z]") {
-        re.replace_all(s, "").into_owned()
-    } else {
-        s.to_string()
-    }
+    static ANSI_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\x1B\[[0-9;?]*[a-zA-Z]").unwrap());
+    ANSI_RE.replace_all(s, "").into_owned()
 }
 
 /// Resolve a build tool to an absolute path. GUI-launched apps (and some
@@ -1169,19 +1157,14 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
         let mut errors = Vec::new();
 
         for line in stdout_str.lines() {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                if val.get("reason").and_then(|r| r.as_str()) == Some("compiler-message") {
-                    if let Some(msg) = val.get("message") {
-                        if let Some(level) = msg.get("level").and_then(|l| l.as_str()) {
-                            if level == "error" {
-                                if let Some(rendered) = msg.get("rendered").and_then(|r| r.as_str()) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line)
+                && val.get("reason").and_then(|r| r.as_str()) == Some("compiler-message")
+                    && let Some(msg) = val.get("message")
+                        && let Some(level) = msg.get("level").and_then(|l| l.as_str())
+                            && level == "error"
+                                && let Some(rendered) = msg.get("rendered").and_then(|r| r.as_str()) {
                                     errors.push(strip_ansi_escapes(rendered));
                                 }
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         if !errors.is_empty() {
@@ -2597,8 +2580,8 @@ pub async fn process_queue_orchestrator(
                                 // Record this call so future identical read-only calls are caught.
                                 {
                                     let mut s = state_clone.lock().await;
-                                    if let Some(p) = view_path {
-                                        if !is_repeat {
+                                    if let Some(p) = view_path
+                                        && !is_repeat {
                                             if let Some(mt) = view_mtime {
                                                 s.read_file_mtimes.insert(p, mt);
                                             } else {
@@ -2607,7 +2590,6 @@ pub async fn process_queue_orchestrator(
                                                 s.read_file_mtimes.remove(&p);
                                             }
                                         }
-                                    }
                                     if is_read_only && !is_repeat {
                                         let sig = tool_signature(&name_clone, &args_clone);
                                         if !s.recent_read_calls.contains(&sig) {

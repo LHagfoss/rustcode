@@ -241,7 +241,7 @@ pub async fn handle_enter(
                     let mut result = String::new();
                     let len = s.len();
                     for (i, c) in s.chars().enumerate() {
-                        if i > 0 && (len - i) % 3 == 0 {
+                        if i > 0 && (len - i).is_multiple_of(3) {
                             result.push(',');
                         }
                         result.push(c);
@@ -643,7 +643,7 @@ pub fn check_memory_usage(s: &mut AppState) {
         let mem_mb = process.memory() / 1024 / 1024;
         s.history.push(ChatMessage::new(
             "system",
-            &format!("🦀 Current Rustcode RAM usage: {} MB", mem_mb),
+            format!("🦀 Current Rustcode RAM usage: {} MB", mem_mb),
         ));
     } else {
         s.history.push(ChatMessage::new(
@@ -780,13 +780,12 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     }
 
     // Extract session ID from the loaded path parent
-    if let Some(parent) = meta.path.parent() {
-        if let Some(session_id_str) = parent.file_name().and_then(|n| n.to_str()) {
+    if let Some(parent) = meta.path.parent()
+        && let Some(session_id_str) = parent.file_name().and_then(|n| n.to_str()) {
             s.active_session_id = session_id_str.to_string();
             s.config.last_active_session_id = Some(s.active_session_id.clone());
             crate::config::save_entire_config(&s.config);
         }
-    }
 
     s.history = loaded;
     s.pending_queue.clear();

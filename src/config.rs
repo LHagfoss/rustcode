@@ -38,20 +38,17 @@ impl ModelProfile {
     }
 
     pub fn resolved_api_key(&self) -> Option<String> {
-        if let Some(ref env_name) = self.env_key {
-            if let Ok(val) = std::env::var(env_name) {
-                if !val.trim().is_empty() {
+        if let Some(ref env_name) = self.env_key
+            && let Ok(val) = std::env::var(env_name)
+                && !val.trim().is_empty() {
                     return Some(val);
                 }
-            }
-        }
         if let Some(ref k) = self.api_key {
             if let Some(var_name) = k.strip_prefix("env:") {
-                if let Ok(val) = std::env::var(var_name) {
-                    if !val.trim().is_empty() {
+                if let Ok(val) = std::env::var(var_name)
+                    && !val.trim().is_empty() {
                         return Some(val);
                     }
-                }
             } else if let Ok(val) = std::env::var(k) {
                 if !val.trim().is_empty() {
                     return Some(val);
@@ -66,16 +63,13 @@ impl ModelProfile {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ToolProtocol {
+    #[default]
     Json,
     Native,
 }
 
-impl Default for ToolProtocol {
-    fn default() -> Self {
-        ToolProtocol::Json
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -175,16 +169,13 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AgentMode {
+    #[default]
     Build,
     Plan,
 }
 
-impl Default for AgentMode {
-    fn default() -> Self {
-        AgentMode::Build
-    }
-}
 
 fn default_history_token_budget() -> u32 {
     128000
@@ -196,18 +187,12 @@ fn default_max_tool_rounds() -> usize {
 
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Default)]
 pub struct UserSettings {
     #[serde(default)]
     pub auto_confirm: bool,
 }
 
-impl Default for UserSettings {
-    fn default() -> Self {
-        Self {
-            auto_confirm: false,
-        }
-    }
-}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -389,16 +374,12 @@ fn session_meta_from(path: PathBuf, history: &[ChatMessage]) -> SessionMeta {
     let title = if let Some(session_dir) = path.parent().and_then(|p| p.parent()) {
         if session_dir
             .components()
-            .last()
+            .next_back()
             .map(|c| c.as_os_str() == SESSIONS_DIR)
             .unwrap_or(false)
         {
             if let Some(session_id) = session_dir.file_name() {
-                if let Some(custom) = load_session_title(session_id.to_str().unwrap_or("")) {
-                    Some(custom)
-                } else {
-                    None
-                }
+                load_session_title(session_id.to_str().unwrap_or(""))
             } else {
                 None
             }
@@ -675,15 +656,14 @@ pub fn delete_session_file(path: &Path) {
         .map(|n| n == "history.json")
         .unwrap_or(false)
     {
-        if let Some(parent) = path.parent() {
-            if parent
+        if let Some(parent) = path.parent()
+            && parent
                 .parent()
                 .map(|p| p.ends_with(SESSIONS_DIR))
                 .unwrap_or(false)
             {
                 let _ = fs::remove_dir_all(parent);
             }
-        }
     } else if path
         .parent()
         .map(|p| p.ends_with(SESSIONS_DIR))
@@ -735,11 +715,10 @@ pub fn get_usage_history() -> std::collections::BTreeMap<String, MonthlyUsage> {
         None => return std::collections::BTreeMap::new(),
     };
     let path = dir.join("usage_stats.json");
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
+    if path.exists()
+        && let Ok(content) = fs::read_to_string(&path) {
             return serde_json::from_str(&content).unwrap_or_default();
         }
-    }
     std::collections::BTreeMap::new()
 }
 

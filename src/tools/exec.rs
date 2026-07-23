@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 pub(crate) use super::get_active_session_id;
 pub(crate) use super::parse_json_bool;
 pub(crate) use super::parse_json_number;
-pub(crate) use super::register_wakeup_callback;
 pub(crate) use super::get_background_tasks;
 pub(crate) use super::{BackgroundTaskInfo, WAKEUP_CALLBACK};
 
@@ -61,11 +60,10 @@ pub fn run_command(args: &Value) -> Result<String, String> {
         None => None,
     };
 
-    if let Some(ref cwd_path) = resolved_cwd {
-        if !cwd_path.is_dir() {
+    if let Some(ref cwd_path) = resolved_cwd
+        && !cwd_path.is_dir() {
             return Err(format!("cwd '{}' is not a directory", cwd_path.display()));
         }
-    }
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = std::process::Command::new("cmd");
@@ -110,7 +108,7 @@ pub fn run_command(args: &Value) -> Result<String, String> {
         let env_clone = env.cloned();
         let task_id_clone = task_id.clone();
 
-        if let Some(mut tasks) = get_background_tasks().lock().ok() {
+        if let Ok(mut tasks) = get_background_tasks().lock() {
             tasks.insert(
                 task_id.clone(),
                 BackgroundTaskInfo {
@@ -151,13 +149,11 @@ pub fn run_command(args: &Value) -> Result<String, String> {
 
             let result = match cmd.spawn() {
                 Ok(child) => {
-                    if let Some(pid) = Some(child.id()) {
-                        if let Some(mut tasks) = get_background_tasks().lock().ok() {
-                            if let Some(info) = tasks.get_mut(&task_id_clone) {
+                    if let Some(pid) = Some(child.id())
+                        && let Ok(mut tasks) = get_background_tasks().lock()
+                            && let Some(info) = tasks.get_mut(&task_id_clone) {
                                 info.child_pid = Some(pid);
                             }
-                        }
-                    }
 
                     match child.wait_with_output() {
                         Ok(output) => {
@@ -183,7 +179,7 @@ pub fn run_command(args: &Value) -> Result<String, String> {
                 Err(e) => Err(format!("failed to spawn: {e}")),
             };
 
-            if let Some(mut tasks) = get_background_tasks().lock().ok() {
+            if let Ok(mut tasks) = get_background_tasks().lock() {
                 tasks.remove(&task_id_clone);
             }
 

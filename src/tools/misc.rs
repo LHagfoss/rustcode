@@ -1,8 +1,4 @@
 use serde_json::Value;
-use chrono;
-use reqwest;
-use scraper;
-use urlencoding;
 pub fn get_time(_args: &Value) -> Result<String, String> {
     Ok(chrono::Local::now()
         .format("%A %Y-%m-%d %H:%M:%S")
@@ -49,7 +45,7 @@ pub fn check_match(args: &Value) -> Result<String, String> {
     }
 
     let mut output = String::new();
-    write!(output, "Found {} match(es),\n", matches.len()).unwrap();
+    writeln!(output, "Found {} match(es),", matches.len()).unwrap();
     writeln!(
         output,
         "══════════════════════════════════════════════════════"
@@ -96,10 +92,10 @@ pub fn check_match(args: &Value) -> Result<String, String> {
             .unwrap();
         }
 
-        write!(output, "Match {}:\n", i + 1).unwrap();
-        write!(output, "League: {}\n", league_name).unwrap();
-        write!(output, "Country: {}\n", country).unwrap();
-        write!(output, "Time: {}\n", dt).unwrap();
+        writeln!(output, "Match {}:", i + 1).unwrap();
+        writeln!(output, "League: {}", league_name).unwrap();
+        writeln!(output, "Country: {}", country).unwrap();
+        writeln!(output, "Time: {}", dt).unwrap();
 
         if let Some(minutes) = elapsed {
             writeln!(output, "Status: LIVE - Minute {}", minutes).unwrap();
@@ -158,10 +154,9 @@ pub fn search_web(args: &Value) -> Result<String, String> {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-        {
-            if response.status().is_success() {
-                if let Ok(res_json) = response.json::<serde_json::Value>() {
-                    if let Some(results) = res_json.get("results").and_then(|r| r.as_array()) {
+            && response.status().is_success()
+                && let Ok(res_json) = response.json::<serde_json::Value>()
+                    && let Some(results) = res_json.get("results").and_then(|r| r.as_array()) {
                         let mut out = String::new();
                         out.push_str(&format!(
                             "Web Search Results for '{}' (via Exa AI):\n\n",
@@ -185,9 +180,6 @@ pub fn search_web(args: &Value) -> Result<String, String> {
                             return Ok(out);
                         }
                     }
-                }
-            }
-        }
     }
 
     if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {

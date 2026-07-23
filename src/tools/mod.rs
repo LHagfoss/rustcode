@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
 mod filesystem;
@@ -11,10 +11,6 @@ mod search;
 mod exec;
 mod misc;
 
-pub use filesystem::*;
-pub use search::*;
-pub use exec::*;
-pub use misc::*;
 
 #[allow(dead_code)]
 pub struct BackgroundTaskInfo {
@@ -41,7 +37,7 @@ where
 }
 
 thread_local! {
-    static ACTIVE_SESSION_ID: RefCell<Option<String>> = RefCell::new(None);
+    static ACTIVE_SESSION_ID: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn set_active_session_id(id: Option<String>) {
@@ -69,17 +65,15 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
         }
     }
 
-    if found_sandbox {
-        if let Some(session_id) = get_active_session_id() {
-            if let Some(sandbox_dir) = crate::config::get_active_session_sandbox_dir(&session_id) {
+    if found_sandbox
+        && let Some(session_id) = get_active_session_id()
+            && let Some(sandbox_dir) = crate::config::get_active_session_sandbox_dir(&session_id) {
                 let mut resolved = sandbox_dir;
                 for part in parts_sandbox {
                     resolved.push(part);
                 }
                 return resolved;
             }
-        }
-    }
 
     // Check if the path contains a component named "artifacts"
     let mut parts_artifacts = Vec::new();
@@ -93,9 +87,9 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
         }
     }
 
-    if found_artifacts {
-        if let Some(session_id) = get_active_session_id() {
-            if let Some(artifacts_dir) =
+    if found_artifacts
+        && let Some(session_id) = get_active_session_id()
+            && let Some(artifacts_dir) =
                 crate::config::get_active_session_artifacts_dir(&session_id)
             {
                 let mut resolved = artifacts_dir;
@@ -104,8 +98,6 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
                 }
                 return resolved;
             }
-        }
-    }
 
     PathBuf::from(raw_path)
 }
@@ -464,13 +456,11 @@ fn repair_json(s: &str) -> String {
                 stack.push('}');
             } else if c == '[' {
                 stack.push(']');
-            } else if c == '}' || c == ']' {
-                if let Some(&last) = stack.last() {
-                    if last == c {
+            } else if (c == '}' || c == ']')
+                && let Some(&last) = stack.last()
+                    && last == c {
                         stack.pop();
                     }
-                }
-            }
         }
     }
     
@@ -485,12 +475,15 @@ fn repair_json(s: &str) -> String {
     repaired
 }
 
+static TOOL_CALLS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[TOOL_CALLS\]\s*([a-zA-Z0-9_-]+)[\":]*\s*(?:\[ARGS\])?[\":]*\s*(\{[\s\S]*)"#)
+        .unwrap()
+});
+static BRACE_OBJ_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{[^{}]*\}").unwrap());
+
 fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
     if text.contains("[TOOL_CALLS]") {
-        let re = Regex::new(
-            r#"\[TOOL_CALLS\]\s*([a-zA-Z0-9_-]+)[\":]*\s*(?:\[ARGS\])?[\":]*\s*(\{[\s\S]*)"#,
-        )
-        .unwrap();
+        let re = &*TOOL_CALLS_RE;
         for chunk in text.split("[TOOL_CALLS]") {
             let chunk = chunk.trim();
             if chunk.is_empty() {
@@ -505,12 +498,11 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
                 if let Ok(json_val) = serde_json::from_str::<Value>(&repaired) {
                     calls.push((name, json_val));
                 } else {
-                    let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
-                    if let Some(mat) = pattern.find(raw_args) {
-                        if let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str()) {
+                    let pattern = &*BRACE_OBJ_RE;
+                    if let Some(mat) = pattern.find(raw_args)
+                        && let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str()) {
                             calls.push((name, json_val));
                         }
-                    }
                 }
             }
         }
@@ -530,11 +522,10 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
 
     if let Some(block) = tool_block_to_parse {
         let repaired = repair_json(&block);
-        if let Ok(json_value) = serde_json::from_str::<Value>(&repaired) {
-            if let Some(call) = extract_tool_call(&json_value) {
+        if let Ok(json_value) = serde_json::from_str::<Value>(&repaired)
+            && let Some(call) = extract_tool_call(&json_value) {
                 calls.push(call);
             }
-        }
     }
 }
 
@@ -567,23 +558,21 @@ fn parse_tool_calls_impl(
         } else {
             cleaned.to_string()
         };
-        if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse) {
-            if let Some(call) = extract_tool_call(&json_value) {
+        if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse)
+            && let Some(call) = extract_tool_call(&json_value) {
                 calls.push(call);
             }
-        }
     }
 
     // Try to find JSON objects in the text
     if calls.is_empty() {
-        let pattern = Regex::new(r"\{[^{}]*\}").unwrap();
+        let pattern = &*BRACE_OBJ_RE;
         for mat in pattern.find_iter(text) {
             let json_str = mat.as_str();
-            if let Ok(json_value) = serde_json::from_str::<Value>(json_str) {
-                if let Some(call) = extract_tool_call(&json_value) {
+            if let Ok(json_value) = serde_json::from_str::<Value>(json_str)
+                && let Some(call) = extract_tool_call(&json_value) {
                     calls.push(call);
                 }
-            }
         }
     }
 
@@ -615,8 +604,8 @@ pub fn parse_tool_call(
 pub fn execute(name: &str, args: &Value) -> String {
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
         for client in reg.values() {
-            if let Ok(tools) = client.get_tools() {
-                if tools
+            if let Ok(tools) = client.get_tools()
+                && tools
                     .iter()
                     .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
                 {
@@ -658,7 +647,6 @@ pub fn execute(name: &str, args: &Value) -> String {
                         Err(e) => format!("error: MCP tool call failed: {e}"),
                     };
                 }
-            }
         }
     }
 

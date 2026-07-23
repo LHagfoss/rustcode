@@ -197,9 +197,9 @@ pub fn list_project_file_paths(query: &str) -> Vec<String> {
         .build();
 
     for result in walker {
-        if let Ok(entry) = result {
-            if entry.file_type().map_or(false, |ft| ft.is_file()) {
-                if let Ok(rel) = entry.path().strip_prefix(&cwd) {
+        if let Ok(entry) = result
+            && entry.file_type().is_some_and(|ft| ft.is_file())
+                && let Ok(rel) = entry.path().strip_prefix(&cwd) {
                     let rel_str = rel.to_string_lossy().to_string();
                     if query_lower.is_empty() || rel_str.to_lowercase().contains(&query_lower) {
                         files.push(format!("@{}", rel_str));
@@ -208,8 +208,6 @@ pub fn list_project_file_paths(query: &str) -> Vec<String> {
                         }
                     }
                 }
-            }
-        }
     }
     files
 }

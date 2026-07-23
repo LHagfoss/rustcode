@@ -65,14 +65,13 @@ impl McpClient {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if let Ok(msg) = serde_json::from_str::<Value>(&line) {
-                    if let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
+                if let Ok(msg) = serde_json::from_str::<Value>(&line)
+                    && let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
                         let mut pend = pending_clone.lock().await;
                         if let Some(sender) = pend.remove(&id) {
                             let _ = sender.send(msg);
                         }
                     }
-                }
             }
         });
 
@@ -108,15 +107,14 @@ impl McpClient {
 
         // Fetch tools list
         let mut tools_list = Vec::new();
-        if let Ok(tools_res) = client.call("tools/list", json!({})).await {
-            if let Some(tools_arr) = tools_res
+        if let Ok(tools_res) = client.call("tools/list", json!({})).await
+            && let Some(tools_arr) = tools_res
                 .get("result")
                 .and_then(|r| r.get("tools"))
                 .and_then(|t| t.as_array())
             {
                 tools_list = tools_arr.clone();
             }
-        }
 
         // Store tools list
         {
