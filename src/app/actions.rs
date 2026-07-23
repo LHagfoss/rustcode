@@ -57,24 +57,6 @@ pub async fn handle_enter(
         let mut should_exit = false;
 
         match cmd {
-            "/quota" => {
-                let client_clone = client.clone();
-                let state_clone = Arc::clone(state);
-                tokio::spawn(async move {
-                    match client_clone.get("http://localhost:3000/auth/status").send().await {
-                        Ok(res) => {
-                            if let Ok(text) = res.text().await {
-                                let mut s = state_clone.lock().await;
-                                s.history.push(ChatMessage::new("system", format!("Model Quota Status:\n{}", text)));
-                            }
-                        }
-                        Err(e) => {
-                            let mut s = state_clone.lock().await;
-                            s.history.push(ChatMessage::new("system", format!("Failed to fetch quota: {}", e)));
-                        }
-                    }
-                });
-            }
             "/memory" => {
                 check_memory_usage(&mut s);
             }
@@ -283,6 +265,34 @@ pub async fn handle_enter(
                 }
 
                 s.history.push(ChatMessage::new("system", text));
+            }
+            "/quota" => {
+                let default_name = s.config.default.big().to_string();
+                let key_opt = s.config.models.iter().find(|m| m.name == default_name).and_then(|m| m.api_key.clone());
+                let state_clone = Arc::clone(state);
+                let client_clone = client.clone();
+                tokio::spawn(async move {
+                    let mut req = client_clone.get("http://localhost:3000/auth/status");
+                    if let Some(key) = key_opt {
+                        req = req.header("Authorization", format!("Bearer {key}"));
+                    }
+                    if let Ok(res) = req.send().await {
+                        if let Ok(json) = res.json::<serde_json::Value>().await {
+                            let mut text = String::from("📊 Model Quota Status:\n");
+                            if let Some(buckets) = json.get("quota").and_then(|q| q.get("quotaBuckets")).and_then(|b| b.as_array()) {
+                                for b in buckets {
+                                    if let (Some(m), Some(f)) = (b.get("modelId").and_then(|x| x.as_str()), b.get("remainingFraction").and_then(|x| x.as_f64())) {
+                                        text.push_str(&format!("\n  • {}: {:.1}% remaining", m, f * 100.0));
+                                    }
+                                }
+                            } else {
+                                text.push_str("\n  No quota bucket information returned.");
+                            }
+                            let mut s = state_clone.lock().await;
+                            s.history.push(ChatMessage::new("system", text));
+                        }
+                    }
+                });
             }
             "/session" => {
                 let session_info = format!(
