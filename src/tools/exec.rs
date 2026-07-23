@@ -41,6 +41,11 @@ pub fn run_command(args: &Value) -> Result<String, String> {
         return Err("Do not use run_command with cat, sed, head, tail, or less/more to read files. Use the native 'view_file' tool instead. This keeps token usage low and allows the harness to manage file context correctly.".to_string());
     }
 
+    let trimmed_cmd = command_str.trim();
+    if (trimmed_cmd == "sudo" || trimmed_cmd.starts_with("sudo ")) && !trimmed_cmd.contains(" -n ") && !trimmed_cmd.starts_with("sudo -n ") {
+        return Err("Interactive 'sudo' commands requiring password input are disabled in subshell execution. Use non-privileged commands or pass 'sudo -n' to fail fast.".to_string());
+    }
+
     let cwd = args.get("cwd").and_then(|c| c.as_str());
     let timeout_ms = args
         .get("timeout_ms")
