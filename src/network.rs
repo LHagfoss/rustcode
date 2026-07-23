@@ -2692,8 +2692,9 @@ pub async fn process_queue_orchestrator(
                         );
                     }
                     if completed {
-                        dbg_log!("complete_task called, turning off continuous mode");
+                        dbg_log!("complete_task called, turning off continuous mode and breaking loop immediately");
                         s.continuous_mode = false;
+                        s.status = AppStatus::Idle;
                         s.history.push(ChatMessage::new(
                             "system",
                             "🏁 Goal Accomplished! Continuous mode completed successfully. ✅".to_string(),
@@ -2711,6 +2712,10 @@ pub async fn process_queue_orchestrator(
                                 s.history.push(ChatMessage::new("assistant", summary_text));
                             }
                         }
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        drop(s);
+                        break;
                     }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
