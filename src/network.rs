@@ -2892,9 +2892,11 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
 }
 
 pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppState>>) {
-    let (url, model_name) = {
+    let (url, model_name, api_key_opt) = {
         let s = state.lock().await;
-        (s.api_base_url.clone(), s.model_name.clone())
+        let big = s.config.default.big().to_string();
+        let key = s.config.models.iter().find(|m| m.name == big).and_then(|m| m.api_key.clone());
+        (s.api_base_url.clone(), s.model_name.clone(), key)
     };
 
     // Only query quota if using local gemini-proxy
@@ -2903,7 +2905,11 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
     }
 
     let status_url = format!("{}/auth/status", url.trim_end_matches('/'));
-    let Ok(res) = client.get(&status_url).send().await else {
+    let mut req = client.get(&status_url);
+    if let Some(key) = api_key_opt {
+        req = req.header("Authorization", format!("Bearer {key}"));
+    }
+    let Ok(res) = req.send().await else {
         return;
     };
     let Ok(json) = res.json::<serde_json::Value>().await else {
