@@ -2917,17 +2917,24 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
     };
 
     if let Some(quota_buckets) = json.get("quota").and_then(|q| q.get("quotaBuckets")).and_then(|b| b.as_array()) {
+        let mut matched_pct = None;
         for bucket in quota_buckets {
             if let Some(model_id) = bucket.get("modelId").and_then(|m| m.as_str()) {
-                if model_id == model_name || model_name.contains(model_id) {
-                    if let Some(fraction) = bucket.get("remainingFraction").and_then(|f| f.as_f64()) {
-                        let pct = (fraction * 100.0) as f32;
-                        let mut s = state.lock().await;
-                        s.model_quota_remaining = Some(pct);
+                if let Some(fraction) = bucket.get("remainingFraction").and_then(|f| f.as_f64()) {
+                    let pct = (fraction * 100.0) as f32;
+                    if matched_pct.is_none() {
+                        matched_pct = Some(pct);
+                    }
+                    if model_id == model_name || model_name.contains(model_id) || model_id.contains(&model_name) {
+                        matched_pct = Some(pct);
                         break;
                     }
                 }
             }
+        }
+        if let Some(pct) = matched_pct {
+            let mut s = state.lock().await;
+            s.model_quota_remaining = Some(pct);
         }
     }
 }
