@@ -198,29 +198,56 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
 
     let diff_text = generate_unified_diff(target_content, replacement_content);
 
-    // 1. If start_line and end_line are provided, try exact matching in that line range first
+    // 1. If start_line and end_line are provided, try exact matching in that line range (with a +-15 line tolerance window for line shifts)
     if let (Some(start), Some(end)) = (start_line, end_line) {
         let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         let total = file_lines.len();
 
-        if start >= 1 && start <= total && end >= start && end <= total {
-            let segment = file_lines[start - 1..end].join("\n");
-            if segment.trim_end() == target_content.trim_end() {
-                let has_trailing_newline = content.ends_with('\n');
-                let mut new_lines = Vec::new();
-                new_lines.extend_from_slice(&file_lines[..start - 1]);
-                new_lines.push(replacement_content.to_string());
-                new_lines.extend_from_slice(&file_lines[end..]);
+        let window_start = start.saturating_sub(15).max(1);
+        let window_end = (end + 15).min(total);
 
-                let mut new_content = new_lines.join("\n");
-                if has_trailing_newline && !new_content.is_empty() {
-                    new_content.push('\n');
+        if window_start <= window_end {
+            // Check original range first
+            if start >= 1 && start <= total && end >= start && end <= total {
+                let segment = file_lines[start - 1..end].join("\n");
+                if segment.trim_end() == target_content.trim_end() {
+                    let has_trailing_newline = content.ends_with('\n');
+                    let mut new_lines = Vec::new();
+                    new_lines.extend_from_slice(&file_lines[..start - 1]);
+                    new_lines.push(replacement_content.to_string());
+                    new_lines.extend_from_slice(&file_lines[end..]);
+
+                    let mut new_content = new_lines.join("\n");
+                    if has_trailing_newline && !new_content.is_empty() {
+                        new_content.push('\n');
+                    }
+                    std::fs::write(&resolved_path, &new_content)
+                        .map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+                    return Ok(format!(
+                        "successfully replaced lines {start}-{end} in '{path}'\n\n```diff\n{diff_text}\n```"
+                    ));
                 }
+            }
+
+            // Search within the expanded tolerance window for target_content block
+            let window_text = file_lines[window_start - 1..window_end].join("\n");
+            if let Some(pos) = window_text.find(target_content) {
+                let bytes_before = file_lines[..window_start - 1]
+                    .iter()
+                    .map(|l| l.len() + 1)
+                    .sum::<usize>();
+                let match_start_byte = bytes_before + pos;
+                let mut new_content = content.clone();
+                new_content.replace_range(
+                    match_start_byte..match_start_byte + target_content.len(),
+                    replacement_content,
+                );
                 std::fs::write(&resolved_path, &new_content)
                     .map_err(|e| format!("cannot write '{path}': {e}"))?;
 
                 return Ok(format!(
-                    "successfully replaced lines {start}-{end} in '{path}'\n\n```diff\n{diff_text}\n```"
+                    "successfully replaced target_content in '{path}' (located within line tolerance window lines {window_start}-{window_end})\n\n```diff\n{diff_text}\n```"
                 ));
             }
         }

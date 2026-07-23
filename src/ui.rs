@@ -849,6 +849,18 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
         ));
 
+        if let Some(quota) = state.model_quota_remaining {
+            let color = if quota > 50.0 {
+                Color::Rgb(100, 220, 120)
+            } else if quota > 20.0 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
+            right_spans.push(Span::styled("   Quota: ", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)));
+            right_spans.push(Span::styled(format!("{:.0}%", quota), get_themed_style(color, COLOR_BG, Modifier::BOLD, show_picker)));
+        }
+
         right_spans.push(Span::styled("   ", Style::default()));
         right_spans.push(Span::styled(
             "ctrl+p",

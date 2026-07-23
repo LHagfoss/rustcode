@@ -2071,6 +2071,7 @@ pub async fn process_queue_orchestrator(
                     (s.api_base_url.clone(), s.model_name.clone())
                 };
                 let mut s = state.lock().await;
+                dedupe_view_file_reads(&mut s.history);
                 let budget = s.get_history_token_budget() as usize;
                 if compaction::maybe_compact(&client, &api_url, &model_name, &mut s.history, budget).await {
                     dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
