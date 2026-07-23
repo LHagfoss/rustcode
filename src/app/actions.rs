@@ -267,29 +267,52 @@ pub async fn handle_enter(
                 s.history.push(ChatMessage::new("system", text));
             }
             "/quota" => {
-                let default_name = s.config.default.big().to_string();
-                let key_opt = s.config.models.iter().find(|m| m.name == default_name).and_then(|m| m.api_key.clone());
+                let (url, key_opt) = {
+                    let active_url = s.api_base_url.clone();
+                    let key = s
+                        .config
+                        .models
+                        .iter()
+                        .find(|m| m.url == active_url || m.model == s.model_name)
+                        .and_then(|m| m.api_key.clone());
+                    (active_url, key)
+                };
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
                 tokio::spawn(async move {
-                    let mut req = client_clone.get("http://localhost:3000/auth/status");
+                    let base_url = if let Some(idx) = url.find("/v1") {
+                        &url[..idx]
+                    } else {
+                        url.trim_end_matches('/')
+                    };
+                    let status_url = format!("{}/auth/status", base_url);
+                    let mut req = client_clone.get(&status_url);
                     if let Some(key) = key_opt {
                         req = req.header("Authorization", format!("Bearer {key}"));
                     }
-                    if let Ok(res) = req.send().await {
-                        if let Ok(json) = res.json::<serde_json::Value>().await {
-                            let mut text = String::from("📊 Model Quota Status:\n");
-                            if let Some(buckets) = json.get("quota").and_then(|q| q.get("quotaBuckets")).and_then(|b| b.as_array()) {
-                                for b in buckets {
-                                    if let (Some(m), Some(f)) = (b.get("modelId").and_then(|x| x.as_str()), b.get("remainingFraction").and_then(|x| x.as_f64())) {
-                                        text.push_str(&format!("\n  • {}: {:.1}% remaining", m, f * 100.0));
+                    match req.send().await {
+                        Ok(res) => {
+                            if let Ok(json) = res.json::<serde_json::Value>().await {
+                                let mut text = String::from("📊 Model Quota Status:\n");
+                                if let Some(buckets) = json.get("quota").and_then(|q| q.get("quotaBuckets")).and_then(|b| b.as_array()) {
+                                    for b in buckets {
+                                        if let (Some(m), Some(f)) = (b.get("modelId").and_then(|x| x.as_str()), b.get("remainingFraction").and_then(|x| x.as_f64())) {
+                                            text.push_str(&format!("\n  • {}: {:.1}% remaining", m, f * 100.0));
+                                        }
                                     }
+                                } else {
+                                    text.push_str("\n  No quota bucket information returned.");
                                 }
+                                let mut s = state_clone.lock().await;
+                                s.history.push(ChatMessage::new("system", text));
                             } else {
-                                text.push_str("\n  No quota bucket information returned.");
+                                let mut s = state_clone.lock().await;
+                                s.history.push(ChatMessage::new("system", "Failed to parse quota JSON response."));
                             }
+                        }
+                        Err(e) => {
                             let mut s = state_clone.lock().await;
-                            s.history.push(ChatMessage::new("system", text));
+                            s.history.push(ChatMessage::new("system", format!("Failed to reach proxy: {}", e)));
                         }
                     }
                 });
