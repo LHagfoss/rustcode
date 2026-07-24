@@ -278,6 +278,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let mut s = app_state.lock().await;
                                     s.auto_confirm = !s.auto_confirm;
                                 }
+                                KeyCode::Up => {
+                                    let mut s = app_state.lock().await;
+                                    s.modal_scroll_row = s.modal_scroll_row.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    let mut s = app_state.lock().await;
+                                    let total_lines = s
+                                        .pending_tool_confirmation
+                                        .as_ref()
+                                        .and_then(|c| c.first())
+                                        .map(|c| c.content_preview.lines().count())
+                                        .unwrap_or(0);
+                                    if total_lines > 0 && (s.modal_scroll_row as usize) + 1 < total_lines {
+                                        s.modal_scroll_row += 1;
+                                    }
+                                }
                                 _ => {}
                             }
                             continue;

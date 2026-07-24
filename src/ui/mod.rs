@@ -3106,8 +3106,14 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
 
     if confirmations.len() == 1 {
         let confirmation = &confirmations[0];
-        let width = if confirmation.content_preview.contains('\x00') { 120 } else { 60 };
-        let height = if confirmation.content_preview.contains('\x00') { 24 } else { 16 };
+        let screen_width = f.area().width;
+        let screen_height = f.area().height;
+        let width = if confirmation.content_preview.contains('\x00') {
+            (screen_width.saturating_sub(4)).min(160).max(80)
+        } else {
+            (screen_width.saturating_sub(10)).min(120).max(60)
+        };
+        let height = (screen_height.saturating_sub(4)).min(40).max(18);
         let modal_area = centered_rect_fixed(width, height, f.area());
 
         f.render_widget(Clear, modal_area);
@@ -3130,7 +3136,7 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
-                Constraint::Min(2),
+                Constraint::Min(4),
                 Constraint::Length(1),
                 Constraint::Length(1),
             ])
@@ -3219,6 +3225,9 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         );
 
         if !confirmation.content_preview.is_empty() {
+            let diff_height = modal_chunks[7].height as usize;
+            let scroll = state.modal_scroll_row as usize;
+
             let has_null = confirmation.content_preview.contains('\x00');
             if has_null {
                 let diff_chunks = Layout::default()
@@ -3235,7 +3244,7 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 
                 let half_width = (diff_chunks[0].width as usize).saturating_sub(2);
                 
-                for line in confirmation.content_preview.lines().take(modal_chunks[7].height as usize) {
+                for line in confirmation.content_preview.lines().skip(scroll).take(diff_height) {
                     let parts: Vec<&str> = line.split('\x00').collect();
                     if parts.len() == 2 {
                         left_lines.push(highlight_diff_line(parts[0], half_width, show_picker));
@@ -3256,7 +3265,8 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 let preview_lines: Vec<Line> = confirmation
                     .content_preview
                     .lines()
-                    .take(modal_chunks[7].height as usize)
+                    .skip(scroll)
+                    .take(diff_height)
                     .map(|l| {
                         let width = (inner_area.width as usize).saturating_sub(4);
                         highlight_diff_line(l, width, show_picker)
@@ -3268,6 +3278,13 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 );
             }
         }
+
+        let total_lines = confirmation.content_preview.lines().count();
+        let scroll_info = if total_lines > modal_chunks[7].height as usize {
+            format!("  ↑/↓ scroll ({}/{})", state.modal_scroll_row + 1, total_lines)
+        } else {
+            String::new()
+        };
 
         let footer_line = Line::from(vec![
             Span::styled(
@@ -3296,10 +3313,11 @@ fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" cancel", Style::default().fg(COLOR_MUTED)),
+            Span::styled(scroll_info, Style::default().fg(COLOR_MUTED)),
         ]);
         f.render_widget(
             Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL)),
-            modal_chunks[8],
+            modal_chunks[9],
         );
     } else {
         // Render batch confirmation modal
