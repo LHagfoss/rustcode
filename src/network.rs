@@ -2094,6 +2094,7 @@ pub async fn process_queue_orchestrator(
                 break;
             }
             s.status = AppStatus::Streaming;
+            s.generation_start_time = Some(std::time::Instant::now());
             s.stream_tracker = Some(StreamTracker::new());
             s.recent_read_calls.clear();
             s.read_file_mtimes.clear();

@@ -402,6 +402,7 @@ pub struct AppState {
     pub mcp_edit_state: Option<McpEditState>,
 
     pub last_copy_time: Option<std::time::Instant>,
+    pub generation_start_time: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     pub modal_scroll_row: u16,
 
@@ -530,6 +531,7 @@ impl AppState {
             mcp_picker_index: 0,
             mcp_edit_state: None,
             last_copy_time: None,
+            generation_start_time: None,
             pending_tool_confirmation: None,
             modal_scroll_row: 0,
             tool_confirmation_response: None,
