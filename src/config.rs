@@ -307,7 +307,12 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
 
     let mut config = match toml::from_str::<AppConfig>(&content) {
         Ok(c) => c,
-        Err(_) => default_config,
+        Err(e) => {
+            eprintln!("[rustcode] WARNING: Failed to parse config.toml ({e}). Keeping existing config on disk to prevent overwriting custom profiles.");
+            let mut cfg = default_config;
+            // Retain original raw text if we cannot parse it so we don't save back default_config over user profiles
+            cfg
+        }
     };
 
     // backfill windows for profiles saved before the context_window field
