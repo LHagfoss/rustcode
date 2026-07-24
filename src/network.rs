@@ -1229,6 +1229,7 @@ async fn ask_user_question(
             options,
             is_multi_select,
             selected: 0,
+            custom_input: None,
         });
         s.question_response = Some(tx);
         s.status = AppStatus::AwaitingQuestion;

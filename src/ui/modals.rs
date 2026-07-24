@@ -1649,13 +1649,18 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
     // Wrap the question to the inner width so the modal height fits it.
     let inner_w = width.saturating_sub(4).max(10) as usize;
     let q_lines = textwrap_simple(&q.question, inner_w);
-    let hint = if q.is_multi_select {
+    let typing = q.custom_input.is_some();
+    let hint = if typing {
+        "Type your answer · Enter submit · Esc back"
+    } else if q.is_multi_select {
         "↑/↓ move · Space toggle · Enter confirm · Esc cancel"
     } else {
         "↑/↓ move · Enter select · 1-9 quick pick · Esc cancel"
     };
 
-    let body_rows = q_lines.len() as u16 + 1 + q.options.len() as u16 + 1 + 1; // question + gap + opts + gap + hint
+    // Real options + the always-present "write your own answer" slot.
+    let row_count = q.options.len() as u16 + 1;
+    let body_rows = q_lines.len() as u16 + 1 + row_count + 1 + 1; // question + gap + rows + gap + hint
     let height = (body_rows + 2).min(screen.height.saturating_sub(2)).max(6);
     let modal_area = centered_rect_fixed(width, height, screen);
 
@@ -1704,6 +1709,24 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
         let padded = format!("{label:<width$}", width = inner.width as usize);
         lines.push(Line::from(Span::styled(padded, style)));
     }
+
+    // The always-present "write your own answer" slot (index == options.len()).
+    let custom_idx = q.options.len();
+    let custom_sel = q.selected == custom_idx;
+    let custom_label = match &q.custom_input {
+        Some(text) => format!("✎ {text}▏"),
+        None => "✎ Write your own answer…".to_string(),
+    };
+    let custom_style = if custom_sel || q.custom_input.is_some() {
+        Style::default()
+            .fg(COLOR_BG)
+            .bg(COLOR_PRIMARY)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(COLOR_TIP).bg(COLOR_PANEL)
+    };
+    let custom_padded = format!("{custom_label:<width$}", width = inner.width as usize);
+    lines.push(Line::from(Span::styled(custom_padded, custom_style)));
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

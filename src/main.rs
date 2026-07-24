@@ -320,7 +320,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         let s = app_state.lock().await;
                         if s.status == AppStatus::AwaitingQuestion {
+                            let typing = s
+                                .pending_question
+                                .as_ref()
+                                .map(|q| q.custom_input.is_some())
+                                .unwrap_or(false);
                             drop(s);
+
+                            if typing {
+                                // Freeform "write your own answer" text entry.
+                                match key.code {
+                                    KeyCode::Char(c) => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut()
+                                            && let Some(buf) = q.custom_input.as_mut()
+                                        {
+                                            buf.push(c);
+                                        }
+                                    }
+                                    KeyCode::Backspace => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut()
+                                            && let Some(buf) = q.custom_input.as_mut()
+                                        {
+                                            buf.pop();
+                                        }
+                                    }
+                                    KeyCode::Enter => {
+                                        let mut s = app_state.lock().await;
+                                        let answer = s
+                                            .pending_question
+                                            .as_ref()
+                                            .and_then(|q| q.custom_input.clone())
+                                            .unwrap_or_default()
+                                            .trim()
+                                            .to_string();
+                                        if !answer.is_empty() {
+                                            if let Some(tx) = s.question_response.take() {
+                                                let _ = tx.send(answer);
+                                            }
+                                            s.pending_question = None;
+                                        }
+                                    }
+                                    KeyCode::Esc => {
+                                        // Back out to the option list, keep the modal open.
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.custom_input = None;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                continue;
+                            }
+
                             match key.code {
                                 KeyCode::Up => {
                                     let mut s = app_state.lock().await;
@@ -331,17 +384,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::Down => {
                                     let mut s = app_state.lock().await;
                                     if let Some(q) = s.pending_question.as_mut() {
-                                        let last = q.options.len().saturating_sub(1);
+                                        // options.len() is the "write your own answer" slot.
+                                        let last = q.options.len();
                                         q.selected = (q.selected + 1).min(last);
                                     }
                                 }
                                 KeyCode::Char(' ') => {
                                     let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_mut()
-                                        && q.is_multi_select
-                                        && let Some(c) = q.chosen.get_mut(q.selected)
-                                    {
-                                        *c = !*c;
+                                    if let Some(q) = s.pending_question.as_mut() {
+                                        if q.selected == q.options.len() {
+                                            q.custom_input = Some(String::new());
+                                        } else if q.is_multi_select
+                                            && let Some(c) = q.chosen.get_mut(q.selected)
+                                        {
+                                            *c = !*c;
+                                        }
                                     }
                                 }
                                 KeyCode::Char(d @ '1'..='9') => {
@@ -366,7 +423,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 KeyCode::Enter => {
                                     let mut s = app_state.lock().await;
-                                    if let Some(q) = s.pending_question.as_ref() {
+                                    // Selecting the "write your own answer" slot enters text mode.
+                                    let is_custom_slot = s
+                                        .pending_question
+                                        .as_ref()
+                                        .map(|q| q.selected == q.options.len())
+                                        .unwrap_or(false);
+                                    if is_custom_slot {
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.custom_input = Some(String::new());
+                                        }
+                                    } else if let Some(q) = s.pending_question.as_ref() {
                                         let answer = if q.is_multi_select {
                                             let picked: Vec<String> = q
                                                 .options

@@ -25,10 +25,14 @@ pub struct PendingQuestion {
     pub question: String,
     pub options: Vec<String>,
     pub is_multi_select: bool,
-    /// Currently highlighted option index.
+    /// Currently highlighted index. Valid range is `0..=options.len()`, where the
+    /// final index (`options.len()`) is the always-present "write your own answer" slot.
     pub selected: usize,
     /// For multi-select: which options are ticked (parallel to `options`).
     pub chosen: Vec<bool>,
+    /// When `Some`, the user is typing a freeform answer (the "write your own"
+    /// slot is active); the string is the in-progress text.
+    pub custom_input: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
