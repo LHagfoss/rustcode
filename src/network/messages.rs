@@ -23,6 +23,35 @@ pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_toke
     dropped
 }
 
+/// Append `text` to the content of the last message in `msgs`.
+///
+/// Used to place turn-varying context (environment delta, files-in-context,
+/// task plan) at the *tail* of the request rather than in the system prompt.
+/// Keeping the system prompt static across turns preserves the provider's
+/// automatic prefix cache — dynamic content in the prefix would invalidate the
+/// whole cached prefix every round and re-bill the full input.
+pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(last_msg) = msgs.last_mut()
+        && let Some(content) = last_msg.get_mut("content")
+    {
+        match content {
+            serde_json::Value::String(s) => {
+                *s = format!("{s}\n\n{text}");
+            }
+            serde_json::Value::Array(arr) => {
+                arr.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!("\n\n{text}")
+                }));
+            }
+            _ => {}
+        }
+    }
+}
+
 /// If the message history has grown long (e.g. >= 4 messages), inject a brief
 /// system reminder right before the latest user message or tool result. This
 /// prevents the model from forgetting the core guidelines and tool formats
@@ -49,5 +78,41 @@ pub(crate) fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
                     _ => {}
                 }
             }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_to_last_message_string_content() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "system", "content": "SYS"}),
+            serde_json::json!({"role": "user", "content": "hello"}),
+        ];
+        append_to_last_message(&mut msgs, "# Environment\nchanged");
+        // System prefix must stay untouched so the cache prefix is stable.
+        assert_eq!(msgs[0]["content"], "SYS");
+        assert_eq!(msgs[1]["content"], "hello\n\n# Environment\nchanged");
+    }
+
+    #[test]
+    fn append_to_last_message_array_content() {
+        let mut msgs = vec![serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "hi"}]
+        })];
+        append_to_last_message(&mut msgs, "tail");
+        let arr = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[1]["text"], "\n\ntail");
+    }
+
+    #[test]
+    fn append_to_last_message_empty_is_noop() {
+        let mut msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
+        append_to_last_message(&mut msgs, "");
+        assert_eq!(msgs[0]["content"], "hi");
     }
 }
