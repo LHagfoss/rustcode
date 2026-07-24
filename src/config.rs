@@ -68,6 +68,12 @@ pub enum ToolProtocol {
     #[default]
     Json,
     Native,
+    /// True API function-calling: the tool schema is sent in the request's
+    /// `tools` field and the model replies with a structured `tool_calls`
+    /// field instead of text. Opt-in — only works when the provider/server
+    /// implements OpenAI-style tool calling. Text protocols stay the default
+    /// for open-weight servers that don't.
+    ApiNative,
 }
 
 

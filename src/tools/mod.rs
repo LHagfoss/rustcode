@@ -281,6 +281,123 @@ pub fn is_agent_tool(name: &str) -> bool {
     matches!(name, "spawn_agent" | "send_agent" | "set_goal" | "todo_write")
 }
 
+/// Agent tools that live outside the `TOOLS` table. `(name, description, args)`
+/// mirrors what `tool_system_prompt` lists for the text protocols, reused here
+/// to build the native function schema.
+const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
+    ("spawn_agent", "Delegate a task to a fresh subagent.", r#"{"task": "task description"}"#),
+    ("send_agent", "Send a follow-up message to a running subagent.", r#"{"id": "subagent id", "message": "message text"}"#),
+    ("set_goal", "Set a new long-running task and switch the agent to continuous autoloop mode.", r#"{"goal": "goal description"}"#),
+    ("todo_write", "Replace the persistent task plan with a list of steps.", r#"{"todos": "list of steps, each with content, status and priority"}"#),
+];
+
+/// Derive a permissive JSON Schema object from a tool's human-readable
+/// `arguments` string (e.g. `{"path": "file path", "start_line": optional}`).
+/// Every parameter is declared as an optional `string`; the tool handlers
+/// already coerce strings to numbers/bools (see `parse_json_number`/
+/// `parse_json_bool`), so this stays correct without a real schema per tool.
+fn schema_from_arguments(arguments: &str) -> Value {
+    let mut properties = serde_json::Map::new();
+    let bytes = arguments.as_bytes();
+    let read_string = |start: usize| -> (String, usize) {
+        // `start` points just past the opening quote; returns (contents, index of closing quote).
+        let mut j = start;
+        while j < bytes.len() && bytes[j] != b'"' {
+            if bytes[j] == b'\\' {
+                j += 1;
+            }
+            j += 1;
+        }
+        (arguments[start..j.min(arguments.len())].to_string(), j)
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        let (token, end) = read_string(i + 1);
+        // A key is a string immediately followed (past whitespace) by ':'.
+        let mut k = end + 1;
+        while k < bytes.len() && (bytes[k] as char).is_whitespace() {
+            k += 1;
+        }
+        if k < bytes.len() && bytes[k] == b':' {
+            // Optional description: the following string literal, if any.
+            let mut m = k + 1;
+            while m < bytes.len() && (bytes[m] as char).is_whitespace() {
+                m += 1;
+            }
+            let desc = if m < bytes.len() && bytes[m] == b'"' {
+                read_string(m + 1).0
+            } else {
+                String::new()
+            };
+            let mut prop = serde_json::Map::new();
+            prop.insert("type".into(), Value::String("string".into()));
+            if !desc.is_empty() {
+                prop.insert("description".into(), Value::String(desc));
+            }
+            properties
+                .entry(token)
+                .or_insert_with(|| Value::Object(prop));
+        }
+        i = end + 1;
+    }
+    serde_json::json!({ "type": "object", "properties": properties })
+}
+
+/// Build the OpenAI-style `tools` array sent in the request when the tool
+/// protocol is `ApiNative`. Covers the built-in `TOOLS`, any MCP tools (which
+/// carry real JSON Schemas), and the agent tools.
+pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    let mut tools = Vec::new();
+    for t in TOOLS {
+        tools.push(serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": schema_from_arguments(t.arguments),
+            }
+        }));
+    }
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(mcp_tools) = client.get_tools() {
+                for tool in mcp_tools {
+                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    let schema = tool
+                        .get("inputSchema")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
+                    tools.push(serde_json::json!({
+                        "type": "function",
+                        "function": { "name": name, "description": desc, "parameters": schema }
+                    }));
+                }
+            }
+        }
+    }
+    if include_agent_tools {
+        for (name, desc, args) in AGENT_TOOL_SPECS {
+            tools.push(serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": desc,
+                    "parameters": schema_from_arguments(args),
+                }
+            }));
+        }
+    }
+    tools
+}
+
 pub fn tool_system_prompt(
     include_agent_tools: bool,
     protocol: crate::config::ToolProtocol,
@@ -357,6 +474,20 @@ pub fn tool_system_prompt(
                 - Arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
+        crate::config::ToolProtocol::ApiNative => {
+            p.push_str(
+                "Tools are provided to you through the API's native function-calling interface. \
+                Invoke them directly through that interface — do NOT print tool calls as text or JSON in your reply. \
+                When the task is complete, reply with a plain-text summary and no tool call.\n\n"
+            );
+        }
+    }
+
+    // Text protocols enumerate tools in the prompt. ApiNative carries the full
+    // tool schema in the request's `tools` field instead, so listing them here
+    // would only duplicate that and waste context.
+    if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+        return p;
     }
 
     p.push_str("Available tools:\n");
@@ -420,6 +551,9 @@ User: hello, how are you?\n\
 Assistant: Hi! Ready to help with your code. What are you working on?\n",
             );
         }
+        // ApiNative returns early above (tools come from the request schema, not
+        // the prompt), so this arm is unreachable but keeps the match exhaustive.
+        crate::config::ToolProtocol::ApiNative => {}
     }
 
     p
@@ -558,7 +692,10 @@ fn parse_tool_calls_impl(
                 parse_tool_calls_fenced(text, &mut calls);
             }
         }
-        crate::config::ToolProtocol::Json => {
+        crate::config::ToolProtocol::Json | crate::config::ToolProtocol::ApiNative => {
+            // ApiNative: the stream reader translates the provider's structured
+            // `tool_calls` into the same fenced `tool` block the Json path emits,
+            // so both parse identically.
             parse_tool_calls_fenced(text, &mut calls);
             if calls.is_empty() {
                 parse_tool_calls_tags(text, &mut calls);
@@ -689,7 +826,48 @@ pub fn needs_confirmation(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    #[test]
+    fn schema_from_arguments_extracts_string_props() {
+        let schema = schema_from_arguments(
+            r#"{"pattern": "regex pattern", "path": "optional dir", "ignore_case": optional bool}"#,
+        );
+        let props = schema["properties"].as_object().unwrap();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(props["pattern"]["type"], "string");
+        assert_eq!(props["pattern"]["description"], "regex pattern");
+        // Non-string values (bool/number) still register as optional string props.
+        assert_eq!(props["ignore_case"]["type"], "string");
+        assert!(props.contains_key("path"));
+    }
+
+    #[test]
+    fn schema_from_arguments_handles_no_args() {
+        let schema = schema_from_arguments("{} (no arguments)");
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn native_tools_schema_covers_builtins_and_agent_tools() {
+        let tools = native_tools_schema(true);
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t["function"]["name"].as_str())
+            .collect();
+        // Every entry is a well-formed function tool.
+        assert!(tools.iter().all(|t| t["type"] == "function"));
+        assert!(names.contains(&"grep"));
+        assert!(names.contains(&"view_file"));
+        assert!(names.contains(&"complete_task"));
+        // Agent tools are included when requested.
+        assert!(names.contains(&"spawn_agent"));
+        assert!(names.contains(&"todo_write"));
+        // Excluded when not requested.
+        let no_agents = native_tools_schema(false);
+        assert!(!no_agents.iter().any(|t| t["function"]["name"] == "spawn_agent"));
+    }
+
     #[test]
     fn test_repair_json() {
         assert_eq!(repair_json("{\"name\": \"test\""), "{\"name\": \"test\"}");
