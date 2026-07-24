@@ -9,6 +9,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Cancel active stream or queued prompt",
     },
     CommandInfo {
+        name: "/changelog",
+        desc: "Show recent changelog updates",
+    },
+    CommandInfo {
         name: "/change_title",
         desc: "Rename the current session title",
     },

@@ -728,6 +728,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 s.history.push(ChatMessage::new("system", out));
                                             }
                                         }
+                                        "/changelog" => {
+                                            let log_text = crate::app::actions::build_latest_changelog();
+                                            s.history.push(ChatMessage::new("system", log_text));
+                                        }
                                         "/copy" => {
                                             crate::app::copy_last_reply(&mut s);
                                         }

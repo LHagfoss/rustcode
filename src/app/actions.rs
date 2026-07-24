@@ -3,6 +3,32 @@ use std::sync::Arc;
 use sysinfo::{Pid, System};
 use tokio::sync::Mutex;
 
+const CHANGELOG_CONTENT: &str = include_str!("../../CHANGELOG.md");
+
+pub fn build_latest_changelog() -> String {
+    let mut out = String::new();
+    let mut version_count = 0;
+
+    for line in CHANGELOG_CONTENT.lines() {
+        if line.starts_with("## [") {
+            version_count += 1;
+            if version_count > 2 {
+                break;
+            }
+        }
+        if version_count > 0 {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    if out.trim().is_empty() {
+        CHANGELOG_CONTENT.lines().take(30).collect::<Vec<_>>().join("\n")
+    } else {
+        out.trim().to_string()
+    }
+}
+
 pub async fn handle_escape(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &mut tokio_util::sync::CancellationToken,
@@ -124,6 +150,10 @@ pub async fn handle_enter(
                     }
                     s.history.push(ChatMessage::new("system", out));
                 }
+            }
+            "/changelog" => {
+                let log_text = build_latest_changelog();
+                s.history.push(ChatMessage::new("system", log_text));
             }
             "/copy" => {
                 copy_last_reply(&mut s);
