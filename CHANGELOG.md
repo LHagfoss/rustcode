@@ -85,3 +85,7 @@
 - Cleanup unused variables in network.rs and tools/mod.rs
 
 ## [v0.1.12]
+-e 
+## v0.1.17
+- Refactor: update dependencies, main logic, and UI structure
+- Chore: bump version to 0.1.17
