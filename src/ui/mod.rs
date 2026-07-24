@@ -26,7 +26,7 @@ mod modals;
 use highlight::{highlight_diff_line, highlight_rust_line, pad_to_width};
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
-    render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
+    render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
     render_tool_confirmation_modal, render_welcome_screen,
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
@@ -1507,6 +1507,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     if state.status == AppStatus::AwaitingToolConfirmation {
         render_tool_confirmation_modal(f, state);
+    }
+
+    if state.status == AppStatus::AwaitingQuestion {
+        render_question_modal(f, state);
     }
 
     // Painted last so it sits on top of everything, like a native selection.
