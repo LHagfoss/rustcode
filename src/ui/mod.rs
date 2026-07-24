@@ -1,3 +1,5 @@
+pub mod theme;
+
 use crate::app::{AppState, AppStatus};
 use ratatui::{
     Frame,

@@ -943,6 +943,21 @@ fn is_reasoning_only(content: &str) -> bool {
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
 /// tool. `display_name` is what the modal shows — subagent calls prefix it
 /// with the agent id so the user knows who is asking.
+fn cap_diff_lines(prev: String) -> String {
+    if prev.trim().is_empty() {
+        return String::new();
+    }
+    let lines: Vec<&str> = prev.lines().collect();
+    if lines.len() > 10 {
+        let total = lines.len();
+        let mut capped = lines[..10].join("\n");
+        capped.push_str(&format!("\n ... ({} more lines changed)", total - 10));
+        capped
+    } else {
+        prev
+    }
+}
+
 fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
     if name == "replace_file_content" {
         let search_block = args
@@ -999,7 +1014,7 @@ fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
                 }
             }
         }
-        Some(prev)
+        Some(cap_diff_lines(prev))
     } else if name == "write_to_file" {
         let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
         let old_content = std::fs::read_to_string(path).unwrap_or_default();
@@ -1052,7 +1067,7 @@ fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
                 }
             }
         }
-        Some(prev)
+        Some(cap_diff_lines(prev))
     } else {
         None
     }

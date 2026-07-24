@@ -1,6 +1,7 @@
 #[macro_use]
 mod logger;
 mod app;
+mod cli;
 mod clipboard;
 mod config;
 mod context;
@@ -14,6 +15,7 @@ mod tools;
 mod ui;
 
 use crate::app::{AppState, AppStatus, ChatMessage};
+use clap::Parser;
 use crossterm::{
     cursor::SetCursorStyle,
     event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -30,27 +32,12 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smo
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    let mut model_override = None;
-    if let Some(pos) = args.iter().position(|arg| arg == "--model" || arg == "-m")
-        && pos + 1 < args.len() {
-            model_override = Some(args[pos + 1].clone());
-        }
+    let cli_args = cli::Cli::parse();
+    let model_override = cli_args.model.clone();
 
-    if args.iter().any(|arg| arg == "--raw" || arg == "-r") {
-        let prompt_idx = args
-            .iter()
-            .position(|arg| arg == "--raw" || arg == "-r")
-            .unwrap()
-            + 1;
-        if prompt_idx < args.len() {
-            let prompt = args[prompt_idx].clone();
-            raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
-            return Ok(());
-        } else {
-            eprintln!("Usage: rustcode --raw <prompt> [--model <model_name>]");
-            return Ok(());
-        }
+    if let Some(prompt) = cli_args.prompt {
+        raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
+        return Ok(());
     }
 
     enable_raw_mode()?;
@@ -81,6 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::config::archive_live_history();
 
     let mut app_state_struct = AppState::new();
+    if cli_args.resume || cli_args.continue_session {
+        crate::app::resume_latest_session(&mut app_state_struct);
+    }
     if let Some(ref m_name) = model_override
         && let Some(profile) = app_state_struct
             .config
