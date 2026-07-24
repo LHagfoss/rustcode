@@ -1,3 +1,24 @@
+use std::io::{self, Write};
+use std::thread;
+use std::time::Duration;
+use rand::seq::IndexedRandom;
+
+pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    let messages = vec!["Thinking...", "Analyzing code...", "Refactoring...", "Checking logic..."];
+    let spinner = vec!['|', '/', '-', '\\'];
+    let mut i = 0;
+    
+    while running.load(std::sync::atomic::Ordering::SeqCst) {
+        let msg = messages.choose(&mut rand::rng()).unwrap();
+        print!("\r{} {}", spinner[i % 4], msg);
+        io::stdout().flush().unwrap();
+        i += 1;
+        thread::sleep(Duration::from_millis(200));
+    }
+    print!("\r ");
+    io::stdout().flush().unwrap();
+}
+
 pub mod theme;
 
 use crate::app::{AppState, AppStatus};
@@ -1421,10 +1442,33 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         };
 
         if state.current_response.is_empty() {
+            let spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let random_statuses = [
+                "Thinking...",
+                "Analyzing code...",
+                "Consulting the oracle...",
+                "Brewing coffee...",
+                "Refactoring reality...",
+                "Checking documentation...",
+                "Optimizing loops...",
+                "Debugging the universe...",
+            ];
+            let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            let frame = spinner_frames[(elapsed_secs as usize * 4) % spinner_frames.len()];
+            let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
+
             let mut status_spans: Vec<Span> = vec![
                 Span::styled(
-                    "■ ",
-                    get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::empty(), show_picker),
+                    format!("{frame} "),
+                    get_themed_style(COLOR_GREEN, COLOR_BG, Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    format!("{status_msg} "),
+                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    " · ",
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
                     label,
@@ -1440,6 +1484,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 model_label(state),
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             ));
+
+            if let Some(t) = state.generation_start_time {
+                let secs = t.elapsed().as_secs_f32();
+                status_spans.push(Span::styled(
+                    format!(" · {:.1}s", secs),
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                ));
+            }
 
             lines.push(Line::from(status_spans));
         } else {

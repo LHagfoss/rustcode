@@ -1,4 +1,17 @@
 use serde_json::Value;
+pub fn ask_question(args: &Value) -> Result<String, String> {
+    let question = args.get("question").and_then(|v| v.as_str()).ok_or("missing 'question'")?;
+    let options = args.get("options").and_then(|v| v.as_array()).ok_or("missing 'options'")?;
+    let is_multi_select = args.get("is_multi_select").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let mut out = format!("ASK_QUESTION: {} | Multi: {}", question, is_multi_select);
+    for (i, opt) in options.iter().enumerate() {
+        out.push_str(&format!("\n{}. {}", i + 1, opt.as_str().unwrap_or("")));
+    }
+    out.push_str("\nOther: (type custom response)");
+    Ok(out)
+}
+
 pub fn get_time(_args: &Value) -> Result<String, String> {
     Ok(chrono::Local::now()
         .format("%A %Y-%m-%d %H:%M:%S")

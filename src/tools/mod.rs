@@ -146,6 +146,13 @@ pub const TOOLS: &[Tool] = &[
         requires_confirmation: false,
     },
     Tool {
+        name: "ask_question",
+        description: "Ask the user a multiple-choice question to clarify underspecified requirements, solicit design choices, or select an option. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands.",
+        arguments: r#"{"question": "The question title or description to ask", "options": ["Option 1 text", "Option 2 text", "Option 3 text"], "is_multi_select": false}"#,
+        handler: misc::ask_question,
+        requires_confirmation: false,
+    },
+    Tool {
         name: "get_time",
         description: "Get the current local date and time",
         arguments: r#"{} (no arguments)"#,
@@ -444,6 +451,7 @@ pub fn tool_system_prompt(
 - Match project code style.\n\
 - Only run tests/builds or commit/push code when explicitly requested by the user.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
+- Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations.\n\
 - When the task is complete, output a plain-text final summary (with no tool block).\n\n\
 # Working memory & avoiding loops
 - If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
