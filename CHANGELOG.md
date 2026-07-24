@@ -1,5 +1,9 @@
 # Changelog
 
+## [v0.1.17] - 2025-07-24
+- Refactor: update dependencies, main logic, and UI structure
+- Chore: bump version to 0.1.17
+
 ## [v0.1.16] - 2026-07-24
 
 ### Features
@@ -86,6 +90,3 @@
 
 ## [v0.1.12]
 -e 
-## v0.1.17
-- Refactor: update dependencies, main logic, and UI structure
-- Chore: bump version to 0.1.17
