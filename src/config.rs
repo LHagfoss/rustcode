@@ -205,7 +205,7 @@ impl Default for AppConfig {
         Self {
             default: DefaultConfig::Table {
                 big: "qwen3.6-dense".to_string(),
-                small: "minicpm5".to_string(),
+                small: "gemma4:e2b-it-qat".to_string(),
             },
             models: vec![
                 ModelProfile {
@@ -218,10 +218,10 @@ impl Default for AppConfig {
                     env_key: None,
                 },
                 ModelProfile {
-                    name: "minicpm5".to_string(),
+                    name: "gemma4:e2b-it-qat".to_string(),
                     url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
-                    model: "openbmb/minicpm5".to_string(),
-                    context_window: Some(32000),
+                    model: "gemma4:e2b-it-qat".to_string(),
+                    context_window: Some(128000),
                     engine: Some("ollama".to_string()),
                     api_key: None,
                     env_key: None,
@@ -752,12 +752,12 @@ mod tests {
     fn test_config_save_load() {
         let dir = temp_dir("config");
         let mut config = AppConfig::default();
-        config.default = DefaultConfig::Simple("minicpm5".to_string());
+        config.default = DefaultConfig::Simple("gemma4:e2b-it-qat".to_string());
         save_config_to(&dir, &config);
 
         let (url, model, loaded) = load_config_from(&dir);
-        assert_eq!(loaded.default.big(), "minicpm5");
-        let expected = &loaded.models.iter().find(|m| m.name == "minicpm5").unwrap();
+        assert_eq!(loaded.default.big(), "gemma4:e2b-it-qat");
+        let expected = &loaded.models.iter().find(|m| m.name == "gemma4:e2b-it-qat").unwrap();
         assert_eq!(url, expected.url);
         assert_eq!(model, expected.model);
     }
@@ -766,11 +766,11 @@ mod tests {
     fn test_default_profile_is_source_of_truth() {
         let dir = temp_dir("latest");
         let mut config = AppConfig::default();
-        config.default = DefaultConfig::Simple("minicpm5".to_string());
+        config.default = DefaultConfig::Simple("gemma4:e2b-it-qat".to_string());
         save_config_to(&dir, &config);
 
         let (url, model, _) = load_config_from(&dir);
-        let expected = &config.models.iter().find(|m| m.name == "minicpm5").unwrap();
+        let expected = &config.models.iter().find(|m| m.name == "gemma4:e2b-it-qat").unwrap();
         assert_eq!(url, expected.url);
         assert_eq!(model, expected.model);
     }
