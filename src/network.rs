@@ -22,6 +22,13 @@ pub(crate) use helpers::{count_tokens, classify_tool_msg, parse_sse_line};
 pub(crate) mod messages;
 pub(crate) use messages::{RESPONSE_RESERVE_TOKENS, append_to_last_message, trim_msgs_to_budget, inject_system_reminder};
 
+#[path = "network/text.rs"]
+pub(crate) mod text;
+use text::{
+    cap_diff_lines, has_intended_tool_call, is_cut_off, strip_ansi_escapes, strip_leading_think,
+    strip_think_blocks, strip_tool_call_syntax,
+};
+
 
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -829,149 +836,6 @@ pub async fn stream_request(
     Ok(finish_reason)
 }
 
-fn has_intended_tool_call(content: &str) -> bool {
-    let lower = content.to_lowercase();
-    lower.contains("```tool") || lower.contains("```json") || lower.contains("[tool_calls]")
-}
-
-fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
-    // If the model already produced a valid tool call, we don't need to continue text generation.
-    // We should execute the tool and get its output first.
-    if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty() {
-        return false;
-    }
-
-    if finish_reason == Some("length") {
-        return true;
-    }
-
-    // Check for unclosed <think> tag
-    let has_think = content.contains("<think>");
-    let has_think_end = content.contains("</think>");
-    if has_think && !has_think_end {
-        return true;
-    }
-
-    // Check for unclosed tool block
-    let triple_backticks_count = content.matches("```").count();
-    if !triple_backticks_count.is_multiple_of(2) {
-        return true;
-    }
-
-    // Check for unclosed <tool_call> tag
-    let has_tool_call = content.contains("<tool_call>");
-    let has_tool_call_end = content.contains("</tool_call>");
-    if has_tool_call && !has_tool_call_end {
-        return true;
-    }
-
-    // Qwen-family open models often close </think> and then emit a stop token
-    // with no actual answer or tool call. Treat that as incomplete so the
-    // continuation path nudges the model instead of stalling for a manual
-    // "continue".
-    if is_reasoning_only(content) {
-        return true;
-    }
-
-    false
-}
-
-/// Remove every `<think>...</think>` span so we can inspect the model's actual
-/// answer/tool output.
-fn strip_think_blocks(content: &str) -> String {
-    let mut out = String::new();
-    let mut rest = content;
-    while let Some(start) = rest.find("<think>") {
-        out.push_str(&rest[..start]);
-        if let Some(end) = rest[start..].find("</think>") {
-            rest = &rest[start + end + "</think>".len()..];
-        } else {
-            // unclosed — drop the remainder (handled by the unclosed-think check)
-            rest = "";
-            break;
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-/// Strip tool-call syntax from model text, leaving only human-readable prose.
-/// Under the JSON tool protocol a model emits tool calls as text (```tool
-/// fences or Mistral `[TOOL_CALLS]...[ARGS]{...}`), so on the forced wrap-up
-/// turn — where we refuse to execute anything — we must remove that syntax
-/// before saving, or the "answer" is a raw tool call. Returns the trimmed prose.
-fn strip_tool_call_syntax(content: &str) -> String {
-    let mut out = strip_think_blocks(content);
-
-    // Remove ```tool ... ``` / ```json ... ``` fenced blocks.
-    for fence in ["```tool", "```json"] {
-        while let Some(start) = out.to_lowercase().find(fence) {
-            if let Some(rel_end) = out[start + fence.len()..].find("```") {
-                let end = start + fence.len() + rel_end + 3;
-                out.replace_range(start..end, "");
-            } else {
-                out.truncate(start); // unclosed fence — drop the remainder
-                break;
-            }
-        }
-    }
-
-    // Remove Mistral-style `[TOOL_CALLS]name[ARGS]{...}` spans (drop to end of
-    // the JSON object if we can find the matching brace, else to end of string).
-    while let Some(start) = out.find("[TOOL_CALLS]") {
-        let after = &out[start..];
-        let end = after
-            .find('{')
-            .and_then(|b| {
-                let mut depth = 0i32;
-                for (i, c) in after[b..].char_indices() {
-                    match c {
-                        '{' => depth += 1,
-                        '}' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                return Some(start + b + i + 1);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                None
-            })
-            .unwrap_or(out.len());
-        out.replace_range(start..end, "");
-    }
-
-    out.trim().to_string()
-}
-
-/// True when the turn is nothing but reasoning: a non-empty response whose only
-/// content is `<think>` blocks, leaving no answer or tool call to act on.
-fn is_reasoning_only(content: &str) -> bool {
-    if content.trim().is_empty() {
-        return false;
-    }
-    strip_think_blocks(content).trim().is_empty()
-}
-
-/// Show the Y/N confirmation modal (when the tool requires it) and run the
-/// tool. `display_name` is what the modal shows — subagent calls prefix it
-/// with the agent id so the user knows who is asking.
-fn cap_diff_lines(prev: String) -> String {
-    if prev.trim().is_empty() {
-        return String::new();
-    }
-    let lines: Vec<&str> = prev.lines().collect();
-    if lines.len() > 10 {
-        let total = lines.len();
-        let mut capped = lines[..10].join("\n");
-        capped.push_str(&format!("\n ... ({} more lines changed)", total - 10));
-        capped
-    } else {
-        prev
-    }
-}
-
 fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
     if name == "replace_file_content" {
         let search_block = args
@@ -1119,12 +983,6 @@ fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> std::path::Pa
     }
 
     std::env::current_dir().unwrap_or_default()
-}
-
-fn strip_ansi_escapes(s: &str) -> String {
-    static ANSI_RE: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"\x1B\[[0-9;?]*[a-zA-Z]").unwrap());
-    ANSI_RE.replace_all(s, "").into_owned()
 }
 
 /// Resolve a build tool to an absolute path. GUI-launched apps (and some
@@ -1514,16 +1372,6 @@ fn push_status_line(s: &mut AppState, text: String) {
 
 /// Drop a leading <think>...</think> block so the main agent only gets the
 /// subagent's actual reply, not its reasoning.
-fn strip_leading_think(text: &str) -> &str {
-    match (
-        text.trim_start().starts_with("<think>"),
-        text.find("</think>"),
-    ) {
-        (true, Some(i)) => text[i + "</think>".len()..].trim_start(),
-        _ => text,
-    }
-}
-
 /// Run one subagent conversation until it produces a plain reply (no tool
 /// call). Tokens stream quietly (not into the main chat view); tool calls
 /// surface as status lines and go through the same confirmation modal as
@@ -2079,6 +1927,363 @@ async fn spawn_title_generation(
 }
 
 #[allow(unused_assignments)]
+/// Assemble the turn-varying context tail appended to the last message. Kept
+/// separate from the static system prefix so the provider prompt cache stays
+/// warm: this lists the files already in context (so the agent doesn't re-read
+/// them) and re-injects the persistent task plan so work continues across turns
+/// instead of re-planning from scratch.
+fn build_dynamic_context_tail(
+    context_section: String,
+    read_files: &[String],
+    todos: &[crate::app::TodoItem],
+) -> String {
+    let mut dynamic_context = context_section;
+
+    if !read_files.is_empty() {
+        dynamic_context.push_str(&format!(
+            "\n\n# Files already in context (do NOT re-read these unless they changed on disk)\n{}",
+            read_files
+                .iter()
+                .map(|f| format!("- {f}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
+    if !todos.is_empty() {
+        dynamic_context.push_str(
+            "\n\n# Your current task plan (execute in order; update via todo_write)\n",
+        );
+        for (i, t) in todos.iter().enumerate() {
+            let mark = match t.status.as_str() {
+                "completed" => "[x]",
+                "in_progress" => "[~]",
+                _ => "[ ]",
+            };
+            dynamic_context.push_str(&format!(
+                "{}. {} {} ({})\n",
+                i + 1,
+                mark,
+                t.content,
+                t.priority
+            ));
+        }
+    }
+
+    dynamic_context
+}
+
+/// Assemble the full provider request for one agent turn.
+///
+/// Runs AI compaction if the history is long enough, snapshots the eligible
+/// history, then builds the message array: a STATIC system prefix (tool
+/// protocol + agent mode only, so the provider prompt cache stays warm) plus
+/// the conversation, with all turn-varying context (environment delta,
+/// files-in-context, task plan) appended to the last message. Finally trims to
+/// the context-window budget and injects the system reminder. `tool_rounds` is
+/// only used to decide whether a one-time "context window full" notice is shown.
+async fn prepare_turn_request(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+) -> Vec<serde_json::Value> {
+    // Try AI-driven compaction if history is long enough
+    {
+        let (api_url, model_name) = {
+            let s = state.lock().await;
+            (s.api_base_url.clone(), s.model_name.clone())
+        };
+        let mut s = state.lock().await;
+        dedupe_view_file_reads(&mut s.history);
+        let budget = s.get_history_token_budget() as usize;
+        if compaction::maybe_compact(client, &api_url, &model_name, &mut s.history, budget).await {
+            dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
+            s.recent_read_calls.clear();
+            s.read_file_mtimes.clear();
+            crate::config::save_history(&s.history);
+        }
+        drop(s);
+    }
+
+    let mut history_snapshot: Vec<ChatMessage> = {
+        let s = state.lock().await;
+        s.history
+            .iter()
+            .filter(|m| {
+                matches!(m.role.as_str(), "user" | "assistant" | "tool")
+                    && !m.content.starts_with('/')
+            })
+            .cloned()
+            .collect()
+    };
+
+    let budget_token_limit = { state.lock().await.get_history_token_budget() };
+    compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
+
+    let (read_files, todos) = {
+        let s = state.lock().await;
+        let mut files: Vec<String> = s.read_file_mtimes.keys().cloned().collect();
+        files.sort();
+        (files, s.todos.clone())
+    };
+
+    let current_snapshot = crate::context::ContextSnapshot::capture();
+    let context_section = {
+        let s = state.lock().await;
+        match &s.context_snapshot {
+            Some(prev) => prev.diff(&current_snapshot).unwrap_or_else(|| {
+                "# Environment\n(unchanged since session start)".to_string()
+            }),
+            None => crate::context::environment_context(),
+        }
+    };
+    let protocol = { state.lock().await.config.tool_protocol };
+    let agent_mode = { state.lock().await.agent_mode };
+    // The system prompt is kept STATIC across turns (it only depends on the
+    // tool protocol and agent mode, which don't change mid-task). A stable
+    // prefix lets the provider's automatic prompt cache stay warm — every
+    // round after the first re-bills only the dynamic tail below instead of
+    // the whole tool-definition block. Turn-varying context (environment
+    // delta, files-in-context, task plan) is appended to the LAST message
+    // instead, so it never invalidates the cached prefix.
+    let system_prompt = crate::tools::tool_system_prompt(true, protocol, agent_mode);
+    // Store the snapshot if this is the first turn
+    {
+        let mut s = state.lock().await;
+        if s.context_snapshot.is_none() {
+            s.context_snapshot = Some(current_snapshot);
+        }
+    }
+
+    // Build the turn-varying context tail (appended to the last message
+    // after the history is assembled, to preserve the cached prefix).
+    let dynamic_context = build_dynamic_context_tail(context_section, &read_files, &todos);
+    let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
+        "role": "system",
+        "content": system_prompt.clone(),
+    })];
+    let mut first_user = true;
+    msgs.extend(history_snapshot.into_iter().map(|m| {
+        if m.role == "tool" {
+            serde_json::json!({
+                "role": "user",
+                "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
+            })
+        } else if m.role == "user" && first_user {
+            first_user = false;
+            serde_json::json!({
+                "role": "user",
+                "content": parse_multimodal_content(&m.content),
+            })
+        } else if m.role == "user" {
+            serde_json::json!({
+                "role": "user",
+                "content": parse_multimodal_content(&m.content),
+            })
+        } else {
+            serde_json::json!({"role": m.role, "content": m.content})
+        }
+    }));
+
+    // Attach turn-varying context to the tail so the static system prefix
+    // stays cache-stable. Done before budget trimming so its size counts
+    // toward the budget.
+    append_to_last_message(&mut msgs, &dynamic_context);
+
+    let window = { state.lock().await.active_context_window() };
+    let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
+    let dropped = trim_msgs_to_budget(&mut msgs, budget);
+    inject_system_reminder(&mut msgs);
+    if dropped > 0 {
+        dbg_log!(
+            "context budget {} tokens exceeded: dropped {} oldest message(s)",
+            budget,
+            dropped
+        );
+        if tool_rounds == 0 {
+            let mut s = state.lock().await;
+            s.history.push(ChatMessage::new(
+                "system",
+                format!(
+                    "context window full: dropped {} oldest message(s) from the request. Use /new to start fresh.",
+                    dropped
+                ),
+            ));
+        }
+    }
+
+    msgs
+}
+
+/// Execute a batch of tool calls and return `(name, result, diff)` per call.
+///
+/// When `approved` is false every call resolves to a denial message. Otherwise
+/// the calls run concurrently via `join_all`; read-only calls are guarded
+/// against pointless repeats (a `view_file` re-read is only blocked when the
+/// file is unchanged on disk), agent tools go through `handle_agent_tool`, and
+/// everything else through `confirm_and_execute` (confirmation already handled
+/// by the caller). If any mutating tool ran, a single cached compiler check is
+/// appended to the first mutating tool's result so build errors surface inline.
+#[allow(clippy::too_many_arguments)]
+async fn execute_tool_batch(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    tool_calls: &[(String, serde_json::Value)],
+    approved: bool,
+    made_edits: bool,
+    edit_root: &Option<std::path::PathBuf>,
+    compile_dirty: &mut bool,
+    compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+) -> Vec<(String, String, Option<String>)> {
+    if !approved {
+        return tool_calls
+            .iter()
+            .map(|(name, _)| {
+                (
+                    name.clone(),
+                    "error: user denied this tool call".to_string(),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+    }
+
+    dbg_log!("Executing {} tool calls in parallel", tool_calls.len());
+    let mut futures = Vec::new();
+    for (name, args) in tool_calls {
+        let client_clone = client.clone();
+        let state_clone = Arc::clone(state);
+        let cancel_token_clone = cancel_token.clone();
+        let name_clone = name.clone();
+        let args_clone = args.clone();
+
+        let fut = async move {
+            let is_read_only = is_read_only_tool(&name_clone);
+
+            // Repeat-loop guard for read-only tools. For view_file we go
+            // further than a signature match: a re-read is only blocked when
+            // the file is UNCHANGED on disk since the last read, so the agent
+            // can always refresh after a (possibly partial) edit. Other
+            // read-only tools use a signature window.
+            let mut is_repeat = false;
+            let mut view_path: Option<String> = None;
+            let mut view_mtime: Option<std::time::SystemTime> = None;
+
+            if is_read_only {
+                if name_clone == "view_file" {
+                    if let Some(p) = args_clone.get("path").and_then(|p| p.as_str()) {
+                        let sig = tool_signature(&name_clone, &args_clone);
+                        let already_seen = {
+                            let s = state_clone.lock().await;
+                            s.recent_read_calls.iter().any(|c| c == &sig)
+                        };
+                        if already_seen {
+                            let current = path_mtime(p);
+                            let stored = {
+                                let s = state_clone.lock().await;
+                                s.read_file_mtimes.get(p).copied()
+                            };
+                            is_repeat = view_file_unchanged_since_last_read(stored, current);
+                        }
+                        view_path = Some(p.to_string());
+                        view_mtime = path_mtime(p);
+                    }
+                } else {
+                    let sig = tool_signature(&name_clone, &args_clone);
+                    is_repeat = {
+                        let s = state_clone.lock().await;
+                        s.recent_read_calls.iter().any(|c| c == &sig)
+                    };
+                }
+            }
+
+            let (result, diff_opt) = if is_repeat {
+                (
+                    "You already ran this exact call — its result is in the \
+                     context above. Re-reading gives no new information. Stop \
+                     searching and either answer the user in prose now, or take \
+                     a genuinely different action (a new file, a new query, or \
+                     an edit)."
+                        .to_string(),
+                    None,
+                )
+            } else if crate::tools::is_agent_tool(&name_clone) {
+                (
+                    handle_agent_tool(
+                        &client_clone,
+                        &state_clone,
+                        &cancel_token_clone,
+                        &name_clone,
+                        &args_clone,
+                    )
+                    .await,
+                    None,
+                )
+            } else {
+                confirm_and_execute(
+                    &state_clone,
+                    &cancel_token_clone,
+                    &name_clone,
+                    &args_clone,
+                    &name_clone,
+                    true, // bypass confirmation
+                )
+                .await
+            };
+
+            // Record this call so future identical read-only calls are caught.
+            {
+                let mut s = state_clone.lock().await;
+                if let Some(p) = view_path
+                    && !is_repeat
+                {
+                    if let Some(mt) = view_mtime {
+                        s.read_file_mtimes.insert(p, mt);
+                    } else {
+                        // File couldn't be stat'd (e.g. already gone);
+                        // drop any stale entry so a later read is allowed.
+                        s.read_file_mtimes.remove(&p);
+                    }
+                }
+                if is_read_only && !is_repeat {
+                    let sig = tool_signature(&name_clone, &args_clone);
+                    if !s.recent_read_calls.contains(&sig) {
+                        s.recent_read_calls.push_back(sig);
+                        while s.recent_read_calls.len() > 8 {
+                            s.recent_read_calls.pop_front();
+                        }
+                    }
+                }
+            }
+
+            (name_clone, result, diff_opt)
+        };
+        futures.push(fut);
+    }
+    let mut results = join_all(futures).await;
+    if made_edits {
+        let root = edit_root
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        if let Some(compiler_errors) =
+            cached_compiler_check(&root, compile_dirty, compile_cache).await
+        {
+            dbg_log!("Inline compiler check detected errors after edit");
+            let mut snippet = compiler_errors;
+            if snippet.len() > 3000 {
+                snippet.truncate(3000);
+                snippet.push_str("\n... (compiler output truncated) ...");
+            }
+            if let Some((_, res, _)) = results.iter_mut().find(|(n, _, _)| is_mutating_tool(n)) {
+                res.push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
+                res.push_str(&snippet);
+            }
+        }
+    }
+    results
+}
+
 pub async fn process_queue_orchestrator(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -2129,6 +2334,7 @@ pub async fn process_queue_orchestrator(
         let mut tool_rounds = 0;
         #[allow(unused_assignments)]
         let mut limit_reached = false;
+        #[allow(unused_assignments)]
         let mut last_sent_messages: Vec<serde_json::Value> = Vec::new();
         let mut final_content = String::new();
         let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
@@ -2157,164 +2363,7 @@ pub async fn process_queue_orchestrator(
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
-            // Try AI-driven compaction if history is long enough
-            {
-                let (api_url, model_name) = {
-                    let s = state.lock().await;
-                    (s.api_base_url.clone(), s.model_name.clone())
-                };
-                let mut s = state.lock().await;
-                dedupe_view_file_reads(&mut s.history);
-                let budget = s.get_history_token_budget() as usize;
-                if compaction::maybe_compact(&client, &api_url, &model_name, &mut s.history, budget).await {
-                    dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
-                    s.recent_read_calls.clear();
-                    s.read_file_mtimes.clear();
-                    crate::config::save_history(&s.history);
-                }
-                drop(s);
-            }
-
-            let mut history_snapshot: Vec<ChatMessage> = {
-                let s = state.lock().await;
-                s.history
-                    .iter()
-                    .filter(|m| {
-                        matches!(m.role.as_str(), "user" | "assistant" | "tool")
-                            && !m.content.starts_with('/')
-                    })
-                    .cloned()
-                    .collect()
-            };
-
-            let budget_token_limit = { state.lock().await.get_history_token_budget() };
-            compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
-
-            let (mut read_files, todos) = {
-                let s = state.lock().await;
-                let mut files: Vec<String> =
-                    s.read_file_mtimes.keys().cloned().collect();
-                files.sort();
-                (files, s.todos.clone())
-            };
-
-            let current_snapshot = crate::context::ContextSnapshot::capture();
-            let context_section = {
-                let s = state.lock().await;
-                match &s.context_snapshot {
-                    Some(prev) => prev.diff(&current_snapshot)
-                        .unwrap_or_else(|| "# Environment\n(unchanged since session start)".to_string()),
-                    None => crate::context::environment_context(),
-                }
-            };
-            let protocol = { state.lock().await.config.tool_protocol };
-            let agent_mode = { state.lock().await.agent_mode };
-            // The system prompt is kept STATIC across turns (it only depends on the
-            // tool protocol and agent mode, which don't change mid-task). A stable
-            // prefix lets the provider's automatic prompt cache stay warm — every
-            // round after the first re-bills only the dynamic tail below instead of
-            // the whole tool-definition block. Turn-varying context (environment
-            // delta, files-in-context, task plan) is appended to the LAST message
-            // instead, so it never invalidates the cached prefix.
-            let system_prompt = crate::tools::tool_system_prompt(true, protocol, agent_mode);
-            // Store the snapshot if this is the first turn
-            {
-                let mut s = state.lock().await;
-                if s.context_snapshot.is_none() {
-                    s.context_snapshot = Some(current_snapshot);
-                }
-            }
-
-            // Build the turn-varying context tail (appended to the last message
-            // after the history is assembled, to preserve the cached prefix).
-            let mut dynamic_context = context_section;
-
-            // Remind the agent which files it already has so it doesn't re-read them.
-            if !read_files.is_empty() {
-                dynamic_context.push_str(&format!(
-                    "\n\n# Files already in context (do NOT re-read these unless they changed on disk)\n{}",
-                    read_files
-                        .drain(..)
-                        .map(|f| format!("- {f}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                ));
-            }
-
-            // Re-inject the persistent task plan so the agent executes across turns
-            // instead of re-planning from scratch.
-            if !todos.is_empty() {
-                dynamic_context.push_str(
-                    "\n\n# Your current task plan (execute in order; update via todo_write)\n",
-                );
-                for (i, t) in todos.iter().enumerate() {
-                    let mark = match t.status.as_str() {
-                        "completed" => "[x]",
-                        "in_progress" => "[~]",
-                        _ => "[ ]",
-                    };
-                    dynamic_context.push_str(&format!(
-                        "{}. {} {} ({})\n",
-                        i + 1,
-                        mark,
-                        t.content,
-                        t.priority
-                    ));
-                }
-            }
-            let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
-                "role": "system",
-                "content": system_prompt.clone(),
-            })];
-            let mut first_user = true;
-            msgs.extend(history_snapshot.into_iter().map(|m| {
-                if m.role == "tool" {
-                    serde_json::json!({
-                        "role": "user",
-                        "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
-                    })
-                } else if m.role == "user" && first_user {
-                    first_user = false;
-                    serde_json::json!({
-                        "role": "user",
-                        "content": parse_multimodal_content(&m.content),
-                    })
-                } else if m.role == "user" {
-                    serde_json::json!({
-                        "role": "user",
-                        "content": parse_multimodal_content(&m.content),
-                    })
-                } else {
-                    serde_json::json!({"role": m.role, "content": m.content})
-                }
-            }));
-
-            // Attach turn-varying context to the tail so the static system prefix
-            // stays cache-stable. Done before budget trimming so its size counts
-            // toward the budget.
-            append_to_last_message(&mut msgs, &dynamic_context);
-
-            let window = { state.lock().await.active_context_window() };
-            let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
-            let dropped = trim_msgs_to_budget(&mut msgs, budget);
-            inject_system_reminder(&mut msgs);
-            if dropped > 0 {
-                dbg_log!(
-                    "context budget {} tokens exceeded: dropped {} oldest message(s)",
-                    budget,
-                    dropped
-                );
-                if tool_rounds == 0 {
-                    let mut s = state.lock().await;
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        format!(
-                            "context window full: dropped {} oldest message(s) from the request. Use /new to start fresh.",
-                            dropped
-                        ),
-                    ));
-                }
-            }
+            let msgs = prepare_turn_request(&client, &state, tool_rounds).await;
 
             state.lock().await.current_response.clear();
             stream_buffer.lock().await.content.clear();
@@ -2624,155 +2673,18 @@ pub async fn process_queue_orchestrator(
                         crate::config::save_history(&s.history);
                     }
 
-                    let results = if !approved {
-                        tool_calls
-                            .iter()
-                            .map(|(name, _)| {
-                                (
-                                    name.clone(),
-                                    "error: user denied this tool call".to_string(),
-                                    None,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                    } else {
-                        dbg_log!("Executing {} tool calls in parallel", tool_calls.len());
-                        let mut futures = Vec::new();
-                        for (name, args) in &tool_calls {
-                            let client_clone = client.clone();
-                            let state_clone = Arc::clone(&state);
-                            let cancel_token_clone = cancel_token.clone();
-                            let name_clone = name.clone();
-                            let args_clone = args.clone();
-
-                            let fut = async move {
-                                let is_read_only = is_read_only_tool(&name_clone);
-
-                                // Repeat-loop guard for read-only tools. For view_file we go
-                                // further than a signature match: a re-read is only blocked when
-                                // the file is UNCHANGED on disk since the last read, so the agent
-                                // can always refresh after a (possibly partial) edit. Other
-                                // read-only tools use a signature window.
-                                let mut is_repeat = false;
-                                let mut view_path: Option<String> = None;
-                                let mut view_mtime: Option<std::time::SystemTime> = None;
-
-                                if is_read_only {
-                                                                    if name_clone == "view_file" {
-                                        if let Some(p) =
-                                            args_clone.get("path").and_then(|p| p.as_str())
-                                        {
-                                            let sig = tool_signature(&name_clone, &args_clone);
-                                            let already_seen = {
-                                                let s = state_clone.lock().await;
-                                                s.recent_read_calls.iter().any(|c| c == &sig)
-                                            };
-                                            if already_seen {
-                                                let current = path_mtime(p);
-                                                let stored = {
-                                                    let s = state_clone.lock().await;
-                                                    s.read_file_mtimes.get(p).copied()
-                                                };
-                                                is_repeat =
-                                                    view_file_unchanged_since_last_read(
-                                                        stored, current,
-                                                    );
-                                            }
-                                            view_path = Some(p.to_string());
-                                            view_mtime = path_mtime(p);
-                                        }
-                                    } else {
-                                        let sig = tool_signature(&name_clone, &args_clone);
-                                        is_repeat = {
-                                            let s = state_clone.lock().await;
-                                            s.recent_read_calls.iter().any(|c| c == &sig)
-                                        };
-                                    }
-                                }
-
-                                let (result, diff_opt) = if is_repeat {
-                                    (
-                                        "You already ran this exact call — its result is in the \
-                                         context above. Re-reading gives no new information. Stop \
-                                         searching and either answer the user in prose now, or take \
-                                         a genuinely different action (a new file, a new query, or \
-                                         an edit)."
-                                            .to_string(),
-                                        None,
-                                    )
-                                } else if crate::tools::is_agent_tool(&name_clone)
-                                {
-                                    (
-                                        handle_agent_tool(
-                                            &client_clone,
-                                            &state_clone,
-                                            &cancel_token_clone,
-                                            &name_clone,
-                                            &args_clone,
-                                        )
-                                        .await,
-                                        None,
-                                    )
-                                } else {
-                                    confirm_and_execute(
-                                        &state_clone,
-                                        &cancel_token_clone,
-                                        &name_clone,
-                                        &args_clone,
-                                        &name_clone,
-                                        true, // bypass confirmation
-                                    )
-                                    .await
-                                };
-
-                                // Record this call so future identical read-only calls are caught.
-                                {
-                                    let mut s = state_clone.lock().await;
-                                    if let Some(p) = view_path
-                                        && !is_repeat {
-                                            if let Some(mt) = view_mtime {
-                                                s.read_file_mtimes.insert(p, mt);
-                                            } else {
-                                                // File couldn't be stat'd (e.g. already gone);
-                                                // drop any stale entry so a later read is allowed.
-                                                s.read_file_mtimes.remove(&p);
-                                            }
-                                        }
-                                    if is_read_only && !is_repeat {
-                                        let sig = tool_signature(&name_clone, &args_clone);
-                                        if !s.recent_read_calls.contains(&sig) {
-                                            s.recent_read_calls.push_back(sig);
-                                            while s.recent_read_calls.len() > 8 {
-                                                s.recent_read_calls.pop_front();
-                                            }
-                                        }
-                                    }
-                                }
-
-                                (name_clone, result, diff_opt)
-                            };
-                            futures.push(fut);
-                        }
-                        let mut results = join_all(futures).await;
-                        if made_edits {
-                            let root = edit_root
-                                .clone()
-                                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                            if let Some(compiler_errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
-                                dbg_log!("Inline compiler check detected errors after edit");
-                                let mut snippet = compiler_errors;
-                                if snippet.len() > 3000 {
-                                    snippet.truncate(3000);
-                                    snippet.push_str("\n... (compiler output truncated) ...");
-                                }
-                                if let Some((_, res, _)) = results.iter_mut().find(|(n, _, _)| is_mutating_tool(n)) {
-                                    res.push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
-                                    res.push_str(&snippet);
-                                }
-                            }
-                        }
-                        results
-                    };
+                    let results = execute_tool_batch(
+                        &client,
+                        &state,
+                        &cancel_token,
+                        &tool_calls,
+                        approved,
+                        made_edits,
+                        &edit_root,
+                        &mut compile_dirty,
+                        &mut compile_cache,
+                    )
+                    .await;
 
                     if cancel_token.is_cancelled() {
                         dbg_log!("Orchestrator: Cancelled during tool execution");
@@ -3217,47 +3129,6 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_leading_think() {
-        assert_eq!(
-            strip_leading_think("<think>\nreasoning here\n</think>\n\nfinal answer"),
-            "final answer"
-        );
-        assert_eq!(strip_leading_think("plain reply"), "plain reply");
-        // </think> mentioned mid-text without a leading block: untouched
-        assert_eq!(
-            strip_leading_think("text about </think> tags"),
-            "text about </think> tags"
-        );
-    }
-
-    #[test]
-    fn test_is_reasoning_only() {
-        // pure reasoning, no answer → stall we want to auto-continue
-        assert!(is_reasoning_only("<think>\nlet me plan\n</think>"));
-        assert!(is_reasoning_only("<think>plan</think>\n\n  \n"));
-        // reasoning followed by a real answer → complete
-        assert!(!is_reasoning_only(
-            "<think>plan</think>\n\nhere is the answer"
-        ));
-        // reasoning followed by a tool call → complete
-        assert!(!is_reasoning_only(
-            "<think>plan</think>\n```tool\n{\"name\":\"get_time\"}\n```"
-        ));
-        assert!(!is_reasoning_only(
-            "<think>plan</think>\n<tool_call>{\"name\":\"get_time\"}</tool_call>"
-        ));
-        // empty content is handled by the caller, not treated as reasoning-only
-        assert!(!is_reasoning_only("   "));
-        assert!(!is_reasoning_only("just a normal reply"));
-    }
-
-    #[test]
-    fn test_is_cut_off_reasoning_only() {
-        assert!(is_cut_off("<think>thinking</think>", None));
-        assert!(!is_cut_off("<think>thinking</think>\n\nthe answer", None));
-    }
-
-    #[test]
     fn test_parse_multimodal_content_plain() {
         let val = parse_multimodal_content("Hello world");
         assert_eq!(val, serde_json::Value::String("Hello world".to_string()));
@@ -3450,13 +3321,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_strip_ansi_escapes() {
-        let input = "\x1B[31mError\x1B[0m: compile failed \x1B[1mline 5\x1B[0m";
-        let output = strip_ansi_escapes(input);
-        assert_eq!(output, "Error: compile failed line 5");
-    }
-
     #[tokio::test]
     async fn test_run_compiler_check_success() {
         let cwd = std::env::current_dir().unwrap();
@@ -3480,5 +3344,45 @@ mod tests {
         assert_eq!(aligned[1]["content"], "[Context initialization]");
         assert_eq!(aligned[2]["role"], "assistant");
         assert_eq!(aligned[3]["role"], "user");
+    }
+
+    #[test]
+    fn test_build_dynamic_context_tail() {
+        let todo = |content: &str, status: &str| crate::app::TodoItem {
+            content: content.to_string(),
+            status: status.to_string(),
+            priority: "high".to_string(),
+        };
+
+        // No files and no todos: the context section is returned untouched.
+        assert_eq!(
+            build_dynamic_context_tail("# Env".to_string(), &[], &[]),
+            "# Env"
+        );
+
+        // Files-in-context section lists each file as a bullet.
+        let with_files = build_dynamic_context_tail(
+            "# Env".to_string(),
+            &["src/a.rs".to_string(), "src/b.rs".to_string()],
+            &[],
+        );
+        assert!(with_files.contains("# Files already in context"));
+        assert!(with_files.contains("- src/a.rs"));
+        assert!(with_files.contains("- src/b.rs"));
+
+        // Task plan renders status markers and 1-based ordering.
+        let with_todos = build_dynamic_context_tail(
+            String::new(),
+            &[],
+            &[
+                todo("done thing", "completed"),
+                todo("active thing", "in_progress"),
+                todo("later thing", "pending"),
+            ],
+        );
+        assert!(with_todos.contains("# Your current task plan"));
+        assert!(with_todos.contains("1. [x] done thing (high)"));
+        assert!(with_todos.contains("2. [~] active thing (high)"));
+        assert!(with_todos.contains("3. [ ] later thing (high)"));
     }
 }
