@@ -908,6 +908,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let page = s.page_rows();
                             s.scroll_down(page);
                         }
+                        KeyCode::End => {
+                            let mut s = app_state.lock().await;
+                            s.scroll_to_bottom();
+                        }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
                             let has_at = crate::app::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
@@ -1172,6 +1176,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             needs_redraw = true;
                         }
                         MouseEventKind::Down(MouseButton::Left) if !modal => {
+                            let hit_scroll_btn = s
+                                .scroll_to_bottom_btn
+                                .map(|r| {
+                                    r.contains(ratatui::layout::Position::new(
+                                        mouse.column,
+                                        mouse.row,
+                                    ))
+                                })
+                                .unwrap_or(false);
+                            if hit_scroll_btn {
+                                // Jump to newest — do NOT start a text selection, and do
+                                // NOT return from the event loop (that would quit the app).
+                                s.scroll_to_bottom();
+                                needs_redraw = true;
+                            } else {
                             let inside_chat = if let Some(ca) = s.chat_area {
                                 mouse.row >= ca.y && mouse.row < ca.y + ca.height &&
                                 mouse.column >= ca.x && mouse.column < ca.x + ca.width
@@ -1186,6 +1205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.clear_selection();
                             }
                             needs_redraw = true;
+                            }
                         }
                         MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
                             let mut target_row = mouse.row + s.scroll_row;

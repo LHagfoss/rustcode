@@ -440,6 +440,7 @@ pub struct AppState {
     pub mouse_capture_enabled: bool,
     pub agent_mode: crate::config::AgentMode,
     pub chat_area: Option<ratatui::layout::Rect>,
+    pub scroll_to_bottom_btn: Option<ratatui::layout::Rect>,
     pub selected_text: Option<String>,
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
@@ -490,16 +491,20 @@ fn get_cwd_and_branch() -> String {
 }
 
 impl AppState {
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_row = self.last_max_scroll;
+    }
+
     pub fn new() -> Self {
         let (api_base_url, model_name, mut config) = crate::config::load_config();
-        let _ = crate::config::init_active_session(&mut config);
-        let active_session_id = crate::config::create_new_session(&mut config);
+        let active_session_id = crate::config::start_session(&mut config);
         let agent_mode = config.agent_mode;
         let history = Vec::new();
         let cwd_and_branch = get_cwd_and_branch();
 
         Self {
             input_buffer: String::new(),
+            scroll_to_bottom_btn: None,
             history,
             current_response: String::new(),
             current_token_usage: None,

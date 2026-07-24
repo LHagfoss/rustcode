@@ -366,6 +366,15 @@ pub fn session_has_content(history: &[ChatMessage]) -> bool {
         .any(|m| m.role == "user" && !m.content.starts_with('/'))
 }
 
+/// A session is worth showing in `/history` or resuming only once a real
+/// exchange happened: a genuine user prompt AND at least one assistant reply.
+/// This hides abandoned prompt-only or goal-only sessions (e.g. a `/goal` that
+/// never produced output) so they don't bury the real chats or get picked by
+/// `/resume`.
+pub fn session_is_resumable(history: &[ChatMessage]) -> bool {
+    session_has_content(history) && history.iter().any(|m| m.role == "assistant")
+}
+
 fn session_title(history: &[ChatMessage]) -> String {
     let title = history
         .iter()
@@ -550,6 +559,22 @@ pub fn create_new_session(config: &mut AppConfig) -> String {
     session_id
 }
 
+/// Choose the session to open at startup. Reuses the last active session when it
+/// is still empty, so relaunching the app repeatedly doesn't litter the sessions
+/// directory with abandoned empty chats. If the last session already has real
+/// content, a fresh session is started (a new chat), as before.
+pub fn start_session(config: &mut AppConfig) -> String {
+    let last = init_active_session(config);
+    if last.is_empty() {
+        return last;
+    }
+    if session_has_content(&load_session_history_direct(&last)) {
+        create_new_session(config)
+    } else {
+        last
+    }
+}
+
 #[allow(dead_code)]
 pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
     if !session_has_content(history) {
@@ -625,10 +650,10 @@ pub fn list_sessions() -> Vec<SessionMeta> {
         .into_iter()
         .filter_map(|p| {
             let history = load_session_file(&p);
-            if history.is_empty() {
-                None
-            } else {
+            if session_is_resumable(&history) {
                 Some(session_meta_from(p, &history))
+            } else {
+                None
             }
         })
         .collect()
@@ -646,7 +671,7 @@ pub fn live_session_meta() -> Option<SessionMeta> {
             .join(&session_id)
             .join("history.json");
         let history = load_session_file(&path);
-        if session_has_content(&history) {
+        if session_is_resumable(&history) {
             return Some(session_meta_from(path, &history));
         }
     }
