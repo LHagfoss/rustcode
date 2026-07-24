@@ -1635,3 +1635,110 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         f.render_widget(Paragraph::new(footer_line), modal_chunks[5]);
     }
 }
+
+/// Interactive `ask_question` modal: renders the question and its options, with
+/// the highlighted option (and, for multi-select, ticked options) emphasized.
+pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
+    let Some(q) = &state.pending_question else {
+        return;
+    };
+
+    let screen = f.area();
+    let width = screen.width.saturating_sub(10).min(84).max(48);
+
+    // Wrap the question to the inner width so the modal height fits it.
+    let inner_w = width.saturating_sub(4).max(10) as usize;
+    let q_lines = textwrap_simple(&q.question, inner_w);
+    let hint = if q.is_multi_select {
+        "↑/↓ move · Space toggle · Enter confirm · Esc cancel"
+    } else {
+        "↑/↓ move · Enter select · 1-9 quick pick · Esc cancel"
+    };
+
+    let body_rows = q_lines.len() as u16 + 1 + q.options.len() as u16 + 1 + 1; // question + gap + opts + gap + hint
+    let height = (body_rows + 2).min(screen.height.saturating_sub(2)).max(6);
+    let modal_area = centered_rect_fixed(width, height, screen);
+
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL)),
+        modal_area,
+    );
+    let inner = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+
+    let mut lines: Vec<Line> = Vec::new();
+    for ql in q_lines {
+        lines.push(Line::from(Span::styled(
+            ql,
+            Style::default().fg(COLOR_PRIMARY).bg(COLOR_PANEL).add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    for (i, opt) in q.options.iter().enumerate() {
+        let is_sel = i == q.selected;
+        let marker = if q.is_multi_select {
+            if q.chosen.get(i).copied().unwrap_or(false) {
+                "[x] "
+            } else {
+                "[ ] "
+            }
+        } else if is_sel {
+            "› "
+        } else {
+            "  "
+        };
+        let label = format!("{marker}{}. {opt}", i + 1);
+        let style = if is_sel {
+            Style::default()
+                .fg(COLOR_BG)
+                .bg(COLOR_PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL)
+        };
+        // Pad the highlighted row so the selection bar spans the modal width.
+        let padded = format!("{label:<width$}", width = inner.width as usize);
+        lines.push(Line::from(Span::styled(padded, style)));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        hint,
+        Style::default().fg(COLOR_MUTED).bg(COLOR_PANEL),
+    )));
+
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL)),
+        inner,
+    );
+}
+
+/// Minimal greedy word-wrap used by the question modal (avoids pulling the chat
+/// wrapping helpers into modal code).
+fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            if line.is_empty() {
+                line.push_str(word);
+            } else if line.width() + 1 + word.width() <= width {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                out.push(std::mem::take(&mut line));
+                line.push_str(word);
+            }
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
