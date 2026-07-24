@@ -733,6 +733,120 @@ pub fn get_usage_history() -> std::collections::BTreeMap<String, MonthlyUsage> {
     std::collections::BTreeMap::new()
 }
 
+pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
+    let dir = get_config_dir().ok_or("Failed to get config directory")?;
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
+    }
+
+    let git_dir = dir.join(".git");
+    if !git_dir.exists() {
+        let init_status = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .status()
+            .map_err(|e| format!("Failed to run git init: {e}"))?;
+        if !init_status.success() {
+            return Err("git init failed".to_string());
+        }
+    }
+
+    // Set remote origin
+    let _ = std::process::Command::new("git")
+        .args(["remote", "remove", "origin"])
+        .current_dir(&dir)
+        .status();
+
+    let remote_status = std::process::Command::new("git")
+        .args(["remote", "add", "origin", remote_url])
+        .current_dir(&dir)
+        .status()
+        .map_err(|e| format!("Failed to add git remote: {e}"))?;
+
+    if !remote_status.success() {
+        return Err("git remote add origin failed".to_string());
+    }
+
+    println!("Initialized sync repository in {:?} -> {}", dir, remote_url);
+    Ok(())
+}
+
+pub fn sync_config() -> Result<(), String> {
+    let dir = get_config_dir().ok_or("Failed to get config directory")?;
+    let git_dir = dir.join(".git");
+    if !git_dir.exists() {
+        return Err(
+            "Sync repo not initialized. Please run: rustcode --sync-init <remote-git-url>".to_string(),
+        );
+    }
+
+    let host = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "device".to_string());
+
+    println!("Syncing rustcode config & skills from {:?}...", dir);
+
+    // 1. Git pull --rebase
+    let pull_out = std::process::Command::new("git")
+        .args(["pull", "--rebase", "origin", "main"])
+        .current_dir(&dir)
+        .output()
+        .map_err(|e| format!("Failed to pull updates: {e}"))?;
+
+    if pull_out.status.success() {
+        let msg = String::from_utf8_lossy(&pull_out.stdout);
+        println!("Pull result: {}", msg.trim());
+    } else {
+        let err = String::from_utf8_lossy(&pull_out.stderr);
+        eprintln!("Warning on pull: {}", err.trim());
+    }
+
+    // 2. Stage files (config.toml, skills/, sessions/)
+    let add_out = std::process::Command::new("git")
+        .args(["add", "config.toml", "skills", "sessions"])
+        .current_dir(&dir)
+        .status()
+        .map_err(|e| format!("Failed to stage files: {e}"))?;
+
+    if !add_out.success() {
+        return Err("git add failed".to_string());
+    }
+
+    // 3. Commit changes if any
+    let commit_msg = format!(
+        "sync: {} ({})",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        host
+    );
+    let commit_status = std::process::Command::new("git")
+        .args(["commit", "-m", &commit_msg])
+        .current_dir(&dir)
+        .status();
+
+    if let Ok(st) = commit_status {
+        if st.success() {
+            println!("Committed local changes: {}", commit_msg);
+        } else {
+            println!("No new local changes to commit.");
+        }
+    }
+
+    // 4. Push to remote
+    let push_out = std::process::Command::new("git")
+        .args(["push", "-u", "origin", "main"])
+        .current_dir(&dir)
+        .output()
+        .map_err(|e| format!("Failed to push to remote: {e}"))?;
+
+    if push_out.status.success() {
+        println!("Successfully pushed config to remote origin/main! 🚀");
+        Ok(())
+    } else {
+        let err = String::from_utf8_lossy(&push_out.stderr);
+        Err(format!("Push failed: {}", err.trim()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
