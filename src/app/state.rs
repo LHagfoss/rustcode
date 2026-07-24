@@ -7,6 +7,7 @@ pub enum AppStatus {
     Queued,
 
     AwaitingToolConfirmation,
+    AwaitingQuestion,
 }
 
 #[derive(Debug, Clone)]
@@ -15,6 +16,23 @@ pub struct ToolConfirmation {
     pub path: String,
     pub content_preview: String,
     pub content_bytes: usize,
+}
+
+/// An interactive `ask_question` prompt awaiting the user's choice. Rendered as
+/// a modal; the selected option(s) are sent back to the agent as the tool result.
+#[derive(Debug, Clone)]
+pub struct PendingQuestion {
+    pub question: String,
+    pub options: Vec<String>,
+    pub is_multi_select: bool,
+    /// Currently highlighted index. Valid range is `0..=options.len()`, where the
+    /// final index (`options.len()`) is the always-present "write your own answer" slot.
+    pub selected: usize,
+    /// For multi-select: which options are ticked (parallel to `options`).
+    pub chosen: Vec<bool>,
+    /// When `Some`, the user is typing a freeform answer (the "write your own"
+    /// slot is active); the string is the in-progress text.
+    pub custom_input: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -408,6 +426,11 @@ pub struct AppState {
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
+    /// Active interactive `ask_question` prompt and the channel that delivers the
+    /// user's selection back to the awaiting tool call.
+    pub pending_question: Option<PendingQuestion>,
+    pub question_response: Option<tokio::sync::oneshot::Sender<String>>,
+
     /// The names of user-approved tools currently running in the background.
     /// While this is not empty, the modal overlay stays closed and the user can
     /// keep working normally.
@@ -540,6 +563,8 @@ impl AppState {
             pending_tool_confirmation: None,
             modal_scroll_row: 0,
             tool_confirmation_response: None,
+            pending_question: None,
+            question_response: None,
             running_tools: Vec::new(),
             stream_tracker: None,
             auto_confirm: false,
@@ -581,6 +606,7 @@ impl AppState {
             || self.show_history_picker
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation
+            || self.status == AppStatus::AwaitingQuestion
     }
 
     /// Returns the auto-confirm status label for the UI footer.

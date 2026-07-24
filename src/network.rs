@@ -1188,6 +1188,74 @@ async fn cached_compiler_check(
     result
 }
 
+/// Handle an interactive `ask_question` tool call: show the option-picker modal
+/// and block until the user chooses (or cancels / the turn is cancelled). Returns
+/// the chosen option text — that becomes the tool result fed back to the model,
+/// so it can continue with the user's answer.
+async fn ask_user_question(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    args: &serde_json::Value,
+) -> String {
+    let question = args
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let options: Vec<String> = args
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| o.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let is_multi_select = args
+        .get("is_multi_select")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if question.is_empty() || options.is_empty() {
+        return "error: ask_question requires a non-empty 'question' and 'options'".to_string();
+    }
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    {
+        let mut s = state.lock().await;
+        s.pending_question = Some(crate::app::PendingQuestion {
+            question,
+            chosen: vec![false; options.len()],
+            options,
+            is_multi_select,
+            selected: 0,
+            custom_input: None,
+        });
+        s.question_response = Some(tx);
+        s.status = AppStatus::AwaitingQuestion;
+    }
+    let _ = crate::notifications::notify_pending_confirmation("ask_question");
+
+    let answer = tokio::select! {
+        _ = cancel_token.cancelled() => None,
+        res = rx => res.ok(),
+    };
+
+    {
+        let mut s = state.lock().await;
+        s.pending_question = None;
+        s.question_response = None;
+        if s.status == AppStatus::AwaitingQuestion {
+            s.status = AppStatus::Streaming;
+        }
+    }
+
+    match answer {
+        Some(a) if !a.is_empty() => format!("User selected: {a}"),
+        _ => "error: the user dismissed the question without answering".to_string(),
+    }
+}
+
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
 /// tool. `display_name` is what the modal shows — subagent calls prefix it
 /// with the agent id so the user knows who is asking.
@@ -2232,6 +2300,11 @@ async fn execute_tool_batch(
                      a genuinely different action (a new file, a new query, or \
                      an edit)."
                         .to_string(),
+                    None,
+                )
+            } else if name_clone == "ask_question" {
+                (
+                    ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await,
                     None,
                 )
             } else if crate::tools::is_agent_tool(&name_clone) {
