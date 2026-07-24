@@ -334,7 +334,7 @@ pub async fn handle_enter(
             "/protocol" | "/parser" => {
                 if tokens.len() < 2 {
                     let msg = format!(
-                        "Current tool protocol: {:?}\nSupported formats: json, native. Use '/protocol native' or '/protocol json' to switch.",
+                        "Current tool protocol: {:?}\nSupported formats: json, native, apinative. Use '/protocol json', '/protocol native', or '/protocol apinative' to switch.\n(apinative = send the tool schema in the request's `tools` field and read structured `tool_calls` back; only works on providers that support OpenAI-style tool calling.)",
                         s.config.tool_protocol
                     );
                     s.history.push(ChatMessage::new("system", msg));
@@ -357,11 +357,19 @@ pub async fn handle_enter(
                                 "Switched tool protocol to Native ([TOOL_CALLS]).".to_string(),
                             ));
                         }
+                        "apinative" | "api" => {
+                            s.config.tool_protocol = crate::config::ToolProtocol::ApiNative;
+                            crate::config::save_entire_config(&s.config);
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                "Switched tool protocol to ApiNative (schema in request `tools`, structured `tool_calls` back). Requires a provider that supports OpenAI-style tool calling.".to_string(),
+                            ));
+                        }
                         _ => {
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
-                                    "Unknown protocol '{}'. Supported options are 'json' or 'native'.",
+                                    "Unknown protocol '{}'. Supported options are 'json', 'native', or 'apinative'.",
                                     tokens[1]
                                 ),
                             ));

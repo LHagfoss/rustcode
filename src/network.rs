@@ -505,7 +505,7 @@ pub async fn stream_request(
     quiet: bool,
 ) -> Result<Option<String>, String> {
     let aligned_messages = align_alternating_messages(messages.to_vec());
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "model": model,
         "messages": aligned_messages,
         "stream": true,
@@ -523,6 +523,20 @@ pub async fn stream_request(
         // Guard against runaway repetition even at low temperature.
         "frequency_penalty": 0.3,
     });
+
+    // ApiNative protocol: attach the tool schema so the provider returns
+    // structured `tool_calls` (handled by the SSE accumulator below) instead of
+    // the model writing tool calls as text. Only sent for this opt-in protocol;
+    // text protocols leave the payload untouched.
+    let tool_protocol = { state.lock().await.config.tool_protocol };
+    if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
+        let schema = crate::tools::native_tools_schema(true);
+        if !schema.is_empty() {
+            payload["tools"] = serde_json::Value::Array(schema);
+            payload["tool_choice"] = serde_json::json!("auto");
+        }
+    }
+
     dbg_log!(
         "stream_request: Request payload: {}",
         serde_json::to_string_pretty(&payload).unwrap_or_default()
