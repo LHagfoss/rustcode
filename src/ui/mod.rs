@@ -1369,6 +1369,31 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     f.render_widget(conversation_paragraph, inner_area);
 
+    // Sticky "scroll to bottom" pill — rendered AFTER the chat paragraph so it
+    // isn't painted over. Near the top, horizontally centered, small top padding.
+    // saturating_sub / min guard against narrow viewports.
+    if state.scroll_row < state.last_max_scroll {
+        let btn_width = 18u16.min(inner_area.width);
+        let btn_x = inner_area.x + inner_area.width.saturating_sub(btn_width) / 2;
+        let btn_y = inner_area.y + 1;
+        let btn_rect = ratatui::layout::Rect::new(btn_x, btn_y, btn_width, 1);
+        state.scroll_to_bottom_btn = Some(btn_rect);
+        f.render_widget(ratatui::widgets::Clear, btn_rect);
+        f.render_widget(
+            ratatui::widgets::Paragraph::new("scroll to bottom ↓")
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(get_themed_style(
+                    COLOR_BG,
+                    COLOR_PRIMARY,
+                    ratatui::prelude::Modifier::BOLD,
+                    false,
+                )),
+            btn_rect,
+        );
+    } else {
+        state.scroll_to_bottom_btn = None;
+    }
+
     // Map visible thought headers to on-screen rows for click hit-testing.
     state.thought_toggle_rows.clear();
     for (wrapped_row, midx) in header_wrapped_rows {
