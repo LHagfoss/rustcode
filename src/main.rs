@@ -35,6 +35,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
 
+    if let Some(ref remote_url) = cli_args.sync_init {
+        if let Err(e) = config::init_sync_repo(remote_url) {
+            eprintln!("Error initializing sync repo: {e}");
+            std::process::exit(1);
+        }
+        println!("Sync repository setup complete! You can now run `rustcode --sync` anytime.");
+        return Ok(());
+    }
+
+    if cli_args.sync {
+        if let Err(e) = config::sync_config() {
+            eprintln!("Sync failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     if let Some(prompt) = cli_args.prompt {
         raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
         return Ok(());

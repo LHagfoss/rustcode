@@ -22,4 +22,12 @@ pub struct Cli {
     /// Override the active AI model name
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
+
+    /// Sync config, skills, and sessions with remote Git repository
+    #[arg(long = "sync")]
+    pub sync: bool,
+
+    /// Initialize remote Git repository for config sync
+    #[arg(long = "sync-init")]
+    pub sync_init: Option<String>,
 }
