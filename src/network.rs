@@ -1185,42 +1185,80 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
         if !errors.is_empty() {
             return Some(errors.join("\n"));
         }
-    } else if cwd.join("tsconfig.json").exists() {
-        let mut cmd = tokio::process::Command::new(resolve_bin("npx"));
-        cmd.args(["tsc", "--noEmit"])
+    } else if cwd.join("biome.json").exists() || cwd.join("biome.jsonc").exists() {
+        let (runner, bin_arg) = if resolve_bin("bunx").exists() {
+            (resolve_bin("bunx"), "biome")
+        } else {
+            (resolve_bin("npx"), "@biomejs/biome")
+        };
+
+        let mut cmd = tokio::process::Command::new(runner);
+        cmd.args([bin_arg, "check", "."])
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         let child = match cmd.spawn() {
             Ok(c) => c,
-            Err(e) => return Some(format!("Failed to spawn npx tsc: {e}")),
+            Err(e) => {
+                dbg_log!("Could not spawn biome check ({e}), skipping compiler check");
+                return None;
+            }
         };
 
-        let timeout_duration = std::time::Duration::from_secs(120);
+        let timeout_duration = std::time::Duration::from_secs(60);
         let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
 
         let output = match output_res {
             Ok(Ok(out)) => out,
-            Ok(Err(e)) => return Some(format!("npx tsc failed to run: {e}")),
-            Err(_) => return Some("npx tsc timed out after 5 seconds".to_string()),
+            Ok(Err(_)) | Err(_) => return None,
         };
 
         if !output.status.success() {
             let stdout_str = String::from_utf8_lossy(&output.stdout);
             let stderr_str = String::from_utf8_lossy(&output.stderr);
-            let mut combined = String::new();
-            if !stdout_str.is_empty() {
-                combined.push_str(&stdout_str);
+            let combined = format!("{stdout_str}\n{stderr_str}");
+            let trimmed = combined.trim();
+            if !trimmed.is_empty() {
+                return Some(strip_ansi_escapes(trimmed));
             }
-            if !stderr_str.is_empty() {
-                if !combined.is_empty() {
-                    combined.push('\n');
-                }
-                combined.push_str(&stderr_str);
+        }
+    } else if cwd.join("tsconfig.json").exists() {
+        let (runner, bin_arg) = if resolve_bin("bunx").exists() {
+            (resolve_bin("bunx"), "tsc")
+        } else {
+            (resolve_bin("npx"), "tsc")
+        };
+
+        let mut cmd = tokio::process::Command::new(runner);
+        cmd.args([bin_arg, "--noEmit"])
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                dbg_log!("Could not spawn {bin_arg} ({e}), skipping compiler check");
+                return None;
             }
-            if !combined.is_empty() {
-                return Some(strip_ansi_escapes(&combined));
+        };
+
+        let timeout_duration = std::time::Duration::from_secs(60);
+        let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
+
+        let output = match output_res {
+            Ok(Ok(out)) => out,
+            Ok(Err(_)) | Err(_) => return None,
+        };
+
+        if !output.status.success() {
+            let stdout_str = String::from_utf8_lossy(&output.stdout);
+            let stderr_str = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("{stdout_str}\n{stderr_str}");
+            let trimmed = combined.trim();
+            if !trimmed.is_empty() {
+                return Some(strip_ansi_escapes(trimmed));
             }
         }
     }

@@ -3,7 +3,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(
     name = "rustcode",
-    version = "0.1.15",
+    version = env!("CARGO_PKG_VERSION"),
     about = "AI-powered agentic coding assistant terminal"
 )]
 pub struct Cli {
