@@ -403,6 +403,7 @@ pub struct AppState {
 
     pub last_copy_time: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
+    pub modal_scroll_row: u16,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
@@ -530,6 +531,7 @@ impl AppState {
             mcp_edit_state: None,
             last_copy_time: None,
             pending_tool_confirmation: None,
+            modal_scroll_row: 0,
             tool_confirmation_response: None,
             running_tools: Vec::new(),
             stream_tracker: None,

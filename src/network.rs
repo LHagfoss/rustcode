@@ -1338,6 +1338,7 @@ async fn confirm_and_execute(
         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
         {
             let mut s = state.lock().await;
+            s.modal_scroll_row = 0;
             s.pending_tool_confirmation = Some(vec![ToolConfirmation {
                 tool_name: display_name.to_string(),
                 path,
@@ -2482,6 +2483,7 @@ pub async fn process_queue_orchestrator(
                         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
                         {
                             let mut s = state.lock().await;
+                            s.modal_scroll_row = 0;
                             s.pending_tool_confirmation = Some(confirmations);
                             s.tool_confirmation_response = Some(tx);
                             s.status = AppStatus::AwaitingToolConfirmation;
