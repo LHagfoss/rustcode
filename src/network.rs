@@ -112,30 +112,56 @@ fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
     }
 }
 
-/// Extract the path from an intact `view_file: [File: <path>, ...]` result.
-fn view_file_path_from_tool_msg(content: &str) -> Option<String> {
+/// Extract `(path, start_line, end_line)` from an intact `view_file` result
+/// header, e.g. `view_file: [File: src/a.rs, Lines 10 to 40 of 200, ...]`.
+/// A read with no explicit line range is treated as the whole file
+/// (`0..=u32::MAX`) so a full read is recognised as covering any partial read.
+fn view_file_range_from_tool_msg(content: &str) -> Option<(String, u32, u32)> {
     let rest = content.strip_prefix("view_file:")?;
-    let after = rest.split("[File:").nth(1)?;
-    let path = after.split(',').next()?.trim();
+    let inner = rest.split("[File:").nth(1)?;
+    let path = inner.split([',', ']']).next()?.trim();
     if path.is_empty() {
         return None;
     }
-    Some(path.to_string())
+    let (start, end) = match inner.split("Lines").nth(1) {
+        Some(after) => {
+            let nums: Vec<u32> = after
+                .split("of")
+                .next()
+                .unwrap_or(after)
+                .split(|c: char| !c.is_ascii_digit())
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            match nums.as_slice() {
+                [s, e, ..] => (*s, *e),
+                _ => (0, u32::MAX),
+            }
+        }
+        None => (0, u32::MAX),
+    };
+    Some((path.to_string(), start, end))
 }
 
+/// Collapse redundant `view_file` results. A read is superseded ONLY when a
+/// LATER read of the same path covers its whole line range (a superset or an
+/// identical re-read). Distinct or partially-overlapping ranges are all kept,
+/// so the model never loses a part of a file it deliberately paged through — the
+/// bug that made range reads vanish behind a misleading "superseded" stub.
 fn dedupe_view_file_reads(history: &mut [ChatMessage]) {
-    use std::collections::HashMap;
-    let mut keep_index: HashMap<String, usize> = HashMap::new();
-    for (idx, m) in history.iter().enumerate() {
-        if let Some(path) = view_file_path_from_tool_msg(&m.content) {
-            keep_index.insert(path, idx); // newest wins
-        }
-    }
-    for (idx, m) in history.iter_mut().enumerate() {
-        if let Some(path) = view_file_path_from_tool_msg(&m.content)
-            && keep_index.get(&path) != Some(&idx)
-        {
-            m.content = format!("view_file: [superseded by a later read of {path}]");
+    let reads: Vec<(usize, String, u32, u32)> = history
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, m)| {
+            view_file_range_from_tool_msg(&m.content).map(|(p, s, e)| (idx, p, s, e))
+        })
+        .collect();
+
+    for &(i, ref path_i, start_i, end_i) in &reads {
+        let covered_by_later = reads.iter().any(|&(j, ref path_j, start_j, end_j)| {
+            j > i && path_j == path_i && start_j <= start_i && end_j >= end_i
+        });
+        if covered_by_later {
+            history[i].content = format!("view_file: [superseded by a later read of {path_i}]");
         }
     }
 }
@@ -3190,19 +3216,24 @@ mod tests {
     }
 
     #[test]
-    fn test_view_file_path_extraction() {
+    fn test_view_file_range_extraction() {
         let content = "view_file: [File: src/main.rs, Lines 1 to 500 of 1128, Bytes offset: 0]\n1: mod app;";
         assert_eq!(
-            view_file_path_from_tool_msg(content),
-            Some("src/main.rs".to_string())
+            view_file_range_from_tool_msg(content),
+            Some(("src/main.rs".to_string(), 1, 500))
+        );
+        // A read with no explicit range is treated as the whole file.
+        assert_eq!(
+            view_file_range_from_tool_msg("view_file: [File: src/a.rs]\ncontents"),
+            Some(("src/a.rs".to_string(), 0, u32::MAX))
         );
         // Stubs and non-view_file messages yield None.
         assert_eq!(
-            view_file_path_from_tool_msg("view_file: [Tool output truncated: 123 pruned]"),
+            view_file_range_from_tool_msg("view_file: [Tool output truncated: 123 pruned]"),
             None
         );
-        assert_eq!(view_file_path_from_tool_msg("grep: some match"), None);
-        assert_eq!(view_file_path_from_tool_msg(""), None);
+        assert_eq!(view_file_range_from_tool_msg("grep: some match"), None);
+        assert_eq!(view_file_range_from_tool_msg(""), None);
     }
 
     #[test]
@@ -3246,6 +3277,34 @@ mod tests {
         assert!(!history[3].content.contains("[superseded"));
         assert!(!history[4].content.contains("[superseded"));
         assert!(history[4].content.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_dedupe_is_range_aware() {
+        let mk = |c: &str| ChatMessage::new("tool", c);
+        let vf =
+            |p: &str, s: u32, e: u32| format!("view_file: [File: {p}, Lines {s} to {e} of 999]\nx");
+
+        // Distinct, non-overlapping ranges of the SAME file are all kept — this
+        // is the regression: paging through a file must not erase earlier pages.
+        let mut h = vec![
+            mk(&vf("src/a.rs", 1, 40)),
+            mk(&vf("src/a.rs", 100, 140)),
+            mk(&vf("src/a.rs", 500, 540)),
+        ];
+        dedupe_view_file_reads(&mut h);
+        assert!(h.iter().all(|m| !m.content.contains("[superseded")));
+
+        // A later read whose range covers an earlier one supersedes it.
+        let mut h2 = vec![mk(&vf("src/a.rs", 100, 140)), mk(&vf("src/a.rs", 1, 900))];
+        dedupe_view_file_reads(&mut h2);
+        assert!(h2[0].content.contains("[superseded"));
+        assert!(!h2[1].content.contains("[superseded"));
+
+        // An earlier full read is NOT clobbered by a later partial (subset) read.
+        let mut h3 = vec![mk(&vf("src/a.rs", 1, 900)), mk(&vf("src/a.rs", 100, 140))];
+        dedupe_view_file_reads(&mut h3);
+        assert!(h3.iter().all(|m| !m.content.contains("[superseded")));
     }
 
     #[test]
