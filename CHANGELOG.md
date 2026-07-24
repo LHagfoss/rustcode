@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.1.18] - 2025-07-25
+- Add ApiNative tool protocol using provider function-calling
+- Improve JS/TS project check (use biome if available)
+- Stabilize prompt cache prefix and dedupe compiler checks
+- UI: dynamic modal sizing, scrollable diff preview, and toggleable inline diff cards
+
 ## [v0.1.17] - 2025-07-24
 - Refactor: update dependencies, main logic, and UI structure
 - Chore: bump version to 0.1.17
