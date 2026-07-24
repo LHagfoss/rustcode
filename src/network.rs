@@ -20,7 +20,7 @@ pub(crate) use helpers::{count_tokens, classify_tool_msg, parse_sse_line};
 
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
-pub(crate) use messages::{RESPONSE_RESERVE_TOKENS, trim_msgs_to_budget, inject_system_reminder};
+pub(crate) use messages::{RESPONSE_RESERVE_TOKENS, append_to_last_message, trim_msgs_to_budget, inject_system_reminder};
 
 
 
@@ -1228,6 +1228,30 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
     None
 }
 
+/// Run a compiler check, reusing the previous result when the tree hasn't been
+/// dirtied since. `cargo check` is slow, and one task can hit the check at
+/// several points in a single round (inline after a tool batch, then again at
+/// the finish gate). Without this, an edit-and-complete round runs `cargo check`
+/// two or three times over an identical tree. `dirty` is set by the caller
+/// whenever a mutating tool runs; this clears it after a fresh check.
+async fn cached_compiler_check(
+    root: &std::path::Path,
+    dirty: &mut bool,
+    cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+) -> Option<String> {
+    if !*dirty
+        && let Some((cached_root, cached_result)) = cache.as_ref()
+        && cached_root == root
+    {
+        dbg_log!("Compiler check: reusing cached result (tree unchanged since last check)");
+        return cached_result.clone();
+    }
+    let result = run_compiler_check(root).await;
+    *cache = Some((root.to_path_buf(), result.clone()));
+    *dirty = false;
+    result
+}
+
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
 /// tool. `display_name` is what the modal shows — subagent calls prefix it
 /// with the agent id so the user knows who is asking.
@@ -2068,6 +2092,13 @@ pub async fn process_queue_orchestrator(
         // root to compile-check, plus a retry budget so the gate can't loop.
         let mut made_edits = false;
         let mut edit_root: Option<std::path::PathBuf> = None;
+        // Compiler-check dedup: `cargo check` is expensive and a single task can
+        // want the result at multiple points (inline after edits, then the finish
+        // gate). Track whether a mutating tool has dirtied the tree since the last
+        // check and cache the outcome so we don't recompile an unchanged tree two
+        // or three times per round.
+        let mut compile_dirty = true;
+        let mut compile_cache: Option<(std::path::PathBuf, Option<String>)> = None;
         let mut finish_gate_retries: u32 = 0;
         const MAX_FINISH_GATE_RETRIES: u32 = 2;
         loop {
@@ -2125,11 +2156,14 @@ pub async fn process_queue_orchestrator(
             };
             let protocol = { state.lock().await.config.tool_protocol };
             let agent_mode = { state.lock().await.agent_mode };
-            let mut system_prompt = format!(
-                "{}\n\n{}",
-                crate::tools::tool_system_prompt(true, protocol, agent_mode),
-                context_section
-            );
+            // The system prompt is kept STATIC across turns (it only depends on the
+            // tool protocol and agent mode, which don't change mid-task). A stable
+            // prefix lets the provider's automatic prompt cache stay warm — every
+            // round after the first re-bills only the dynamic tail below instead of
+            // the whole tool-definition block. Turn-varying context (environment
+            // delta, files-in-context, task plan) is appended to the LAST message
+            // instead, so it never invalidates the cached prefix.
+            let system_prompt = crate::tools::tool_system_prompt(true, protocol, agent_mode);
             // Store the snapshot if this is the first turn
             {
                 let mut s = state.lock().await;
@@ -2138,9 +2172,13 @@ pub async fn process_queue_orchestrator(
                 }
             }
 
+            // Build the turn-varying context tail (appended to the last message
+            // after the history is assembled, to preserve the cached prefix).
+            let mut dynamic_context = context_section;
+
             // Remind the agent which files it already has so it doesn't re-read them.
             if !read_files.is_empty() {
-                system_prompt.push_str(&format!(
+                dynamic_context.push_str(&format!(
                     "\n\n# Files already in context (do NOT re-read these unless they changed on disk)\n{}",
                     read_files
                         .drain(..)
@@ -2153,7 +2191,7 @@ pub async fn process_queue_orchestrator(
             // Re-inject the persistent task plan so the agent executes across turns
             // instead of re-planning from scratch.
             if !todos.is_empty() {
-                system_prompt.push_str(
+                dynamic_context.push_str(
                     "\n\n# Your current task plan (execute in order; update via todo_write)\n",
                 );
                 for (i, t) in todos.iter().enumerate() {
@@ -2162,7 +2200,7 @@ pub async fn process_queue_orchestrator(
                         "in_progress" => "[~]",
                         _ => "[ ]",
                     };
-                    system_prompt.push_str(&format!(
+                    dynamic_context.push_str(&format!(
                         "{}. {} {} ({})\n",
                         i + 1,
                         mark,
@@ -2197,6 +2235,11 @@ pub async fn process_queue_orchestrator(
                     serde_json::json!({"role": m.role, "content": m.content})
                 }
             }));
+
+            // Attach turn-varying context to the tail so the static system prefix
+            // stays cache-stable. Done before budget trimming so its size counts
+            // toward the budget.
+            append_to_last_message(&mut msgs, &dynamic_context);
 
             let window = { state.lock().await.active_context_window() };
             let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
@@ -2394,6 +2437,9 @@ pub async fn process_queue_orchestrator(
                     if is_mutating_tool(name) {
                         made_edits = true;
                         edit_root = Some(get_tool_project_root(name, args));
+                        // A mutating tool will run this round — invalidate the
+                        // cached compiler result so the next check recompiles.
+                        compile_dirty = true;
                     }
                 }
                 match loop_status {
@@ -2660,7 +2706,7 @@ pub async fn process_queue_orchestrator(
                             let root = edit_root
                                 .clone()
                                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                            if let Some(compiler_errors) = run_compiler_check(&root).await {
+                            if let Some(compiler_errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
                                 dbg_log!("Inline compiler check detected errors after edit");
                                 let mut snippet = compiler_errors;
                                 if snippet.len() > 3000 {
@@ -2714,7 +2760,7 @@ pub async fn process_queue_orchestrator(
                             let root = edit_root
                                 .clone()
                                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                            if let Some(errors) = run_compiler_check(&root).await {
+                            if let Some(errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
                                 dbg_log!("complete_task finish gate failed with compiler errors");
                                 s.history.push(ChatMessage::new(
                                     "system",
@@ -2824,7 +2870,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                     .clone()
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 dbg_log!("Finish gate: compile-checking {} before accepting done", root.display());
-                if let Some(errors) = run_compiler_check(&root).await {
+                if let Some(errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
                     finish_gate_retries += 1;
                     tool_rounds += 1;
                     dbg_log!("Finish gate: build is RED, forcing a fix round ({}/{})", finish_gate_retries, MAX_FINISH_GATE_RETRIES);
