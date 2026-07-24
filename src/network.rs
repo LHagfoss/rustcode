@@ -2446,19 +2446,18 @@ pub async fn process_queue_orchestrator(
             // risk re-entering the loop we just broke out of.
             if force_final {
                 dbg_log!("Loop wrap-up: recording forced text answer and finishing");
-                // The model may ignore "tools disabled" and emit a tool call as
-                // text anyway. Strip that syntax so we never save a raw tool call
-                // as the answer; if nothing useful remains, synthesize a fallback
-                // so the user gets a real explanation instead of a dead stop.
                 let prose = strip_tool_call_syntax(&final_content);
-                let answer = if prose.is_empty() {
-                    "I stopped because I was repeating the same actions without making \
-                     progress (a loop). I could not complete this task automatically. \
-                     What I gathered is in the context above; consider narrowing the task \
-                     or giving me a more specific next step."
+                // Filter out any system prompt leak or empty content
+                let clean_prose = prose
+                    .lines()
+                    .filter(|line| !line.trim().starts_with("- ") && !line.contains("system directive") && !line.contains("CRITICAL — you are stuck"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let answer = if clean_prose.trim().is_empty() {
+                    "I encountered a repeating loop while running tool actions and have stopped to prevent unnecessary repetition. I was unable to complete the task automatically. Please check the current changes or re-run with a more specific prompt."
                         .to_string()
                 } else {
-                    prose
+                    clean_prose.trim().to_string()
                 };
                 let mut s = state.lock().await;
                 s.history.push(ChatMessage::new("assistant", &answer));
