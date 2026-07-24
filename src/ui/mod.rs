@@ -1442,6 +1442,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         };
 
         if state.current_response.is_empty() {
+            let spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
             let random_statuses = [
                 "Thinking...",
                 "Analyzing code...",
@@ -1453,9 +1454,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 "Debugging the universe...",
             ];
             let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            let frame = spinner_frames[(elapsed_secs as usize * 4) % spinner_frames.len()];
             let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
 
             let mut status_spans: Vec<Span> = vec![
+                Span::styled(
+                    format!("{frame} "),
+                    get_themed_style(COLOR_GREEN, COLOR_BG, Modifier::BOLD, show_picker),
+                ),
                 Span::styled(
                     format!("{status_msg} "),
                     get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
@@ -1490,76 +1496,38 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(status_spans));
         } else {
             let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
+            render_assistant_message(
+                &state.current_response,
+                None,
+                &model_label(state),
+                &mut lines,
+                true,
+                inner_area.width,
+                show_picker,
+                false,
+                None,
+                &mut thought_clicks,
+                is_copied_recently,
+            );
 
-            // Check if current streaming response is a tool call syntax
-            let parsed_tool = crate::tools::parse_tool_call(&state.current_response, state.config.tool_protocol);
-            let is_tool_syntax = crate::tools::is_tool_call_start(&state.current_response);
-
-            let should_hide_stream = match parsed_tool {
-                Some((ref tool_name, _)) => !crate::tools::is_code_editing_tool(tool_name),
-                None => is_tool_syntax,
-            };
-
-            if should_hide_stream {
-                let random_statuses = [
-                    "Preparing tool action...",
-                    "Analyzing query...",
-                    "Gathering context...",
-                    "Checking codebase...",
-                ];
-                let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
-                let status_msg = random_statuses[(elapsed_secs as usize / 2) % random_statuses.len()];
-
-                let tool_label = parsed_tool.map(|(n, _)| format!("Executing {n}...")).unwrap_or_else(|| status_msg.to_string());
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{tool_label} "),
-                        get_themed_style(COLOR_TIP, COLOR_BG, Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        " · ",
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                    Span::styled(
-                        model_label(state),
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                ]));
-            } else {
-                render_assistant_message(
-                    &state.current_response,
-                    None,
-                    &model_label(state),
-                    &mut lines,
-                    true,
-                    inner_area.width,
-                    show_picker,
-                    false,
-                    None,
-                    &mut thought_clicks,
-                    is_copied_recently,
-                );
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "■ ",
-                        get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                    Span::styled(
-                        label,
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        " · ",
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                    Span::styled(
-                        model_label(state),
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                ]));
-            }
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "■ ",
+                    get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    label,
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    " · ",
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    model_label(state),
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                ),
+            ]));
         }
 
         lines.push(Line::from(""));

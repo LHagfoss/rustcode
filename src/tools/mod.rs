@@ -755,18 +755,6 @@ pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Ve
     unique_calls
 }
 
-pub fn is_code_editing_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "replace_file_content" | "multi_replace_file_content" | "write_to_file"
-    )
-}
-
-pub fn is_tool_call_start(text: &str) -> bool {
-    let trimmed = text.trim();
-    trimmed.contains("```tool") || trimmed.contains("[TOOL_CALLS]") || (trimmed.starts_with('{') && (trimmed.contains("\"name\"") || trimmed.contains("\"tool\"")))
-}
-
 pub fn parse_tool_call(
     text: &str,
     protocol: crate::config::ToolProtocol,
