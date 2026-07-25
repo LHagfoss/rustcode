@@ -2380,6 +2380,11 @@ async fn execute_tool_batch(
     }
     let mut results = join_all(futures).await;
     if made_edits {
+        {
+            let mut s = state.lock().await;
+            s.recent_read_calls.clear();
+            s.read_file_mtimes.clear();
+        }
         let root = edit_root
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
