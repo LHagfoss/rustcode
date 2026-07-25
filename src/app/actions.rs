@@ -43,11 +43,17 @@ pub async fn handle_escape(
 
     if s.status == AppStatus::Streaming {
         s.status = AppStatus::Idle;
+        if s.config.discord_rpc_enabled {
+            s.discord_rpc.clear_activity();
+        }
         s.pending_queue.clear();
     } else if !s.pending_queue.is_empty() {
         s.pending_queue.remove(0);
         if s.pending_queue.is_empty() {
             s.status = AppStatus::Idle;
+            if s.config.discord_rpc_enabled {
+                s.discord_rpc.clear_activity();
+            }
         }
     }
 }
@@ -113,6 +119,25 @@ pub async fn handle_enter(
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
+            "/discord" => {
+                s.config.discord_rpc_enabled = !s.config.discord_rpc_enabled;
+                crate::config::save_entire_config(&s.config);
+                let is_enabled = s.config.discord_rpc_enabled;
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!(
+                        "Switched Discord Rich Presence to {}",
+                        if is_enabled { "ON" } else { "OFF" }
+                    ),
+                ));
+                if is_enabled {
+                    s.discord_rpc.connect();
+                    let model_name = s.model_name.clone();
+                    s.discord_rpc.set_activity("Idle", &format!("Using model: {}", model_name));
+                } else {
+                    s.discord_rpc.clear_activity();
+                }
+            }
             "/goal" => {
                 let goal_text = tokens[1..].join(" ");
                 if goal_text.trim().is_empty() {
@@ -158,9 +183,7 @@ pub async fn handle_enter(
             "/copy" => {
                 copy_last_reply(&mut s);
             }
-            "/quota" => {
-                trigger_quota_fetch(&s, state, client);
-            }
+
             "/resume" => {
                 resume_latest_session(&mut s);
             }
@@ -299,9 +322,7 @@ pub async fn handle_enter(
 
                 s.history.push(ChatMessage::new("system", text));
             }
-            "/quota" => {
-                trigger_quota_fetch(&s, state, client);
-            }
+
             "/session" => {
                 let session_info = format!(
                     "Session ID: {}\nToken budget (history_token_budget): {} tokens\nActive model: {}",
@@ -386,6 +407,10 @@ pub async fn handle_enter(
                             "system",
                             format!("Switched to model profile '{}'", name),
                         ));
+                        if s.config.discord_rpc_enabled {
+                            let model_name = s.model_name.clone();
+                            s.discord_rpc.set_activity("Idle", &format!("Using model: {}", model_name));
+                        }
                     } else {
                         s.model_name = name.clone();
                         let default_name = s.config.default.big().to_string();

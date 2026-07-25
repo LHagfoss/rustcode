@@ -1252,7 +1252,11 @@ async fn ask_user_question(
         s.pending_question = None;
         s.question_response = None;
         if s.status == AppStatus::AwaitingQuestion {
+            let model_name = s.model_name.clone();
             s.status = AppStatus::Streaming;
+            if s.config.discord_rpc_enabled {
+                s.discord_rpc.set_activity("Streaming", &format!("Using model: {}", model_name));
+            }
         }
     }
 
@@ -1393,7 +1397,11 @@ async fn confirm_and_execute(
                 {
                     let mut s = state.lock().await;
                     s.pending_tool_confirmation = None;
+                    let model_name = s.model_name.clone();
                     s.status = AppStatus::Streaming;
+                    if s.config.discord_rpc_enabled {
+                        s.discord_rpc.set_activity("Streaming", &format!("Using model: {}", model_name));
+                    }
                     s.stream_tracker = Some(StreamTracker::new());
                     s.running_tools.push(tool_name.clone());
                 }
@@ -1436,7 +1444,11 @@ async fn confirm_and_execute(
         {
             let mut s = state.lock().await;
             s.pending_tool_confirmation = None;
+            let model_name = s.model_name.clone();
             s.status = AppStatus::Streaming;
+            if s.config.discord_rpc_enabled {
+                s.discord_rpc.set_activity("Streaming", &format!("Using model: {}", model_name));
+            }
             s.stream_tracker = Some(StreamTracker::new());
         }
         res
@@ -2401,9 +2413,16 @@ pub async fn process_queue_orchestrator(
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
                 s.status = AppStatus::Idle;
+                if s.config.discord_rpc_enabled {
+                    s.discord_rpc.clear_activity();
+                }
                 break;
             }
+            let model_name = s.model_name.clone();
             s.status = AppStatus::Streaming;
+            if s.config.discord_rpc_enabled {
+                s.discord_rpc.set_activity("Streaming", &format!("Using model: {}", model_name));
+            }
             s.generation_start_time = Some(std::time::Instant::now());
             s.stream_tracker = Some(StreamTracker::new());
             s.recent_read_calls.clear();

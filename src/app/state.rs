@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::discord_rpc::DiscordRpcHandler;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum AppStatus {
@@ -484,6 +485,7 @@ pub struct AppState {
 
     /// Snapshot of environment context from the first turn, used for delta diffing.
     pub context_snapshot: Option<crate::context::ContextSnapshot>,
+    pub discord_rpc: DiscordRpcHandler,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -599,6 +601,7 @@ impl AppState {
             tip_index: random_tip_index(),
             continuous_mode: false,
             context_snapshot: None,
+            discord_rpc: DiscordRpcHandler::new(),
         }
     }
 
