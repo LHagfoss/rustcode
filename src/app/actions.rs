@@ -158,6 +158,9 @@ pub async fn handle_enter(
             "/copy" => {
                 copy_last_reply(&mut s);
             }
+            "/quota" => {
+                trigger_quota_fetch(&s, state, client);
+            }
             "/resume" => {
                 resume_latest_session(&mut s);
             }
@@ -297,60 +300,7 @@ pub async fn handle_enter(
                 s.history.push(ChatMessage::new("system", text));
             }
             "/quota" => {
-                let (url, key_opt) = {
-                    let active_url = s.api_base_url.clone();
-                    let key = s
-                        .config
-                        .models
-                        .iter()
-                        .find(|m| m.url == active_url || m.model == s.model_name)
-                        .and_then(|m| m.api_key.clone());
-                    (active_url, key)
-                };
-                let state_clone = Arc::clone(state);
-                let client_clone = client.clone();
-                tokio::spawn(async move {
-                    let base_url = if let Some(idx) = url.find("/v1") {
-                        &url[..idx]
-                    } else {
-                        url.trim_end_matches('/')
-                    };
-                    let status_url = format!("{}/auth/status", base_url);
-                    let mut req = client_clone.get(&status_url);
-                    if let Some(key) = key_opt {
-                        req = req.header("Authorization", format!("Bearer {key}"));
-                    }
-                    match req.send().await {
-                        Ok(res) => {
-                            if let Ok(json) = res.json::<serde_json::Value>().await {
-                                let mut text = String::from("📊 Model Quota Status:\n");
-                                let quota_obj = json.get("quota");
-                                let buckets_arr = quota_obj
-                                    .and_then(|q| q.get("buckets").or_else(|| q.get("quotaBuckets")))
-                                    .and_then(|b| b.as_array());
-
-                                if let Some(buckets) = buckets_arr {
-                                    for b in buckets {
-                                        if let (Some(m), Some(f)) = (b.get("modelId").and_then(|x| x.as_str()), b.get("remainingFraction").and_then(|x| x.as_f64())) {
-                                            text.push_str(&format!("\n  • {}: {:.1}% remaining", m, f * 100.0));
-                                        }
-                                    }
-                                } else {
-                                    text.push_str("\n  No quota bucket information returned.");
-                                }
-                                let mut s = state_clone.lock().await;
-                                s.history.push(ChatMessage::new("system", text));
-                            } else {
-                                let mut s = state_clone.lock().await;
-                                s.history.push(ChatMessage::new("system", "Failed to parse quota JSON response."));
-                            }
-                        }
-                        Err(e) => {
-                            let mut s = state_clone.lock().await;
-                            s.history.push(ChatMessage::new("system", format!("Failed to reach proxy: {}", e)));
-                        }
-                    }
-                });
+                trigger_quota_fetch(&s, state, client);
             }
             "/session" => {
                 let session_info = format!(
@@ -994,6 +944,76 @@ pub fn select_picker_model(s: &mut AppState) {
             format!("Switched to model profile '{}'", profile.name),
         ));
     }
+}
+
+pub fn trigger_quota_fetch(
+    s: &AppState,
+    state: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+) {
+    let (url, key_opt) = {
+        let active_url = s.api_base_url.clone();
+        let key = s
+            .config
+            .models
+            .iter()
+            .find(|m| m.url == active_url || m.model == s.model_name)
+            .and_then(|m| m.api_key.clone());
+        (active_url, key)
+    };
+    let state_clone = Arc::clone(state);
+    let client_clone = client.clone();
+    tokio::spawn(async move {
+        let base_url = if let Some(idx) = url.find("/v1") {
+            &url[..idx]
+        } else {
+            url.trim_end_matches('/')
+        };
+        let status_url = format!("{}/auth/status", base_url);
+        let mut req = client_clone.get(&status_url);
+        if let Some(key) = key_opt {
+            req = req.header("Authorization", format!("Bearer {key}"));
+        }
+        match req.send().await {
+            Ok(res) => {
+                if let Ok(json) = res.json::<serde_json::Value>().await {
+                    let mut text = String::from("📊 Model Quota Status:\n");
+                    let quota_obj = json.get("quota");
+                    let buckets_arr = quota_obj
+                        .and_then(|q| q.get("buckets").or_else(|| q.get("quotaBuckets")))
+                        .and_then(|b| b.as_array());
+
+                    if let Some(buckets) = buckets_arr {
+                        for b in buckets {
+                            if let (Some(m), Some(f)) = (
+                                b.get("modelId").and_then(|x| x.as_str()),
+                                b.get("remainingFraction").and_then(|x| x.as_f64()),
+                            ) {
+                                text.push_str(&format!("\n  • {}: {:.1}% remaining", m, f * 100.0));
+                            }
+                        }
+                    } else {
+                        text.push_str("\n  No quota bucket information returned.");
+                    }
+                    let mut s = state_clone.lock().await;
+                    s.history.push(ChatMessage::new("system", text));
+                } else {
+                    let mut s = state_clone.lock().await;
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Failed to parse quota JSON response.",
+                    ));
+                }
+            }
+            Err(e) => {
+                let mut s = state_clone.lock().await;
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!("Failed to reach proxy: {}", e),
+                ));
+            }
+        }
+    });
 }
 
 #[cfg(test)]
