@@ -48,12 +48,14 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
             }
             None => exact.clone(),
         }
-    } else if matches!(name, "list_directory" | "grep" | "glob" | "find_symbol") {
-        // No line ranges — same target = same intent. Falls back to `exact` if
-        // no identifiable target.
+    } else if name == "grep" {
+        let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+        let path = args.get("path").or_else(|| args.get("include")).and_then(|v| v.as_str()).unwrap_or("");
+        format!("grep:{pattern}@{path}")
+    } else if matches!(name, "list_directory" | "glob" | "find_symbol") {
         let target = args
-            .get("path")
-            .or_else(|| args.get("pattern"))
+            .get("pattern")
+            .or_else(|| args.get("path"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty());
         match target {
@@ -297,6 +299,15 @@ mod tests {
         let (exact, cat) = signatures("write_to_file", &json!({"path": "src/main.rs"}));
         assert_eq!(exact, cat);
         assert!(exact.starts_with("write_to_file:"));
+    }
+
+    #[test]
+    fn grep_different_patterns_distinct_categories() {
+        let (_e1, cat1) = signatures("grep", &json!({ "pattern": "command", "path": "src/app/actions.rs" }));
+        let (_e2, cat2) = signatures("grep", &json!({ "pattern": "/clear", "path": "src/app/actions.rs" }));
+        assert_ne!(cat1, cat2);
+        assert_eq!(cat1, "grep:command@src/app/actions.rs");
+        assert_eq!(cat2, "grep:/clear@src/app/actions.rs");
     }
 
     #[test]
