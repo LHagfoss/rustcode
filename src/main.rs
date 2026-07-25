@@ -498,8 +498,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                                 KeyCode::Esc => {
-                                    // Dismiss without answering — drop the sender so the
-                                    // awaiting tool call gets a "dismissed" result.
+                                    // Dismiss question and cancel active generation stream
+                                    current_cancel_token.cancel();
+                                    current_cancel_token = tokio_util::sync::CancellationToken::new();
                                     let mut s = app_state.lock().await;
                                     s.question_response = None;
                                     s.pending_question = None;
