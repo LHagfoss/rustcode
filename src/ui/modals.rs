@@ -1468,10 +1468,10 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 for line in confirmation.content_preview.lines().skip(scroll).take(diff_height) {
                     let parts: Vec<&str> = line.split('\x00').collect();
                     if parts.len() == 2 {
-                        left_lines.push(highlight_diff_line(parts[0], half_width, show_picker));
-                        right_lines.push(highlight_diff_line(parts[1], half_width, show_picker));
+                        left_lines.push(highlight_diff_line(parts[0], half_width, false));
+                        right_lines.push(highlight_diff_line(parts[1], half_width, false));
                     } else {
-                        left_lines.push(highlight_diff_line(line, half_width, show_picker));
+                        left_lines.push(highlight_diff_line(line, half_width, false));
                         right_lines.push(Line::from(""));
                     }
                 }
@@ -1490,7 +1490,7 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                     .take(diff_height)
                     .map(|l| {
                         let width = (inner_area.width as usize).saturating_sub(4);
-                        highlight_diff_line(l, width, show_picker)
+                        highlight_diff_line(l, width, false)
                     })
                     .collect();
                 f.render_widget(
