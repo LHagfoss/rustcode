@@ -1,13 +1,13 @@
-## [v0.2.1] - 2026-07-25
-- Fix: Hide intermediate loop warnings from TUI history view
-- Feat: Refactor sync command into subcommands (push, pull, init) with progress feedback
-- Feat: Add harder async-deadlock task and label quota bucket model aliases
-- Fix: Wire /quota slash command execution in TUI command picker
-- Fix: Dynamic sizing for tool confirmation modal based on diff preview content
-- Fix: Prevent out-of-bounds index panic in tool confirmation modal
-- Test: Task-based harness benchmark runner
-- Fix: Gemini OpenAI-compat, working single [Copy] badge and tighter chat gap
-- Feat: Interactive ask_question modal with custom-answer slot
+## [v0.2.1](https://github.com/LHagfoss/rustcode/compare/v0.2.0...v0.2.1) - 2026-07-25
+- Fix: Hide intermediate loop warnings from TUI history view ([3accd84](https://github.com/LHagfoss/rustcode/commit/3accd84))
+- Feat: Refactor sync command into subcommands (push, pull, init) with progress feedback ([3e26914](https://github.com/LHagfoss/rustcode/commit/3e26914))
+- Feat: Add harder async-deadlock task and label quota bucket model aliases ([e27d344](https://github.com/LHagfoss/rustcode/commit/e27d344))
+- Fix: Wire /quota slash command execution in TUI command picker ([0d4a13d](https://github.com/LHagfoss/rustcode/commit/0d4a13d))
+- Fix: Dynamic sizing for tool confirmation modal based on diff preview content ([f681f3b](https://github.com/LHagfoss/rustcode/commit/f681f3b))
+- Fix: Prevent out-of-bounds index panic in tool confirmation modal ([8923bf1](https://github.com/LHagfoss/rustcode/commit/8923bf1))
+- Test: Task-based harness benchmark runner ([83df86e](https://github.com/LHagfoss/rustcode/commit/83df86e))
+- Fix: Gemini OpenAI-compat, working single [Copy] badge and tighter chat gap ([d80ff36](https://github.com/LHagfoss/rustcode/commit/d80ff36))
+- Feat: Interactive ask_question modal with custom-answer slot ([cab7714](https://github.com/LHagfoss/rustcode/commit/cab7714))
 
 ## [v0.2.0](https://github.com/LHagfoss/rustcode/compare/v0.1.19...v0.2.0) - 2025-05-14
 - Refactor state management and UI components ([db638d4](https://github.com/LHagfoss/rustcode/commit/db638d4))
