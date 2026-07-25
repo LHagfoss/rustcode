@@ -470,6 +470,9 @@ pub struct AppState {
     pub selecting: bool,
     pub expanded_thoughts: std::collections::HashSet<usize>,
     pub thought_toggle_rows: Vec<(u16, usize)>,
+    /// Screen rows carrying a code-block `[Copy]` badge, mapped to the block's
+    /// text, for click-to-copy hit-testing.
+    pub code_copy_rows: Vec<(u16, String)>,
 
     /// Timestamp of the last escape key press (for double-esc detection)
     pub last_escape_time: Option<std::time::Instant>,
@@ -588,6 +591,7 @@ impl AppState {
             selecting: false,
             expanded_thoughts: std::collections::HashSet::new(),
             thought_toggle_rows: Vec::new(),
+            code_copy_rows: Vec::new(),
 
             last_escape_time: None,
 
