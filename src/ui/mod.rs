@@ -118,6 +118,7 @@ fn render_assistant_message<'a>(
     thought_collapsed: bool,
     msg_index: Option<usize>,
     click_registry: &mut Vec<(usize, usize)>,
+    copy_registry: &mut Vec<(usize, String)>,
     is_copied_recently: bool,
 ) {
     let mut think_content = None;
@@ -224,6 +225,7 @@ fn render_assistant_message<'a>(
         }
 
         let mut i = 0;
+        let mut fence_open = false;
         while i < processed_lines.len() {
             if processed_lines[i].0 {
                 let line_str = &processed_lines[i].1;
@@ -231,21 +233,54 @@ fn render_assistant_message<'a>(
                 let mut spans = Vec::new();
                 let code_content_width = (viewport_width as usize).saturating_sub(6);
                 if is_code_fence {
-                    let button_badge = if is_copied_recently { " 📋 [Copied!] " } else { " 📋 [Copy] " };
-                    let button_color = if is_copied_recently { Color::Rgb(152, 195, 121) } else { COLOR_SECONDARY };
+                    let opening = !fence_open;
+                    fence_open = !fence_open;
                     let fence_text = line_str.trim();
-                    let left_len = fence_text.len();
-                    let right_len = button_badge.len();
-                    let pad_len = code_content_width.saturating_sub(left_len + right_len);
+                    if opening {
+                        // Only the OPENING fence carries the [Copy] badge. Gather the
+                        // block's code (all lines up to the closing fence) and register
+                        // this row so a click on the badge copies it.
+                        let mut code_text = String::new();
+                        let mut j = i + 1;
+                        while j < processed_lines.len()
+                            && !(processed_lines[j].0
+                                && processed_lines[j].1.trim_start().starts_with("```"))
+                        {
+                            if !code_text.is_empty() {
+                                code_text.push('\n');
+                            }
+                            code_text.push_str(&processed_lines[j].1);
+                            j += 1;
+                        }
 
-                    spans.push(Span::styled(
-                        format!("{}{}", fence_text, " ".repeat(pad_len)),
-                        get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                    ));
-                    spans.push(Span::styled(
-                        button_badge,
-                        get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
-                    ));
+                        let button_badge = if is_copied_recently {
+                            " 📋 [Copied!] "
+                        } else {
+                            " 📋 [Copy] "
+                        };
+                        let button_color = if is_copied_recently {
+                            Color::Rgb(152, 195, 121)
+                        } else {
+                            COLOR_SECONDARY
+                        };
+                        let pad_len =
+                            code_content_width.saturating_sub(fence_text.len() + button_badge.len());
+                        spans.push(Span::styled(
+                            format!("{}{}", fence_text, " ".repeat(pad_len)),
+                            get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                        ));
+                        spans.push(Span::styled(
+                            button_badge,
+                            get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
+                        ));
+                        copy_registry.push((lines.len(), code_text));
+                    } else {
+                        // Closing fence: a clean full-width bar, no badge.
+                        spans.push(Span::styled(
+                            " ".repeat(code_content_width),
+                            get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                        ));
+                    }
                     lines.push(Line::from(spans));
                 } else if line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@") {
                     lines.push(highlight_diff_line(line_str, code_content_width, show_picker));
@@ -278,7 +313,7 @@ fn render_assistant_message<'a>(
                         get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                     ),
                     Span::styled(
-                        " ".repeat(content_width + 4),
+                        " ".repeat(content_width + 3),
                         get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
                     ),
                 ]));
@@ -287,9 +322,10 @@ fn render_assistant_message<'a>(
                 for line_str in normal_block {
                     let mut spans = Vec::new();
                     
-                    // Add 2 spaces left padding inside the bubble
+                    // Single space of left padding inside the bubble, so text sits
+                    // right next to the ▌ bar instead of leaving a wide gap.
                     spans.push(Span::styled(
-                        "  ",
+                        " ",
                         get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
                     ));
 
@@ -340,7 +376,7 @@ fn render_assistant_message<'a>(
                     }
 
                     // Pad to full content_width so the COLOR_PANEL background fills the block
-                    let current_width: usize = spans.iter().map(|s| s.content.width()).sum::<usize>().saturating_sub(2);
+                    let current_width: usize = spans.iter().map(|s| s.content.width()).sum::<usize>().saturating_sub(1);
                     if current_width < content_width {
                         spans.push(Span::styled(
                             " ".repeat(content_width - current_width),
@@ -371,7 +407,7 @@ fn render_assistant_message<'a>(
                         get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                     ),
                     Span::styled(
-                        " ".repeat(content_width + 4),
+                        " ".repeat(content_width + 3),
                         get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
                     ),
                 ]));
@@ -936,6 +972,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     let mut lines: Vec<Line> = Vec::new();
 
     let mut thought_clicks: Vec<(usize, usize)> = Vec::new();
+    let mut copy_clicks: Vec<(usize, String)> = Vec::new();
 
     for (msg_idx, msg) in state.history.iter().enumerate() {
         if msg.role == "system" {
@@ -1178,6 +1215,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 collapsed,
                 Some(msg_idx),
                 &mut thought_clicks,
+                &mut copy_clicks,
                 is_copied_recently,
             );
             lines.push(Line::from(""));
@@ -1291,6 +1329,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     false,
                     None,
                     &mut thought_clicks,
+                    &mut copy_clicks,
                     is_copied_recently,
                 );
 
@@ -1332,6 +1371,26 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         for (i, line) in lines.iter().enumerate() {
             if let Some(&midx) = click_map.get(&i) {
                 header_wrapped_rows.push((cum, midx));
+            }
+            let h = Paragraph::new(vec![line.clone()])
+                .wrap(Wrap { trim: false })
+                .line_count(inner_area.width) as u16;
+            cum = cum.saturating_add(h);
+            if i >= last_line {
+                break;
+            }
+        }
+    }
+
+    // Same resolution for each code block's [Copy] badge row.
+    let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
+    if let Some((last_line, _)) = copy_clicks.last().cloned() {
+        let copy_map: std::collections::HashMap<usize, String> =
+            copy_clicks.iter().cloned().collect();
+        let mut cum = 0u16;
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(text) = copy_map.get(&i) {
+                copy_wrapped_rows.push((cum, text.clone()));
             }
             let h = Paragraph::new(vec![line.clone()])
                 .wrap(Wrap { trim: false })
@@ -1400,6 +1459,15 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         if wrapped_row >= scroll_offset && wrapped_row < scroll_offset + inner_area.height {
             let screen_row = inner_area.y + (wrapped_row - scroll_offset);
             state.thought_toggle_rows.push((screen_row, midx));
+        }
+    }
+
+    // Map each visible [Copy] badge to its on-screen row for click hit-testing.
+    state.code_copy_rows.clear();
+    for (wrapped_row, text) in copy_wrapped_rows {
+        if wrapped_row >= scroll_offset && wrapped_row < scroll_offset + inner_area.height {
+            let screen_row = inner_area.y + (wrapped_row - scroll_offset);
+            state.code_copy_rows.push((screen_row, text));
         }
     }
 
