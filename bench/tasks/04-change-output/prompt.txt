@@ -1,0 +1,1 @@
+Modify src/main.rs so that running the program prints exactly `Goodbye, world!` and nothing else.
