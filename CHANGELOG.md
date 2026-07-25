@@ -1,3 +1,14 @@
+## [v0.2.1] - 2026-07-25
+- Fix: Hide intermediate loop warnings from TUI history view
+- Feat: Refactor sync command into subcommands (push, pull, init) with progress feedback
+- Feat: Add harder async-deadlock task and label quota bucket model aliases
+- Fix: Wire /quota slash command execution in TUI command picker
+- Fix: Dynamic sizing for tool confirmation modal based on diff preview content
+- Fix: Prevent out-of-bounds index panic in tool confirmation modal
+- Test: Task-based harness benchmark runner
+- Fix: Gemini OpenAI-compat, working single [Copy] badge and tighter chat gap
+- Feat: Interactive ask_question modal with custom-answer slot
+
 ## [v0.2.0](https://github.com/LHagfoss/rustcode/compare/v0.1.19...v0.2.0) - 2025-05-14
 - Refactor state management and UI components ([db638d4](https://github.com/LHagfoss/rustcode/commit/db638d4))
 - Improve network view_file deduplication for paged reads ([8eb9770](https://github.com/LHagfoss/rustcode/commit/8eb9770))
