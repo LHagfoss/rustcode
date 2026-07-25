@@ -122,15 +122,33 @@ pub async fn execute_tool_if_approved(
     }
 }
 
+/// Feedback handed back when the model clearly meant to call a tool but the
+/// block didn't parse, so it can correct itself instead of the loop giving up.
+const TOOL_REPAIR_FEEDBACK: &str = "tool_error: your tool call could not be parsed. \
+Emit exactly one complete, valid tool call inside a ```tool fenced block using JSON, e.g.\n\
+```tool\n{\"name\": \"tool_name\", \"arguments\": {...}}\n```\n\
+Use the keys \"name\" and \"arguments\" exactly, and do not wrap numbers or booleans in quotes.";
+
 /// Execute the main agent round loop: stream a response, detect tool calls,
 /// and repeat until no tool is invoked or max rounds are reached.
+///
+/// Robustness: a transient stream error or a single malformed/prose round must
+/// not abandon the task (the interactive TUI recovers from both). Stream errors
+/// are retried with backoff without consuming a round; a response that clearly
+/// intended a tool call but failed to parse is handed back for correction.
 pub async fn run_round_loop(
     client: &reqwest::Client,
     state_arc: Arc<Mutex<AppState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
-    for rounds in 0..=MAX_ROUNDS {
+    const MAX_STREAM_RETRIES: u32 = 3;
+    const MAX_MALFORMED_RETRIES: u32 = 2;
+    let mut stream_retries = 0u32;
+    let mut malformed_retries = 0u32;
+
+    let mut rounds = 0u32;
+    while rounds <= MAX_ROUNDS {
         println!("\n=== Round {} ===", rounds);
 
         // Reset streaming buffer.
@@ -167,28 +185,63 @@ pub async fn run_round_loop(
         )
         .await
         {
-            println!("Stream error: {}", e);
+            stream_retries += 1;
+            if stream_retries <= MAX_STREAM_RETRIES {
+                let delay = std::time::Duration::from_millis(500 * stream_retries as u64);
+                println!(
+                    "Stream error: {e} — retry {stream_retries}/{MAX_STREAM_RETRIES} in {}ms",
+                    delay.as_millis()
+                );
+                tokio::time::sleep(delay).await;
+                continue; // retry the same round; don't spend the round budget
+            }
+            println!("Stream error: {e} — giving up after {MAX_STREAM_RETRIES} retries.");
             break;
         }
+        stream_retries = 0;
 
         println!();
 
         let response_content = { state_arc.lock().await.current_response.clone() };
 
-        if let Some(result) = execute_tool_if_approved(&state_arc, response_content).await {
-            // Tool was executed — loop continues with updated history.
-            drop(result);
-        } else {
-            if rounds < MAX_ROUNDS {
-                println!("\nNo tool call detected. Agent loop finished.");
+        if execute_tool_if_approved(&state_arc, response_content.clone())
+            .await
+            .is_some()
+        {
+            // Tool executed — loop continues with updated history.
+            malformed_retries = 0;
+            rounds += 1;
+            if rounds >= MAX_ROUNDS {
+                println!("Reached max rounds ({}). Exiting.", MAX_ROUNDS);
+                break;
             }
-            break;
+            continue;
         }
 
-        if rounds + 1 >= MAX_ROUNDS {
-            println!("Reached max rounds ({}). Exiting.", MAX_ROUNDS);
-            break;
+        // No tool executed. If the model clearly intended a tool call but it
+        // didn't parse, hand the error back and let it retry rather than
+        // abandoning the task.
+        if crate::network::text::has_intended_tool_call(&response_content)
+            && malformed_retries < MAX_MALFORMED_RETRIES
+        {
+            malformed_retries += 1;
+            println!(
+                "\nMalformed tool call — asking the model to correct it (retry {malformed_retries}/{MAX_MALFORMED_RETRIES})."
+            );
+            let mut s = state_arc.lock().await;
+            s.history
+                .push(ChatMessage::new("assistant", response_content));
+            s.history
+                .push(ChatMessage::new("tool", TOOL_REPAIR_FEEDBACK.to_string()));
+            drop(s);
+            rounds += 1;
+            continue;
         }
+
+        if rounds < MAX_ROUNDS {
+            println!("\nNo tool call detected. Agent loop finished.");
+        }
+        break;
     }
 
     Ok(())
