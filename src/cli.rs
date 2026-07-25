@@ -23,11 +23,25 @@ pub struct Cli {
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
 
-    /// Sync config, skills, and sessions with remote Git repository
-    #[arg(long = "sync")]
-    pub sync: bool,
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
 
+#[derive(clap::Subcommand, Debug)]
+pub enum Commands {
+    /// Sync config, skills, and sessions with remote Git repository
+    Sync { 
+        #[command(subcommand)]
+        command: Option<SyncCommands> 
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum SyncCommands {
+    /// Pull latest config and skills from remote
+    Pull,
+    /// Push local config and skills to remote
+    Push,
     /// Initialize remote Git repository for config sync
-    #[arg(long = "sync-init")]
-    pub sync_init: Option<String>,
+    Init { remote_url: String },
 }
