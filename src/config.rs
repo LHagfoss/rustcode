@@ -204,8 +204,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             default: DefaultConfig::Table {
-                big: "qwen3.6-dense".to_string(),
-                small: "gemma4:e2b-it-qat".to_string(),
+                big: "gemini-3.6-flash".to_string(),
+                small: "gemini-3.6-flash".to_string(),
             },
             models: vec![
                 ModelProfile {
@@ -214,6 +214,15 @@ impl Default for AppConfig {
                     model: "qwen3.6:27b-coding-mxfp8".to_string(),
                     context_window: Some(128000),
                     engine: Some("ollama".to_string()),
+                    api_key: None,
+                    env_key: None,
+                },
+                ModelProfile {
+                    name: "gemini-3.6-flash".to_string(),
+                    url: "http://localhost:3000/v1/chat/completions".to_string(),
+                    model: "gemini-3.6-flash".to_string(),
+                    context_window: Some(128000),
+                    engine: Some("openai".to_string()),
                     api_key: None,
                     env_key: None,
                 },
