@@ -99,6 +99,14 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
                 return resolved;
             }
 
+    if raw_path.starts_with("~/") || raw_path == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            let tail = raw_path.strip_prefix('~').unwrap_or("");
+            let tail = tail.strip_prefix('/').unwrap_or(tail);
+            return PathBuf::from(home).join(tail);
+        }
+    }
+
     PathBuf::from(raw_path)
 }
 
