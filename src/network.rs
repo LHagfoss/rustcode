@@ -2671,9 +2671,7 @@ pub async fn process_queue_orchestrator(
                         s.history.push(ChatMessage::new(
                             "system",
                             format!(
-                                "[Loop warning: this action has repeated {n} times. If you are \
-                                 stuck, change your approach — a different query, a different tool, \
-                                 or summarize what you have and move on.]"
+                                "[Loop warning: this action has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — call view_file to check exact line numbers or change your approach.]"
                             ),
                         ));
                         drop(s);
