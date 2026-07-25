@@ -35,19 +35,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
 
-    if let Some(ref remote_url) = cli_args.sync_init {
-        if let Err(e) = config::init_sync_repo(remote_url) {
-            eprintln!("Error initializing sync repo: {e}");
-            std::process::exit(1);
-        }
-        println!("Sync repository setup complete! You can now run `rustcode --sync` anytime.");
-        return Ok(());
-    }
-
-    if cli_args.sync {
-        if let Err(e) = config::sync_config() {
-            eprintln!("Sync failed: {e}");
-            std::process::exit(1);
+    if let Some(cli::Commands::Sync { command }) = cli_args.command {
+        match command {
+            Some(cli::SyncCommands::Pull) => {
+                println!("📥 [sync] Pulling latest config and skills from remote origin/main...");
+                if let Err(e) = config::sync_config_pull() {
+                    eprintln!("Sync pull failed: {e}");
+                    std::process::exit(1);
+                }
+                println!("✅ [sync] Config sync complete!");
+            }
+            Some(cli::SyncCommands::Push) => {
+                println!("💾 [sync] Staging config.toml, skills/, and session logs...");
+                if let Err(e) = config::sync_config_push() {
+                    eprintln!("Sync push failed: {e}");
+                    std::process::exit(1);
+                }
+                println!("✅ [sync] Config sync complete!");
+            }
+            Some(cli::SyncCommands::Init { remote_url }) => {
+                if let Err(e) = config::init_sync_repo(&remote_url) {
+                    eprintln!("Error initializing sync repo: {e}");
+                    std::process::exit(1);
+                }
+                println!("Sync repository setup complete! You can now run `rustcode sync` anytime.");
+            }
+            None => {
+                // Default behavior for `rustcode sync` (pull then push)
+                println!("📥 [sync] Pulling latest config and skills from remote origin/main...");
+                if let Err(e) = config::sync_config_pull() {
+                    eprintln!("Sync failed during pull: {e}");
+                    std::process::exit(1);
+                }
+                println!("💾 [sync] Staging config.toml, skills/, and session logs...");
+                if let Err(e) = config::sync_config_push() {
+                    eprintln!("Sync failed during push: {e}");
+                    std::process::exit(1);
+                }
+                println!("✅ [sync] Config sync complete!");
+            }
         }
         return Ok(());
     }
