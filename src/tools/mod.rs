@@ -446,7 +446,8 @@ pub fn tool_system_prompt(
 - DO NOT add code comments (such as `// ...` or `/* ... */`) to code files unless explicitly requested by the user.\n\
 - After completing a file edit or tool action, stop directly without outputting post-edit summaries or preambles (\"Here is what I changed...\").\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
-- For editing, use `replace_file_content`. You do NOT need to specify `start_line` or `end_line` — simply copy the code block you want to edit into `target_content` and it will be replaced.\n\
+- For editing, use `replace_file_content`. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
+- EXECUTE TOOL CALLS SEQUENTIALLY: Emit at most 1 or 2 tool calls at a time. Never output speculative multi-step batches of 5+ tool calls (such as predicting edits, builds, git commits, and PR creations all in a single turn). Execute tools step-by-step and inspect results.\n\
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
 - Match project code style.\n\
 - Only run tests/builds or commit/push code when explicitly requested by the user.\n\
