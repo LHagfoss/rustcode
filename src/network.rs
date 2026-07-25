@@ -553,9 +553,15 @@ pub async fn stream_request(
         // the server-side temperature can't be relied on. Keep it low.
         "temperature": 0.2,
         "max_tokens": 4096,
-        // Guard against runaway repetition even at low temperature.
-        "frequency_penalty": 0.3,
     });
+
+    // Guard against runaway repetition even at low temperature. Google's
+    // OpenAI-compat endpoint (generativelanguage.googleapis.com) rejects
+    // `frequency_penalty` with a 400, so only send it to providers that accept
+    // it — which is also where small open models need the repetition guard most.
+    if !url.contains("generativelanguage.googleapis.com") {
+        payload["frequency_penalty"] = serde_json::json!(0.3);
+    }
 
     // ApiNative protocol: attach the tool schema so the provider returns
     // structured `tool_calls` (handled by the SSE accumulator below) instead of
