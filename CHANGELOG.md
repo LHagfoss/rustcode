@@ -1,3 +1,12 @@
+## [v0.2.2] - 2026-07-26
+- Fix: Invalidate read-only signature cache on file mutations.
+- Fix: Restore /quota slash command branch.
+- Feat: Add optional Discord Rich Presence integration and /discord toggle.
+- Fix: Include pattern in grep category signature to prevent false loop aborts.
+- Fix: Mandate sequential tool execution and view_file before editing in system prompt.
+- Fix: Improve replace_file_content mismatch error feedback and loop warning guidance.
+- Fix: Restore diff syntax colors in tool confirmation modal.
+
 ## [v0.2.1](https://github.com/LHagfoss/rustcode/compare/v0.2.0...v0.2.1) - 2026-07-25
 - Fix: Hide intermediate loop warnings from TUI history view ([3accd84](https://github.com/LHagfoss/rustcode/commit/3accd84))
 - Feat: Refactor sync command into subcommands (push, pull, init) with progress feedback ([3e26914](https://github.com/LHagfoss/rustcode/commit/3e26914))
