@@ -1396,6 +1396,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         s.thought_toggle_rows.iter().find(|(row, _)| *row == click_screen_row)
                                     {
                                         s.toggle_thought(idx);
+                                    } else if let Some((_, code)) = s
+                                        .code_copy_rows
+                                        .iter()
+                                        .find(|(row, _)| *row == click_screen_row)
+                                        .map(|(r, t)| (*r, t.clone()))
+                                    {
+                                        // Clicked a code block's [Copy] badge row.
+                                        crate::clipboard::copy_to_clipboard(&code);
+                                        s.last_copy_time = Some(std::time::Instant::now());
                                     }
                                 }
                             }
