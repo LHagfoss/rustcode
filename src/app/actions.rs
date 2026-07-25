@@ -989,7 +989,12 @@ pub fn trigger_quota_fetch(
                                 b.get("modelId").and_then(|x| x.as_str()),
                                 b.get("remainingFraction").and_then(|x| x.as_f64()),
                             ) {
-                                text.push_str(&format!("\n  • {}: {:.1}% remaining", m, f * 100.0));
+                                let display_name = match m {
+                                    "gemini-2.5-flash" => "gemini-2.5-flash / gemini-3.6-flash / 3.5-flash",
+                                    "gemini-2.5-pro" => "gemini-2.5-pro",
+                                    _ => m,
+                                };
+                                text.push_str(&format!("\n  • {}: {:.1}% remaining", display_name, f * 100.0));
                             }
                         }
                     } else {
