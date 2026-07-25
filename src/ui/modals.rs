@@ -1328,7 +1328,13 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         } else {
             (screen_width.saturating_sub(10)).min(120).max(60)
         };
-        let height = (screen_height.saturating_sub(4)).min(40).max(18);
+        let has_preview = !confirmation.content_preview.trim().is_empty();
+        let preview_lines = confirmation.content_preview.lines().count();
+        let height = if has_preview {
+            ((preview_lines as u16) + 9).clamp(14, (screen_height.saturating_sub(4)).min(40))
+        } else {
+            9
+        };
         let modal_area = centered_rect_fixed(width, height, f.area());
 
         f.render_widget(Clear, modal_area);
@@ -1344,16 +1350,16 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(4),
-                Constraint::Length(1),
-                Constraint::Length(1),
+                Constraint::Length(1), // 0: Header
+                Constraint::Length(1), // 1: Spacer
+                Constraint::Length(1), // 2: Tool
+                Constraint::Length(1), // 3: Path
+                Constraint::Length(1), // 4: Size
+                Constraint::Length(1), // 5: Auto-confirm status
+                Constraint::Length(1), // 6: Spacer
+                Constraint::Min(if has_preview { 2 } else { 0 }), // 7: Preview Diff / Content
+                Constraint::Length(1), // 8: Spacer
+                Constraint::Length(1), // 9: Footer buttons
             ])
             .split(inner_area);
 
