@@ -98,9 +98,10 @@ pub async fn handle_enter(
                 // LLM still sees the same chat on next message.
                 s.current_response.clear();
                 s.current_token_usage = None;
-                s.status = AppStatus::Idle;
             }
-            "/new" => {
+            "/quota" => {
+                trigger_quota_fetch(&s, state, client);
+            }            "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
                 start_new_session(&mut s);
