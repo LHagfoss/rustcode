@@ -2873,7 +2873,7 @@ pub async fn process_queue_orchestrator(
                         s.status = AppStatus::Idle;
                         s.history.push(ChatMessage::new(
                             "system",
-                            "🏁 Goal Accomplished! Continuous mode completed successfully. ✅".to_string(),
+                            "Continuous mode completed."
                         ));
 
                         // Extract task result text from the complete_task call
