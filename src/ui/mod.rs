@@ -976,6 +976,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     for (msg_idx, msg) in state.history.iter().enumerate() {
         if msg.role == "system" {
+            // Hide benign intermediate loop warnings from TUI display
+            if msg.content.contains("Loop warning:") {
+                continue;
+            }
+
             if msg.content.contains("🏁") || msg.content.contains("Goal Accomplished") {
                 lines.push(Line::from(vec![
                     Span::styled(
