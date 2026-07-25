@@ -1495,7 +1495,7 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         }
 
         let total_lines = confirmation.content_preview.lines().count();
-        let scroll_info = if total_lines > modal_chunks[7].height as usize {
+        let scroll_info = if modal_chunks.len() > 7 && total_lines > modal_chunks[7].height as usize {
             format!("  ↑/↓ scroll ({}/{})", state.modal_scroll_row + 1, total_lines)
         } else {
             String::new()
