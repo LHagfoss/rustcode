@@ -13,12 +13,14 @@ bash bench/run.sh
 # specific models (must exist in ~/.config/rustcode/config.toml)
 bash bench/run.sh gemini-3.6-flash gemini-3.5-flash-lite qwen3.6-dense
 
-# longer per-task timeout (seconds)
-TIMEOUT=300 bash bench/run.sh gemini-3.6-flash
+# more repeats per task + longer timeout (seconds)
+REPEATS=5 TIMEOUT=300 bash bench/run.sh gemini-3.6-flash
 ```
 
-Output: a per-run table plus a scorecard — **pass rate · avg time · avg rounds**
-per model. Raw rows are written to `bench/last-results.csv`.
+Each (model, task) runs `REPEATS` times (default 3) so a single flaky run
+doesn't read as a hard failure; pass rate is reported as `k/N`. Output: a
+per-task table plus a scorecard — **pass rate · avg time · avg rounds** per
+model. Raw rows are written to `bench/last-results.csv`.
 
 ## What it measures
 
