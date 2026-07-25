@@ -309,16 +309,23 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     // 4. Mismatch feedback
     let mut err_msg = format!(
         "Error: target_content not found in '{path}'.\n\
-         Please ensure the code block matches exactly (including indentation and spaces)."
+         Please check that your target content exact string matches the file."
     );
     if let (Some(start), Some(end)) = (start_line, end_line) {
         let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         let total = file_lines.len();
         if start >= 1 && start <= total && end >= start && end <= total {
             let segment = file_lines[start - 1..end].join("\n");
-            err_msg.push_str("\n=== Found in File at specified lines ===\n");
-            err_msg.push_str(&segment);
-            err_msg.push_str("\n========================================\n");
+            err_msg = format!(
+                "Error: target_content was not found between lines {start}..{end} in '{path}'.\n\
+                 The actual content currently at lines {start}..{end} is:\n\
+                 ```\n{segment}\n```\n\
+                 Action required: Adjust your start_line/end_line range to point to the correct line numbers, or use view_file to re-check line numbers."
+            );
+        } else {
+            err_msg.push_str(&format!(
+                "\nSpecified range {start}..{end} is out of bounds for file with {total} lines."
+            ));
         }
     }
     Err(err_msg)
