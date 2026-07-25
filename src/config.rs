@@ -171,6 +171,12 @@ pub struct AppConfig {
     pub max_tool_rounds: usize,
     #[serde(default)]
     pub agent_mode: AgentMode,
+    #[serde(default = "default_false")]
+    pub discord_rpc_enabled: bool,
+}
+
+fn default_false() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,6 +257,7 @@ impl Default for AppConfig {
             history_token_budget: 128000,
             max_tool_rounds: 1000,
             agent_mode: AgentMode::default(),
+            discord_rpc_enabled: false,
         }
     }
 }

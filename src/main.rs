@@ -13,6 +13,7 @@ mod skills;
 mod symbols;
 mod tools;
 mod ui;
+mod discord_rpc;
 
 use crate::app::{AppState, AppStatus, ChatMessage};
 use clap::Parser;
@@ -126,6 +127,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
+    // Initialize Discord RPC if enabled
+    {
+        let mut s = app_state.lock().await;
+        if s.config.discord_rpc_enabled {
+            s.discord_rpc.connect();
+            let model_name = s.model_name.clone();
+            s.discord_rpc.set_activity("Idle", &format!("Using model: {}", model_name));
+        }
+    }
+
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -152,6 +163,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
                 if s.status == AppStatus::Idle {
                     s.status = AppStatus::Queued;
+                    if s.config.discord_rpc_enabled {
+                        let model_name = s.model_name.clone();
+                        s.discord_rpc.set_activity("Queued", &format!("Using model: {}", model_name));
+                    }
                     drop(s);
                     crate::network::process_queue_orchestrator(
                         client_clone,

@@ -65,6 +65,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Delete current session and start fresh",
     },
     CommandInfo {
+        name: "/discord",
+        desc: "Toggle Discord Rich Presence",
+    },
+    CommandInfo {
         name: "/ollama",
         desc: "Configure or list Ollama models",
     },
