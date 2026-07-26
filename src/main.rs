@@ -155,25 +155,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle_clone.spawn(async move {
             let mut s = state_clone.lock().await;
             if s.active_session_id == session_id {
+                // Background output can be huge (long-running servers dump MBs of
+                // logs). Head+tail truncate it like any other tool result so it
+                // doesn't bloat context and the scroll buffer.
+                let body = crate::network::truncate_tool_output("background_task", output);
                 s.history.push(ChatMessage::new(
                     "tool",
-                    format!("background_task: Task {task_id} completed. Output:\n{output}"),
+                    format!("background_task: Task {task_id} completed. Output:\n{body}"),
                 ));
                 crate::config::save_session_history(&session_id, &s.history);
-                s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
-                if s.status == AppStatus::Idle {
-                    s.status = AppStatus::Queued;
-                    if s.config.discord_rpc_enabled {
-                        let model_name = s.model_name.clone();
-                        s.discord_rpc.set_activity("Queued", &format!("Using model: {}", model_name));
+                // Only drive a fresh model turn when the agent is actively working
+                // toward a goal. After completion / in plain chat, a late task
+                // finish must NOT wake the model: it would run against the whole
+                // history with no task and tends to regurgitate its system prompt.
+                // The result is still recorded above for the user to act on.
+                if s.continuous_mode {
+                    s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
+                    if s.status == AppStatus::Idle {
+                        s.status = AppStatus::Queued;
+                        if s.config.discord_rpc_enabled {
+                            let model_name = s.model_name.clone();
+                            s.discord_rpc.set_activity("Queued", &format!("Using model: {}", model_name));
+                        }
+                        drop(s);
+                        crate::network::process_queue_orchestrator(
+                            client_clone,
+                            state_clone,
+                            token_clone,
+                        )
+                        .await;
                     }
-                    drop(s);
-                    crate::network::process_queue_orchestrator(
-                        client_clone,
-                        state_clone,
-                        token_clone,
-                    )
-                    .await;
                 }
             } else {
                 let mut history = crate::config::load_session_history_direct(&session_id);
