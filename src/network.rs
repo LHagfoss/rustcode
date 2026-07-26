@@ -1038,11 +1038,32 @@ fn resolve_bin(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+/// PATH for spawned build tools. GUI/Dock launches don't inherit the shell
+/// PATH, so `cargo` can't find `rustc` (and bare-name spawns fail with ENOENT)
+/// even though the toolchain is installed. Prepend the canonical toolchain dirs
+/// to whatever PATH we did inherit so the checker — and its own subprocesses —
+/// resolve regardless of how rustcode was launched.
+pub(crate) fn augmented_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut dirs = vec![
+        format!("{home}/.cargo/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+        "/usr/bin".to_string(),
+        "/bin".to_string(),
+    ];
+    if let Ok(existing) = std::env::var("PATH") {
+        dirs.extend(existing.split(':').map(|s| s.to_string()));
+    }
+    dirs.join(":")
+}
+
 async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
     if cwd.join("Cargo.toml").exists() {
         let mut cmd = tokio::process::Command::new(resolve_bin("cargo"));
         cmd.args(["check", "--message-format=json"])
             .current_dir(cwd)
+            .env("PATH", augmented_path())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -1050,7 +1071,10 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
             Ok(c) => c,
             Err(e) => {
                 dbg_log!("Could not spawn cargo check ({e}), skipping compiler check");
-                return None;
+                return Some(format!(
+                    "__BUILD_UNVERIFIED__: could not run `cargo check` ({e}). \
+                     The build was NOT verified — do not claim the task compiles."
+                ));
             }
         };
 
@@ -1064,11 +1088,18 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => {
                 dbg_log!("cargo check failed to run ({e}), skipping compiler check");
-                return None;
+                return Some(format!(
+                    "__BUILD_UNVERIFIED__: `cargo check` failed to run ({e}). \
+                     The build was NOT verified."
+                ));
             }
             Err(_) => {
                 dbg_log!("cargo check timed out, skipping compiler check");
-                return None;
+                return Some(
+                    "__BUILD_UNVERIFIED__: `cargo check` timed out. \
+                     The build was NOT verified."
+                        .to_string(),
+                );
             }
         };
 
@@ -1099,6 +1130,7 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
         let mut cmd = tokio::process::Command::new(runner);
         cmd.args([bin_arg, "check", "."])
             .current_dir(cwd)
+            .env("PATH", augmented_path())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -1137,6 +1169,7 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
         let mut cmd = tokio::process::Command::new(runner);
         cmd.args([bin_arg, "--noEmit"])
             .current_dir(cwd)
+            .env("PATH", augmented_path())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -2390,6 +2423,7 @@ async fn execute_tool_batch(
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         if let Some(compiler_errors) =
             cached_compiler_check(&root, compile_dirty, compile_cache).await
+            .filter(|e| !e.starts_with("__BUILD_UNVERIFIED__"))
         {
             dbg_log!("Inline compiler check detected errors after edit");
             let mut snippet = compiler_errors;
@@ -2466,6 +2500,10 @@ pub async fn process_queue_orchestrator(
         #[allow(unused_assignments)]
         let mut last_sent_messages: Vec<serde_json::Value> = Vec::new();
         let mut final_content = String::new();
+        // Set when the loop exits via a `complete_task` call. The break path
+        // already appends a clean summary message, so the post-loop "write final
+        // assistant reply" must not re-append the raw tool-call block on top.
+        let mut task_completed = false;
         let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
         // Detects repetitive tool-call patterns (exact / semantic / stagnation /
         // churn) so continuous mode can't spin forever. One instance per task.
@@ -2852,19 +2890,31 @@ pub async fn process_queue_orchestrator(
                                 .clone()
                                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                             if let Some(errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
-                                dbg_log!("complete_task finish gate failed with compiler errors");
-                                s.history.push(ChatMessage::new(
-                                    "system",
-                                    format!(
-                                        "[Finish blocked — the build does not compile. You cannot report this \
-                                         task as done while there are compiler errors. Fix them, then finish. \
-                                         Compiler errors:\n{errors}]"
-                                    ),
-                                ));
-                                crate::config::save_history(&s.history);
-                                s.current_response.clear();
-                                drop(s);
-                                continue;
+                                if errors.starts_with("__BUILD_UNVERIFIED__") {
+                                    // The checker itself couldn't run (missing toolchain,
+                                    // timeout, …). We can't prove the build is red, so we
+                                    // don't loop forever — but we must NOT let the agent
+                                    // report a clean completion, so surface it loudly.
+                                    dbg_log!("complete_task finish gate: build unverified — {errors}");
+                                    s.history.push(ChatMessage::new(
+                                        "system",
+                                        format!("[⚠ Build could not be verified — {errors}]"),
+                                    ));
+                                } else {
+                                    dbg_log!("complete_task finish gate failed with compiler errors");
+                                    s.history.push(ChatMessage::new(
+                                        "system",
+                                        format!(
+                                            "[Finish blocked — the build does not compile. You cannot report this \
+                                             task as done while there are compiler errors. Fix them, then finish. \
+                                             Compiler errors:\n{errors}]"
+                                        ),
+                                    ));
+                                    crate::config::save_history(&s.history);
+                                    s.current_response.clear();
+                                    drop(s);
+                                    continue;
+                                }
                             }
                         }
 
@@ -2891,6 +2941,7 @@ pub async fn process_queue_orchestrator(
                         crate::config::save_history(&s.history);
                         s.current_response.clear();
                         drop(s);
+                        task_completed = true;
                         break;
                     }
                     crate::config::save_history(&s.history);
@@ -2962,26 +3013,39 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 dbg_log!("Finish gate: compile-checking {} before accepting done", root.display());
                 if let Some(errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
-                    finish_gate_retries += 1;
-                    tool_rounds += 1;
-                    dbg_log!("Finish gate: build is RED, forcing a fix round ({}/{})", finish_gate_retries, MAX_FINISH_GATE_RETRIES);
-                    let mut s = state.lock().await;
-                    s.history
-                        .push(ChatMessage::new("assistant", final_content.clone()));
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        format!(
-                            "[Finish blocked — the build does not compile. You cannot report this \
-                             task as done while there are compiler errors. Fix them, then finish. \
-                             Compiler errors:\n{errors}]"
-                        ),
-                    ));
-                    crate::config::save_history(&s.history);
-                    s.current_response.clear();
-                    s.status = AppStatus::Streaming;
-                    s.stream_tracker = Some(StreamTracker::new());
-                    drop(s);
-                    continue;
+                    if errors.starts_with("__BUILD_UNVERIFIED__") {
+                        // Checker couldn't run — surface it but accept done rather
+                        // than spinning against an environment we can't fix.
+                        dbg_log!("Finish gate: build unverified — {errors}");
+                        let mut s = state.lock().await;
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("[⚠ Build could not be verified — {errors}]"),
+                        ));
+                        crate::config::save_history(&s.history);
+                        drop(s);
+                    } else {
+                        finish_gate_retries += 1;
+                        tool_rounds += 1;
+                        dbg_log!("Finish gate: build is RED, forcing a fix round ({}/{})", finish_gate_retries, MAX_FINISH_GATE_RETRIES);
+                        let mut s = state.lock().await;
+                        s.history
+                            .push(ChatMessage::new("assistant", final_content.clone()));
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "[Finish blocked — the build does not compile. You cannot report this \
+                                 task as done while there are compiler errors. Fix them, then finish. \
+                                 Compiler errors:\n{errors}]"
+                            ),
+                        ));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        s.status = AppStatus::Streaming;
+                        s.stream_tracker = Some(StreamTracker::new());
+                        drop(s);
+                        continue;
+                    }
                 }
                 dbg_log!("Finish gate: build is green, accepting done");
             }
@@ -2995,9 +3059,13 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             let mut s = state.lock().await;
             s.continuous_mode = false;
             s.response_time = Some(prompt_start_time.elapsed());
-            let mut msg = ChatMessage::new("assistant", final_content.clone());
-            msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
-            s.history.push(msg);
+            // On the complete_task path the summary was already appended; only
+            // record token usage / notify below, don't duplicate the reply.
+            if !task_completed {
+                let mut msg = ChatMessage::new("assistant", final_content.clone());
+                msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
+                s.history.push(msg);
+            }
 
             if limit_reached {
                 s.history.push(ChatMessage::new(
