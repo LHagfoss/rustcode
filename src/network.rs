@@ -59,7 +59,7 @@ const MAX_TOOL_OUTPUT_LINES: usize = 1000;
 
 /// Truncate tool output at execution time if it exceeds size limits.
 /// Full output is saved to a temp file so the agent can still access it.
-fn truncate_tool_output(name: &str, result: String) -> String {
+pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
     let bytes = result.len();
     let lines: Vec<&str> = result.lines().collect();
     let line_count = lines.len();
