@@ -386,6 +386,12 @@ pub struct AppState {
     pub model_quota_remaining: Option<f32>,
     pub pending_queue: Vec<String>,
     pub status: AppStatus,
+    /// Single-flight guard for the agent loop. `status` transiently reads Idle
+    /// in windows where an orchestrator is still alive, so gating spawns on it
+    /// let a background wakeup (or the event-loop drainer) start a *second*
+    /// concurrent orchestrator — two turns streaming the same history produced
+    /// duplicate assistant messages. Spawns gate on this instead.
+    pub orchestrator_running: bool,
     pub cursor_position: usize,
 
     pub suggestion_cycle: crate::app::suggestion::SuggestionCycle,
@@ -539,6 +545,7 @@ impl AppState {
             model_quota_remaining: None,
             pending_queue: Vec::new(),
             status: AppStatus::Idle,
+            orchestrator_running: false,
             cursor_position: 0,
             suggestion_cycle: crate::app::suggestion::SuggestionCycle::new(),
             response_time: None,
