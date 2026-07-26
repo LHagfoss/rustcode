@@ -37,6 +37,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Run a task in continuous autoloop mode until complete_task is called",
     },
     CommandInfo {
+        name: "/info",
+        desc: "Show version and basic info about rustcode",
+    },
+    CommandInfo {
         name: "/help",
         desc: "Show help info",
     },

@@ -473,13 +473,15 @@ pub fn tool_system_prompt(
     match protocol {
         crate::config::ToolProtocol::Json => {
             p.push_str(
-                "To call a tool, output ONLY the fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\n\
+                "To call a tool, output ONLY fenced `tool` blocks containing a single JSON object each. Do not output any conversational text or narration before or after the block.\n\n\
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
                 Rules:\n\
                 - Keys must be \"name\" and \"arguments\".\n\
-                - Pass correct type for arguments (no quotes for numbers/booleans).\n\n"
+                - Pass correct type for arguments (no quotes for numbers/booleans).\n\
+                - Use the ```tool fence ONLY. Never use ```tool_code, ```json, or any other fence for tool calls, and never repeat the same call in multiple fences.\n\
+                - To run several tools at once, emit up to 2 separate ```tool blocks (one JSON object each); they execute in parallel.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
@@ -677,22 +679,32 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
 }
 
 fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
-    let mut tool_block_to_parse = None;
-    if let Some(start) = text.find("```tool") {
-        let rest = &text[start + 7..];
-        if let Some(end) = rest.find("```") {
-            tool_block_to_parse = Some(rest[..end].trim().to_string());
-        } else {
-            tool_block_to_parse = Some(rest.trim().to_string());
-        }
-    }
+    // Walk every ```tool fence, not just the first, so a model can batch
+    // multiple tool calls in one turn (the executor runs them in parallel).
+    // `find("```tool")` also matches ```tool_code (Gemini's code-exec fence);
+    // require the fence tag to be exactly `tool` (next char whitespace) so we
+    // skip those without eating the real call.
+    let mut search = text;
+    while let Some(rel) = search.find("```tool") {
+        let after_tag = &search[rel + 7..];
+        let (block, next) = match after_tag.find("```") {
+            Some(end) => (&after_tag[..end], &after_tag[end + 3..]),
+            None => (after_tag, ""),
+        };
 
-    if let Some(block) = tool_block_to_parse {
-        let repaired = repair_json(&block);
-        if let Ok(json_value) = serde_json::from_str::<Value>(&repaired)
-            && let Some(call) = extract_tool_call(&json_value) {
-                calls.push(call);
-            }
+        let is_tool_fence = after_tag.chars().next().is_none_or(|c| c.is_whitespace());
+        if is_tool_fence {
+            let repaired = repair_json(block.trim());
+            if let Ok(json_value) = serde_json::from_str::<Value>(&repaired)
+                && let Some(call) = extract_tool_call(&json_value) {
+                    calls.push(call);
+                }
+        }
+
+        if next.is_empty() {
+            break;
+        }
+        search = next;
     }
 }
 
@@ -938,5 +950,45 @@ mod tests {
         let calls3 = parse_tool_calls(text3, crate::config::ToolProtocol::Json);
         assert_eq!(calls3.len(), 1);
         assert_eq!(calls3[0].0, "todo_write");
+    }
+
+    #[test]
+    fn test_parse_multiple_fenced_tool_calls() {
+        // Two distinct ```tool blocks in one turn → both parsed, in order.
+        let text = "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"foo\"}}\n```\n\
+                    some prose\n\
+                    ```tool\n{\"name\": \"view_file\", \"arguments\": {\"path\": \"src/x.rs\"}}\n```";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "grep");
+        assert_eq!(calls[0].1.get("pattern").unwrap().as_str().unwrap(), "foo");
+        assert_eq!(calls[1].0, "view_file");
+        assert_eq!(calls[1].1.get("path").unwrap().as_str().unwrap(), "src/x.rs");
+    }
+
+    #[test]
+    fn test_tool_code_decoy_is_skipped() {
+        // Gemini habit: a real ```tool block plus redundant ```tool_code /
+        // ```json decoys of the SAME call. Only one call, and the tool_code
+        // fence must not be mis-parsed into garbage.
+        let text = "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"foo\"}}\n```\n\
+                    ```tool_code\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"foo\"}}\n```\n\
+                    ```json\n{\"tool_code\": {\"name\": \"grep\", \"arguments\": {\"pattern\": \"foo\"}}}\n```";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "grep");
+    }
+
+    #[test]
+    fn test_two_tool_calls_with_tool_code_between() {
+        // A tool_code decoy sitting between two real, distinct calls must be
+        // skipped without swallowing the second call.
+        let text = "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"a\"}}\n```\n\
+                    ```tool_code\n{\"name\": \"noise\", \"arguments\": {}}\n```\n\
+                    ```tool\n{\"name\": \"glob\", \"arguments\": {\"pattern\": \"*.rs\"}}\n```";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "grep");
+        assert_eq!(calls[1].0, "glob");
     }
 }

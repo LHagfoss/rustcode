@@ -922,6 +922,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 s.history.push(ChatMessage::new("system", out));
                                             }
                                         }
+                                        "/info" => {
+                                            let info = crate::app::actions::build_info_text();
+                                            s.history.push(ChatMessage::new("system", info));
+                                        }
                                         "/changelog" => {
                                             let log_text = crate::app::actions::build_latest_changelog();
                                             s.history.push(ChatMessage::new("system", log_text));
@@ -1463,6 +1467,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Event::Paste(text) => {
+                    // Terminals with bracketed paste enabled deliver Cmd+V through
+                    // this event instead of the Char('v') key handler. When the
+                    // clipboard holds an image (e.g. a screenshot), the pasted text
+                    // is empty — fall back to grabbing the image so it still turns
+                    // into an `![image](file://…)` marker that renders as [Image #N].
+                    if text.trim().is_empty()
+                        && let Some(img_markdown) = crate::clipboard::paste_image_from_clipboard()
+                    {
+                        let mut s = app_state.lock().await;
+                        if !s.show_mcp_config {
+                            for c in img_markdown.chars() {
+                                s.insert_char(c);
+                            }
+                            s.reset_suggestion_cycle();
+                        }
+                        needs_redraw = true;
+                        continue;
+                    }
                     let mut s = app_state.lock().await;
                     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                     if s.show_mcp_config {
