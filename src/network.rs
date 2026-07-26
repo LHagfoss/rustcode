@@ -2452,6 +2452,12 @@ pub async fn process_queue_orchestrator(
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
                 s.status = AppStatus::Idle;
+                // Clear the single-flight guard under the same lock that saw the
+                // queue empty, so an enqueue racing this exit either lands before
+                // (queue non-empty here → we keep going) or after (guard clear →
+                // the enqueuer spawns a fresh orchestrator). No lost wakeups, no
+                // second concurrent orchestrator.
+                s.orchestrator_running = false;
                 if s.config.discord_rpc_enabled {
                     s.discord_rpc.clear_activity();
                 }
@@ -3132,6 +3138,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             break;
         }
     }
+    // Safety net: every loop exit that isn't the queue-empty branch (stream
+    // error, cancel, empty content) lands here — always release the guard so a
+    // future turn can start.
+    state.lock().await.orchestrator_running = false;
     dbg_log!("Orchestrator finished");
 }
 

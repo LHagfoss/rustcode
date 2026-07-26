@@ -171,7 +171,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // The result is still recorded above for the user to act on.
                 if s.continuous_mode {
                     s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
-                    if s.status == AppStatus::Idle {
+                    // Only spawn if no orchestrator is alive; otherwise the
+                    // running one drains the queue. Gating on status==Idle raced
+                    // an exiting turn and spawned a second concurrent orchestrator.
+                    if !s.orchestrator_running {
+                        s.orchestrator_running = true;
                         s.status = AppStatus::Queued;
                         if s.config.discord_rpc_enabled {
                             let model_name = s.model_name.clone();
@@ -234,7 +238,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         {
             let mut s = app_state.lock().await;
-            if s.status == AppStatus::Idle && !s.pending_queue.is_empty() {
+            if !s.orchestrator_running && !s.pending_queue.is_empty() {
+                s.orchestrator_running = true;
                 s.status = AppStatus::Queued;
                 let client_clone = client.clone();
                 let state_clone = Arc::clone(&app_state);
@@ -382,6 +387,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if typing {
                                 // Freeform "write your own answer" text entry.
                                 match key.code {
+                                    // Cmd/Ctrl+V — paste clipboard text into the slot.
+                                    // (Bracketed-paste terminals arrive via Event::Paste
+                                    // instead; this covers terminals that forward the key.)
+                                    KeyCode::Char('v') | KeyCode::Char('V')
+                                        if key.modifiers.contains(event::KeyModifiers::CONTROL)
+                                            || key.modifiers.contains(event::KeyModifiers::SUPER)
+                                            || key.modifiers.contains(event::KeyModifiers::META) =>
+                                    {
+                                        if let Some(text) =
+                                            crate::clipboard::read_text_from_clipboard()
+                                        {
+                                            let normalized =
+                                                text.replace("\r\n", "\n").replace('\r', "\n");
+                                            let mut s = app_state.lock().await;
+                                            if let Some(q) = s.pending_question.as_mut()
+                                                && let Some(buf) = q.custom_input.as_mut()
+                                            {
+                                                for c in normalized.chars() {
+                                                    if c != '\n' {
+                                                        buf.push(c);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                     KeyCode::Char(c) => {
                                         let mut s = app_state.lock().await;
                                         if let Some(q) = s.pending_question.as_mut()
@@ -1487,7 +1517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && let Some(img_markdown) = crate::clipboard::paste_image_from_clipboard()
                     {
                         let mut s = app_state.lock().await;
-                        if !s.show_mcp_config {
+                        if !s.show_mcp_config && s.status != AppStatus::AwaitingQuestion {
                             for c in img_markdown.chars() {
                                 s.insert_char(c);
                             }
@@ -1498,7 +1528,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     let mut s = app_state.lock().await;
                     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-                    if s.show_mcp_config {
+                    // Route the paste into whichever text field is focused: the
+                    // ask_question custom-answer slot, the MCP editor, else chat.
+                    if s.status == AppStatus::AwaitingQuestion {
+                        if let Some(q) = s.pending_question.as_mut()
+                            && let Some(buf) = q.custom_input.as_mut()
+                        {
+                            for c in normalized.chars() {
+                                if c != '\n' && c != '\r' {
+                                    buf.push(c);
+                                }
+                            }
+                        }
+                    } else if s.show_mcp_config {
                         if let Some(ref mut edit_state) = s.mcp_edit_state {
                             for c in normalized.chars() {
                                 if c != '\n' && c != '\r' {

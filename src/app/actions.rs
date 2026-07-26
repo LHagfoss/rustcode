@@ -647,7 +647,8 @@ pub async fn handle_enter(
     s.input_buffer.clear();
     s.cursor_position = 0;
 
-    if s.status == AppStatus::Idle {
+    if !s.orchestrator_running {
+        s.orchestrator_running = true;
         s.status = AppStatus::Queued;
         let client_clone = client.clone();
         let state_clone = Arc::clone(state);
