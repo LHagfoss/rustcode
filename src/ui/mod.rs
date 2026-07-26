@@ -961,6 +961,67 @@ fn format_tool_call_brief(name: &str, args: &serde_json::Value) -> String {
     }
 }
 
+/// Memoized conversation render. Building every message's spans and wrapping
+/// them several times per frame is O(history) and dominates scroll latency on
+/// long sessions. The rendered lines only change when the history, viewport
+/// width, expanded-thoughts, modal state, or copy-badge state changes — so we
+/// cache them and reuse across the many frames where nothing but the scroll
+/// offset moved.
+struct ChatCache {
+    key: ChatKey,
+    lines: Vec<Line<'static>>,
+    header_wrapped_rows: Vec<(u16, usize)>,
+    copy_wrapped_rows: Vec<(u16, String)>,
+    total_wrapped_lines: u16,
+}
+
+#[derive(PartialEq, Clone)]
+struct ChatKey {
+    hist_len: usize,
+    total_len: usize,
+    last_len: usize,
+    width: u16,
+    show_picker: bool,
+    thoughts: (usize, usize),
+    copied_recently: bool,
+}
+
+thread_local! {
+    static CHAT_CACHE: std::cell::RefCell<Option<ChatCache>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
+    ChatKey {
+        hist_len: state.history.len(),
+        total_len: state.history.iter().map(|m| m.content.len()).sum(),
+        last_len: state.history.last().map_or(0, |m| m.content.len()),
+        width,
+        show_picker,
+        thoughts: (
+            state.expanded_thoughts.len(),
+            state.expanded_thoughts.iter().sum(),
+        ),
+        copied_recently: state
+            .last_copy_time
+            .is_some_and(|t| t.elapsed().as_secs() < 2),
+    }
+}
+
+/// Deep-copy a borrowed `Line` into an owned `'static` one so it can outlive the
+/// `state.history` borrow it was built from and sit in the frame cache.
+fn own_line(line: &Line) -> Line<'static> {
+    let spans: Vec<Span<'static>> = line
+        .spans
+        .iter()
+        .map(|s| Span::styled(s.content.clone().into_owned(), s.style))
+        .collect();
+    let mut owned = Line::from(spans);
+    owned.style = line.style;
+    owned.alignment = line.alignment;
+    owned
+}
+
 fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
     let inner_area = chunks[0].inner(Margin {
         vertical: 0,
@@ -970,6 +1031,33 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     state.viewport_height = inner_area.height;
     state.chat_area = Some(inner_area);
 
+    // Streaming shows live content that changes every frame, so it always
+    // rebuilds; when idle we reuse the cached lines whenever the key matches.
+    let idle = !matches!(state.status, AppStatus::Streaming | AppStatus::Queued);
+    let cache_key = chat_cache_key(state, inner_area.width, show_picker);
+    let cached: Option<(Vec<Line<'static>>, Vec<(u16, usize)>, Vec<(u16, String)>, u16)> = if idle {
+        CHAT_CACHE.with(|c| {
+            c.borrow().as_ref().filter(|c| c.key == cache_key).map(|c| {
+                (
+                    c.lines.clone(),
+                    c.header_wrapped_rows.clone(),
+                    c.copy_wrapped_rows.clone(),
+                    c.total_wrapped_lines,
+                )
+            })
+        })
+    } else {
+        None
+    };
+
+    let (lines, header_wrapped_rows, copy_wrapped_rows, total_wrapped_lines): (
+        Vec<Line<'static>>,
+        Vec<(u16, usize)>,
+        Vec<(u16, String)>,
+        u16,
+    ) = if let Some(hit) = cached {
+        hit
+    } else {
     let mut lines: Vec<Line> = Vec::new();
 
     let mut thought_clicks: Vec<(usize, usize)> = Vec::new();
@@ -1408,13 +1496,30 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         }
     }
 
+        // exact rendered height — the paragraph word-wraps, so estimating rows
+        // from character counts undershoots and cuts off the bottom.
+        let total_wrapped_lines = Paragraph::new(lines.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(inner_area.width) as u16;
+
+        let owned_lines: Vec<Line<'static>> = lines.iter().map(own_line).collect();
+        if idle {
+            let cache = ChatCache {
+                key: cache_key,
+                lines: owned_lines.clone(),
+                header_wrapped_rows: header_wrapped_rows.clone(),
+                copy_wrapped_rows: copy_wrapped_rows.clone(),
+                total_wrapped_lines,
+            };
+            CHAT_CACHE.with(|c| *c.borrow_mut() = Some(cache));
+        }
+        (owned_lines, header_wrapped_rows, copy_wrapped_rows, total_wrapped_lines)
+    };
+
     let conversation_paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .style(Style::default().bg(COLOR_BG));
 
-    // exact rendered height — the paragraph word-wraps, so estimating
-    // rows from character counts undershoots and cuts off the bottom
-    let total_wrapped_lines = conversation_paragraph.line_count(inner_area.width) as u16;
     let max_scroll = total_wrapped_lines.saturating_sub(inner_area.height);
     state.last_max_scroll = max_scroll;
 
