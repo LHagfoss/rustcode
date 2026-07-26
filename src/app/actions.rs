@@ -153,6 +153,10 @@ pub async fn handle_enter(
                     return true;
                 }
             }
+            "/info" => {
+                let info = build_info_text();
+                s.history.push(ChatMessage::new("system", info));
+            }
             "/help" => {
                 let help = build_help_text();
                 s.history.push(ChatMessage::new("system", help));
@@ -918,6 +922,18 @@ pub fn copy_last_reply(s: &mut AppState) {
             "No assistant reply found to copy",
         ));
     }
+}
+
+pub fn build_info_text() -> String {
+    format!(
+        "Notice: rustcode v{}\n\n\
+        Description: A terminal-based coding assistant.\n\n\
+        Basic Slash Commands:\n\
+        \x20 /changelog - View the latest changes.\n\
+        \x20 /help      - Get help on commands and keybindings.\n\
+        \x20 /tools     - List available tools for the harness.\n",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 pub fn build_help_text() -> String {

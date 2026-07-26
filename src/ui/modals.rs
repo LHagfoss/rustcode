@@ -1125,6 +1125,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
     PaletteItem {
         group: "System",
+        name: "Show info",
+        shortcut: "/info",
+    },
+    PaletteItem {
+        group: "System",
         name: "Show help",
         shortcut: "/help",
     },
