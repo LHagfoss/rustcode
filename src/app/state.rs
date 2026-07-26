@@ -159,7 +159,7 @@ pub const TIPS: &[&str] = &[
     "Esc interrupts a running generation",
     "The agent can grep, glob, read, edit, and run commands",
     "Hold Shift+Enter for multi-line input",
-    "Type /help to see all commands and keybindings",
+    "Type /info for basic info, or /help for all commands and keybindings",
 ];
 
 #[derive(Clone, Serialize, Deserialize)]
