@@ -190,7 +190,7 @@ fn render_assistant_message<'a>(
     }
 
     if !main_content.trim().is_empty() || is_generating {
-        let content_width = (viewport_width as usize).saturating_sub(10).max(10);
+        let content_width = (viewport_width as usize).saturating_sub(8).max(10);
         let mut processed_lines: Vec<(bool, String)> = Vec::new();
         let mut in_code_block = false;
 
@@ -309,11 +309,11 @@ fn render_assistant_message<'a>(
                 // Top padding row
                 lines.push(Line::from(vec![
                     Span::styled(
-                        "▌ ",
+                        "▌",
                         get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                     ),
                     Span::styled(
-                        " ".repeat(content_width + 3),
+                        " ".repeat(content_width + 4),
                         get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
                     ),
                 ]));
@@ -321,11 +321,11 @@ fn render_assistant_message<'a>(
                 // Text rows
                 for line_str in normal_block {
                     let mut spans = Vec::new();
-                    
-                    // Single space of left padding inside the bubble, so text sits
-                    // right next to the ▌ bar instead of leaving a wide gap.
+
+                    // Two spaces of left padding inside the bubble, matching the
+                    // input field's horizontal margin so both bubbles line up.
                     spans.push(Span::styled(
-                        " ",
+                        "  ",
                         get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
                     ));
 
@@ -376,7 +376,8 @@ fn render_assistant_message<'a>(
                     }
 
                     // Pad to full content_width so the COLOR_PANEL background fills the block
-                    let current_width: usize = spans.iter().map(|s| s.content.width()).sum::<usize>().saturating_sub(1);
+                    // (subtract the 2-space left padding added above).
+                    let current_width: usize = spans.iter().map(|s| s.content.width()).sum::<usize>().saturating_sub(2);
                     if current_width < content_width {
                         spans.push(Span::styled(
                             " ".repeat(content_width - current_width),
@@ -392,7 +393,7 @@ fn render_assistant_message<'a>(
 
                     let mut final_spans = vec![
                         Span::styled(
-                            "▌ ",
+                            "▌",
                             get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                         ),
                     ];
@@ -403,11 +404,11 @@ fn render_assistant_message<'a>(
                 // Bottom padding row
                 lines.push(Line::from(vec![
                     Span::styled(
-                        "▌ ",
+                        "▌",
                         get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                     ),
                     Span::styled(
-                        " ".repeat(content_width + 3),
+                        " ".repeat(content_width + 4),
                         get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
                     ),
                 ]));
@@ -1125,7 +1126,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(""));
         } else if msg.role == "user" {
             lines.push(Line::from(""));
-            // Account for "▌ " prefix (2 characters) plus internal bubble padding (4 characters) plus margins (2 characters)
+            // Account for "▌" prefix (1 char) + internal bubble padding (2 left + 2 right) + right margin (3)
             let content_width = (inner_area.width as usize).saturating_sub(8);
             let display_content = collapse_image_markers(&msg.content);
             let mut wrapped_lines = Vec::new();
@@ -1154,7 +1155,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             // Top padding row
             lines.push(Line::from(vec![
                 Span::styled(
-                    "▌ ",
+                    "▌",
                     get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
@@ -1167,7 +1168,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 let padded_text = pad_to_width(&line_str, content_width);
                 lines.push(Line::from(vec![
                     Span::styled(
-                        "▌ ",
+                        "▌",
                         get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                     ),
                     Span::styled(
@@ -1180,7 +1181,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             // Bottom padding row
             lines.push(Line::from(vec![
                 Span::styled(
-                    "▌ ",
+                    "▌",
                     get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
