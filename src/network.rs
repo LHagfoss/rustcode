@@ -1060,8 +1060,14 @@ pub(crate) fn augmented_path() -> String {
 
 async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
     if cwd.join("Cargo.toml").exists() {
-        let mut cmd = tokio::process::Command::new(resolve_bin("cargo"));
-        cmd.args(["check", "--message-format=json"])
+        // Run through `sh -c` (like run_command) so the SHELL resolves `cargo`
+        // using the augmented PATH. A bare-name direct spawn
+        // (`Command::new("cargo")`) does not use the command's env PATH for
+        // program lookup, so on GUI/Dock launches — where `resolve_bin`'s
+        // exists() checks can't see /opt/homebrew — it fell back to "cargo" and
+        // failed with ENOENT even though `cargo check` via run_command worked.
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args(["-c", "cargo check --message-format=json"])
             .current_dir(cwd)
             .env("PATH", augmented_path())
             .stdout(std::process::Stdio::piped())
