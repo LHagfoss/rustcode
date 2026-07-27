@@ -943,7 +943,10 @@ pub fn copy_last_reply(s: &mut AppState) {
 /// Max transcript characters sent to the summarizer. Beyond this we keep the
 /// most recent content so a long session still summarizes without blowing the
 /// model's context.
-const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 48_000;
+const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 16_000;
+/// Tool outputs are the bulk of a session's bytes but low signal for a summary;
+/// keep only a head of each so the transcript stays small and fast.
+const MAX_SUMMARY_TOOL_CHARS: usize = 300;
 
 pub async fn summarize_session(
     state_arc: &Arc<Mutex<AppState>>,
@@ -969,7 +972,15 @@ pub async fn summarize_session(
                 "tool" => "TOOL",
                 _ => "SYSTEM",
             };
-            transcript.push_str(&format!("{who}: {}\n\n", m.content));
+            // Trim verbose tool outputs — they dominate the byte count but add
+            // little the summary needs.
+            let body: String = if m.role == "tool" && m.content.chars().count() > MAX_SUMMARY_TOOL_CHARS {
+                let head: String = m.content.chars().take(MAX_SUMMARY_TOOL_CHARS).collect();
+                format!("{head}… (truncated)")
+            } else {
+                m.content.clone()
+            };
+            transcript.push_str(&format!("{who}: {body}\n\n"));
         }
         // Keep the most recent slice if oversized (char-boundary safe).
         if transcript.len() > MAX_SUMMARY_TRANSCRIPT_CHARS {
@@ -1046,10 +1057,12 @@ pub async fn summarize_session(
                 elapsed,
                 summary_content.len()
             );
-            s.history.push(ChatMessage::new(
-                "system",
-                format!("Session Summary ({model_name}, {elapsed:.1}s):\n\n{summary_content}"),
-            ));
+            // Post as an assistant message so it renders as a normal model reply
+            // (chat bubble), not a system Notice/Warning — the summary text often
+            // contains words like "error"/"loop" that would trip the warning style.
+            let mut msg = ChatMessage::new("assistant", summary_content);
+            msg.response_time_ms = Some((elapsed * 1000.0) as u64);
+            s.history.push(msg);
         }
         Ok(_) => {
             dbg_log!("[SUMMARIZE] empty response after {:.1}s", elapsed);
