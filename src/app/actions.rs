@@ -100,7 +100,20 @@ pub async fn handle_enter(
                 s.current_token_usage = None;
             }
             "/summarize" => {
-                summarize_session(state, client).await;
+                // summarize_session locks the state itself and runs a full
+                // streaming request. handle_enter holds the lock here, so calling
+                // it inline deadlocks (re-locking the same mutex) and would freeze
+                // the event loop for the whole request. Release the lock, do the
+                // usual input cleanup, and run it detached so the UI stays live.
+                s.input_buffer.clear();
+                s.cursor_position = 0;
+                drop(s);
+                let state_clone = Arc::clone(state);
+                let client_clone = client.clone();
+                tokio::spawn(async move {
+                    summarize_session(&state_clone, &client_clone).await;
+                });
+                return false;
             }
             "/quota" => {
                 trigger_quota_fetch(&s, state, client);
