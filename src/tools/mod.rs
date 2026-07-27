@@ -458,6 +458,7 @@ pub fn tool_system_prompt(
 - EXECUTE TOOL CALLS SEQUENTIALLY: Emit at most 1 or 2 tool calls at a time. Never output speculative multi-step batches of 5+ tool calls (such as predicting edits, builds, git commits, and PR creations all in a single turn). Execute tools step-by-step and inspect results.\n\
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
 - Match project code style.\n\
+- Before adding new code, study how the nearest EXISTING code does the same thing (sibling functions, other match arms, similar handlers) and mirror its patterns — function signatures, how shared state/locks are passed, error handling. Do NOT invent a new pattern when neighbors establish one; diverging from local conventions is a common source of subtle bugs (deadlocks, double-locks, lifetime issues) that compile fine but break at runtime.\n\
 - Only run tests/builds or commit/push code when explicitly requested by the user.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
 - Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations.\n\
