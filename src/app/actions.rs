@@ -99,6 +99,9 @@ pub async fn handle_enter(
                 s.current_response.clear();
                 s.current_token_usage = None;
             }
+            "/summarize" => {
+                summarize_session(state, client).await;
+            }
             "/quota" => {
                 trigger_quota_fetch(&s, state, client);
             }            "/new" => {
@@ -921,6 +924,62 @@ pub fn copy_last_reply(s: &mut AppState) {
             "system",
             "No assistant reply found to copy",
         ));
+    }
+}
+
+pub async fn summarize_session(
+    state_arc: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+) {
+    let mut s = state_arc.lock().await;
+    s.history.push(ChatMessage::new("system", "Summarizing session..."));
+
+    let messages_to_summarize: Vec<ChatMessage> = s.history.iter().cloned().collect();
+    let system_message = ChatMessage::new("system", "Please summarize the following conversation, highlighting the problem, solution, and key outcomes. If the conversation is long, provide a structured summary.");
+
+    let mut llm_messages_for_request = vec![system_message];
+    llm_messages_for_request.extend(messages_to_summarize);
+
+    let llm_messages_json: Vec<serde_json::Value> = llm_messages_for_request.into_iter().map(|m| {
+        serde_json::json!({ "role": m.role, "content": m.content })
+    }).collect();
+
+    let (api_base_url, model_name) = (s.api_base_url.clone(), s.model_name.clone());
+    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer { content: String::new() }));
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+
+    // Temporarily release the lock on `s` to allow `stream_request` to acquire its own lock.
+    // This is a simplified approach; a more robust solution might involve message passing
+    // or a more granular state management.
+    drop(s);
+
+    let stream_result = crate::network::stream_request(
+        client,
+        state_arc.clone(), // Pass the original Arc<Mutex<AppState>>
+        cancel_token,
+        &api_base_url,
+        &model_name,
+        &llm_messages_json,
+        Arc::clone(&stream_buffer),
+        false,
+    ).await;
+
+    // Re-acquire the lock on `s` after the stream request completes
+    let mut s = state_arc.lock().await;
+
+    let summary_content = stream_buffer.lock().await.content.clone();
+
+    match stream_result {
+        Ok(_) => {
+            if summary_content.is_empty() {
+                s.history.push(ChatMessage::new("system", "Summarization failed: received empty response."));
+            } else {
+                s.history.push(ChatMessage::new("system", format!("Session Summary:\n{}", summary_content)));
+            }
+        }
+        Err(e) => {
+            s.history.push(ChatMessage::new("system", format!("Summarization failed: {}", e)));
+        }
     }
 }
 
