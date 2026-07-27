@@ -11,11 +11,12 @@ pub struct SkillInfo {
 pub fn discover_skills() -> Vec<SkillInfo> {
     let mut skills = Vec::new();
 
-    let local_dirs = [
-        ".rustcode/skills",
-        ".agents/skills",
-        ".claude/skills",
-    ];
+    // rustcode's own skill locations. We deliberately do NOT scan `.claude/skills`
+    // anymore: that is Claude Code's directory, and inheriting it dumped unrelated
+    // plugin skills (Cloudflare Workers, etc.) into every prompt — which derailed
+    // agents into believing this project was something it isn't. Users who really
+    // want to share those can opt in via RUSTCODE_EXTRA_SKILL_DIRS (colon-separated).
+    let local_dirs = [".rustcode/skills", ".agents/skills"];
 
     let home = match std::env::var("HOME") {
         Ok(h) => PathBuf::from(h),
@@ -24,15 +25,27 @@ pub fn discover_skills() -> Vec<SkillInfo> {
 
     let global_dirs = [
         home.join(".config/rustcode/skills"),
-        home.join(".claude/skills"),
         home.join(".agents/skills"),
     ];
 
-    for dir in local_dirs.iter().map(PathBuf::from).chain(global_dirs) {
+    let extra_dirs: Vec<PathBuf> = std::env::var("RUSTCODE_EXTRA_SKILL_DIRS")
+        .ok()
+        .into_iter()
+        .flat_map(|v| v.split(':').map(PathBuf::from).collect::<Vec<_>>())
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect();
+
+    for dir in local_dirs
+        .iter()
+        .map(PathBuf::from)
+        .chain(global_dirs)
+        .chain(extra_dirs)
+    {
         scan_skill_dir(&dir, &mut skills);
     }
 
     skills.sort_by(|a, b| a.name.cmp(&b.name));
+    skills.dedup_by(|a, b| a.name == b.name);
     skills
 }
 
