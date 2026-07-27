@@ -165,8 +165,7 @@ pub struct AppConfig {
     pub last_active_session_id: Option<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
-    #[serde(default = "default_history_token_budget")]
-    pub history_token_budget: u32,
+
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: usize,
     #[serde(default)]
@@ -189,9 +188,7 @@ pub enum AgentMode {
 }
 
 
-fn default_history_token_budget() -> u32 {
-    128000
-}
+
 
 fn default_max_tool_rounds() -> usize {
     1000
@@ -254,7 +251,7 @@ impl Default for AppConfig {
             tool_protocol: ToolProtocol::default(),
             last_active_session_id: None,
             mcp_servers: Vec::new(),
-            history_token_budget: 128000,
+
             max_tool_rounds: 1000,
             agent_mode: AgentMode::default(),
             discord_rpc_enabled: false,
