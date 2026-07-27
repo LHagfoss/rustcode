@@ -330,9 +330,8 @@ pub async fn handle_enter(
 
             "/session" => {
                 let session_info = format!(
-                    "Session ID: {}\nToken budget (history_token_budget): {} tokens\nActive model: {}",
+                    "Session ID: {}\nActive model: {}",
                     s.active_session_id,
-                    s.config.history_token_budget,
                     s.model_name
                 );
                 s.history.push(ChatMessage::new("system", session_info));
