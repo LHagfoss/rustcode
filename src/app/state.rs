@@ -646,13 +646,10 @@ impl AppState {
 
     pub fn get_history_token_budget(&self) -> u32 {
         let cw = self.active_context_window();
-        // Use the larger of 75% of context window and the configured history_token_budget,
-        // but clamped to 85% of the context window.
-        let dynamic_budget = (cw as f64 * 0.75) as u32;
-        let budget = dynamic_budget.max(self.config.history_token_budget);
-        let limit = (cw as f64 * 0.85) as u32;
-        budget.min(limit)
+        // Use 75% of the model's context window as the history budget.
+        (cw as f64 * 0.75) as u32
     }
+
 
     fn clamp_cursor(&mut self) {
         self.cursor_position = self.cursor_position.min(self.input_buffer.len());
