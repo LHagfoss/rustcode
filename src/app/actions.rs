@@ -940,58 +940,130 @@ pub fn copy_last_reply(s: &mut AppState) {
     }
 }
 
+/// Max transcript characters sent to the summarizer. Beyond this we keep the
+/// most recent content so a long session still summarizes without blowing the
+/// model's context.
+const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 48_000;
+
 pub async fn summarize_session(
     state_arc: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
 ) {
-    let mut s = state_arc.lock().await;
-    s.history.push(ChatMessage::new("system", "Summarizing session..."));
+    let started = std::time::Instant::now();
+    let (api_base_url, model_name, transcript) = {
+        let mut s = state_arc.lock().await;
 
-    let messages_to_summarize: Vec<ChatMessage> = s.history.iter().cloned().collect();
-    let system_message = ChatMessage::new("system", "Please summarize the following conversation, highlighting the problem, solution, and key outcomes. If the conversation is long, provide a structured summary.");
+        // Flatten the chat into a single plain transcript. Sending the raw
+        // history (system/assistant/tool roles) through the request builder's
+        // alternation/merge logic produced empty responses on some providers;
+        // one system instruction + one user message with the transcript is
+        // robust everywhere.
+        let mut transcript = String::new();
+        for m in &s.history {
+            if m.content.trim().is_empty() {
+                continue;
+            }
+            let who = match m.role.as_str() {
+                "user" => "USER",
+                "assistant" => "ASSISTANT",
+                "tool" => "TOOL",
+                _ => "SYSTEM",
+            };
+            transcript.push_str(&format!("{who}: {}\n\n", m.content));
+        }
+        // Keep the most recent slice if oversized (char-boundary safe).
+        if transcript.len() > MAX_SUMMARY_TRANSCRIPT_CHARS {
+            let cut = transcript.len() - MAX_SUMMARY_TRANSCRIPT_CHARS;
+            let mut idx = cut;
+            while idx < transcript.len() && !transcript.is_char_boundary(idx) {
+                idx += 1;
+            }
+            transcript = format!("...(earlier conversation truncated)...\n\n{}", &transcript[idx..]);
+        }
 
-    let mut llm_messages_for_request = vec![system_message];
-    llm_messages_for_request.extend(messages_to_summarize);
+        // Drive the existing status-bar spinner + elapsed timer.
+        s.history.push(ChatMessage::new("system", "Summarizing session..."));
+        s.status = AppStatus::Streaming;
+        s.generation_start_time = Some(started);
+        s.current_response.clear();
 
-    let llm_messages_json: Vec<serde_json::Value> = llm_messages_for_request.into_iter().map(|m| {
-        serde_json::json!({ "role": m.role, "content": m.content })
-    }).collect();
+        (s.api_base_url.clone(), s.model_name.clone(), transcript)
+    };
 
-    let (api_base_url, model_name) = (s.api_base_url.clone(), s.model_name.clone());
-    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer { content: String::new() }));
+    dbg_log!(
+        "[SUMMARIZE] start model={} url={} transcript_chars={}",
+        model_name,
+        api_base_url,
+        transcript.len()
+    );
+
+    if transcript.trim().is_empty() {
+        let mut s = state_arc.lock().await;
+        s.status = AppStatus::Idle;
+        s.generation_start_time = None;
+        s.history
+            .push(ChatMessage::new("system", "Nothing to summarize yet."));
+        return;
+    }
+
+    let messages = vec![
+        serde_json::json!({
+            "role": "system",
+            "content": "You are summarizing a coding assistant session. Produce a concise, structured summary with these sections: Problem, What was done, Current state, Open problems, Next steps. Omit a section if it has nothing. Be specific about files and decisions."
+        }),
+        serde_json::json!({ "role": "user", "content": format!("Summarize this session transcript:\n\n{transcript}") }),
+    ];
+
+    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer {
+        content: String::new(),
+    }));
     let cancel_token = tokio_util::sync::CancellationToken::new();
-
-    // Temporarily release the lock on `s` to allow `stream_request` to acquire its own lock.
-    // This is a simplified approach; a more robust solution might involve message passing
-    // or a more granular state management.
-    drop(s);
 
     let stream_result = crate::network::stream_request(
         client,
-        state_arc.clone(), // Pass the original Arc<Mutex<AppState>>
+        state_arc.clone(),
         cancel_token,
         &api_base_url,
         &model_name,
-        &llm_messages_json,
+        &messages,
         Arc::clone(&stream_buffer),
-        false,
-    ).await;
-
-    // Re-acquire the lock on `s` after the stream request completes
-    let mut s = state_arc.lock().await;
+        true, // quiet: don't stream into the main chat view; we post the result
+    )
+    .await;
 
     let summary_content = stream_buffer.lock().await.content.clone();
+    let elapsed = started.elapsed().as_secs_f32();
+
+    let mut s = state_arc.lock().await;
+    s.status = AppStatus::Idle;
+    s.generation_start_time = None;
+    s.current_response.clear();
 
     match stream_result {
+        Ok(_) if !summary_content.trim().is_empty() => {
+            dbg_log!(
+                "[SUMMARIZE] ok in {:.1}s, {} chars",
+                elapsed,
+                summary_content.len()
+            );
+            s.history.push(ChatMessage::new(
+                "system",
+                format!("Session Summary ({model_name}, {elapsed:.1}s):\n\n{summary_content}"),
+            ));
+        }
         Ok(_) => {
-            if summary_content.is_empty() {
-                s.history.push(ChatMessage::new("system", "Summarization failed: received empty response."));
-            } else {
-                s.history.push(ChatMessage::new("system", format!("Session Summary:\n{}", summary_content)));
-            }
+            dbg_log!("[SUMMARIZE] empty response after {:.1}s", elapsed);
+            s.history.push(ChatMessage::new(
+                "system",
+                format!("Summarization failed: the model returned an empty response ({model_name}, {elapsed:.1}s). It may be rate-limited or rejecting the request — check debug.log."),
+            ));
         }
         Err(e) => {
-            s.history.push(ChatMessage::new("system", format!("Summarization failed: {}", e)));
+            dbg_log!("[SUMMARIZE] error after {:.1}s: {}", elapsed, e);
+            s.history.push(ChatMessage::new(
+                "system",
+                format!("Summarization failed after {elapsed:.1}s: {e}"),
+            ));
         }
     }
 }
