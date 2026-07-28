@@ -115,6 +115,49 @@ pub async fn handle_enter(
                 });
                 return false;
             }
+            "/compact" => {
+                s.input_buffer.clear();
+                s.cursor_position = 0;
+                let api_base_url = s.api_base_url.clone();
+                let model_name = s.model_name.clone();
+                drop(s);
+                let state_clone = Arc::clone(state);
+                let client_clone = client.clone();
+                tokio::spawn(async move {
+                    let mut s = state_clone.lock().await;
+                    let history_len = s.history.len();
+                    if history_len < 2 {
+                        s.history.push(ChatMessage::new("system", "Not enough messages to compact."));
+                        return;
+                    }
+                    let mut history_to_compact = s.history.drain(..).collect::<Vec<ChatMessage>>();
+                    drop(s);
+
+                    match crate::network::compaction::force_compact(
+                        &client_clone,
+                        &api_base_url,
+                        &model_name,
+                        &mut history_to_compact,
+                    )
+                    .await
+                    {
+                        Ok((before, after)) => {
+                            let mut s = state_clone.lock().await;
+                            s.history.extend(history_to_compact);
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                format!("🧹 History compacted: reduced context from {} to {} tokens.", before, after),
+                            ));
+                        }
+                        Err(e) => {
+                            let mut s = state_clone.lock().await;
+                            s.history.extend(history_to_compact);
+                            s.history.push(ChatMessage::new("system", format!("History compaction failed: {}", e)));
+                        }
+                    }
+                });
+                return false;
+            }
             "/quota" => {
                 trigger_quota_fetch(&s, state, client);
             }            "/new" => {
