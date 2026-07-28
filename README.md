@@ -1,7 +1,7 @@
 <div align="center">
 <h1>rustcode</h1>
 
-<img src="./image-1.png" alt="rustcode screenshot 1"/>
+<img src="./images/header.png" alt="rustcode screenshot 1"/>
 </div>
 
 ## initial
