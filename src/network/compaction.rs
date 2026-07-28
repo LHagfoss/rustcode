@@ -1,12 +1,13 @@
 use crate::app::ChatMessage;
-use tiktoken_rs::p50k_base;
-use std::collections::HashSet;
+use std::sync::OnceLock;
+use tiktoken_rs::{p50k_base, CoreBPE};
+
+
+static BPE: OnceLock<CoreBPE> = OnceLock::new();
 
 pub fn estimate_tokens(text: &str) -> usize {
-    let bpe = p50k_base().unwrap();
-    let tokens = bpe.encode(text, HashSet::new()).len();
-    eprintln!("Token count for text ({} chars): {}", text.chars().count(), tokens);
-    tokens
+    let bpe = BPE.get_or_init(|| p50k_base().unwrap());
+    bpe.encode_with_special_tokens(text).len()
 }
 
 pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
