@@ -494,6 +494,9 @@ pub struct AppState {
     pub context_snapshot: Option<crate::context::ContextSnapshot>,
     pub discord_rpc: DiscordRpcHandler,
     pub auto_recap_enabled: bool,
+    pub recap_message_count: usize,
+    pub recap_content_length: usize,
+    pub last_recap_time: Option<std::time::Instant>,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -613,6 +616,9 @@ impl AppState {
             context_snapshot: None,
             discord_rpc: DiscordRpcHandler::new(),
             auto_recap_enabled: config.auto_recap_enabled,
+            recap_message_count: 0,
+            recap_content_length: 0,
+            last_recap_time: None,
         }
     }
 

@@ -1,39 +1,54 @@
 <div align="center">
 <h1>rustcode</h1>
 
-<img src="./image-1.png" alt="rustcode screenshot 1"/>
+<img src="./images/header.png" alt="rustcode screenshot 1"/>
 </div>
 
-## initial
+<table>
+  <tr>
+    <td align="center"><img src="./images/small-1.png" alt="screenshot 2" width="200"/></td>
+    <td align="center"><img src="./images/small-2.png" alt="screenshot 3" width="200"/></td>
+    <td align="center"><img src="./images/small-3.png" alt="screenshot 4" width="200"/></td>
+  </tr>
+</table>
 
-`rustcode` is a lightweight Terminal User Interface (TUI) agent harness for testing originally Apple's on-device Foundation Models via `fm serve`. But now has turned out to create an overall Agent Harness and learn from that. It works on itself using a pipeline I made which is a self improvment loop (currently not working yet)
+## about
 
-## new
-
+`rustcode` is a lightweight Terminal User Interface (TUI) agent harness.
+Originally made for testing Apple's on-device Foundation Models. Turned into a way deeper project.
 Now supports ollama or openai compatible APIs.
-Major UI overhaul taking ALOT of inspo from OpenCodes Agent Harness.
 
-## Running the Application
+## running it
 
-1. Start the Apple Foundation Models completions server:
-    ```bash
-    fm serve
-    ```
-2. Build and run the TUI:
-   `bash
-    cargo build --release
-    cargo run --release
-    `
-   OR you can install it via `cargo install` and run it from anywhere:
-   `bash
-    cargo install --path .
-    rustcode
-    `
+Needs [homebrew](https://brew.sh/) or [rust toolchain](https://rust-lang.org/tools/install/) installed.
 
-## Installation - macOS Apple Silicon
+### installation (cargo)
 
-You can easily install it using Homebrew.
+1. Clone repo:
+
+```bash
+git clone https://github.com/lhagfoss/rustcode.git
+```
+
+2. Build and run:
+
+```bash
+ cargo build --release
+ cargo run --release
+```
+
+OR you can install it via `cargo install` and run it from anywhere:
+
+```bash
+ cargo install --path .
+ rustcode
+```
+
+### via homebrew
+
+You can easily install it using Homebrew (Needs Apple Silicon).
 Just run the following command in your terminal:
+
 ```bash
 # 1. Tap the repository
 brew tap lhagfoss/tap
@@ -56,3 +71,7 @@ brew upgrade rustcode
 ## IMPORTANT
 
 If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have XCode v27](https://developer.apple.com/videos/play/wwdc2026/334/) for this to work. As this was introduced in the Beta version of MacOS 27.
+
+Also not recmomended to use FM system model. as it only have like 2k context window...
+
+Made with [rust](https://www.rust-lang.org/) by goat (me) and models inside [rustcode](README) harness

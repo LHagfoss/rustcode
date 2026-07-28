@@ -2643,12 +2643,43 @@ pub async fn process_queue_orchestrator(
             final_content = accumulated_content;
 
             // If auto-recap is enabled, generate a recap of the last turn.
-            let auto_recap_enabled = { state.lock().await.auto_recap_enabled };
-            if auto_recap_enabled {
+            let (auto_recap_enabled, message_count_threshold, content_length_threshold, time_interval_seconds) = {
+                let s = state.lock().await;
+                (
+                    s.auto_recap_enabled,
+                    s.config.recap_message_count_threshold,
+                    s.config.recap_content_length_threshold,
+                    s.config.recap_time_interval_seconds,
+                )
+            };
+
+            let should_recap = if auto_recap_enabled {
+                let mut s = state.lock().await;
+                s.recap_message_count += 1;
+                s.recap_content_length += final_content.len();
+
+                let message_count_met = s.recap_message_count >= message_count_threshold;
+                let content_length_met = s.recap_content_length >= content_length_threshold;
+                let time_interval_met = if let Some(last_recap) = s.last_recap_time {
+                    last_recap.elapsed().as_secs() >= time_interval_seconds
+                } else {
+                    true // Recap if no previous recap time is set
+                };
+
+                message_count_met || content_length_met || time_interval_met
+            } else {
+                false
+            };
+
+            if should_recap {
                 let state_clone = Arc::clone(&state);
                 let client_clone = client.clone();
                 tokio::spawn(async move {
                     crate::app::actions::generate_auto_recap(&state_clone, &client_clone).await;
+                    let mut s = state_clone.lock().await;
+                    s.recap_message_count = 0;
+                    s.recap_content_length = 0;
+                    s.last_recap_time = Some(std::time::Instant::now());
                 });
             }
             dbg_log!(
@@ -2941,6 +2972,10 @@ pub async fn process_queue_orchestrator(
                         let client_clone = client.clone();
                         tokio::spawn(async move {
                             generate_auto_recap(&state_clone, &client_clone).await;
+                            let mut s = state_clone.lock().await;
+                            s.recap_message_count = 0;
+                            s.recap_content_length = 0;
+                            s.last_recap_time = Some(std::time::Instant::now());
                         });
                         s.continuous_mode = false;
                         s.status = AppStatus::Idle;

@@ -174,11 +174,31 @@ pub struct AppConfig {
     pub discord_rpc_enabled: bool,
     #[serde(default = "default_false")]
     pub auto_recap_enabled: bool,
+    #[serde(default = "default_recap_message_count_threshold")]
+    pub recap_message_count_threshold: usize,
+    #[serde(default = "default_recap_content_length_threshold")]
+    pub recap_content_length_threshold: usize,
+    #[serde(default = "default_recap_time_interval_seconds")]
+    pub recap_time_interval_seconds: u64,
 }
 
 fn default_false() -> bool {
     false
 }
+
+fn default_recap_message_count_threshold() -> usize {
+    10
+}
+
+fn default_recap_content_length_threshold() -> usize {
+    2000
+}
+
+fn default_recap_time_interval_seconds() -> u64 {
+    300 // 5 minutes
+}
+
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -258,6 +278,10 @@ impl Default for AppConfig {
             agent_mode: AgentMode::default(),
             discord_rpc_enabled: false,
             auto_recap_enabled: false,
+            recap_message_count_threshold: default_recap_message_count_threshold(),
+            recap_content_length_threshold: default_recap_content_length_threshold(),
+            recap_time_interval_seconds: default_recap_time_interval_seconds(),
+
         }
     }
 }

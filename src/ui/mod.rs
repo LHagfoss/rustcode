@@ -3,6 +3,7 @@ use std::thread;
 use std::time::Duration;
 use rand::seq::IndexedRandom;
 
+
 pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     let messages = vec!["Thinking...", "Analyzing code...", "Refactoring...", "Checking logic..."];
     let spinner = vec!['|', '/', '-', '\\'];
@@ -1388,7 +1389,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 if !state.recap_content.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("recap: {}", state.recap_content),
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                     )));
                 }
 

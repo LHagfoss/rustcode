@@ -1072,6 +1072,7 @@ async fn generate_recap(
         }
 
         // Drive the existing status-bar spinner + elapsed timer.
+
         s.history.push(ChatMessage::new("system", "Summarizing session..."));
         s.status = AppStatus::Streaming;
         s.generation_start_time = Some(started);
