@@ -1052,7 +1052,7 @@ async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
         // program lookup, so on GUI/Dock launches — where `resolve_bin`'s
         // exists() checks can't see /opt/homebrew — it fell back to "cargo" and
         // failed with ENOENT even though `cargo check` via run_command worked.
-        let mut cmd = tokio::process::Command::new("sh");
+        let mut cmd = tokio::process::Command::new("/bin/sh");
         cmd.args(["-c", "cargo check --message-format=json"])
             .current_dir(cwd)
             .env("PATH", augmented_path())
