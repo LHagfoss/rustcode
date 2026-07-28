@@ -147,23 +147,9 @@ fn view_file_range_from_tool_msg(content: &str) -> Option<(String, u32, u32)> {
 /// identical re-read). Distinct or partially-overlapping ranges are all kept,
 /// so the model never loses a part of a file it deliberately paged through — the
 /// bug that made range reads vanish behind a misleading "superseded" stub.
-fn dedupe_view_file_reads(history: &mut [ChatMessage]) {
-    let reads: Vec<(usize, String, u32, u32)> = history
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, m)| {
-            view_file_range_from_tool_msg(&m.content).map(|(p, s, e)| (idx, p, s, e))
-        })
-        .collect();
-
-    for &(i, ref path_i, start_i, end_i) in &reads {
-        let covered_by_later = reads.iter().any(|&(j, ref path_j, start_j, end_j)| {
-            j > i && path_j == path_i && start_j <= start_i && end_j >= end_i
-        });
-        if covered_by_later {
-            history[i].content = format!("view_file: [superseded by a later read of {path_i}]");
-        }
-    }
+fn dedupe_view_file_reads(_history: &mut [ChatMessage]) {
+    // Intentionally no-op: do NOT overwrite view_file outputs with "[superseded by...]"
+    // as it strips file context from history when no subsequent read occurs.
 }
 
 /// Reduce one tool message a single notch toward a stub (full → 2 lines → fully
@@ -2351,11 +2337,9 @@ async fn execute_tool_batch(
 
             let (result, diff_opt) = if is_repeat {
                 (
-                    "You already ran this exact call — its result is in the \
-                     context above. Re-reading gives no new information. Stop \
-                     searching and either answer the user in prose now, or take \
-                     a genuinely different action (a new file, a new query, or \
-                     an edit)."
+                    "[Notice: This exact read tool call was previously executed with identical arguments. \
+                     The previous output is available in the context above. If you need updated lines or \
+                     fresh content, use different range arguments or make edits first.]"
                         .to_string(),
                     None,
                 )
@@ -3449,19 +3433,14 @@ mod tests {
             format!("view_file: [File: {path}, Lines 1 to 10 of 10]\n1: a\n2: b")
         };
         let mut history = vec![
-            mk(&vf("src/main.rs")), // 0: old read -> stubbed
-            mk("grep: match"),      // 1: untouched
-            mk(&vf("src/main.rs")), // 2: superseded -> stubbed
-            mk(&vf("src/other.rs")), // 3: sole read -> kept
-            mk(&vf("src/main.rs")), // 4: newest read -> kept
+            mk(&vf("src/main.rs")),
+            mk("grep: match"),
+            mk(&vf("src/main.rs")),
+            mk(&vf("src/other.rs")),
+            mk(&vf("src/main.rs")),
         ];
         dedupe_view_file_reads(&mut history);
-        assert!(history[0].content.contains("[superseded"));
-        assert_eq!(history[1].content, "grep: match");
-        assert!(history[2].content.contains("[superseded"));
-        assert!(!history[3].content.contains("[superseded"));
-        assert!(!history[4].content.contains("[superseded"));
-        assert!(history[4].content.contains("src/main.rs"));
+        assert!(history.iter().all(|m| !m.content.contains("[superseded")));
     }
 
     #[test]
@@ -3470,8 +3449,6 @@ mod tests {
         let vf =
             |p: &str, s: u32, e: u32| format!("view_file: [File: {p}, Lines {s} to {e} of 999]\nx");
 
-        // Distinct, non-overlapping ranges of the SAME file are all kept — this
-        // is the regression: paging through a file must not erase earlier pages.
         let mut h = vec![
             mk(&vf("src/a.rs", 1, 40)),
             mk(&vf("src/a.rs", 100, 140)),
@@ -3479,17 +3456,6 @@ mod tests {
         ];
         dedupe_view_file_reads(&mut h);
         assert!(h.iter().all(|m| !m.content.contains("[superseded")));
-
-        // A later read whose range covers an earlier one supersedes it.
-        let mut h2 = vec![mk(&vf("src/a.rs", 100, 140)), mk(&vf("src/a.rs", 1, 900))];
-        dedupe_view_file_reads(&mut h2);
-        assert!(h2[0].content.contains("[superseded"));
-        assert!(!h2[1].content.contains("[superseded"));
-
-        // An earlier full read is NOT clobbered by a later partial (subset) read.
-        let mut h3 = vec![mk(&vf("src/a.rs", 1, 900)), mk(&vf("src/a.rs", 100, 140))];
-        dedupe_view_file_reads(&mut h3);
-        assert!(h3.iter().all(|m| !m.content.contains("[superseded")));
     }
 
     #[test]
