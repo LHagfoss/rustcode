@@ -885,6 +885,52 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
     input_margin
 }
 
+fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, String) {
+    let action_label = match name {
+        "view_file" => "Read",
+        "replace_file_content" | "multi_replace_file_content" => "Edit",
+        "write_to_file" => "Write",
+        "delete_file" => "Delete",
+        "move_file" => "Move",
+        "copy_file" => "Copy",
+        "list_directory" | "glob" => "ListDir",
+        "grep" => "Grep",
+        "find_symbol" => "Symbol",
+        "run_command" => "Bash",
+        "search_web" => "Search",
+        "get_project_map" => "ProjectMap",
+        _ => name,
+    };
+
+    let target_arg = match name {
+        "view_file" | "replace_file_content" | "multi_replace_file_content" | "write_to_file" | "delete_file" => {
+            args.get("path").and_then(|v| v.as_str()).unwrap_or("?").to_string()
+        }
+        "move_file" | "copy_file" => {
+            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
+            let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("{} -> {}", src, dest)
+        }
+        "list_directory" | "glob" => {
+            args.get("path").or_else(|| args.get("pattern")).and_then(|v| v.as_str()).unwrap_or(".").to_string()
+        }
+        "grep" => {
+            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            format!("\"{}\" in {}", pattern, path)
+        }
+        "run_command" => {
+            args.get("command").and_then(|v| v.as_str()).unwrap_or("?").to_string()
+        }
+        "search_web" | "find_symbol" => {
+            args.get("query").and_then(|v| v.as_str()).unwrap_or("?").to_string()
+        }
+        _ => "".to_string(),
+    };
+
+    (action_label.to_string(), target_arg)
+}
+
 fn format_tool_call_brief(name: &str, args: &serde_json::Value) -> String {
     match name {
         "view_file" => {
@@ -1154,54 +1200,42 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
 
         } else if msg.role == "tool" {
-            let (tool_name, tool_result) = if let Some(pos) = msg.content.find(": ") {
-                (&msg.content[..pos], &msg.content[pos + 2..])
+            let prev_tool_info = if msg_idx > 0 {
+                state.history.get(msg_idx - 1).and_then(|prev| {
+                    crate::tools::parse_tool_call(&prev.content, state.config.tool_protocol)
+                })
             } else {
-                ("", msg.content.as_str())
+                None
             };
 
-            let line_count = tool_result.lines().count();
-            let byte_count = tool_result.len();
-            // Default is a compact one-liner. We never dump full raw output into the
-            // chat — file/command bodies are noise unless they're a diff (handled via
-            // msg.diff below) or a short command result (previewed a few lines down).
-            let summary = match tool_name {
-                "read_file" | "view_file" => {
-                    format!(
-                        "completed (read {} lines, {} bytes)",
-                        line_count, byte_count
-                    )
-                }
-                "grep" => format!("completed ({} matching lines)", line_count),
-                "glob" => format!("completed ({} files found)", line_count),
-                "list_directory" => format!("completed ({} entries listed)", line_count),
-                "find_symbol" => format!("completed ({} symbols found)", line_count),
-                "get_project_map" => format!("completed ({} bytes of map generated)", byte_count),
-                "search_web" => format!("completed ({} bytes of search results)", byte_count),
-                _ => {
-                    let trimmed = tool_result.trim();
-                    if trimmed.is_empty() {
-                        "completed".to_string()
-                    } else if line_count <= 1 && trimmed.width() <= 80 {
-                        format!("completed · {}", trimmed)
-                    } else {
-                        format!("completed ({} lines)", line_count)
-                    }
-                }
+            let (action, arg) = if let Some((name, args)) = prev_tool_info {
+                format_pi_tool_action(&name, &args)
+            } else {
+                let (tool_name, tool_result) = if let Some(pos) = msg.content.find(": ") {
+                    (&msg.content[..pos], &msg.content[pos + 2..])
+                } else {
+                    ("", msg.content.as_str())
+                };
+                let action_label = match tool_name {
+                    "view_file" => "Read",
+                    "replace_file_content" | "multi_replace_file_content" => "Edit",
+                    "write_to_file" => "Write",
+                    "list_directory" | "glob" => "ListDir",
+                    "grep" => "Grep",
+                    "run_command" => "Bash",
+                    _ => tool_name,
+                };
+                (action_label.to_string(), tool_result.lines().next().unwrap_or("").to_string())
             };
 
             lines.push(Line::from(vec![
                 Span::styled(
-                    "⚙ ",
-                    get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
+                    action,
+                    get_themed_style(COLOR_TIP, COLOR_BG, Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
-                    format!("{}: ", tool_name),
-                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    summary,
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    format!("({})", arg),
+                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
                 ),
             ]));
 
@@ -1282,18 +1316,20 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             if let Some((name, args)) =
                 crate::tools::parse_tool_call(&msg.content, state.config.tool_protocol)
             {
-                let brief = format_tool_call_brief(&name, &args);
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "→ ",
-                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        brief,
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
-                    ),
-                ]));
-                lines.push(Line::from(""));
+                let has_following_tool_result = state.history.get(msg_idx + 1).is_some_and(|m| m.role == "tool");
+                if !has_following_tool_result {
+                    let (action, arg) = format_pi_tool_action(&name, &args);
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            action,
+                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                        ),
+                        Span::styled(
+                            format!("({})...", arg),
+                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+                        ),
+                    ]));
+                }
                 continue;
             }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
