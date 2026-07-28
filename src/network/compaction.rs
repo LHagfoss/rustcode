@@ -76,6 +76,36 @@ pub async fn maybe_compact(
         return false;
     }
 
+    force_compact_internal(client, url, model, history, summarize_count).await.is_ok()
+}
+
+pub async fn force_compact(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+) -> Result<(usize, usize), String> {
+    let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    prune_old_tool_outputs(history);
+
+    // Summarize all but the last 8 messages.
+    let summarize_count = history.len().saturating_sub(8);
+    if summarize_count < 1 {
+        return Err("Not enough messages to compact.".to_string());
+    }
+
+    let result = force_compact_internal(client, url, model, history, summarize_count).await;
+    let after_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    result.map(|_| (before_tokens, after_tokens))
+}
+
+async fn force_compact_internal(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    summarize_count: usize,
+) -> Result<(), String> {
     // Incremental compaction: if a prior summary already sits at the front of the
     // range, preserve its facts and only summarize the messages that came after.
     // Avoids re-compressing an already-compressed summary (which drifts and loses
@@ -113,7 +143,7 @@ pub async fn maybe_compact(
     .await
     {
         Some(s) => s,
-        None => return false,
+        None => return Err("Failed to generate summary.".to_string()),
     };
 
     let tail: Vec<ChatMessage> = history[summarize_count..].to_vec();
@@ -138,8 +168,9 @@ pub async fn maybe_compact(
     }
     history.extend(tail);
 
-    true
+    Ok(())
 }
+
 
 /// Prefix that marks a compaction summary message, used to detect and preserve
 /// prior summaries during incremental compaction.

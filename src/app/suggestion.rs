@@ -117,6 +117,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show token usage and context statistics",
     },
     CommandInfo {
+        name: "/compact",
+        desc: "Manually compact session history to save context space",
+    },
+    CommandInfo {
         name: "/summarize",
         desc: "Summarize the current chat session",
     },
