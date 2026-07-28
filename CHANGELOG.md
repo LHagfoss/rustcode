@@ -1,6 +1,7 @@
 ## Unreleased
 ### Fixes
 - Render code blocks as a solid full-width panel with an aligned copy button, and stop running prose fences through the Rust highlighter ([#74](https://github.com/LHagfoss/rustcode/pull/74) / [`c69fc07`](https://github.com/LHagfoss/rustcode/commit/c69fc07))
+- Stop the loop detector from aborting an agent mid-recovery: read-only tool repeats only warn, a successful edit resets the detector, and non-unique-target edit errors point at the `start_line`/`end_line` anchor ([#75](https://github.com/LHagfoss/rustcode/pull/75) / [`3dadbfd`](https://github.com/LHagfoss/rustcode/commit/3dadbfd))
 
 ## [v0.3.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.3.1) - 2026-07-28
 ### Features
