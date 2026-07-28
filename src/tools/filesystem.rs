@@ -93,6 +93,9 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
     let resolved_path = resolve(path);
+    if resolved_path.is_dir() {
+        return super::search::list_directory(args);
+    }
     let start_line = args
         .get("start_line")
         .and_then(parse_json_number)
@@ -170,36 +173,62 @@ pub fn generate_unified_diff(target: &str, replacement: &str) -> String {
     out
 }
 
-pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
-    let path = args
-        .get("path")
-        .and_then(|p| p.as_str())
-        .ok_or("missing 'path' argument")?;
-    let start_line = args
-        .get("start_line")
-        .and_then(parse_json_number)
-        .map(|v| v as usize);
-    let end_line = args
-        .get("end_line")
-        .and_then(parse_json_number)
-        .map(|v| v as usize);
-    let target_content = args
-        .get("target_content")
-        .and_then(|t| t.as_str())
-        .ok_or("missing 'target_content' argument")?;
-    let replacement_content = args
-        .get("replacement_content")
-        .and_then(|r| r.as_str())
-        .ok_or("missing 'replacement_content' argument")?;
+struct SingleEdit {
+    target: String,
+    replacement: String,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+}
 
-    let resolved_path = resolve(path);
-    let content = std::fs::read_to_string(&resolved_path)
-        .map_err(|e| format!("cannot read '{path}': {e}"))?;
+fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
+    let get_alias = |v: &Value, keys: &[&str]| -> Option<String> {
+        for &k in keys {
+            if let Some(s) = v.get(k).and_then(|x| x.as_str()) {
+                return Some(s.to_string());
+            }
+        }
+        None
+    };
 
-    let diff_text = generate_unified_diff(target_content, replacement_content);
+    let target_keys = &["target_content", "target", "old_string", "old_text", "oldString", "oldText"];
+    let replacement_keys = &["replacement_content", "replacement", "new_string", "new_text", "newString", "newText"];
 
-    // 1. If start_line and end_line are provided, try exact matching in that line range (with a +-15 line tolerance window for line shifts)
-    if let (Some(start), Some(end)) = (start_line, end_line) {
+    if let Some(edits_arr) = args.get("edits").and_then(|e| e.as_array()) {
+        if edits_arr.is_empty() {
+            return Err("edits array cannot be empty".to_string());
+        }
+        let mut chunks = Vec::new();
+        for (i, item) in edits_arr.iter().enumerate() {
+            let target = get_alias(item, target_keys)
+                .ok_or_else(|| format!("edits[{i}] is missing target_content/old_string"))?;
+            let replacement = get_alias(item, replacement_keys)
+                .ok_or_else(|| format!("edits[{i}] is missing replacement_content/new_string"))?;
+            let start_line = item.get("start_line").and_then(parse_json_number).map(|v| v as usize);
+            let end_line = item.get("end_line").and_then(parse_json_number).map(|v| v as usize);
+            chunks.push(SingleEdit { target, replacement, start_line, end_line });
+        }
+        Ok(chunks)
+    } else {
+        let target = get_alias(args, target_keys)
+            .ok_or("missing 'target_content' (or 'old_string') argument")?;
+        let replacement = get_alias(args, replacement_keys)
+            .ok_or("missing 'replacement_content' (or 'new_string') argument")?;
+        let start_line = args.get("start_line").and_then(parse_json_number).map(|v| v as usize);
+        let end_line = args.get("end_line").and_then(parse_json_number).map(|v| v as usize);
+        Ok(vec![SingleEdit { target, replacement, start_line, end_line }])
+    }
+}
+
+fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) -> Result<String, String> {
+    if edit.target == edit.replacement {
+        return Err("old_string and new_string are identical".to_string());
+    }
+
+    let target_content = &edit.target;
+    let replacement_content = &edit.replacement;
+
+    // 1. Line range matching (with +-15 tolerance window)
+    if let (Some(start), Some(end)) = (edit.start_line, edit.end_line) {
         let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         let total = file_lines.len();
 
@@ -207,7 +236,6 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         let window_end = (end + 15).min(total);
 
         if window_start <= window_end {
-            // Check original range first
             if start >= 1 && start <= total && end >= start && end <= total {
                 let segment = file_lines[start - 1..end].join("\n");
                 if segment.trim_end() == target_content.trim_end() {
@@ -221,16 +249,10 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
                     if has_trailing_newline && !new_content.is_empty() {
                         new_content.push('\n');
                     }
-                    std::fs::write(&resolved_path, &new_content)
-                        .map_err(|e| format!("cannot write '{path}': {e}"))?;
-
-                    return Ok(format!(
-                        "successfully replaced lines {start}-{end} in '{path}'\n\n```diff\n{diff_text}\n```"
-                    ));
+                    return Ok(new_content);
                 }
             }
 
-            // Search within the expanded tolerance window for target_content block
             let window_text = file_lines[window_start - 1..window_end].join("\n");
             if let Some(pos) = window_text.find(target_content) {
                 let bytes_before = file_lines[..window_start - 1]
@@ -238,32 +260,23 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
                     .map(|l| l.len() + 1)
                     .sum::<usize>();
                 let match_start_byte = bytes_before + pos;
-                let mut new_content = content.clone();
+                let mut new_content = content.to_string();
                 new_content.replace_range(
                     match_start_byte..match_start_byte + target_content.len(),
                     replacement_content,
                 );
-                std::fs::write(&resolved_path, &new_content)
-                    .map_err(|e| format!("cannot write '{path}': {e}"))?;
-
-                return Ok(format!(
-                    "successfully replaced target_content in '{path}' (located within line tolerance window lines {window_start}-{window_end})\n\n```diff\n{diff_text}\n```"
-                ));
+                return Ok(new_content);
             }
         }
     }
 
-    // 2. Exact semantic matching anywhere in the file (helps if line numbers shifted)
+    // 2. Exact semantic matching anywhere in content
     let occurrences: Vec<_> = content.match_indices(target_content).collect();
     if occurrences.len() == 1 {
         let (index, _) = occurrences[0];
-        let mut new_content = content.clone();
+        let mut new_content = content.to_string();
         new_content.replace_range(index..index + target_content.len(), replacement_content);
-        std::fs::write(&resolved_path, &new_content)
-            .map_err(|e| format!("cannot write '{path}': {e}"))?;
-        return Ok(format!(
-            "successfully replaced target_content in '{path}' (uniquely located in file)\n\n```diff\n{diff_text}\n```"
-        ));
+        return Ok(new_content);
     } else if occurrences.len() > 1 {
         return Err(format!(
             "Error: found {} matches for target_content in '{path}'. Please include more surrounding context lines to make it unique.",
@@ -271,7 +284,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         ));
     }
 
-    // 3. Normalized matching (ignoring line endings CRLF vs LF)
+    // 3. Line-ending normalized matching
     let clean_content = content.replace("\r\n", "\n");
     let clean_target = target_content.replace("\r\n", "\n");
     let clean_occurrences: Vec<_> = clean_content.match_indices(&clean_target).collect();
@@ -280,11 +293,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         let (index, _) = clean_occurrences[0];
         let mut new_content = clean_content.clone();
         new_content.replace_range(index..index + clean_target.len(), replacement_content);
-        std::fs::write(&resolved_path, &new_content)
-            .map_err(|e| format!("cannot write '{path}': {e}"))?;
-        return Ok(format!(
-            "successfully replaced target_content in '{path}' (matched with normalized line endings)\n\n```diff\n{diff_text}\n```"
-        ));
+        return Ok(new_content);
     } else if clean_occurrences.len() > 1 {
         return Err(format!(
             "Error: found {} matches for target_content (with normalized newlines) in '{path}'. Please include more surrounding context.",
@@ -292,26 +301,22 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         ));
     }
 
-    // 3.5. Fuzzy matching (line-trimmed & block anchor fallback ala OpenCode)
+    // 4. Fuzzy matching (line-trimmed & block anchor fallback)
     if let Some((start_byte, end_byte)) = find_fuzzy_span(&clean_content, &clean_target) {
         let mut new_content = clean_content.clone();
         let end_byte = end_byte.min(new_content.len());
         if start_byte <= end_byte {
             new_content.replace_range(start_byte..end_byte, replacement_content);
-            std::fs::write(&resolved_path, &new_content)
-                .map_err(|e| format!("cannot write '{path}': {e}"))?;
-            return Ok(format!(
-                "successfully replaced target_content in '{path}' (matched via fuzzy block/line-trimmed alignment)\n\n```diff\n{diff_text}\n```"
-            ));
+            return Ok(new_content);
         }
     }
 
-    // 4. Mismatch feedback
+    // 5. Failure feedback
     let mut err_msg = format!(
         "Error: target_content not found in '{path}'.\n\
-         Please check that your target content exact string matches the file."
+         Please check that your target content matches the file."
     );
-    if let (Some(start), Some(end)) = (start_line, end_line) {
+    if let (Some(start), Some(end)) = (edit.start_line, edit.end_line) {
         let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         let total = file_lines.len();
         if start >= 1 && start <= total && end >= start && end <= total {
@@ -320,15 +325,51 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
                 "Error: target_content was not found between lines {start}..{end} in '{path}'.\n\
                  The actual content currently at lines {start}..{end} is:\n\
                  ```\n{segment}\n```\n\
-                 Action required: Adjust your start_line/end_line range to point to the correct line numbers, or use view_file to re-check line numbers."
+                 Action required: Adjust your start_line/end_line range, or omit line numbers to use exact string matching."
             );
-        } else {
-            err_msg.push_str(&format!(
-                "\nSpecified range {start}..{end} is out of bounds for file with {total} lines."
-            ));
         }
     }
     Err(err_msg)
+}
+
+pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path' argument")?;
+
+    let resolved_path = resolve(path);
+    if resolved_path.is_dir() {
+        return Err(format!("'{path}' is a directory"));
+    }
+
+    let chunks = extract_edit_chunks(args)?;
+    let mut current_content = std::fs::read_to_string(&resolved_path)
+        .map_err(|e| format!("cannot read '{path}': {e}"))?;
+
+    let mut combined_diffs = String::new();
+    for (idx, edit) in chunks.iter().enumerate() {
+        let diff = generate_unified_diff(&edit.target, &edit.replacement);
+        if !combined_diffs.is_empty() {
+            combined_diffs.push_str("\n");
+        }
+        combined_diffs.push_str(&diff);
+
+        let new_content = apply_single_edit_to_content(&current_content, path, edit)
+            .map_err(|e| if chunks.len() > 1 { format!("Edit #{}: {}", idx + 1, e) } else { e })?;
+        current_content = new_content;
+    }
+
+    std::fs::write(&resolved_path, &current_content)
+        .map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+    let msg = if chunks.len() == 1 {
+        format!("successfully replaced target_content in '{path}'\n\n```diff\n{combined_diffs}\n```")
+    } else {
+        format!("successfully applied {} edits in '{path}'\n\n```diff\n{combined_diffs}\n```", chunks.len())
+    };
+
+    Ok(msg)
 }
 
 fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {

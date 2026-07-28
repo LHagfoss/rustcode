@@ -247,15 +247,15 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "view_file",
-        description: "View the contents of a file. Supports line ranges (1-indexed) and optional byte offset if content is truncated.",
-        arguments: r#"{"path": "absolute or relative path to file", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (default start_line + 500)", "content_offset": "optional byte offset into content"}"#,
+        description: "View the contents of a file or directory. Supports line ranges (1-indexed) and optional byte offset if content is truncated.",
+        arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (default start_line + 2000)", "content_offset": "optional byte offset into content"}"#,
         handler: filesystem::view_file_tool,
         requires_confirmation: false,
     },
     Tool {
         name: "replace_file_content",
-        description: "Surgically edit a contiguous block of text in an existing file. Locates the block using target_content (semantic search-and-replace). start_line and end_line are optional helper fields.",
-        arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (must match file exactly)", "replacement_content": "complete replacement text for that block", "start_line": "optional 1-indexed start line containing target content", "end_line": "optional 1-indexed end line containing target content"}"#,
+        description: "Surgically edit code in an existing file. Supports single replacement (target_content/replacement_content or old_string/new_string) or array of batch edits (edits: [{old_string, new_string}]). Line numbers are optional.",
+        arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (or old_string)", "replacement_content": "complete replacement text (or new_string)", "edits": "optional array of [{old_string, new_string}] for multiple edits in 1 call"}"#,
         handler: filesystem::replace_file_content_tool,
         requires_confirmation: true,
     },
@@ -991,5 +991,54 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, "grep");
         assert_eq!(calls[1].0, "glob");
+    }
+
+    #[test]
+    fn test_replace_file_content_tool_aliases_and_batch_edits() {
+        let temp_dir = std::env::temp_dir().join(format!("rustcode_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("test.rs");
+        std::fs::write(&test_file, "fn foo() {}\nfn bar() {}\n").unwrap();
+
+        // 1. Single edit using old_string / new_string aliases
+        let args = serde_json::json!({
+            "path": test_file.to_str().unwrap(),
+            "old_string": "fn foo() {}",
+            "new_string": "fn foo_updated() {}"
+        });
+        let res = filesystem::replace_file_content_tool(&args).unwrap();
+        assert!(res.contains("successfully replaced"));
+        let updated = std::fs::read_to_string(&test_file).unwrap();
+        assert!(updated.contains("fn foo_updated() {}"));
+
+        // 2. Batch edits using edits array
+        let args_batch = serde_json::json!({
+            "path": test_file.to_str().unwrap(),
+            "edits": [
+                {"old_string": "fn foo_updated() {}", "new_string": "fn foo_v2() {}"},
+                {"old_string": "fn bar() {}", "new_string": "fn bar_v2() {}"}
+            ]
+        });
+        let res_batch = filesystem::replace_file_content_tool(&args_batch).unwrap();
+        assert!(res_batch.contains("successfully applied 2 edits"));
+        let final_content = std::fs::read_to_string(&test_file).unwrap();
+        assert_eq!(final_content, "fn foo_v2() {}\nfn bar_v2() {}\n");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_view_file_tool_directory_fallback() {
+        let temp_dir = std::env::temp_dir().join(format!("rustcode_dir_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        std::fs::write(temp_dir.join("sample.txt"), "hello").unwrap();
+
+        let args = serde_json::json!({
+            "path": temp_dir.to_str().unwrap()
+        });
+        let res = filesystem::view_file_tool(&args).unwrap();
+        assert!(res.contains("sample.txt"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
