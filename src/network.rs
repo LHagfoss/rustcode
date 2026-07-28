@@ -3348,6 +3348,7 @@ mod tests {
     #[tokio::test]
     async fn test_confirm_and_execute_bypassed() {
         let state = Arc::new(Mutex::new(AppState::new()));
+        state.lock().await.agent_mode = crate::config::AgentMode::Build;
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let args = serde_json::json!({
             "path": "sandbox/test_bypass.txt",
@@ -3367,7 +3368,8 @@ mod tests {
         assert!(
             result.contains("wrote")
                 || result.contains("created")
-                || result.contains("test_bypass.txt")
+                || result.contains("test_bypass.txt"),
+            "got result: {result}"
         );
 
         let _ = std::fs::remove_file("sandbox/test_bypass.txt");
