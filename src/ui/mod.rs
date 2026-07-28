@@ -310,29 +310,9 @@ fn render_assistant_message<'a>(
                     i += 1;
                 }
 
-                // Render the normal block as a single padded bubble card!
-                // Top padding row
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "▌",
-                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                    Span::styled(
-                        " ".repeat(content_width + 4),
-                        get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
-                    ),
-                ]));
-
-                // Text rows
+                // Render assistant prose cleanly directly on COLOR_BG (no full-width box or giant background panel)
                 for line_str in normal_block {
                     let mut spans = Vec::new();
-
-                    // Two spaces of left padding inside the bubble, matching the
-                    // input field's horizontal margin so both bubbles line up.
-                    spans.push(Span::styled(
-                        "  ",
-                        get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
-                    ));
 
                     let mut chars = line_str.chars().peekable();
                     let mut current = String::new();
@@ -346,7 +326,7 @@ fn render_assistant_message<'a>(
                                 let style = if in_inline_code {
                                     get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                                 } else {
-                                    get_themed_style(COLOR_TEXT, COLOR_PANEL, modifier, show_picker)
+                                    get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
                                 };
                                 spans.push(Span::styled(current.clone(), style));
                                 current.clear();
@@ -359,7 +339,7 @@ fn render_assistant_message<'a>(
                                 let style = if in_inline_code {
                                     get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                                 } else {
-                                    get_themed_style(COLOR_TEXT, COLOR_PANEL, modifier, show_picker)
+                                    get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
                                 };
                                 spans.push(Span::styled(current.clone(), style));
                                 current.clear();
@@ -375,48 +355,13 @@ fn render_assistant_message<'a>(
                         let style = if in_inline_code {
                             get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
                         } else {
-                            get_themed_style(COLOR_TEXT, COLOR_PANEL, modifier, show_picker)
+                            get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
                         };
                         spans.push(Span::styled(current, style));
                     }
 
-                    // Pad to full content_width so the COLOR_PANEL background fills the block
-                    // (subtract the 2-space left padding added above).
-                    let current_width: usize = spans.iter().map(|s| s.content.width()).sum::<usize>().saturating_sub(2);
-                    if current_width < content_width {
-                        spans.push(Span::styled(
-                            " ".repeat(content_width - current_width),
-                            get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
-                        ));
-                    }
-
-                    // Add 2 spaces right padding inside the bubble
-                    spans.push(Span::styled(
-                        "  ",
-                        get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
-                    ));
-
-                    let mut final_spans = vec![
-                        Span::styled(
-                            "▌",
-                            get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
-                        ),
-                    ];
-                    final_spans.extend(spans);
-                    lines.push(Line::from(final_spans));
+                    lines.push(Line::from(spans));
                 }
-
-                // Bottom padding row
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "▌",
-                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
-                    ),
-                    Span::styled(
-                        " ".repeat(content_width + 4),
-                        get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
-                    ),
-                ]));
             }
         }
         lines.push(Line::from(""));
@@ -1121,6 +1066,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 continue;
             }
 
+            let prev_was_tool = msg_idx > 0 && state.history.get(msg_idx - 1).is_some_and(|m| m.role == "tool");
+            if prev_was_tool {
+                lines.push(Line::from(""));
+            }
+
             if msg.content.contains("🏁") || msg.content.contains("Goal Accomplished") {
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -1203,6 +1153,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     ]));
                 }
             }
+            lines.push(Line::from(""));
 
         } else if msg.role == "tool" {
             let prev_tool_info = if msg_idx > 0 {
