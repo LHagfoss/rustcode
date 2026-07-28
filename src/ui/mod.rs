@@ -1317,13 +1317,17 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
             let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
 
+            // The randomized status word gets its own orange line; the
+            // Build/model/elapsed metadata follows on a second muted line
+            // (ratatui breaks lines by pushing separate `Line`s, not `\n`).
+            lines.push(Line::from(Span::styled(
+                status_msg.to_string(),
+                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            )));
+
             let mut status_spans: Vec<Span> = vec![
                 Span::styled(
-                    format!("{status_msg} "),
-                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    " · ",
+                    "· ",
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
                 Span::styled(
@@ -1334,12 +1338,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     " · ",
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
+                Span::styled(
+                    model_label(state),
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                ),
             ];
-
-            status_spans.push(Span::styled(
-                model_label(state),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-            ));
 
             if let Some(t) = state.generation_start_time {
                 let secs = t.elapsed().as_secs_f32();
