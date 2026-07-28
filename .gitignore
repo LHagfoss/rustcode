@@ -2,3 +2,8 @@
 **/.DS_Store
 *.log
 debug.log
+
+# clewdr reverse-proxy: local binary + data (cookies/secrets) must never be committed
+/clewdr
+/clewdr-*.zip
+/clewdr_data/
