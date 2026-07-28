@@ -1317,43 +1317,21 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
             let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
 
-            // The randomized status word gets its own orange line; the
-            // Build/model/elapsed metadata follows on a second muted line
-            // (ratatui breaks lines by pushing separate `Line`s, not `\n`).
-            lines.push(Line::from(Span::styled(
-                status_msg.to_string(),
-                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
-            )));
-
             let mut status_spans: Vec<Span> = vec![
                 Span::styled(
-                    "· ",
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    label,
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    " · ",
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    model_label(state),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    status_msg.to_string(),
+                    get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
                 ),
             ];
 
             if let Some(t) = state.generation_start_time {
-                let secs = t.elapsed().as_secs_f32();
+                let secs = t.elapsed().as_secs();
                 status_spans.push(Span::styled(
-                    format!(" · {:.1}s", secs),
+                    format!(" · {}s", secs),
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ));
             }
-
-            lines.push(Line::from(status_spans));
-        } else {
+            lines.push(Line::from(status_spans));        } else {
             let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
 
             // Check if current streaming response is a tool call syntax
