@@ -1,7 +1,10 @@
 use crate::app::ChatMessage;
+use tiktoken_rs::p50k_base;
+use std::collections::HashSet;
 
 pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().saturating_div(4)
+    let bpe = p50k_base().unwrap();
+    bpe.encode(text, HashSet::new()).len()
 }
 
 pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
