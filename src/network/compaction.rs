@@ -4,8 +4,9 @@ use std::collections::HashSet;
 
 pub fn estimate_tokens(text: &str) -> usize {
     let bpe = p50k_base().unwrap();
-    bpe.encode(text, HashSet::new()).len()
-}
+    let tokens = bpe.encode(text, HashSet::new()).len();
+    eprintln!("Token count for text ({} chars): {}", text.chars().count(), tokens);
+    tokens
 }
 
 pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {

@@ -102,7 +102,7 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         .get("end_line")
         .and_then(parse_json_number)
         .map(|v| v as usize)
-        .unwrap_or(start_line + 500);
+        .unwrap_or(start_line + 2000);
 
     let content_bytes =
         std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
