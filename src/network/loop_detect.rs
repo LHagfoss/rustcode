@@ -22,6 +22,18 @@ use std::hash::{Hash, Hasher};
 /// `grep`/`rg`/`ag` variants of the same query count as one intent.
 const SEARCH_BINS: &[&str] = &["rg", "grep", "ag", "ack", "fgrep", "egrep"];
 
+/// Read-only tools inspect state without mutating it. Re-reading the region
+/// you're actively editing — to find a unique anchor, or verify an edit landed
+/// — is normal recovery, not a runaway loop. Repeats of these should nudge the
+/// model, not disable its tools, so they're capped at `Warning` unless they
+/// spin far past the abort threshold (a genuine hang).
+pub fn is_read_only(name: &str) -> bool {
+    matches!(
+        name,
+        "view_file" | "read_file" | "grep" | "list_directory" | "glob" | "find_symbol"
+    )
+}
+
 /// Build `(exact_signature, category)` for a tool call.
 ///
 /// `exact` distinguishes every distinct call; `category` strips syntactic
@@ -230,6 +242,32 @@ impl LoopDetector {
         self.classify(n)
     }
 
+    /// Like [`check`], but softens the verdict for read-only tools: their
+    /// repeats only *warn* (nudging the model to change approach) instead of
+    /// aborting and disabling tools — unless they spin to 3× the abort
+    /// threshold, which is a real hang rather than legitimate re-reading.
+    pub fn check_tool(&mut self, name: &str, exact: &str, category: &str) -> LoopStatus {
+        let status = self.check(exact, category);
+        if is_read_only(name)
+            && let LoopStatus::Abort(n) = status
+            && n < self.abort.saturating_mul(3)
+        {
+            return LoopStatus::Warning(n);
+        }
+        status
+    }
+
+    /// Clear all repetition state. Called when the agent makes real progress —
+    /// a successful mutating tool — so post-edit re-reads start from a clean
+    /// slate instead of inheriting the pre-edit read history that would
+    /// otherwise trip the frequency signal mid-task.
+    pub fn reset(&mut self) {
+        self.exact = ConsecutiveTracker::default();
+        self.category = ConsecutiveTracker::default();
+        self.output = HashTracker::default();
+        self.frequency = FrequencyTracker::new(self.abort * 2);
+    }
+
     /// Record a tool output and check for stagnation (same result repeatedly).
     pub fn record_output(&mut self, output: &str) -> LoopStatus {
         let n = self.output.record(output);
@@ -348,6 +386,52 @@ mod tests {
             last = d.check(&e, &cat);
         }
         assert_eq!(last, LoopStatus::Abort(4));
+    }
+
+    #[test]
+    fn read_only_repeats_warn_not_abort() {
+        // A model paging around the same region it's editing must be nudged,
+        // not hard-stopped: view_file repeats cap at Warning below 3× abort.
+        let mut d = LoopDetector::new(4); // warn at 2, abort at 4
+        let mut last = LoopStatus::Ok;
+        for start in [250, 260, 250, 255, 252, 258] {
+            let (e, c) = signatures(
+                "view_file",
+                &json!({"path": "src/big.rs", "start_line": start, "end_line": start + 50}),
+            );
+            last = d.check_tool("view_file", &e, &c);
+        }
+        assert!(matches!(last, LoopStatus::Warning(_)), "got {last:?}");
+    }
+
+    #[test]
+    fn mutating_tool_still_aborts_via_check_tool() {
+        // check_tool must not soften non-read-only tools.
+        let mut d = LoopDetector::new(4);
+        let mut last = LoopStatus::Ok;
+        for _ in 0..4 {
+            last = d.check_tool("write_to_file", "write_to_file:x", "write_to_file:x");
+        }
+        assert_eq!(last, LoopStatus::Abort(4));
+    }
+
+    #[test]
+    fn reset_clears_loop_state() {
+        // After progress (reset), a previously-churning read starts fresh.
+        let mut d = LoopDetector::new(4);
+        for start in [250, 260, 250] {
+            let (e, c) = signatures(
+                "view_file",
+                &json!({"path": "src/big.rs", "start_line": start, "end_line": start + 50}),
+            );
+            d.check(&e, &c);
+        }
+        d.reset();
+        let (e, c) = signatures(
+            "view_file",
+            &json!({"path": "src/big.rs", "start_line": 255, "end_line": 305}),
+        );
+        assert_eq!(d.check(&e, &c), LoopStatus::Ok, "reset should clear counts");
     }
 
     #[test]
