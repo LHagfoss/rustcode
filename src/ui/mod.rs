@@ -23,7 +23,7 @@ pub mod theme;
 mod highlight;
 mod modals;
 
-use highlight::{highlight_diff_line, highlight_rust_line, pad_to_width};
+use highlight::{format_markdown_spans, highlight_diff_line, highlight_rust_line, pad_to_width};
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
@@ -224,6 +224,11 @@ fn render_assistant_message<'a>(
             }
         }
 
+        let is_prose = |lang: &str| -> bool {
+            let l = lang.trim().to_lowercase();
+            l == "markdown" || l == "md" || l == "text" || l == "txt"
+        };
+
         let mut i = 0;
         let mut fence_open = false;
         let mut current_lang = String::new();
@@ -231,7 +236,6 @@ fn render_assistant_message<'a>(
             if processed_lines[i].0 {
                 let line_str = &processed_lines[i].1;
                 let is_code_fence = line_str.trim_start().starts_with("```");
-                let mut spans = Vec::new();
                 let code_content_width = (viewport_width as usize).saturating_sub(6);
                 if is_code_fence {
                     let opening = !fence_open;
@@ -239,52 +243,57 @@ fn render_assistant_message<'a>(
                     let fence_text = line_str.trim();
                     if opening {
                         current_lang = fence_text.trim_start_matches('`').trim().to_lowercase();
-                        // Only the OPENING fence carries the [Copy] badge. Gather the
-                        // block's code (all lines up to the closing fence) and register
-                        // this row so a click on the badge copies it.
-                        let mut code_text = String::new();
-                        let mut j = i + 1;
-                        while j < processed_lines.len()
-                            && !(processed_lines[j].0
-                                && processed_lines[j].1.trim_start().starts_with("```"))
-                        {
-                            if !code_text.is_empty() {
-                                code_text.push('\n');
+                        if !is_prose(&current_lang) {
+                            let mut spans = Vec::new();
+                            let mut code_text = String::new();
+                            let mut j = i + 1;
+                            while j < processed_lines.len()
+                                && !(processed_lines[j].0
+                                    && processed_lines[j].1.trim_start().starts_with("```"))
+                            {
+                                if !code_text.is_empty() {
+                                    code_text.push('\n');
+                                }
+                                code_text.push_str(&processed_lines[j].1);
+                                j += 1;
                             }
-                            code_text.push_str(&processed_lines[j].1);
-                            j += 1;
-                        }
 
-                        let button_badge = if is_copied_recently {
-                            " 📋 [Copied!] "
-                        } else {
-                            " 📋 [Copy] "
-                        };
-                        let button_color = if is_copied_recently {
-                            Color::Rgb(152, 195, 121)
-                        } else {
-                            COLOR_SECONDARY
-                        };
-                        let pad_len =
-                            code_content_width.saturating_sub(fence_text.len() + button_badge.len());
-                        spans.push(Span::styled(
-                            format!("{}{}", fence_text, " ".repeat(pad_len)),
-                            get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                        ));
-                        spans.push(Span::styled(
-                            button_badge,
-                            get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
-                        ));
-                        copy_registry.push((lines.len(), code_text));
+                            let button_badge = if is_copied_recently {
+                                " 📋 [Copied!] "
+                            } else {
+                                " 📋 [Copy] "
+                            };
+                            let button_color = if is_copied_recently {
+                                Color::Rgb(152, 195, 121)
+                            } else {
+                                COLOR_SECONDARY
+                            };
+                            let pad_len =
+                                code_content_width.saturating_sub(fence_text.len() + button_badge.len());
+                            spans.push(Span::styled(
+                                format!("{}{}", fence_text, " ".repeat(pad_len)),
+                                get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                            ));
+                            spans.push(Span::styled(
+                                button_badge,
+                                get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
+                            ));
+                            copy_registry.push((lines.len(), code_text));
+                            lines.push(Line::from(spans));
+                        }
                     } else {
+                        if !is_prose(&current_lang) {
+                            let mut spans = Vec::new();
+                            spans.push(Span::styled(
+                                " ".repeat(code_content_width),
+                                get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                            ));
+                            lines.push(Line::from(spans));
+                        }
                         current_lang.clear();
-                        // Closing fence: a clean full-width bar, no badge.
-                        spans.push(Span::styled(
-                            " ".repeat(code_content_width),
-                            get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                        ));
                     }
-                    lines.push(Line::from(spans));
+                } else if is_prose(&current_lang) {
+                    lines.push(Line::from(format_markdown_spans(line_str, show_picker)));
                 } else if (current_lang == "diff" || current_lang == "patch" || current_lang == "udiff")
                     && (line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@"))
                 {
@@ -298,69 +307,18 @@ fn render_assistant_message<'a>(
                             get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
                         ));
                     }
-                    spans.extend(line_spans);
-                    lines.push(Line::from(spans));
+                    lines.push(Line::from(line_spans));
                 }
                 i += 1;
             } else {
-                // Gather contiguous normal text lines
                 let mut normal_block = Vec::new();
                 while i < processed_lines.len() && !processed_lines[i].0 {
                     normal_block.push(processed_lines[i].1.clone());
                     i += 1;
                 }
 
-                // Render assistant prose cleanly directly on COLOR_BG (no full-width box or giant background panel)
                 for line_str in normal_block {
-                    let mut spans = Vec::new();
-
-                    let mut chars = line_str.chars().peekable();
-                    let mut current = String::new();
-                    let mut in_inline_code = false;
-                    let mut in_bold = false;
-
-                    while let Some(c) = chars.next() {
-                        if c == '`' {
-                            if !current.is_empty() {
-                                let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
-                                let style = if in_inline_code {
-                                    get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
-                                } else {
-                                    get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
-                                };
-                                spans.push(Span::styled(current.clone(), style));
-                                current.clear();
-                            }
-                            in_inline_code = !in_inline_code;
-                        } else if c == '*' && chars.peek() == Some(&'*') {
-                            chars.next();
-                            if !current.is_empty() {
-                                let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
-                                let style = if in_inline_code {
-                                    get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
-                                } else {
-                                    get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
-                                };
-                                spans.push(Span::styled(current.clone(), style));
-                                current.clear();
-                            }
-                            in_bold = !in_bold;
-                        } else {
-                            current.push(c);
-                        }
-                    }
-
-                    if !current.is_empty() {
-                        let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
-                        let style = if in_inline_code {
-                            get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
-                        } else {
-                            get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
-                        };
-                        spans.push(Span::styled(current, style));
-                    }
-
-                    lines.push(Line::from(spans));
+                    lines.push(Line::from(format_markdown_spans(&line_str, show_picker)));
                 }
             }
         }

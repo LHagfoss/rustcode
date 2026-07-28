@@ -9,7 +9,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::{COLOR_BG, COLOR_ELEMENT, COLOR_TEXT, get_themed_style};
+use super::{COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_TEXT, get_themed_style};
 
 pub(super) fn pad_to_width(s: &str, width: usize) -> String {
     let current = s.width();
@@ -299,4 +299,158 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
     }
 
     Line::from(final_spans)
+}
+
+pub(super) fn format_markdown_spans<'a>(line_str: &str, show_picker: bool) -> Vec<Span<'a>> {
+    let trimmed = line_str.trim();
+
+    if trimmed.starts_with("# ") {
+        let text = trimmed.trim_start_matches("# ").trim();
+        let mut spans = vec![Span::styled(
+            "# ".to_string(),
+            get_themed_style(Color::Rgb(100, 175, 235), COLOR_BG, Modifier::BOLD, show_picker),
+        )];
+        parse_inline_markdown(text, show_picker, &mut spans);
+        return spans;
+    } else if trimmed.starts_with("## ") {
+        let text = trimmed.trim_start_matches("## ").trim();
+        let mut spans = vec![Span::styled(
+            "## ".to_string(),
+            get_themed_style(Color::Rgb(229, 192, 123), COLOR_BG, Modifier::BOLD, show_picker),
+        )];
+        parse_inline_markdown(text, show_picker, &mut spans);
+        return spans;
+    } else if trimmed.starts_with("### ") {
+        let text = trimmed.trim_start_matches("### ").trim();
+        let mut spans = vec![Span::styled(
+            "### ".to_string(),
+            get_themed_style(Color::Rgb(224, 169, 109), COLOR_BG, Modifier::BOLD, show_picker),
+        )];
+        parse_inline_markdown(text, show_picker, &mut spans);
+        return spans;
+    } else if trimmed.starts_with("#### ") {
+        let text = trimmed.trim_start_matches("#### ").trim();
+        let mut spans = Vec::new();
+        parse_inline_markdown(text, show_picker, &mut spans);
+        return spans;
+    }
+
+    let (prefix, text_content) = if trimmed.starts_with("- ") {
+        ("• ", &trimmed[2..])
+    } else if trimmed.starts_with("* ") {
+        ("• ", &trimmed[2..])
+    } else {
+        ("", line_str)
+    };
+
+    let mut spans = Vec::new();
+    if !prefix.is_empty() {
+        let indent = line_str.len() - line_str.trim_start().len();
+        if indent > 0 {
+            spans.push(Span::styled(
+                " ".repeat(indent),
+                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+            ));
+        }
+        spans.push(Span::styled(
+            prefix.to_string(),
+            get_themed_style(Color::Rgb(100, 175, 235), COLOR_BG, Modifier::BOLD, show_picker),
+        ));
+    }
+
+    parse_inline_markdown(text_content, show_picker, &mut spans);
+    spans
+}
+
+pub(super) fn parse_inline_markdown<'a>(text: &str, show_picker: bool, spans: &mut Vec<Span<'a>>) {
+    let mut chars = text.chars().peekable();
+    let mut current = String::new();
+    let mut in_inline_code = false;
+    let mut in_bold = false;
+
+    while let Some(c) = chars.next() {
+        if c == '`' {
+            if !current.is_empty() {
+                let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
+                let style = if in_inline_code {
+                    get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
+                } else {
+                    get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
+                };
+                spans.push(Span::styled(current.clone(), style));
+                current.clear();
+            }
+            in_inline_code = !in_inline_code;
+        } else if c == '*' && chars.peek() == Some(&'*') {
+            chars.next();
+            if !current.is_empty() {
+                let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
+                let style = if in_inline_code {
+                    get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
+                } else {
+                    get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
+                };
+                spans.push(Span::styled(current.clone(), style));
+                current.clear();
+            }
+            in_bold = !in_bold;
+        } else if c == '[' {
+            let mut label = String::new();
+            let mut found_closing_bracket = false;
+            let mut sub_chars = chars.clone();
+            while let Some(sc) = sub_chars.next() {
+                if sc == ']' {
+                    found_closing_bracket = true;
+                    break;
+                }
+                label.push(sc);
+            }
+
+            if found_closing_bracket && sub_chars.peek() == Some(&'(') {
+                sub_chars.next(); // consume '('
+                let mut url = String::new();
+                let mut found_closing_paren = false;
+                while let Some(uc) = sub_chars.next() {
+                    if uc == ')' {
+                        found_closing_paren = true;
+                        break;
+                    }
+                    url.push(uc);
+                }
+
+                if found_closing_paren {
+                    if !current.is_empty() {
+                        let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
+                        let style = if in_inline_code {
+                            get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
+                        } else {
+                            get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
+                        };
+                        spans.push(Span::styled(current.clone(), style));
+                        current.clear();
+                    }
+
+                    chars = sub_chars;
+                    spans.push(Span::styled(
+                        label,
+                        get_themed_style(Color::Rgb(100, 175, 235), COLOR_BG, Modifier::UNDERLINED | Modifier::BOLD, show_picker),
+                    ));
+                    continue;
+                }
+            }
+            current.push(c);
+        } else {
+            current.push(c);
+        }
+    }
+
+    if !current.is_empty() {
+        let modifier = if in_bold { Modifier::BOLD } else { Modifier::empty() };
+        let style = if in_inline_code {
+            get_themed_style(COLOR_GREEN, COLOR_ELEMENT, modifier, show_picker)
+        } else {
+            get_themed_style(COLOR_TEXT, COLOR_BG, modifier, show_picker)
+        };
+        spans.push(Span::styled(current, style));
+    }
 }
