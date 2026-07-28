@@ -168,7 +168,12 @@ pub fn generate_unified_diff(target: &str, replacement: &str) -> String {
             similar::ChangeTag::Insert => "+",
             similar::ChangeTag::Equal => " ",
         };
-        out.push_str(&format!("{}{}", sign, change));
+        let val = change.value();
+        out.push_str(sign);
+        out.push_str(val);
+        if !val.ends_with('\n') {
+            out.push('\n');
+        }
     }
     out
 }
