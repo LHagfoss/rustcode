@@ -7,7 +7,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_TEXT, get_themed_style};
 
@@ -245,6 +245,57 @@ pub(super) fn highlight_rust_line<'a>(line: &str, show_picker: bool) -> Vec<Span
     highlight_rust_line_with_colors(line, COLOR_TEXT, COLOR_ELEMENT, show_picker)
 }
 
+/// Flow a sequence of styled spans across as many rows as needed to fit
+/// `width` display columns, padding every row (including the last) out to the
+/// full width with `bg`. This is what makes a code panel's background fill the
+/// entire box edge to edge instead of stopping behind the last glyph, and it
+/// hard-wraps over-long lines so nothing overflows the panel.
+pub(super) fn wrap_code_spans<'a>(
+    spans: Vec<Span<'a>>,
+    width: usize,
+    bg: Color,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
+    let width = width.max(1);
+    let pad_style = get_themed_style(COLOR_TEXT, bg, Modifier::empty(), show_picker);
+    let mut out: Vec<Line> = Vec::new();
+    let mut row: Vec<Span> = Vec::new();
+    let mut row_w = 0usize;
+
+    for span in spans {
+        let style = span.style;
+        let mut seg = String::new();
+        let mut seg_w = 0usize;
+        for ch in span.content.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if row_w + seg_w + cw > width {
+                if !seg.is_empty() {
+                    row.push(Span::styled(std::mem::take(&mut seg), style));
+                    row_w += seg_w;
+                    seg_w = 0;
+                }
+                if row_w < width {
+                    row.push(Span::styled(" ".repeat(width - row_w), pad_style));
+                }
+                out.push(Line::from(std::mem::take(&mut row)));
+                row_w = 0;
+            }
+            seg.push(ch);
+            seg_w += cw;
+        }
+        if !seg.is_empty() {
+            row.push(Span::styled(seg, style));
+            row_w += seg_w;
+        }
+    }
+
+    if row_w < width {
+        row.push(Span::styled(" ".repeat(width - row_w), pad_style));
+    }
+    out.push(Line::from(row));
+    out
+}
+
 pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: bool) -> Line<'a> {
     let (prefix, code) = if line.is_empty() {
         (' ', "")
@@ -299,6 +350,33 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
     }
 
     Line::from(final_spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row_width(line: &Line) -> usize {
+        line.spans.iter().map(|s| s.content.width()).sum()
+    }
+
+    #[test]
+    fn wraps_and_pads_every_row_to_width() {
+        // A single long span must split across rows, each padded to full width.
+        let spans = vec![Span::raw("abcdefghijklmnop")];
+        let rows = wrap_code_spans(spans, 6, COLOR_ELEMENT, false);
+        assert_eq!(rows.len(), 3); // 16 chars / 6 = 3 rows
+        for row in &rows {
+            assert_eq!(row_width(&row), 6);
+        }
+    }
+
+    #[test]
+    fn pads_empty_input_to_one_full_row() {
+        let rows = wrap_code_spans(Vec::new(), 8, COLOR_ELEMENT, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(row_width(&rows[0]), 8);
+    }
 }
 
 pub(super) fn format_markdown_spans<'a>(line_str: &str, show_picker: bool) -> Vec<Span<'a>> {
