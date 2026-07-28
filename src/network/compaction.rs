@@ -6,6 +6,7 @@ pub fn estimate_tokens(text: &str) -> usize {
     let bpe = p50k_base().unwrap();
     bpe.encode(text, HashSet::new()).len()
 }
+}
 
 pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
     let mut total_tool_tokens = 0;
