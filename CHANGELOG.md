@@ -1,3 +1,7 @@
+## Unreleased
+### Fixes
+- Render code blocks as a solid full-width panel with an aligned copy button, and stop running prose fences through the Rust highlighter ([#74](https://github.com/LHagfoss/rustcode/pull/74) / [`c69fc07`](https://github.com/LHagfoss/rustcode/commit/c69fc07))
+
 ## [v0.3.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.3.1) - 2026-07-28
 ### Features
 - Implement Pi/Claude Code single-line tool execution rendering ([#70](https://github.com/LHagfoss/rustcode/pull/70) / [`0361239`](https://github.com/LHagfoss/rustcode/commit/0361239))
