@@ -97,6 +97,8 @@ pub async fn handle_enter(
                 // History, cancel-token, session state all stay intact — the
                 // LLM still sees the same chat on next message.
                 s.current_response.clear();
+                s.recap_content.clear();
+                s.recap_content.clear();
                 s.current_token_usage = None;
             }
             "/summarize" => {
@@ -793,6 +795,7 @@ pub fn start_new_session(s: &mut AppState) {
     s.history.clear();
     s.pending_queue.clear();
     s.current_response.clear();
+    s.recap_content.clear();
     s.current_token_usage = None;
     s.response_time = None;
     s.history_index = None;
@@ -923,6 +926,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     s.history = loaded;
     s.pending_queue.clear();
     s.current_response.clear();
+    s.recap_content.clear();
     s.current_token_usage = None;
     s.response_time = None;
     s.history_index = None;
@@ -1040,6 +1044,7 @@ pub async fn summarize_session(
         s.status = AppStatus::Streaming;
         s.generation_start_time = Some(started);
         s.current_response.clear();
+        s.recap_content.clear();
 
         (s.api_base_url.clone(), s.model_name.clone(), transcript)
     };
@@ -1092,6 +1097,7 @@ pub async fn summarize_session(
     s.status = AppStatus::Idle;
     s.generation_start_time = None;
     s.current_response.clear();
+    s.recap_content.clear();
 
     match stream_result {
         Ok(_) if !summary_content.trim().is_empty() => {
@@ -1103,9 +1109,9 @@ pub async fn summarize_session(
             // Post as an assistant message so it renders as a normal model reply
             // (chat bubble), not a system Notice/Warning — the summary text often
             // contains words like "error"/"loop" that would trip the warning style.
-            let mut msg = ChatMessage::new("assistant", summary_content);
+            let mut msg = ChatMessage::new("assistant", summary_content.clone());
             msg.response_time_ms = Some((elapsed * 1000.0) as u64);
-            s.history.push(msg);
+            s.recap_content = summary_content.clone();
         }
         Ok(_) => {
             dbg_log!("[SUMMARIZE] empty response after {:.1}s", elapsed);
