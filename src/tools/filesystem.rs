@@ -284,7 +284,7 @@ fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) ->
         return Ok(new_content);
     } else if occurrences.len() > 1 {
         return Err(format!(
-            "Error: found {} matches for target_content in '{path}'. Please include more surrounding context lines to make it unique.",
+            "Error: found {} matches for target_content in '{path}'. Either include more surrounding context lines to make it unique, or pass `start_line`/`end_line` to target the specific occurrence you mean (the edit is anchored within that range).",
             occurrences.len()
         ));
     }
@@ -301,7 +301,7 @@ fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) ->
         return Ok(new_content);
     } else if clean_occurrences.len() > 1 {
         return Err(format!(
-            "Error: found {} matches for target_content (with normalized newlines) in '{path}'. Please include more surrounding context.",
+            "Error: found {} matches for target_content (with normalized newlines) in '{path}'. Include more surrounding context, or pass `start_line`/`end_line` to target a specific occurrence.",
             clean_occurrences.len()
         ));
     }

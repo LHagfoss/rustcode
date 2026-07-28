@@ -2692,7 +2692,7 @@ pub async fn process_queue_orchestrator(
                 let mut loop_status = loop_detect::LoopStatus::Ok;
                 for (name, args) in &tool_calls {
                     let (exact, category) = loop_detect::signatures(name, args);
-                    let s = loop_detector.check(&exact, &category);
+                    let s = loop_detector.check_tool(name, &exact, &category);
                     if s.rank() > loop_status.rank() {
                         loop_status = s;
                     }
@@ -2865,6 +2865,17 @@ pub async fn process_queue_orchestrator(
                         );
                         if name == "complete_task" {
                             completed = true;
+                        }
+                        // Progress resets the loop detector: a successful mutating
+                        // tool means the agent moved the work forward, so any
+                        // re-reads that follow (to verify or find the next anchor)
+                        // shouldn't inherit the pre-edit read history and trip the
+                        // frequency signal. Failed edits (result starts with
+                        // "error") are not progress and must keep accumulating.
+                        if is_mutating_tool(&name)
+                            && !result.trim_start().to_ascii_lowercase().starts_with("error")
+                        {
+                            loop_detector.reset();
                         }
                         // Output-stagnation signal: repeated identical results
                         // (e.g. "No matches found") despite varied commands.
