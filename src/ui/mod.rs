@@ -1152,7 +1152,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     ]));
                 }
             }
-            lines.push(Line::from(""));
+
         } else if msg.role == "tool" {
             let (tool_name, tool_result) = if let Some(pos) = msg.content.find(": ") {
                 (&msg.content[..pos], &msg.content[pos + 2..])
@@ -1211,7 +1211,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     lines.push(highlight_diff_line(diff_line, code_content_width, show_picker));
                 }
             }
-            lines.push(Line::from(""));
+
         } else if msg.role == "user" {
             lines.push(Line::from(""));
             // Account for "▌" prefix (1 char) + internal bubble padding (2 left + 2 right) + right margin (3)
