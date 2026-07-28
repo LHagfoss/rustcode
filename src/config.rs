@@ -172,6 +172,8 @@ pub struct AppConfig {
     pub agent_mode: AgentMode,
     #[serde(default = "default_false")]
     pub discord_rpc_enabled: bool,
+    #[serde(default = "default_false")]
+    pub auto_recap_enabled: bool,
 }
 
 fn default_false() -> bool {
@@ -255,6 +257,7 @@ impl Default for AppConfig {
             max_tool_rounds: 1000,
             agent_mode: AgentMode::default(),
             discord_rpc_enabled: false,
+            auto_recap_enabled: false,
         }
     }
 }

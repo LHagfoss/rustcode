@@ -493,6 +493,7 @@ pub struct AppState {
     /// Snapshot of environment context from the first turn, used for delta diffing.
     pub context_snapshot: Option<crate::context::ContextSnapshot>,
     pub discord_rpc: DiscordRpcHandler,
+    pub auto_recap_enabled: bool,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -555,7 +556,7 @@ impl AppState {
             temp_input: String::new(),
             api_base_url,
             model_name,
-            config,
+            config: config.clone(),
             cwd_and_branch,
             active_suggestion_index: None,
             show_model_picker: false,
@@ -611,6 +612,7 @@ impl AppState {
             continuous_mode: false,
             context_snapshot: None,
             discord_rpc: DiscordRpcHandler::new(),
+            auto_recap_enabled: config.auto_recap_enabled,
         }
     }
 
