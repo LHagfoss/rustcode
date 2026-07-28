@@ -226,6 +226,7 @@ fn render_assistant_message<'a>(
 
         let mut i = 0;
         let mut fence_open = false;
+        let mut current_lang = String::new();
         while i < processed_lines.len() {
             if processed_lines[i].0 {
                 let line_str = &processed_lines[i].1;
@@ -237,6 +238,7 @@ fn render_assistant_message<'a>(
                     fence_open = !fence_open;
                     let fence_text = line_str.trim();
                     if opening {
+                        current_lang = fence_text.trim_start_matches('`').trim().to_lowercase();
                         // Only the OPENING fence carries the [Copy] badge. Gather the
                         // block's code (all lines up to the closing fence) and register
                         // this row so a click on the badge copies it.
@@ -275,6 +277,7 @@ fn render_assistant_message<'a>(
                         ));
                         copy_registry.push((lines.len(), code_text));
                     } else {
+                        current_lang.clear();
                         // Closing fence: a clean full-width bar, no badge.
                         spans.push(Span::styled(
                             " ".repeat(code_content_width),
@@ -282,7 +285,9 @@ fn render_assistant_message<'a>(
                         ));
                     }
                     lines.push(Line::from(spans));
-                } else if line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@") {
+                } else if (current_lang == "diff" || current_lang == "patch" || current_lang == "udiff")
+                    && (line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@"))
+                {
                     lines.push(highlight_diff_line(line_str, code_content_width, show_picker));
                 } else {
                     let mut line_spans = highlight_rust_line(line_str, show_picker);
@@ -1331,6 +1336,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     ]));
                 }
                 continue;
+            }
+            let prev_was_tool = msg_idx > 0 && state.history.get(msg_idx - 1).is_some_and(|m| m.role == "tool");
+            if prev_was_tool {
+                lines.push(Line::from(""));
             }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
