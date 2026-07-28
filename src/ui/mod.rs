@@ -23,7 +23,9 @@ pub mod theme;
 mod highlight;
 mod modals;
 
-use highlight::{format_markdown_spans, highlight_diff_line, highlight_rust_line, pad_to_width};
+use highlight::{
+    format_markdown_spans, highlight_diff_line, highlight_rust_line, pad_to_width, wrap_code_spans,
+};
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
@@ -224,11 +226,21 @@ fn render_assistant_message<'a>(
             }
         }
 
-        let is_prose = |lang: &str| -> bool {
-            let l = lang.trim().to_lowercase();
-            l == "markdown" || l == "md" || l == "text" || l == "txt"
+        // Languages we render as plain text (no Rust syntax highlighting), so
+        // prose dumped inside a fence doesn't get every capitalised word painted
+        // yellow and words like `in`/`for`/`type` painted like keywords.
+        let is_plain_lang = |lang: &str| -> bool {
+            matches!(lang, "" | "text" | "txt" | "markdown" | "md" | "plain" | "plaintext")
         };
+        let is_diff_lang =
+            |lang: &str| -> bool { matches!(lang, "diff" | "patch" | "udiff") };
 
+        // Code blocks render as one solid full-width panel. Every row is padded
+        // (or wrapped) to `box_width` so the panel background fills the whole box
+        // rather than sitting only behind the glyphs, and the copy button is
+        // right-aligned using display width — not byte length, which overcounts
+        // the 📋 emoji and knocked the button out of alignment.
+        let box_width = (viewport_width as usize).max(10);
         let mut i = 0;
         let mut fence_open = false;
         let mut current_lang = String::new();
@@ -236,78 +248,89 @@ fn render_assistant_message<'a>(
             if processed_lines[i].0 {
                 let line_str = &processed_lines[i].1;
                 let is_code_fence = line_str.trim_start().starts_with("```");
-                let code_content_width = (viewport_width as usize).saturating_sub(6);
                 if is_code_fence {
                     let opening = !fence_open;
                     fence_open = !fence_open;
                     let fence_text = line_str.trim();
                     if opening {
                         current_lang = fence_text.trim_start_matches('`').trim().to_lowercase();
-                        if !is_prose(&current_lang) {
-                            let mut spans = Vec::new();
-                            let mut code_text = String::new();
-                            let mut j = i + 1;
-                            while j < processed_lines.len()
-                                && !(processed_lines[j].0
-                                    && processed_lines[j].1.trim_start().starts_with("```"))
-                            {
-                                if !code_text.is_empty() {
-                                    code_text.push('\n');
-                                }
-                                code_text.push_str(&processed_lines[j].1);
-                                j += 1;
-                            }
 
-                            let button_badge = if is_copied_recently {
-                                " 📋 [Copied!] "
-                            } else {
-                                " 📋 [Copy] "
-                            };
-                            let button_color = if is_copied_recently {
-                                Color::Rgb(152, 195, 121)
-                            } else {
-                                COLOR_SECONDARY
-                            };
-                            let pad_len =
-                                code_content_width.saturating_sub(fence_text.len() + button_badge.len());
-                            spans.push(Span::styled(
-                                format!("{}{}", fence_text, " ".repeat(pad_len)),
+                        let mut code_text = String::new();
+                        let mut j = i + 1;
+                        while j < processed_lines.len()
+                            && !(processed_lines[j].0
+                                && processed_lines[j].1.trim_start().starts_with("```"))
+                        {
+                            if !code_text.is_empty() {
+                                code_text.push('\n');
+                            }
+                            code_text.push_str(&processed_lines[j].1);
+                            j += 1;
+                        }
+
+                        let lang_label = if current_lang.is_empty() {
+                            "code".to_string()
+                        } else {
+                            current_lang.clone()
+                        };
+                        let button_badge = if is_copied_recently {
+                            " Copied! 📋 "
+                        } else {
+                            " Copy 📋 "
+                        };
+                        let button_color = if is_copied_recently {
+                            COLOR_GREEN
+                        } else {
+                            COLOR_SECONDARY
+                        };
+                        let left_text = format!(" {lang_label} ");
+                        let pad_len = box_width
+                            .saturating_sub(left_text.width() + button_badge.width());
+                        let spans = vec![
+                            Span::styled(
+                                left_text,
+                                get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::BOLD, show_picker),
+                            ),
+                            Span::styled(
+                                " ".repeat(pad_len),
                                 get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                            ));
-                            spans.push(Span::styled(
+                            ),
+                            Span::styled(
                                 button_badge,
                                 get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
-                            ));
-                            copy_registry.push((lines.len(), code_text));
-                            lines.push(Line::from(spans));
-                        }
+                            ),
+                        ];
+                        copy_registry.push((lines.len(), code_text));
+                        lines.push(Line::from(spans));
                     } else {
-                        if !is_prose(&current_lang) {
-                            let mut spans = Vec::new();
-                            spans.push(Span::styled(
-                                " ".repeat(code_content_width),
-                                get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                            ));
-                            lines.push(Line::from(spans));
-                        }
+                        // Closing fence: one solid trailing row to close the panel.
+                        lines.push(Line::from(Span::styled(
+                            " ".repeat(box_width),
+                            get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                        )));
                         current_lang.clear();
                     }
-                } else if is_prose(&current_lang) {
-                    lines.push(Line::from(format_markdown_spans(line_str, show_picker)));
-                } else if (current_lang == "diff" || current_lang == "patch" || current_lang == "udiff")
+                } else if is_diff_lang(&current_lang)
                     && (line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@"))
                 {
-                    lines.push(highlight_diff_line(line_str, code_content_width, show_picker));
+                    lines.push(highlight_diff_line(line_str, box_width, show_picker));
                 } else {
-                    let mut line_spans = highlight_rust_line(line_str, show_picker);
-                    let current_width: usize = line_spans.iter().map(|s| s.content.width()).sum();
-                    if current_width < code_content_width {
-                        line_spans.push(Span::styled(
-                            " ".repeat(code_content_width - current_width),
+                    // Body line: leading gutter space, per-language rendering,
+                    // then wrapped and padded so the panel bg fills full width.
+                    let content_spans = if is_plain_lang(&current_lang) || is_diff_lang(&current_lang) {
+                        vec![Span::styled(
+                            format!(" {line_str}"),
                             get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
-                        ));
-                    }
-                    lines.push(Line::from(line_spans));
+                        )]
+                    } else {
+                        let mut s = vec![Span::styled(
+                            " ".to_string(),
+                            get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                        )];
+                        s.extend(highlight_rust_line(line_str, show_picker));
+                        s
+                    };
+                    lines.extend(wrap_code_spans(content_spans, box_width, COLOR_ELEMENT, show_picker));
                 }
                 i += 1;
             } else {
@@ -1154,7 +1177,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             ]));
 
             if let Some(ref diff) = msg.diff {
-                let code_content_width = (inner_area.width as usize).saturating_sub(6);
+                let code_content_width = inner_area.width as usize;
                 for diff_line in diff.lines() {
                     lines.push(highlight_diff_line(diff_line, code_content_width, show_picker));
                 }
@@ -1849,5 +1872,32 @@ mod tests {
         // Unclosed marker (mid-paste) is left as-is from the marker onward.
         let unclosed = "text ![image](file:///tmp/a";
         assert_eq!(collapse_image_markers(unclosed), unclosed);
+    }
+
+    #[test]
+    fn code_block_rows_fill_full_width() {
+        use super::render_assistant_message;
+        use unicode_width::UnicodeWidthStr;
+
+        let content = "```text\nWhy Rust Outshines C#\n\nA short line\n```";
+        let mut lines = Vec::new();
+        let mut clicks = Vec::new();
+        let mut copies = Vec::new();
+        let width: u16 = 80;
+        render_assistant_message(
+            content, None, "model", &mut lines, false, width, false, true, None, &mut clicks,
+            &mut copies, false,
+        );
+
+        // Exactly one code panel → one copy button, anchored to the header row.
+        assert_eq!(copies.len(), 1);
+        let header_idx = copies[0].0;
+
+        // Header + 3 body rows (text, blank, text) + closing row must each be
+        // exactly `width` display columns so the panel background fills the box.
+        for line in &lines[header_idx..header_idx + 5] {
+            let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
+            assert_eq!(w, width as usize, "code panel row must fill full width");
+        }
     }
 }
