@@ -1407,6 +1407,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     is_copied_recently,
                 );
 
+                if !state.recap_content.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("recap: {}", state.recap_content),
+                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    )));
+                }
+
                 lines.push(Line::from(vec![
                     Span::styled(
                         "■ ",
