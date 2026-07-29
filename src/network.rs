@@ -33,6 +33,9 @@ use text::{
 pub(crate) mod stream;
 pub(crate) use stream::StreamBuffer;
 
+#[path = "network/output.rs"]
+pub(crate) mod output;
+pub(crate) use output::truncate_tool_output;
 
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -56,64 +59,6 @@ fn is_fully_stubbed(m: &ChatMessage) -> bool {
         .trim_start();
     rest.starts_with("[Tool output truncated")
         || rest.starts_with("[superseded")
-}
-
-const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
-const MAX_TOOL_OUTPUT_LINES: usize = 1000;
-
-/// Truncate tool output at execution time if it exceeds size limits.
-/// Full output is saved to a temp file so the agent can still access it.
-pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
-    let bytes = result.len();
-    let lines: Vec<&str> = result.lines().collect();
-    let line_count = lines.len();
-
-    if bytes <= MAX_TOOL_OUTPUT_BYTES && line_count <= MAX_TOOL_OUTPUT_LINES {
-        return result;
-    }
-
-    // Save full output to temp file
-    let saved_path = save_full_tool_output(name, &result);
-
-    // Head+tail truncation: keep first 30% and last 30% of allowed lines
-    let max_lines = MAX_TOOL_OUTPUT_LINES.min(line_count);
-    let head_count = (max_lines * 3) / 10;
-    let tail_count = (max_lines * 3) / 10;
-
-    let head: String = lines[..head_count.min(line_count)].join("\n");
-    let tail: String = if tail_count > 0 && line_count > head_count + tail_count {
-        lines[line_count - tail_count..].join("\n")
-    } else {
-        String::new()
-    };
-
-    let omitted_lines = line_count.saturating_sub(head_count + tail_count);
-    let omitted_bytes = bytes.saturating_sub(head.len() + tail.len());
-
-    let path_note = match saved_path {
-        Some(p) => format!(" Full output saved to: {}\nUse grep to search the full content or view_file with line offsets to read specific sections.", p),
-        None => String::new(),
-    };
-
-    format!(
-        "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]"
-    )
-}
-
-/// Save full tool output to a temp file, returning the path on success.
-fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
-    let dir = crate::config::get_config_dir()?.join("tool_output");
-    let _ = std::fs::create_dir_all(&dir);
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or(std::time::Duration::from_secs(0))
-        .as_millis();
-    let safe_name: String = name.chars().filter(|c| c.is_alphanumeric() || *c == '_').collect();
-    let path = dir.join(format!("{ts}_{safe_name}.txt"));
-    match std::fs::write(&path, content) {
-        Ok(_) => Some(path.to_string_lossy().to_string()),
-        Err(_) => None,
-    }
 }
 
 /// Extract `(path, start_line, end_line)` from an intact `view_file` result
