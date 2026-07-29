@@ -2650,13 +2650,15 @@ pub async fn process_queue_orchestrator(
                 response_finish_reason.as_deref(),
                 protocol,
             );
-            let tool_calls = response_events
+            let parsed_tool_calls = response_events
                 .iter()
                 .filter_map(|event| match event {
                     events::AgentEvent::ToolCall(call) => Some(call.clone()),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            let (tool_calls, deferred_tool_calls) =
+                crate::tools::isolate_control_plane_call(parsed_tool_calls);
             let turn_action = events::next_turn_action(
                 cancel_token.is_cancelled(),
                 false,
@@ -2840,7 +2842,12 @@ pub async fn process_queue_orchestrator(
                     let mut completed = false;
                     for result in results {
                         let name = result.tool_name;
-                        let content = result.content;
+                        let mut content = result.content;
+                        if name == "use_skill" && deferred_tool_calls > 0 {
+                            content.push_str(&format!(
+                                "\n\n[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
+                            ));
+                        }
                         let diff_opt = result.diff;
                         dbg_log!(
                             "Tool '{}' finished with result length: {} chars",
