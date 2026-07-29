@@ -35,7 +35,7 @@ use modals::{
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 
-use crate::app::{AppState, AppStatus};
+use crate::app::{AppState, AppStatus, NoticeKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin},
@@ -1727,25 +1727,30 @@ fn notice_rect(area: ratatui::layout::Rect, text_width: u16) -> Option<ratatui::
 /// Draws a small auto-expiring toast in the top-right corner. Cleared lazily
 /// once expired; the ≤100ms idle redraw guarantees it disappears on time.
 fn render_notice(f: &mut Frame, state: &mut AppState) {
-    let Some((msg, shown_at)) = state.notice.as_ref() else {
+    let Some(notice) = state.notice.as_ref() else {
         return;
     };
-    if shown_at.elapsed() >= NOTICE_TTL {
+    if notice.shown_at.elapsed() >= NOTICE_TTL {
         state.notice = None;
         return;
     }
 
-    let Some(rect) = notice_rect(f.area(), msg.width() as u16) else {
+    let Some(rect) = notice_rect(f.area(), notice.text.width() as u16) else {
         return;
+    };
+
+    let accent = match notice.kind {
+        NoticeKind::Notice => COLOR_TIP,
+        NoticeKind::Warning => COLOR_PRIMARY,
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(COLOR_TIP))
+        .border_style(Style::default().fg(accent))
         .style(Style::default().bg(COLOR_PANEL));
     let para = Paragraph::new(Line::from(Span::styled(
-        msg.clone(),
+        notice.text.clone(),
         Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL),
     )))
     .block(block)

@@ -1185,7 +1185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     crate::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
                                     crate::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
                                 };
-                                s.history.push(ChatMessage::new("system", notice.to_string()));
+                                s.set_notice(notice);
                             }
                         }
                         KeyCode::Left => {
