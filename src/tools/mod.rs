@@ -11,6 +11,13 @@ mod filesystem;
 mod misc;
 mod search;
 
+/// A parsed tool request emitted by a model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub name: String,
+    pub arguments: Value,
+}
+
 #[allow(dead_code)]
 pub struct BackgroundTaskInfo {
     pub id: String,
@@ -877,7 +884,7 @@ static TOOL_CALLS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static BRACE_OBJ_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{[^{}]*\}").unwrap());
 
-fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
+fn parse_tool_calls_tags(text: &str, calls: &mut Vec<ToolCall>) {
     if text.contains("[TOOL_CALLS]") {
         let re = &*TOOL_CALLS_RE;
         for chunk in text.split("[TOOL_CALLS]") {
@@ -892,13 +899,13 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
 
                 let repaired = repair_json(raw_args);
                 if let Ok(json_val) = serde_json::from_str::<Value>(&repaired) {
-                    calls.push((name, json_val));
+                    calls.push(ToolCall { name, arguments: json_val });
                 } else {
                     let pattern = &*BRACE_OBJ_RE;
                     if let Some(mat) = pattern.find(raw_args)
                         && let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str())
                     {
-                        calls.push((name, json_val));
+                        calls.push(ToolCall { name, arguments: json_val });
                     }
                 }
             }
@@ -906,7 +913,7 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
     }
 }
 
-fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
+fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<ToolCall>) {
     // Walk every ```tool fence, not just the first, so a model can batch
     // multiple tool calls in one turn (the executor runs them in parallel).
     // `find("```tool")` also matches ```tool_code (Gemini's code-exec fence);
@@ -926,7 +933,7 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
             if let Ok(json_value) = serde_json::from_str::<Value>(&repaired)
                 && let Some(call) = extract_tool_call(&json_value)
             {
-                calls.push(call);
+                calls.push(ToolCall { name: call.0, arguments: call.1 });
             }
         }
 
@@ -972,7 +979,7 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
 fn parse_tool_calls_impl(
     text: &str,
     protocol: crate::config::ToolProtocol,
-) -> Vec<(String, Value)> {
+) -> Vec<ToolCall> {
     let mut calls = Vec::new();
 
     match protocol {
@@ -1004,7 +1011,7 @@ fn parse_tool_calls_impl(
         if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse)
             && let Some(call) = extract_tool_call(&json_value)
         {
-            calls.push(call);
+            calls.push(ToolCall { name: call.0, arguments: call.1 });
         }
     }
 
@@ -1016,7 +1023,7 @@ fn parse_tool_calls_impl(
             if let Ok(json_value) = serde_json::from_str::<Value>(json_str)
                 && let Some(call) = extract_tool_call(&json_value)
             {
-                calls.push(call);
+                calls.push(ToolCall { name: call.0, arguments: call.1 });
             }
         }
     }
@@ -1025,13 +1032,13 @@ fn parse_tool_calls_impl(
     calls
 }
 
-pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<(String, Value)> {
+pub fn parse_tool_calls(text: &str, protocol: crate::config::ToolProtocol) -> Vec<ToolCall> {
     let raw_calls = parse_tool_calls_impl(text, protocol);
     let mut unique_calls = Vec::new();
     for call in raw_calls {
         if !unique_calls
             .iter()
-            .any(|(n, a)| n == &call.0 && a == &call.1)
+            .any(|existing: &ToolCall| existing == &call)
         {
             unique_calls.push(call);
         }
@@ -1057,7 +1064,7 @@ pub fn is_tool_call_start(text: &str) -> bool {
 pub fn parse_tool_call(
     text: &str,
     protocol: crate::config::ToolProtocol,
-) -> Option<(String, Value)> {
+) -> Option<ToolCall> {
     parse_tool_calls(text, protocol).into_iter().next()
 }
 
@@ -1242,10 +1249,10 @@ mod tests {
         let text = "```tool\n{\"name\": \"write_to_file\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello";
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "write_to_file");
-        assert_eq!(calls[0].1.get("path").unwrap().as_str().unwrap(), "/foo");
+        assert_eq!(calls[0].name, "write_to_file");
+        assert_eq!(calls[0].arguments.get("path").unwrap().as_str().unwrap(), "/foo");
         assert_eq!(
-            calls[0].1.get("content").unwrap().as_str().unwrap(),
+            calls[0].arguments.get("content").unwrap().as_str().unwrap(),
             "hello"
         );
     }
@@ -1273,25 +1280,25 @@ mod tests {
         let text1 = "Let me check...[TOOL_CALLS]glob[ARGS]{\"pattern\": \"**/*.rs\"}";
         let calls1 = parse_tool_calls(text1, crate::config::ToolProtocol::Json);
         assert_eq!(calls1.len(), 1);
-        assert_eq!(calls1[0].0, "glob");
+        assert_eq!(calls1[0].name, "glob");
         assert_eq!(
-            calls1[0].1.get("pattern").unwrap().as_str().unwrap(),
+            calls1[0].arguments.get("pattern").unwrap().as_str().unwrap(),
             "**/*.rs"
         );
 
         let text2 = "Let me check...[TOOL_CALLS]glob\":{\"pattern\":\"**/*.rs\"}";
         let calls2 = parse_tool_calls(text2, crate::config::ToolProtocol::Json);
         assert_eq!(calls2.len(), 1);
-        assert_eq!(calls2[0].0, "glob");
+        assert_eq!(calls2[0].name, "glob");
         assert_eq!(
-            calls2[0].1.get("pattern").unwrap().as_str().unwrap(),
+            calls2[0].arguments.get("pattern").unwrap().as_str().unwrap(),
             "**/*.rs"
         );
 
         let text3 = "Plan:[TOOL_CALLS]todo_write[ARGS]{\"todos\": [{\"content\": \"Fix bug\"}]}";
         let calls3 = parse_tool_calls(text3, crate::config::ToolProtocol::Json);
         assert_eq!(calls3.len(), 1);
-        assert_eq!(calls3[0].0, "todo_write");
+        assert_eq!(calls3[0].name, "todo_write");
     }
 
     #[test]
@@ -1302,11 +1309,11 @@ mod tests {
                     ```tool\n{\"name\": \"view_file\", \"arguments\": {\"path\": \"src/x.rs\"}}\n```";
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].0, "grep");
-        assert_eq!(calls[0].1.get("pattern").unwrap().as_str().unwrap(), "foo");
-        assert_eq!(calls[1].0, "view_file");
+        assert_eq!(calls[0].name, "grep");
+        assert_eq!(calls[0].arguments.get("pattern").unwrap().as_str().unwrap(), "foo");
+        assert_eq!(calls[1].name, "view_file");
         assert_eq!(
-            calls[1].1.get("path").unwrap().as_str().unwrap(),
+            calls[1].arguments.get("path").unwrap().as_str().unwrap(),
             "src/x.rs"
         );
     }
@@ -1321,7 +1328,7 @@ mod tests {
                     ```json\n{\"tool_code\": {\"name\": \"grep\", \"arguments\": {\"pattern\": \"foo\"}}}\n```";
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "grep");
+        assert_eq!(calls[0].name, "grep");
     }
 
     #[test]
@@ -1333,8 +1340,8 @@ mod tests {
                     ```tool\n{\"name\": \"glob\", \"arguments\": {\"pattern\": \"*.rs\"}}\n```";
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].0, "grep");
-        assert_eq!(calls[1].0, "glob");
+        assert_eq!(calls[0].name, "grep");
+        assert_eq!(calls[1].name, "glob");
     }
 
     #[test]

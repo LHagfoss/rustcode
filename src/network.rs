@@ -1598,7 +1598,9 @@ reply compact and information-dense.\n\n{}",
         }
 
         let protocol = { state.lock().await.config.tool_protocol };
-        if let Some((name, args)) = crate::tools::parse_tool_call(&content, protocol) {
+        if let Some(tool_call) = crate::tools::parse_tool_call(&content, protocol) {
+            let name = &tool_call.name;
+            let args = &tool_call.arguments;
             if rounds >= MAX_SUBAGENT_ROUNDS {
                 return format!(
                     "error: subagent {agent_id} hit the {MAX_SUBAGENT_ROUNDS}-round tool limit without a final reply"
@@ -2173,7 +2175,7 @@ async fn execute_tool_batch(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
-    tool_calls: &[(String, serde_json::Value)],
+    tool_calls: &[crate::tools::ToolCall],
     approved: bool,
     made_edits: bool,
     edit_root: &Option<std::path::PathBuf>,
@@ -2183,9 +2185,9 @@ async fn execute_tool_batch(
     if !approved {
         return tool_calls
             .iter()
-            .map(|(name, _)| {
+            .map(|call| {
                 (
-                    name.clone(),
+                    call.name.clone(),
                     "error: user denied this tool call".to_string(),
                     None,
                 )
@@ -2195,7 +2197,9 @@ async fn execute_tool_batch(
 
     dbg_log!("Executing {} tool calls sequentially", tool_calls.len());
     let mut results = Vec::with_capacity(tool_calls.len());
-    for (name, args) in tool_calls {
+    for call in tool_calls {
+        let name = &call.name;
+        let args = &call.arguments;
         let client_clone = client.clone();
         let state_clone = Arc::clone(state);
         let cancel_token_clone = cancel_token.clone();
@@ -2602,17 +2606,17 @@ pub async fn process_queue_orchestrator(
                 // keep the worst status. Abort stops auto-execution; Warning
                 // injects a nudge so the model changes approach.
                 let mut loop_status = loop_detect::LoopStatus::Ok;
-                for (name, args) in &tool_calls {
-                    let (exact, category) = loop_detect::signatures(name, args);
-                    let s = loop_detector.check_tool(name, &exact, &category);
+                for call in &tool_calls {
+                    let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
+                    let s = loop_detector.check_tool(&call.name, &exact, &category);
                     if s.rank() > loop_status.rank() {
                         loop_status = s;
                     }
                     // Remember that code was touched, and where, so the finish
                     // gate can compile-check before accepting a "done".
-                    if is_mutating_tool(name) {
+                    if is_mutating_tool(&call.name) {
                         made_edits = true;
-                        edit_root = Some(get_tool_project_root(name, args));
+                        edit_root = Some(get_tool_project_root(&call.name, &call.arguments));
                         // A mutating tool will run this round — invalidate the
                         // cached compiler result so the next check recompiles.
                         compile_dirty = true;
@@ -2657,39 +2661,39 @@ pub async fn process_queue_orchestrator(
                     let auto_confirm = { state.lock().await.auto_confirm };
 
                     if !auto_confirm {
-                        for (name, args) in &tool_calls {
-                            if crate::tools::needs_confirmation(name)
-                                && !crate::tools::is_agent_tool(name)
+                        for call in &tool_calls {
+                            if crate::tools::needs_confirmation(&call.name)
+                                && !crate::tools::is_agent_tool(&call.name)
                             {
                                 let path =
-                                    if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+                                    if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str()) {
                                         p.to_string()
                                     } else if let Some(cmd) =
-                                        args.get("command").and_then(|c| c.as_str())
+                                        call.arguments.get("command").and_then(|c| c.as_str())
                                     {
                                         cmd.to_string()
                                     } else if let (Some(src), Some(dest)) = (
-                                        args.get("src").and_then(|s| s.as_str()),
-                                        args.get("dest").and_then(|d| d.as_str()),
+                                        call.arguments.get("src").and_then(|s| s.as_str()),
+                                        call.arguments.get("dest").and_then(|d| d.as_str()),
                                     ) {
                                         format!("{src} -> {dest}")
                                     } else {
                                         "?".to_string()
                                     };
 
-                                let diff_opt = get_diff_preview(name, args);
+                                let diff_opt = get_diff_preview(&call.name, &call.arguments);
                                 let (preview, content_bytes) = if let Some(ref d) = diff_opt {
                                     (d.clone(), d.len())
                                 } else {
                                     let content =
-                                        args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                                        call.arguments.get("content").and_then(|c| c.as_str()).unwrap_or("");
                                     let preview =
                                         content.lines().take(6).collect::<Vec<_>>().join("\n");
                                     (preview, content.len())
                                 };
 
                                 confirmations.push(crate::app::ToolConfirmation {
-                                    tool_name: name.clone(),
+                                    tool_name: call.name.clone(),
                                     path,
                                     content_preview: preview,
                                     content_bytes,
@@ -2709,7 +2713,7 @@ pub async fn process_queue_orchestrator(
                             s.status = AppStatus::AwaitingToolConfirmation;
                         }
 
-                        let first_tool_name = &tool_calls[0].0;
+                        let first_tool_name = &tool_calls[0].name;
                         let _ = crate::notifications::notify_pending_confirmation(first_tool_name);
 
                         dbg_log!(
@@ -2843,8 +2847,8 @@ pub async fn process_queue_orchestrator(
                         // Extract task result text from the complete_task call
                         let task_result_summary = tool_calls
                             .iter()
-                            .find(|(n, _)| n == "complete_task")
-                            .and_then(|(_, args)| args.get("result").and_then(|r| r.as_str()))
+                            .find(|call| call.name == "complete_task")
+                            .and_then(|call| call.arguments.get("result").and_then(|r| r.as_str()))
                             .map(|s| s.to_string());
 
                         if let Some(summary_text) = task_result_summary {
