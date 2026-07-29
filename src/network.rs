@@ -3101,7 +3101,11 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         (active_url, s.model_name.clone(), key)
     };
 
-    if !url.contains("localhost:3000") && !url.contains("127.0.0.1:3000") {
+    if !url.contains("localhost:3000")
+        && !url.contains("127.0.0.1:3000")
+        && !url.contains("127.0.0.1:10531")
+        && !url.contains("localhost:10531")
+    {
         return;
     }
 
@@ -3150,6 +3154,22 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
             let mut s = state.lock().await;
             s.model_quota_remaining = Some(pct);
         }
+        return;
+    }
+
+    // The ChatGPT/Codex usage response reports account-wide rate limits rather
+    // than per-model Gemini-style buckets. Use the primary window for the
+    // footer quota indicator; /status and /quota display both windows.
+    let primary_window = json
+        .get("rate_limits")
+        .and_then(|r| r.get("primary"))
+        .or_else(|| json.get("rate_limit").and_then(|r| r.get("primary_window")));
+    if let Some(used_percent) = primary_window
+        .and_then(|p| p.get("used_percent"))
+        .and_then(|v| v.as_f64())
+    {
+        let mut s = state.lock().await;
+        s.model_quota_remaining = Some((100.0 - used_percent).clamp(0.0, 100.0) as f32);
     }
 }
 

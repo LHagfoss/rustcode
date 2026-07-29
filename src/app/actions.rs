@@ -329,7 +329,20 @@ pub async fn handle_enter(
                     ));
                 }
             }
-            "/usage" | "/stats" | "/status" => {
+            "/status" => {
+                trigger_quota_fetch(&s, state, client);
+                let mut text = String::from("Session usage:");
+                let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
+                let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
+                let tool_calls = s.history.iter().filter(|m| m.role == "tool").count();
+                text.push_str(&format!(
+                    "\n  messages: {} user, {} assistant, {} tool calls",
+                    user_msgs, assistant_msgs, tool_calls
+                ));
+                text.push_str("\n  Fetching provider quota...");
+                s.history.push(ChatMessage::new("system", text));
+            }
+            "/usage" | "/stats" => {
                 let mut text = String::from("Session usage:");
                 let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
                 let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
@@ -1315,8 +1328,13 @@ pub fn trigger_quota_fetch(
                                 text.push_str(&format!("\n  • {}: {:.1}% remaining", display_name, f * 100.0));
                             }
                         }
+                    } else if let Some(rate_limits) = json
+                        .get("rate_limits")
+                        .or_else(|| json.get("rate_limit"))
+                    {
+                        append_codex_rate_limits(&mut text, rate_limits);
                     } else {
-                        text.push_str("\n  No quota bucket information returned.");
+                        text.push_str("\n  No quota information returned by this provider.");
                     }
                     let mut s = state_clone.lock().await;
                     s.history.push(ChatMessage::new("system", text));
@@ -1339,6 +1357,49 @@ pub fn trigger_quota_fetch(
     });
 }
 
+fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) {
+    for (label, key) in [("primary", "primary"), ("secondary", "secondary")] {
+        let window = rate_limits.get(key).or_else(|| {
+            if key == "primary" {
+                rate_limits.get("primary_window")
+            } else {
+                rate_limits.get("secondary_window")
+            }
+        });
+        let Some(window) = window else { continue };
+        let Some(used) = window.get("used_percent").and_then(|v| v.as_f64()) else {
+            continue;
+        };
+        let remaining = (100.0 - used).clamp(0.0, 100.0);
+        let window_minutes = window
+            .get("window_minutes")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                window
+                    .get("limit_window_seconds")
+                    .and_then(|v| v.as_u64())
+                    .map(|seconds| seconds / 60)
+            });
+        let window_label = match window_minutes {
+            Some(minutes) if minutes % 1440 == 0 => format!("{}d", minutes / 1440),
+            Some(minutes) if minutes % 60 == 0 => format!("{}h", minutes / 60),
+            Some(minutes) => format!("{}m", minutes),
+            None => String::new(),
+        };
+        let suffix = if window_label.is_empty() {
+            String::new()
+        } else {
+            format!(" ({window_label})")
+        };
+        text.push_str(&format!("\n  • ChatGPT {label}{suffix}: {remaining:.1}% remaining"));
+        if let Some(reset) = window.get("resets_at").and_then(|v| v.as_i64()) {
+            if let Some(dt) = chrono::DateTime::from_timestamp(reset, 0) {
+                text.push_str(&format!("; resets {}", dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_token_count;
@@ -1350,6 +1411,21 @@ mod tests {
         assert_eq!(parse_token_count("256K"), Some(256 * 1024));
         assert_eq!(parse_token_count("abc"), None);
         assert_eq!(parse_token_count(""), None);
+    }
+
+    #[test]
+    fn render_codex_rate_limit_windows() {
+        let mut text = String::from("Session usage:");
+        let limits = serde_json::json!({
+            "primary": {"used_percent": 20.0, "window_minutes": 300, "resets_at": 1_700_000_000_i64},
+            "secondary": {"used_percent": 50.0, "limit_window_seconds": 86400}
+        });
+
+        super::append_codex_rate_limits(&mut text, &limits);
+
+        assert!(text.contains("ChatGPT primary (5h): 80.0% remaining"));
+        assert!(text.contains("ChatGPT secondary (1d): 50.0% remaining"));
+        assert!(text.contains("resets "));
     }
 
     #[tokio::test]
