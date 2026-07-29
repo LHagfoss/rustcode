@@ -77,10 +77,7 @@ pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str)
 /// due to attention dilution in long contexts.
 pub(crate) fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
     if msgs.len() >= 4 {
-        let reminder_text = "REMINDER: You are rustcode. Always follow your core instructions:\n\
-             - Be extremely concise and direct. No filler or preamble.\n\
-             - To call a tool, output exactly one fenced `tool` block containing a single JSON object. Do not output any conversational text or narration before or after the block.\n\
-             - Available tools: view_file, replace_file_content, multi_replace_file_content, write_to_file, delete_file, move_file, copy_file, list_directory, grep, glob, run_command, search_web, find_symbol, get_project_map.";
+        let reminder_text = "REMINDER: Follow the configured tool protocol exactly. Use tools only when needed, inspect results before choosing the next action, and report relevant verification when finished.";
         
         if let Some(last_msg) = msgs.last_mut()
             && let Some(content) = last_msg.get_mut("content") {
