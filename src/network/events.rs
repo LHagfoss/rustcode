@@ -40,6 +40,36 @@ impl FinishReason {
     }
 }
 
+/// Convert one completed provider response into the events consumed by the
+/// turn loop. Tool-call detection lives here so every caller applies the same
+/// precedence: structured tool work first, otherwise final text.
+pub(crate) fn classify_response(
+    content: &str,
+    provider_finish_reason: Option<&str>,
+    protocol: crate::config::ToolProtocol,
+) -> Vec<AgentEvent> {
+    let tool_calls = crate::tools::parse_tool_calls(content, protocol);
+    let mut events = tool_calls
+        .into_iter()
+        .map(AgentEvent::ToolCall)
+        .collect::<Vec<_>>();
+
+    if events.is_empty() {
+        events.push(AgentEvent::TextDelta(content.to_string()));
+    }
+
+    let finish_reason = if events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::ToolCall(_)))
+    {
+        FinishReason::ToolCalls
+    } else {
+        FinishReason::from_provider(provider_finish_reason)
+    };
+    events.push(AgentEvent::Finished(finish_reason));
+    events
+}
+
 /// Events exchanged between response handling, tool execution, and the turn
 /// state machine. The current loop still consumes some legacy return values;
 /// this type is the migration seam for the event-driven loop.
@@ -85,5 +115,25 @@ mod tests {
             diff: None,
         }
         .is_error());
+    }
+
+    #[test]
+    fn classifies_tool_response_before_text_completion() {
+        let events = classify_response(
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"TODO\"}}\n```",
+            Some("stop"),
+            crate::config::ToolProtocol::Json,
+        );
+
+        assert!(matches!(events[0], AgentEvent::ToolCall(_)));
+        assert_eq!(events.last(), Some(&AgentEvent::Finished(FinishReason::ToolCalls)));
+    }
+
+    #[test]
+    fn classifies_plain_response_as_text_then_finish() {
+        let events = classify_response("done", Some("stop"), crate::config::ToolProtocol::Json);
+
+        assert_eq!(events[0], AgentEvent::TextDelta("done".to_string()));
+        assert_eq!(events[1], AgentEvent::Finished(FinishReason::Stop));
     }
 }
