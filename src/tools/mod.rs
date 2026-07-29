@@ -1209,6 +1209,20 @@ mod tests {
     }
 
     #[test]
+    fn native_tools_schema_requires_explicit_delegation() {
+        let disabled = native_tools_schema(false);
+        let enabled = native_tools_schema(true);
+        assert!(disabled.iter().all(|t| {
+            !matches!(
+                t["function"]["name"].as_str(),
+                Some("spawn_agent") | Some("send_agent")
+            )
+        }));
+        assert!(enabled.iter().any(|t| t["function"]["name"] == "spawn_agent"));
+        assert!(enabled.iter().any(|t| t["function"]["name"] == "send_agent"));
+    }
+
+    #[test]
     fn test_repair_json() {
         assert_eq!(repair_json("{\"name\": \"test\""), "{\"name\": \"test\"}");
         assert_eq!(
