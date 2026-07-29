@@ -2625,7 +2625,14 @@ pub async fn process_queue_orchestrator(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            if !tool_calls.is_empty() {
+            let turn_action = events::next_turn_action(
+                cancel_token.is_cancelled(),
+                false,
+                force_final,
+                !tool_calls.is_empty(),
+                task_completed,
+            );
+            if matches!(turn_action, events::TurnAction::ExecuteTools) {
                 dbg_log!("Parsed {} tool call requests", tool_calls.len());
 
                 // Loop detection: feed each requested call to the detector and
