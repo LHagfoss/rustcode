@@ -666,7 +666,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
     );
 }
 
-fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) -> Margin {
+fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) -> Margin {
     let show_picker = state.modal_open();
 
     let input_split = Layout::default()
@@ -788,6 +788,8 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppStat
     );
     let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL));
     f.render_widget(paragraph, text_area);
+    // Record the editable region so mouse drag-selection can target it.
+    state.input_text_area = Some(text_area);
 
     let build_y = input_inner.y + input_inner.height.saturating_sub(1);
     let build_area = ratatui::layout::Rect::new(input_inner.x, build_y, input_inner.width, 1);
@@ -1659,8 +1661,15 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     // Painted last so it sits on top of everything, like a native selection.
     if !state.modal_open() {
         if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
-            highlight_selection(f, start, end, state.chat_area, state.scroll_row);
-            let text = extract_selection(f.buffer_mut(), start, end, state.chat_area, state.scroll_row);
+            // Input-box selections have no scroll offset and use the input rect;
+            // chat selections use chat_area and the chat scroll_row.
+            let (area, scroll) = if state.sel_in_input {
+                (state.input_text_area, 0)
+            } else {
+                (state.chat_area, state.scroll_row)
+            };
+            highlight_selection(f, start, end, area, scroll);
+            let text = extract_selection(f.buffer_mut(), start, end, area, scroll);
             if !text.is_empty() {
                 state.selected_text = Some(text);
             }
@@ -1863,6 +1872,24 @@ mod tests {
         let text = extract_selection(&buf, (0, 0), (12, 0), chat_area, 0);
         assert_eq!(text.trim(), "Grep(spinner)", "first two chars must survive");
         assert!(text.starts_with("Gr"), "got: {text:?}");
+    }
+
+    // The input box reuses extract_selection with its own rect and scroll 0.
+    // Verify selection works for an area that is not at the buffer origin.
+    #[test]
+    fn extract_selection_works_in_input_area() {
+        use super::extract_selection;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let area = Rect::new(0, 0, 30, 12);
+        let mut buf = Buffer::empty(area);
+        // Input text region near the bottom of the screen.
+        let input_area = Rect::new(2, 9, 26, 2);
+        buf.set_string(2, 9, "hello world", ratatui::style::Style::default());
+
+        let text = extract_selection(&buf, (2, 9), (12, 9), Some(input_area), 0);
+        assert_eq!(text.trim(), "hello world", "got: {text:?}");
     }
 
     #[test]
