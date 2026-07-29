@@ -113,7 +113,7 @@ pub async fn handle_enter(
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
                 tokio::spawn(async move {
-                    generate_recap(&state_clone, &client_clone, false).await;
+                    summarize_session(&state_clone, &client_clone).await;
                 });
                 return false;
             }
@@ -199,18 +199,6 @@ pub async fn handle_enter(
                 } else {
                     s.discord_rpc.clear_activity();
                 }
-            }
-            "/recap" => {
-                s.config.auto_recap_enabled = !s.config.auto_recap_enabled;
-                crate::config::save_entire_config(&s.config);
-                let is_enabled = s.config.auto_recap_enabled;
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!(
-                        "Automatic recap is now {}",
-                        if is_enabled { "ON" } else { "OFF" }
-                    ),
-                ));
             }
             "/goal" => {
                 let goal_text = tokens[1..].join(" ");
@@ -1011,29 +999,9 @@ pub async fn summarize_session(
     state_arc: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
 ) {
-    generate_recap(state_arc, client, false).await;
-}
-
-pub async fn generate_auto_recap(
-    state_arc: &Arc<Mutex<AppState>>,
-    client: &reqwest::Client,
-) {
-    generate_recap(state_arc, client, true).await;
-}
-
-async fn generate_recap(
-    state_arc: &Arc<Mutex<AppState>>,
-    client: &reqwest::Client,
-    is_auto_recap: bool,
-) {
     let started = std::time::Instant::now();
-    let (api_base_url, model_name, transcript, recap_model_name) = {
+    let (api_base_url, model_name, transcript) = {
         let mut s = state_arc.lock().await;
-        let recap_model_name = if is_auto_recap {
-            s.config.default.small().to_string()
-        } else {
-            s.model_name.clone()
-        };
 
         // Flatten the chat into a single plain transcript. Sending the raw
         // history (system/assistant/tool roles) through the request builder's
@@ -1078,13 +1046,12 @@ async fn generate_recap(
         s.current_response.clear();
         s.recap_content.clear();
 
-        let (api_base_url, model_name) = crate::config::resolve_model_endpoint(&s.config, &recap_model_name);
-        (api_base_url, model_name, transcript, recap_model_name)
+        (s.api_base_url.clone(), s.model_name.clone(), transcript)
     };
 
     dbg_log!(
-        "[RECAP] start model={} url={} transcript_chars={}",
-        recap_model_name,
+        "[SUMMARIZE] start model={} url={} transcript_chars={}",
+        model_name,
         api_base_url,
         transcript.len()
     );
@@ -1101,11 +1068,7 @@ async fn generate_recap(
     let messages = vec![
         serde_json::json!({
             "role": "system",
-            "content": if is_auto_recap {
-                "You are a concise summarization bot. Summarize the provided transcript into a single, short sentence, prefixed with 'recap: '. Focus on the main action or outcome. Do not include any other text."
-            } else {
-                "You are summarizing a coding assistant session. Produce a concise, structured summary with these sections: Problem, What was done, Current state, Open problems, Next steps. Omit a section if it has nothing. Be specific about files and decisions."
-            }
+            "content": "You are summarizing a coding assistant session. Produce a concise, structured summary with these sections: Problem, What was done, Current state, Open problems, Next steps. Omit a section if it has nothing. Be specific about files and decisions."
         }),
         serde_json::json!({ "role": "user", "content": format!("Summarize this session transcript:\n\n{transcript}") }),
     ];
@@ -1139,7 +1102,7 @@ async fn generate_recap(
     match stream_result {
         Ok(_) if !summary_content.trim().is_empty() => {
             dbg_log!(
-                "[RECAP] ok in {:.1}s, {} chars",
+                "[SUMMARIZE] ok in {:.1}s, {} chars",
                 elapsed,
                 summary_content.len()
             );
@@ -1148,21 +1111,20 @@ async fn generate_recap(
             // contains words like "error"/"loop" that would trip the warning style.
             let mut msg = ChatMessage::new("assistant", summary_content.clone());
             msg.response_time_ms = Some((elapsed * 1000.0) as u64);
-            s.history.push(msg);
             s.recap_content = summary_content.clone();
         }
         Ok(_) => {
-            dbg_log!("[RECAP] empty response after {:.1}s", elapsed);
+            dbg_log!("[SUMMARIZE] empty response after {:.1}s", elapsed);
             s.history.push(ChatMessage::new(
                 "system",
-                format!("Recap failed: the model returned an empty response ({recap_model_name}, {elapsed:.1}s). It may be rate-limited or rejecting the request — check debug.log."),
+                format!("Summarization failed: the model returned an empty response ({model_name}, {elapsed:.1}s). It may be rate-limited or rejecting the request — check debug.log."),
             ));
         }
         Err(e) => {
-            dbg_log!("[RECAP] error after {:.1}s: {}", elapsed, e);
+            dbg_log!("[SUMMARIZE] error after {:.1}s: {}", elapsed, e);
             s.history.push(ChatMessage::new(
                 "system",
-                format!("Recap failed after {elapsed:.1}s: {e}"),
+                format!("Summarization failed after {elapsed:.1}s: {e}"),
             ));
         }
     }
