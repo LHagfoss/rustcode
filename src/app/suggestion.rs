@@ -125,6 +125,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Summarize the current chat session",
     },
     CommandInfo {
+        name: "/update",
+        desc: "Check the Homebrew tap and upgrade rustcode if a newer version exists",
+    },
+    CommandInfo {
         name: "/tools",
         desc: "List available tools",
     },
