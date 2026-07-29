@@ -493,6 +493,54 @@ pub fn get_active_session_artifacts_dir(session_id: &str) -> Option<PathBuf> {
     Some(dir.join("artifacts"))
 }
 
+/// Create a detached worktree for a write-enabled subagent. The worktree is
+/// intentionally retained after completion so the parent can inspect and
+/// selectively merge the review manifest.
+pub fn create_subagent_workspace(session_id: &str, agent_id: u32) -> Result<PathBuf, String> {
+    let root = get_active_session_dir(session_id)
+        .ok_or_else(|| "active session directory unavailable".to_string())?
+        .join("subagents")
+        .join(format!("agent-{agent_id}"));
+    if root.exists() {
+        return Ok(root);
+    }
+    if let Some(parent) = root.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create subagent directory: {e}"))?;
+    }
+    let repo = std::env::current_dir().map_err(|e| format!("resolve repository: {e}"))?;
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", "--detach"])
+        .arg(&root)
+        .arg("HEAD")
+        .current_dir(repo)
+        .status()
+        .map_err(|e| format!("create git worktree: {e}"))?;
+    if !status.success() {
+        return Err(format!("git worktree add exited with {status}"));
+    }
+    Ok(root)
+}
+
+pub fn write_subagent_review_manifest(
+    workspace: &Path,
+    agent_id: u32,
+) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(workspace)
+        .output()
+        .ok()?;
+    let manifest = workspace
+        .parent()
+        .unwrap_or(workspace)
+        .join(format!("agent-{agent_id}-review.txt"));
+    let mut content = format!("Subagent {agent_id} workspace review manifest\n\n");
+    content.push_str("Changed paths (git status --short):\n");
+    content.push_str(&String::from_utf8_lossy(&output.stdout));
+    std::fs::write(&manifest, content).ok()?;
+    Some(manifest)
+}
+
 pub fn init_active_session(config: &mut AppConfig) -> String {
     let dir = match get_config_dir() {
         Some(d) => d,
