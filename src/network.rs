@@ -2016,30 +2016,31 @@ fn build_dynamic_context_tail(
     read_files: &[String],
     todos: &[crate::app::TodoItem],
 ) -> String {
-    let mut dynamic_context = context_section;
+    let mut fragments = vec![history::ContextFragment::new("environment", context_section)];
 
     if !read_files.is_empty() {
-        dynamic_context.push_str(&format!(
-            "\n\n# Files already in context (do NOT re-read these unless they changed on disk)\n{}",
+        fragments.push(history::ContextFragment::new(
+            "files",
+            format!(
+                "# Files already in context (do NOT re-read these unless they changed on disk)\n{}",
             read_files
                 .iter()
                 .map(|f| format!("- {f}"))
                 .collect::<Vec<_>>()
                 .join("\n")
+            ),
         ));
     }
 
     if !todos.is_empty() {
-        dynamic_context.push_str(
-            "\n\n# Your current task plan (execute in order; update via todo_write)\n",
-        );
+        let mut plan = String::from("# Your current task plan (execute in order; update via todo_write)\n");
         for (i, t) in todos.iter().enumerate() {
             let mark = match t.status.as_str() {
                 "completed" => "[x]",
                 "in_progress" => "[~]",
                 _ => "[ ]",
             };
-            dynamic_context.push_str(&format!(
+            plan.push_str(&format!(
                 "{}. {} {} ({})\n",
                 i + 1,
                 mark,
@@ -2047,9 +2048,10 @@ fn build_dynamic_context_tail(
                 t.priority
             ));
         }
+        fragments.push(history::ContextFragment::new("task plan", plan));
     }
 
-    dynamic_context
+    history::render_context_fragments(&fragments)
 }
 
 /// Assemble the full provider request for one agent turn.
