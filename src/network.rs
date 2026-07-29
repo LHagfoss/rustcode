@@ -41,6 +41,9 @@ pub(crate) use output::truncate_tool_output;
 pub(crate) mod events;
 pub(crate) use events::ToolResult;
 
+#[path = "network/history.rs"]
+pub(crate) mod history;
+
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
@@ -2109,32 +2112,7 @@ async fn prepare_turn_request(
         dynamic_context.push_str("\n\n");
     }
     dynamic_context.push_str(&volatile_block);
-    let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
-        "role": "system",
-        "content": system_prompt.clone(),
-    })];
-    let mut first_user = true;
-    msgs.extend(history_snapshot.into_iter().map(|m| {
-        if m.role == "tool" {
-            serde_json::json!({
-                "role": "user",
-                "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
-            })
-        } else if m.role == "user" && first_user {
-            first_user = false;
-            serde_json::json!({
-                "role": "user",
-                "content": parse_multimodal_content(&m.content),
-            })
-        } else if m.role == "user" {
-            serde_json::json!({
-                "role": "user",
-                "content": parse_multimodal_content(&m.content),
-            })
-        } else {
-            serde_json::json!({"role": m.role, "content": m.content})
-        }
-    }));
+    let mut msgs = history::to_messages(&history_snapshot, system_prompt.clone());
 
     // Attach turn-varying context to the tail so the static system prefix
     // stays cache-stable. Done before budget trimming so its size counts
