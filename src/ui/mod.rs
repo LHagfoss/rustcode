@@ -4,6 +4,7 @@ use std::time::Duration;
 use rand::seq::IndexedRandom;
 
 pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    println!();
     let messages = vec!["Thinking...", "Analyzing code...", "Refactoring...", "Checking logic..."];
     let spinner = vec!['|', '/', '-', '\\'];
     let mut i = 0;
@@ -16,6 +17,7 @@ pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         thread::sleep(Duration::from_millis(200));
     }
     print!("\r ");
+    println!();
     io::stdout().flush().unwrap();
 }
 
