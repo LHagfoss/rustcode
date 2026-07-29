@@ -1495,11 +1495,24 @@ async fn run_subagent(
 
         let protocol = { state.lock().await.config.tool_protocol };
         let agent_mode = { state.lock().await.agent_mode };
+        let delegation_contract = {
+            let s = state.lock().await;
+            s.subagents
+                .iter()
+                .find(|agent| agent.id == agent_id)
+                .map(|agent| {
+                    format!(
+                        "Delegation contract: write_access={}, allowed_paths={:?}, verification_command={:?}.",
+                        agent.write_access, agent.allowed_paths, agent.verification_command
+                    )
+                })
+                .unwrap_or_else(|| "Delegation contract unavailable; remain read-only.".to_string())
+        };
         let system_prompt = format!(
             "{}\n\nYou are subagent {agent_id}, working for a main agent in the same \
 rustcode session. Complete the task you were given, then reply in plain text \
 with NO tool call — that reply is returned to the main agent. Keep the final \
-reply compact and information-dense.\n\n{}",
+reply compact and information-dense. {delegation_contract}\n\n{}",
             crate::tools::tool_system_prompt(false, protocol, agent_mode),
             crate::context::environment_context()
         );
@@ -1622,7 +1635,35 @@ reply compact and information-dense.\n\n{}",
                 );
             }
             rounds += 1;
-            let (result, diff_opt) = if crate::tools::is_agent_tool(&name) {
+            let (write_access, allowed_paths) = {
+                let s = state.lock().await;
+                s.subagents
+                    .iter()
+                    .find(|agent| agent.id == agent_id)
+                    .map(|agent| (agent.write_access, agent.allowed_paths.clone()))
+                    .unwrap_or((false, Vec::new()))
+            };
+            let needs_write_access = is_mutating_tool(name) || name == "run_command";
+            let path_outside_contract = args
+                .get("path")
+                .and_then(|value| value.as_str())
+                .is_some_and(|path| {
+                    !allowed_paths.iter().any(|allowed| {
+                        path == allowed
+                            || path.starts_with(&format!("{}/", allowed.trim_end_matches('/')))
+                    })
+                });
+            let (result, diff_opt) = if needs_write_access && !write_access {
+                (
+                    "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
+                    None,
+                )
+            } else if write_access && path_outside_contract {
+                (
+                    "error: requested path is outside the subagent allowed_paths contract".to_string(),
+                    None,
+                )
+            } else if crate::tools::is_agent_tool(&name) {
                 (
                     "error: subagents cannot spawn or message other agents".to_string(),
                     None,
@@ -1703,6 +1744,28 @@ async fn handle_agent_tool(
                 .get("model")
                 .and_then(|m| m.as_str())
                 .map(|s| s.to_string());
+            let write_access = args
+                .get("write_access")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let allowed_paths = args
+                .get("allowed_paths")
+                .and_then(|value| value.as_array())
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(|path| path.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if write_access && allowed_paths.is_empty() {
+                return "error: write-enabled subagents require at least one allowed_paths entry".to_string();
+            }
+            let verification_command = args
+                .get("verification_command")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let verification_label = verification_command.as_deref().unwrap_or("none").to_string();
             let agent_id = {
                 let mut s = state.lock().await;
                 let active_count = s
@@ -1723,9 +1786,18 @@ async fn handle_agent_tool(
                     model,
                     history: vec![ChatMessage::new("user", task)],
                     status: crate::app::SubAgentStatus::Running,
+                    write_access,
+                    allowed_paths,
+                    verification_command,
                 });
                 let brief: String = task.chars().take(60).collect();
-                push_status_line(&mut s, format!("agent-{id} spawned: {brief}"));
+                push_status_line(
+                    &mut s,
+                    format!(
+                        "agent-{id} spawned: {brief} (write_access={write_access}, verify={})",
+                        verification_label
+                    ),
+                );
                 id
             };
             let reply = run_subagent(client, state, cancel_token, agent_id).await;
