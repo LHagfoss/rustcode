@@ -39,7 +39,7 @@ pub(crate) use output::truncate_tool_output;
 
 #[path = "network/events.rs"]
 pub(crate) mod events;
-pub(crate) use events::ToolResult;
+pub(crate) use events::{ToolResult, ToolResultMetadata};
 
 #[path = "network/history.rs"]
 pub(crate) mod history;
@@ -2206,6 +2206,24 @@ async fn prepare_turn_request(
 /// and reads from racing each other or hiding dependencies. If any mutating
 /// tool ran, a single cached compiler check is appended to the first mutating
 /// tool's result so build errors surface inline.
+fn stable_arguments_hash(arguments: &serde_json::Value) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    arguments.to_string().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn extract_exit_code(content: &str) -> Option<i32> {
+    let marker = "exit code";
+    let start = content.find(marker)? + marker.len();
+    let suffix = content[start..].trim_start_matches([':', ' ', '=']);
+    let digits: String = suffix
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    digits.parse().ok()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn execute_tool_batch(
     client: &reqwest::Client,
@@ -2226,6 +2244,10 @@ async fn execute_tool_batch(
                     tool_name: call.name.clone(),
                     content: "error: user denied this tool call".to_string(),
                     diff: None,
+                    metadata: ToolResultMetadata {
+                        success: false,
+                        ..Default::default()
+                    },
                 }
             })
             .collect::<Vec<_>>();
@@ -2354,10 +2376,38 @@ async fn execute_tool_batch(
             (name_clone, result, diff_opt)
         }
         .await;
+        let content = truncate_tool_output(&name, result);
+        let changed_paths = if is_mutating_tool(&name) {
+            args.get("path")
+                .and_then(|value| value.as_str())
+                .map(|path| vec![path.to_string()])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let full_output_artifact = content
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("Full output saved to: "))
+            .map(str::to_string);
+        let exit_code = extract_exit_code(&content);
+        let truncated = content.contains("[Output truncated:");
+        let success = !content
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("error");
         results.push(ToolResult {
             tool_name: name,
-            content: result,
+            content,
             diff: diff_opt,
+            metadata: ToolResultMetadata {
+                call_id: None,
+                arguments_hash: stable_arguments_hash(args),
+                success,
+                exit_code,
+                changed_paths,
+                truncated,
+                full_output_artifact,
+            },
         });
         if cancel_token.is_cancelled() {
             break;
