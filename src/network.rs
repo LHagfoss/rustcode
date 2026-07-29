@@ -1313,18 +1313,12 @@ async fn confirm_and_execute(
     // Plan Mode Enforcement: block mutating/writing tools
     {
         let s = state.lock().await;
-        if s.agent_mode == crate::config::AgentMode::Plan && matches!(
-            name,
-            "replace_file_content"
-                | "multi_replace_file_content"
-                | "write_to_file"
-                | "delete_file"
-                | "move_file"
-                | "copy_file"
-        ) {
+        if s.agent_mode == crate::config::AgentMode::Plan
+            && !crate::tools::allowed_in_plan_mode(name)
+        {
             return (
-                "error: Plan mode is active. Code editing and file modification tools are disabled in Plan mode. \
-                 I can read, search, and design solutions, but I cannot modify files right now. \
+                "error: Plan mode is active. This tool is not allowed because it can modify workspace state, execute commands, delegate work, or has no declared safety capability. \
+                 I can read, search, ask questions, and design solutions, but I cannot modify files or execute commands right now. \
                  If you want me to implement these changes, please switch to Build mode (press Tab)."
                     .to_string(),
                 None,
@@ -2423,6 +2417,14 @@ async fn execute_tool_batch(
             } else if name_clone == "ask_question" {
                 (
                     ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await,
+                    None,
+                )
+            } else if {
+                let plan_mode = { state_clone.lock().await.agent_mode == crate::config::AgentMode::Plan };
+                plan_mode && !crate::tools::allowed_in_plan_mode(&name_clone)
+            } {
+                (
+                    "error: Plan mode is active; this tool is not permitted.".to_string(),
                     None,
                 )
             } else if crate::tools::is_agent_tool(&name_clone) {
