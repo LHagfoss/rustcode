@@ -340,9 +340,8 @@ pub async fn fetch_context_window(
 /// Read-only tools whose results can be safely short-circuited by the repeat guard.
 fn is_read_only_tool(name: &str) -> bool {
     matches!(
-        name,
-        "view_file" | "list_directory" | "grep" | "glob" | "get_time"
-            | "find_symbol" | "get_project_map" | "search_web"
+        crate::tools::tool_safety(name),
+        crate::tools::ToolSafety::ReadOnly
     )
 }
 
