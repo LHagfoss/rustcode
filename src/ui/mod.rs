@@ -8,6 +8,7 @@ pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     let spinner = vec!['|', '/', '-', '\\'];
     let mut i = 0;
     
+    println!(); // Add padding above
     while running.load(std::sync::atomic::Ordering::SeqCst) {
         let msg = messages.choose(&mut rand::rng()).unwrap();
         print!("\r{} {}", spinner[i % 4], msg);
@@ -17,6 +18,7 @@ pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     }
     print!("\r ");
     io::stdout().flush().unwrap();
+    println!(); // Add padding below
 }
 
 pub mod theme;
