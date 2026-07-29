@@ -2657,6 +2657,23 @@ pub async fn process_queue_orchestrator(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls) {
+                dbg_log!("Tool-call validation rejected response: {}", reason);
+                let mut s = state.lock().await;
+                s.history.push(ChatMessage::new("assistant", &final_content));
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!(
+                        "[Tool call rejected before execution: {reason}] Preserve the raw assistant response above for diagnostics, then emit one corrected tool call."
+                    ),
+                ));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.status = AppStatus::Streaming;
+                drop(s);
+                tool_rounds += 1;
+                continue;
+            }
             let (tool_calls, deferred_tool_calls) =
                 crate::tools::isolate_control_plane_call(parsed_tool_calls);
             let turn_action = events::next_turn_action(
