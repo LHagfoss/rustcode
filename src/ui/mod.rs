@@ -1694,9 +1694,12 @@ fn highlight_selection(
     }
 
     let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
-        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x + 2, ca.x + ca.width.saturating_sub(2))
+        // Chat content renders flush to ca.x (chat_area is already inset), so the
+        // selectable span is [ca.x, ca.x+width-1]. A former `+2`/`-2` gutter here
+        // clipped the first and last two columns of every left-aligned line.
+        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
     } else {
-        (area.y + 1, area.y + area.height.saturating_sub(2), area.x + 2, area.x + width.saturating_sub(2))
+        (area.y + 1, area.y + area.height.saturating_sub(2), area.x, area.x + width.saturating_sub(1))
     };
 
     // If the selection is completely scrolled off-screen, don't draw anything
@@ -1772,9 +1775,11 @@ pub fn extract_selection(
     }
 
     let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
-        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x + 2, ca.x + ca.width.saturating_sub(2))
+        // Must match highlight_selection's bounds so the copied text lines up
+        // exactly with what the user sees highlighted (no clipped first/last cols).
+        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
     } else {
-        (area.y + 1, area.y + area.height.saturating_sub(2), area.x + 2, area.x + width.saturating_sub(2))
+        (area.y + 1, area.y + area.height.saturating_sub(2), area.x, area.x + width.saturating_sub(1))
     };
 
     if screen_start.1 > max_row || screen_end.1 < min_row {
@@ -1838,6 +1843,27 @@ pub fn extract_selection(
 #[cfg(test)]
 mod tests {
     use super::collapse_image_markers;
+
+    // Regression: selection clamped to chat_area.x + 2, so the first two columns
+    // of every left-aligned line (tool calls, assistant text) could not be
+    // selected or copied. Bounds now start at chat_area.x.
+    #[test]
+    fn extract_selection_captures_first_column() {
+        use super::extract_selection;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let area = Rect::new(0, 0, 20, 3);
+        let mut buf = Buffer::empty(area);
+        // Chat content rendered flush to the left edge of the chat area.
+        buf.set_string(0, 0, "Grep(spinner)", ratatui::style::Style::default());
+        let chat_area = Some(area);
+
+        // Select the whole line, row 0, columns 0..=12.
+        let text = extract_selection(&buf, (0, 0), (12, 0), chat_area, 0);
+        assert_eq!(text.trim(), "Grep(spinner)", "first two chars must survive");
+        assert!(text.starts_with("Gr"), "got: {text:?}");
+    }
 
     #[test]
     fn collapses_image_markers_to_chips() {
