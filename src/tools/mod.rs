@@ -709,6 +709,38 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
     }
 }
 
+/// When a tool call was clearly intended but produced zero parseable calls,
+/// return a specific reason (the underlying JSON error and the offending block)
+/// so the retry nudge can tell the model exactly what to fix instead of a vague
+/// "malformed" message it tends to reproduce verbatim. Returns `None` when the
+/// text was parseable or contained no recognizable tool syntax.
+pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
+    // Look at every ```tool fence; report the first that fails to parse.
+    let mut search = text;
+    while let Some(rel) = search.find("```tool") {
+        let after_tag = &search[rel + 7..];
+        let (block, next) = match after_tag.find("```") {
+            Some(end) => (&after_tag[..end], &after_tag[end + 3..]),
+            None => (after_tag, ""),
+        };
+        let is_tool_fence = after_tag.chars().next().is_none_or(|c| c.is_whitespace());
+        if is_tool_fence {
+            let repaired = repair_json(block.trim());
+            if let Err(e) = serde_json::from_str::<Value>(&repaired) {
+                let snippet: String = block.trim().chars().take(240).collect();
+                return Some(format!(
+                    "JSON parse error: {e}. A common cause is a backslash inside a string: every literal `\\` in the file must be written as `\\\\` in the JSON, and a real newline must be `\\n`. Offending block:\n```\n{snippet}\n```"
+                ));
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        search = next;
+    }
+    None
+}
+
 fn parse_tool_calls_impl(
     text: &str,
     protocol: crate::config::ToolProtocol,
@@ -931,6 +963,23 @@ mod tests {
         assert_eq!(calls[0].0, "write_to_file");
         assert_eq!(calls[0].1.get("path").unwrap().as_str().unwrap(), "/foo");
         assert_eq!(calls[0].1.get("content").unwrap().as_str().unwrap(), "hello");
+    }
+
+    #[test]
+    fn diagnose_reports_specific_json_error() {
+        // Invalid JSON (bad escape + trailing junk) that repair can't rescue.
+        let text = "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"a\\zb\"} garbage}\n```";
+        let diag = diagnose_failed_tool_call(text);
+        assert!(diag.is_some(), "should diagnose an unparseable fence");
+        let d = diag.unwrap();
+        assert!(d.contains("JSON parse error"), "got: {d}");
+        assert!(d.contains("Offending block"), "should echo the block: {d}");
+    }
+
+    #[test]
+    fn diagnose_ignores_valid_tool_call() {
+        let text = "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"x\"}}\n```";
+        assert!(diagnose_failed_tool_call(text).is_none());
     }
 
     #[test]

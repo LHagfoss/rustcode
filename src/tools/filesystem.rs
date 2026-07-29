@@ -333,8 +333,54 @@ fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) ->
                  Action required: Adjust your start_line/end_line range, or omit line numbers to use exact string matching."
             );
         }
+    } else if let Some((lo, hi, ratio)) = closest_region(content, target_content) {
+        // No line range was given. Show the closest region verbatim (with line
+        // numbers) so the caller can see exactly how their target drifted from
+        // the file — the usual culprits are escaped characters (e.g. a Rust
+        // `\\` byte, which must appear as `\\` in target_content, not `\`) and
+        // whitespace. This is what stops the caller from re-submitting the same
+        // failing edit in a loop.
+        let file_lines: Vec<&str> = content.lines().collect();
+        let snippet = file_lines[lo..hi]
+            .iter()
+            .enumerate()
+            .map(|(k, l)| format!("{:>5}: {l}", lo + 1 + k))
+            .collect::<Vec<_>>()
+            .join("\n");
+        err_msg = format!(
+            "Error: target_content not found in '{path}'. Closest region is ~{:.0}% similar.\n\
+             Actual file content at lines {}..{}:\n```\n{snippet}\n```\n\
+             Action required: copy the block above verbatim (watch for escaped backslashes and trailing whitespace), or shrink target_content to a single unique line as an anchor. Do not re-send the same target unchanged.",
+            ratio * 100.0,
+            lo + 1,
+            hi
+        );
     }
     Err(err_msg)
+}
+
+/// Slide a target-sized window over the file and return the byte-line range
+/// (start_idx, end_idx_exclusive, ratio) of the most similar region, comparing
+/// lines by trimmed equality. Used purely to build actionable error feedback.
+fn closest_region(content: &str, target: &str) -> Option<(usize, usize, f32)> {
+    let content_lines: Vec<&str> = content.lines().collect();
+    let target_lines: Vec<&str> = target.lines().collect();
+    if content_lines.is_empty() || target_lines.is_empty() {
+        return None;
+    }
+    let win = target_lines.len().min(content_lines.len());
+    let mut best: Option<(usize, usize, f32)> = None;
+    for i in 0..=(content_lines.len() - win) {
+        // Char-level similarity so near-misses (an escape or a typo) rank above
+        // unrelated lines — line-equality alone scores every mismatch as 0 and
+        // would just return the first window.
+        let window = content_lines[i..i + win].join("\n");
+        let ratio = similar::TextDiff::from_chars(window.as_str(), target).ratio();
+        if best.map(|(_, _, r)| ratio > r).unwrap_or(true) {
+            best = Some((i, i + win, ratio));
+        }
+    }
+    best
 }
 
 pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
@@ -413,43 +459,60 @@ fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
         let last_anchor = target_lines[target_lines.len() - 1].trim();
         let target_len = target_lines.len();
 
-        let mut anchor_matches = Vec::new();
+        let mut anchor_matches: Vec<(usize, usize, f32)> = Vec::new();
         for i in 0..content_lines.len() {
             if content_lines[i].trim() != first_anchor {
                 continue;
             }
+            // Consider EVERY line matching the closing anchor, not just the
+            // first. The first `last_anchor` is frequently a nested delimiter
+            // (e.g. an inner `}` closing a loop before the block's own `}`), so
+            // breaking on it discards the real end and the whole match fails.
             for j in (i + 2)..content_lines.len() {
-                if content_lines[j].trim() == last_anchor {
-                    let block_len = j - i + 1;
-                    if (block_len as isize - target_len as isize).abs() <= 2 {
-                        let inner_content = &content_lines[i + 1..j];
-                        let inner_target = &target_lines[1..target_lines.len() - 1];
-                        let min_len = inner_content.len().min(inner_target.len());
-                        if min_len > 0 {
-                            let matched_count = inner_content
-                                .iter()
-                                .take(min_len)
-                                .zip(inner_target.iter().take(min_len))
-                                .filter(|(c, t)| c.trim() == t.trim())
-                                .count();
-                            let ratio = matched_count as f32 / min_len as f32;
-                            if ratio >= 0.6 {
-                                anchor_matches.push((i, j + 1));
-                            }
-                        } else {
-                            anchor_matches.push((i, j + 1));
-                        }
-                    }
-                    break;
+                if content_lines[j].trim() != last_anchor {
+                    continue;
+                }
+                let block_len = j - i + 1;
+                if (block_len as isize - target_len as isize).abs() > 2 {
+                    continue;
+                }
+                let inner_content = &content_lines[i + 1..j];
+                let inner_target = &target_lines[1..target_lines.len() - 1];
+                let min_len = inner_content.len().min(inner_target.len());
+                let ratio = if min_len == 0 {
+                    1.0
+                } else {
+                    let matched_count = inner_content
+                        .iter()
+                        .take(min_len)
+                        .zip(inner_target.iter().take(min_len))
+                        .filter(|(c, t)| c.trim() == t.trim())
+                        .count();
+                    matched_count as f32 / min_len as f32
+                };
+                if ratio >= 0.6 {
+                    anchor_matches.push((i, j + 1, ratio));
                 }
             }
         }
 
-        if anchor_matches.len() == 1 {
-            let (start_idx, end_idx) = anchor_matches[0];
-            let byte_start = get_byte_offset_of_line(&content_lines, start_idx);
-            let byte_end = get_byte_offset_of_line_end(&content_lines, end_idx - 1, content.len());
-            return Some((byte_start, byte_end));
+        // Apply only when there is a single, unambiguous best block; if two
+        // candidates tie on the top score, fall through rather than guess.
+        if !anchor_matches.is_empty() {
+            anchor_matches
+                .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+            let best = anchor_matches[0].2;
+            let top_count = anchor_matches
+                .iter()
+                .filter(|m| (m.2 - best).abs() < f32::EPSILON)
+                .count();
+            if top_count == 1 {
+                let (start_idx, end_idx, _) = anchor_matches[0];
+                let byte_start = get_byte_offset_of_line(&content_lines, start_idx);
+                let byte_end =
+                    get_byte_offset_of_line_end(&content_lines, end_idx - 1, content.len());
+                return Some((byte_start, byte_end));
+            }
         }
     }
 
@@ -613,4 +676,58 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
         "wrote '{path}' ({lines} lines, {} bytes)",
         content.len()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: session 1785315367588 looped because the model's target
+    // block had a single backslash in the char literal (`'\'`) where the file
+    // has an escaped one (`'\\'`), and the block-anchor fallback bailed on the
+    // inner `}` before reaching the function's closing `}`.
+    #[test]
+    fn resolves_block_with_single_line_escape_drift() {
+        let file = "pub fn show_spinner() {\n\
+                        let spinner = vec!['|', '/', '-', '\\\\'];\n\
+                    let mut i = 0;\n\
+                    while running {\n\
+                    print!(\"x\");\n\
+                    }\n\
+                    flush();\n\
+                    }\n";
+        // Target differs only on the spinner line (one backslash, not two).
+        let edit = SingleEdit {
+            target: "pub fn show_spinner() {\n\
+                     let spinner = vec!['|', '/', '-', '\\'];\n\
+                     let mut i = 0;\n\
+                     while running {\n\
+                     print!(\"x\");\n\
+                     }\n\
+                     flush();\n\
+                     }"
+                .to_string(),
+            replacement: "REPLACED".to_string(),
+            start_line: None,
+            end_line: None,
+        };
+        let out = apply_single_edit_to_content(file, "src/ui/mod.rs", &edit)
+            .expect("should resolve via block-anchor fuzzy match");
+        assert!(out.contains("REPLACED"), "got: {out}");
+        assert!(!out.contains("show_spinner"), "old block should be gone: {out}");
+    }
+
+    #[test]
+    fn missing_target_error_shows_closest_region() {
+        let file = "line one\nlet x = 1;\nline three\n";
+        let edit = SingleEdit {
+            target: "let x = 2;".to_string(),
+            replacement: "let x = 3;".to_string(),
+            start_line: None,
+            end_line: None,
+        };
+        let err = apply_single_edit_to_content(file, "f.rs", &edit).unwrap_err();
+        assert!(err.contains("Closest region"), "got: {err}");
+        assert!(err.contains("let x = 1;"), "should quote actual line: {err}");
+    }
 }
