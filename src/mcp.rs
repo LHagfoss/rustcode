@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -19,6 +20,22 @@ pub struct McpClient {
 pub fn get_mcp_registry() -> &'static StdMutex<HashMap<String, Arc<McpClient>>> {
     static REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<McpClient>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+/// Monotonic counter bumped whenever the MCP tool set changes (a server is
+/// connected or disconnected). The prompt cache stores the generation it was
+/// built against and rebuilds the static system prompt + tool schema only when
+/// this value moves — the "dirty flag" for MCP-driven schema changes.
+static MCP_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Current MCP tool-set generation. See [`MCP_GENERATION`].
+pub fn mcp_generation() -> u64 {
+    MCP_GENERATION.load(Ordering::Relaxed)
+}
+
+/// Signal that the MCP tool set changed, invalidating any cached prompt/schema.
+pub fn bump_mcp_generation() {
+    MCP_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
 impl McpClient {
@@ -208,6 +225,7 @@ pub async fn start_server_by_name(name: &str) -> Result<(), String> {
         if let Ok(mut reg) = get_mcp_registry().lock() {
             reg.insert(name.to_string(), client);
         }
+        bump_mcp_generation();
     }
     Ok(())
 }
@@ -222,6 +240,7 @@ pub async fn shutdown_server(name: &str) {
     };
     if let Some(c) = client {
         c.shutdown().await;
+        bump_mcp_generation();
     }
 }
 

@@ -390,6 +390,37 @@ fn schema_from_arguments(arguments: &str) -> Value {
 /// Build the OpenAI-style `tools` array sent in the request when the tool
 /// protocol is `ApiNative`. Covers the built-in `TOOLS`, any MCP tools (which
 /// carry real JSON Schemas), and the agent tools.
+/// Gather all connected MCP tools as `(name, description, input_schema)`,
+/// sorted by name for a deterministic, cache-stable ordering. Shared by both
+/// the native schema builder and the text-protocol prompt listing.
+fn collect_mcp_tools() -> Vec<(String, String, Value)> {
+    let mut out = Vec::new();
+    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
+        for client in reg.values() {
+            if let Ok(mcp_tools) = client.get_tools() {
+                for tool in mcp_tools {
+                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let desc = tool
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let schema = tool
+                        .get("inputSchema")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
+                    out.push((name.to_string(), desc, schema));
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
@@ -402,26 +433,15 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
             }
         }));
     }
-    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
-        for client in reg.values() {
-            if let Ok(mcp_tools) = client.get_tools() {
-                for tool in mcp_tools {
-                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    if name.is_empty() {
-                        continue;
-                    }
-                    let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
-                    let schema = tool
-                        .get("inputSchema")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
-                    tools.push(serde_json::json!({
-                        "type": "function",
-                        "function": { "name": name, "description": desc, "parameters": schema }
-                    }));
-                }
-            }
-        }
+    // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
+    // a HashMap, so iterating it directly yields a hash-dependent order that can
+    // shift after a rehash and silently break the provider's prefix cache. A
+    // stable byte-for-byte layout keeps the cached prefix valid across turns.
+    for (name, desc, schema) in collect_mcp_tools() {
+        tools.push(serde_json::json!({
+            "type": "function",
+            "function": { "name": name, "description": desc, "parameters": schema }
+        }));
     }
     if include_agent_tools {
         for (name, desc, args) in AGENT_TOOL_SPECS {
@@ -542,25 +562,13 @@ pub fn tool_system_prompt(
             t.name, t.arguments, t.description
         ));
     }
-    if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
-        for client in reg.values() {
-            if let Ok(tools) = client.get_tools() {
-                for tool in tools {
-                    let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let desc = tool
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("");
-                    let schema = tool.get("inputSchema").unwrap_or(&serde_json::Value::Null);
-                    p.push_str(&format!(
-                        "- {} | Args: {} | {}\n",
-                        name,
-                        serde_json::to_string(schema).unwrap_or_default(),
-                        desc
-                    ));
-                }
-            }
-        }
+    for (name, desc, schema) in collect_mcp_tools() {
+        p.push_str(&format!(
+            "- {} | Args: {} | {}\n",
+            name,
+            serde_json::to_string(&schema).unwrap_or_default(),
+            desc
+        ));
     }
     if include_agent_tools {
         p.push_str(
