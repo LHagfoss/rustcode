@@ -1443,9 +1443,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 true
                             };
+                            let inside_input = s.input_text_area.map(|ia| {
+                                mouse.row >= ia.y && mouse.row < ia.y + ia.height &&
+                                mouse.column >= ia.x && mouse.column < ia.x + ia.width
+                            }).unwrap_or(false);
                             if inside_chat {
+                                s.sel_in_input = false;
                                 s.sel_start = Some((mouse.column, mouse.row + s.scroll_row));
                                 s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
+                                s.selecting = true;
+                            } else if inside_input {
+                                // Input box has no scroll offset: store raw screen rows.
+                                s.sel_in_input = true;
+                                s.sel_start = Some((mouse.column, mouse.row));
+                                s.sel_end = Some((mouse.column, mouse.row));
                                 s.selecting = true;
                             } else {
                                 s.clear_selection();
@@ -1454,24 +1465,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
-                            let mut target_row = mouse.row + s.scroll_row;
-                            if let Some(ca) = s.chat_area {
-                                if mouse.row < ca.y {
-                                    s.scroll_up(1);
-                                    target_row = ca.y + s.scroll_row;
-                                } else if mouse.row >= ca.y + ca.height {
-                                    s.scroll_down(1);
-                                    target_row = (ca.y + ca.height).saturating_sub(1) + s.scroll_row;
+                            let target_row = if s.sel_in_input {
+                                // Clamp to the input rect; no scroll in the input box.
+                                match s.input_text_area {
+                                    Some(ia) => mouse.row.max(ia.y).min((ia.y + ia.height).saturating_sub(1)),
+                                    None => mouse.row,
                                 }
-                            }
+                            } else {
+                                let mut tr = mouse.row + s.scroll_row;
+                                if let Some(ca) = s.chat_area {
+                                    if mouse.row < ca.y {
+                                        s.scroll_up(1);
+                                        tr = ca.y + s.scroll_row;
+                                    } else if mouse.row >= ca.y + ca.height {
+                                        s.scroll_down(1);
+                                        tr = (ca.y + ca.height).saturating_sub(1) + s.scroll_row;
+                                    }
+                                }
+                                tr
+                            };
                             s.sel_end = Some((mouse.column, target_row));
                             needs_redraw = true;
                         }
                         MouseEventKind::Up(MouseButton::Left) if s.selecting => {
-                            let mut target_row = mouse.row + s.scroll_row;
-                            if let Some(ca) = s.chat_area {
-                                target_row = target_row.max(ca.y + s.scroll_row).min((ca.y + ca.height).saturating_sub(1) + s.scroll_row);
-                            }
+                            let target_row = if s.sel_in_input {
+                                match s.input_text_area {
+                                    Some(ia) => mouse.row.max(ia.y).min((ia.y + ia.height).saturating_sub(1)),
+                                    None => mouse.row,
+                                }
+                            } else {
+                                let mut tr = mouse.row + s.scroll_row;
+                                if let Some(ca) = s.chat_area {
+                                    tr = tr.max(ca.y + s.scroll_row).min((ca.y + ca.height).saturating_sub(1) + s.scroll_row);
+                                }
+                                tr
+                            };
                             s.sel_end = Some((mouse.column, target_row));
                             s.selecting = false;
                             if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {

@@ -470,11 +470,17 @@ pub struct AppState {
     pub mouse_capture_enabled: bool,
     pub agent_mode: crate::config::AgentMode,
     pub chat_area: Option<ratatui::layout::Rect>,
+    /// Screen rect of the editable text region inside the bottom input box, so
+    /// mouse selection can work there too (distinct from `chat_area`).
+    pub input_text_area: Option<ratatui::layout::Rect>,
     pub scroll_to_bottom_btn: Option<ratatui::layout::Rect>,
     pub selected_text: Option<String>,
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
     pub selecting: bool,
+    /// True when the active selection lives in the input box rather than the
+    /// chat. Input has no scroll offset, so highlight/extract use scroll_row 0.
+    pub sel_in_input: bool,
     pub expanded_thoughts: std::collections::HashSet<usize>,
     pub thought_toggle_rows: Vec<(u16, usize)>,
     /// Screen rows carrying a code-block `[Copy]` badge, mapped to the block's
@@ -594,10 +600,12 @@ impl AppState {
             mouse_capture_enabled: true,
             agent_mode,
             chat_area: None,
+            input_text_area: None,
             selected_text: None,
             sel_start: None,
             sel_end: None,
             selecting: false,
+            sel_in_input: false,
             expanded_thoughts: std::collections::HashSet::new(),
             thought_toggle_rows: Vec::new(),
             code_copy_rows: Vec::new(),
@@ -949,6 +957,7 @@ impl AppState {
         self.sel_start = None;
         self.sel_end = None;
         self.selecting = false;
+        self.sel_in_input = false;
     }
 
     pub fn toggle_thought(&mut self, idx: usize) {
