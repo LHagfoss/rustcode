@@ -969,7 +969,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         "/changelog" => {
                                             let log_text = crate::app::actions::build_latest_changelog();
-                                            s.history.push(ChatMessage::new("system", log_text));
+                                            s.history.push(ChatMessage::new("assistant", log_text));
                                         }
                                         "/quota" => {
                                             crate::app::actions::trigger_quota_fetch(

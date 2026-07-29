@@ -242,7 +242,7 @@ pub async fn handle_enter(
             }
             "/changelog" => {
                 let log_text = build_latest_changelog();
-                s.history.push(ChatMessage::new("system", log_text));
+                s.history.push(ChatMessage::new("assistant", log_text));
             }
             "/copy" => {
                 copy_last_reply(&mut s);
