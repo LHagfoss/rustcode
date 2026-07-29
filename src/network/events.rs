@@ -79,6 +79,7 @@ pub(crate) enum TurnInput {
 }
 
 pub(crate) fn transition_turn(state: TurnState, input: TurnInput) -> TurnState {
+    let _current_state = state;
     match input {
         TurnInput::Cancelled => TurnState::Cancelled,
         TurnInput::Failed => TurnState::Failed,
