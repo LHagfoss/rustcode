@@ -1266,6 +1266,7 @@ async fn confirm_and_execute(
     args: &serde_json::Value,
     display_name: &str,
     bypass_confirm: bool,
+    workspace_root: Option<std::path::PathBuf>,
 ) -> (String, Option<String>) {
     let (agent_mode, auto_confirm) = {
         let s = state.lock().await;
@@ -1315,9 +1316,12 @@ async fn confirm_and_execute(
         let name_owned = name.to_string();
         let args_owned = args.clone();
         let session_id = { state.lock().await.active_session_id.clone() };
+        let workspace_root_for_task = workspace_root.clone();
         let run_fut = tokio::task::spawn_blocking(move || {
             crate::tools::set_active_session_id(Some(session_id));
+            crate::tools::set_active_workspace_root(workspace_root_for_task);
             let result = crate::tools::execute(&name_owned, &args_owned);
+            crate::tools::set_active_workspace_root(None);
             crate::tools::set_active_session_id(None);
             result
         });
@@ -1392,9 +1396,12 @@ async fn confirm_and_execute(
                 let name_owned = name.to_string();
                 let args_owned = args.clone();
                 let session_id = { state.lock().await.active_session_id.clone() };
+                let workspace_root_for_task = workspace_root.clone();
                 let run_fut = tokio::task::spawn_blocking(move || {
                     crate::tools::set_active_session_id(Some(session_id));
+                    crate::tools::set_active_workspace_root(workspace_root_for_task);
                     let result = crate::tools::execute(&name_owned, &args_owned);
+                    crate::tools::set_active_workspace_root(None);
                     crate::tools::set_active_session_id(None);
                     result
                 });
@@ -1684,6 +1691,13 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     &args,
                     &format!("agent-{agent_id} · {name}"),
                     false,
+                    {
+                        let s = state.lock().await;
+                        s.subagents
+                            .iter()
+                            .find(|agent| agent.id == agent_id)
+                            .and_then(|agent| agent.workspace_root.clone())
+                    },
                 )
                 .await
             };
@@ -1779,6 +1793,14 @@ async fn handle_agent_tool(
                 }
                 let id = s.next_subagent_id;
                 s.next_subagent_id += 1;
+                let workspace_root = if write_access {
+                    match crate::config::create_subagent_workspace(&s.active_session_id, id) {
+                        Ok(path) => Some(path),
+                        Err(error) => return format!("error: unable to create isolated subagent workspace: {error}"),
+                    }
+                } else {
+                    None
+                };
                 s.subagents.push(crate::app::SubAgent {
                     id,
                     task: task.to_string(),
@@ -1788,6 +1810,8 @@ async fn handle_agent_tool(
                     write_access,
                     allowed_paths,
                     verification_command,
+                    workspace_root,
+                    review_manifest: None,
                 });
                 let brief: String = task.chars().take(60).collect();
                 push_status_line(
@@ -1800,6 +1824,19 @@ async fn handle_agent_tool(
                 id
             };
             let reply = run_subagent(client, state, cancel_token, agent_id).await;
+            let review_manifest = {
+                let s = state.lock().await;
+                s.subagents
+                    .iter()
+                    .find(|agent| agent.id == agent_id)
+                    .and_then(|agent| agent.workspace_root.as_ref())
+                    .and_then(|workspace| crate::config::write_subagent_review_manifest(workspace, agent_id))
+            };
+            if let Some(manifest) = review_manifest {
+                if let Some(agent) = state.lock().await.subagents.iter_mut().find(|agent| agent.id == agent_id) {
+                    agent.review_manifest = Some(manifest);
+                }
+            }
             set_subagent_status(
                 state,
                 agent_id,
@@ -2455,6 +2492,7 @@ async fn execute_tool_batch(
                     &args_clone,
                     &name_clone,
                     true, // bypass confirmation
+                    None,
                 )
                 .await
             };
@@ -3561,6 +3599,7 @@ mod tests {
             &args,
             "write_to_file",
             true,
+            None,
         )
         .await;
         assert!(

@@ -151,6 +151,7 @@ where
 
 thread_local! {
     static ACTIVE_SESSION_ID: RefCell<Option<String>> = const { RefCell::new(None) };
+    static ACTIVE_WORKSPACE_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 pub fn set_active_session_id(id: Option<String>) {
@@ -163,8 +164,20 @@ pub fn get_active_session_id() -> Option<String> {
     ACTIVE_SESSION_ID.with(|f| f.borrow().clone())
 }
 
+pub fn set_active_workspace_root(root: Option<PathBuf>) {
+    ACTIVE_WORKSPACE_ROOT.with(|current| {
+        *current.borrow_mut() = root;
+    });
+}
+
 pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
     let p = Path::new(raw_path);
+
+    if !p.is_absolute()
+        && let Some(root) = ACTIVE_WORKSPACE_ROOT.with(|current| current.borrow().clone())
+    {
+        return root.join(p);
+    }
 
     // Check if the path contains a component named "sandbox"
     let mut parts_sandbox = Vec::new();

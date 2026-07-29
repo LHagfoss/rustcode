@@ -213,6 +213,8 @@ pub struct SubAgent {
     pub write_access: bool,
     pub allowed_paths: Vec<String>,
     pub verification_command: Option<String>,
+    pub workspace_root: Option<std::path::PathBuf>,
+    pub review_manifest: Option<std::path::PathBuf>,
 }
 
 /// One entry of the agent's persistent task plan, managed via the `todo_write` tool.
