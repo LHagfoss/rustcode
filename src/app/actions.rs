@@ -498,6 +498,35 @@ pub async fn handle_enter(
                     }
                 }
             }
+            "/reasoning" => {
+                let allowed = ["none", "low", "medium", "high", "xhigh", "max"];
+                if tokens.len() == 1 {
+                    let value = s.config.reasoning_effort.clone().unwrap_or_else(|| "provider default".to_string());
+                    s.history.push(ChatMessage::new("system", format!("Reasoning effort: {value}. Use /reasoning <none|low|medium|high|xhigh|max>.")));
+                } else if allowed.contains(&tokens[1].to_lowercase().as_str()) {
+                    s.config.reasoning_effort = Some(tokens[1].to_lowercase());
+                    crate::config::save_entire_config(&s.config);
+                    s.history.push(ChatMessage::new("system", format!("Reasoning effort set to '{}'. Applies to GPT-5.6 OpenAI profiles.", tokens[1])));
+                } else {
+                    s.history.push(ChatMessage::new("system", "Usage: /reasoning <none|low|medium|high|xhigh|max>"));
+                }
+            }
+            "/speed" => {
+                if tokens.len() == 1 {
+                    let speed = if s.config.fast_mode { "fast (priority)" } else { "standard" };
+                    s.history.push(ChatMessage::new("system", format!("Speed: {speed}. Use /speed <fast|standard>.")));
+                } else if matches!(tokens[1].to_lowercase().as_str(), "fast" | "on" | "priority") {
+                    s.config.fast_mode = true;
+                    crate::config::save_entire_config(&s.config);
+                    s.history.push(ChatMessage::new("system", "Fast mode enabled for GPT-5.6 OpenAI profiles."));
+                } else if matches!(tokens[1].to_lowercase().as_str(), "standard" | "off") {
+                    s.config.fast_mode = false;
+                    crate::config::save_entire_config(&s.config);
+                    s.history.push(ChatMessage::new("system", "Fast mode disabled."));
+                } else {
+                    s.history.push(ChatMessage::new("system", "Usage: /speed <fast|standard>"));
+                }
+            }
             "/provider" => {
                 if tokens.len() >= 4 {
                     let name = tokens[1].to_string();

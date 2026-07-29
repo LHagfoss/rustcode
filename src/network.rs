@@ -541,6 +541,21 @@ pub async fn stream_request(
         "max_tokens": 4096,
     });
 
+    // GPT-5.6 supports configurable reasoning via Chat Completions. Keep these
+    // OpenAI-only: local OpenAI-compatible servers often reject unknown fields.
+    let openai_settings = {
+        let s = state.lock().await;
+        s.config.models.iter().find(|p| p.model == model || p.name == model)
+            .filter(|p| p.engine.as_deref() == Some("openai") && p.model.starts_with("gpt-5.6"))
+            .map(|_| (s.config.reasoning_effort.clone(), s.config.fast_mode))
+    };
+    if let Some((Some(effort), _)) = &openai_settings {
+        payload["reasoning_effort"] = serde_json::json!(effort);
+    }
+    if matches!(openai_settings, Some((_, true))) {
+        payload["service_tier"] = serde_json::json!("priority");
+    }
+
     // Guard against runaway repetition even at low temperature. Google's
     // OpenAI-compat endpoint (generativelanguage.googleapis.com) rejects
     // `frequency_penalty` with a 400, so only send it to providers that accept

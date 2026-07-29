@@ -172,6 +172,10 @@ pub struct AppConfig {
     pub agent_mode: AgentMode,
     #[serde(default = "default_false")]
     pub discord_rpc_enabled: bool,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub fast_mode: bool,
 }
 
 fn default_false() -> bool {
@@ -255,6 +259,8 @@ impl Default for AppConfig {
             max_tool_rounds: 1000,
             agent_mode: AgentMode::default(),
             discord_rpc_enabled: false,
+            reasoning_effort: None,
+            fast_mode: false,
         }
     }
 }

@@ -3,6 +3,9 @@
 ### Fixed
 - Harden native tool schemas, tool execution ordering, and MCP tool-list refresh behavior ([`9601628`](https://github.com/LHagfoss/rustcode/commit/9601628))
 
+### Features
+- Add GPT-5.6 reasoning and speed controls for OpenAI profiles
+
 ### Performance
 - Cache the static prompt and native tool schema while keeping runtime context volatile ([#97](https://github.com/LHagfoss/rustcode/pull/97) / [`7461b61`](https://github.com/LHagfoss/rustcode/commit/7461b61))
 

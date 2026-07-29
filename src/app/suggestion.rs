@@ -101,6 +101,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Resume most recent session",
     },
     CommandInfo {
+        name: "/reasoning",
+        desc: "Show or set GPT-5.6 reasoning effort",
+    },
+    CommandInfo {
+        name: "/speed",
+        desc: "Set GPT-5.6 OpenAI request speed",
+    },
+    CommandInfo {
         name: "/session",
         desc: "Show current session ID, token budget, and active model",
     },
