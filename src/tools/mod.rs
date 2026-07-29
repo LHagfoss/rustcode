@@ -160,6 +160,53 @@ pub struct Tool {
     pub requires_confirmation: bool,
 }
 
+/// Runtime capabilities used to enforce agent modes and safety policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCapability {
+    ReadWorkspace,
+    WriteWorkspace,
+    ExecuteCommands,
+    Network,
+    UserInteraction,
+    AgentDelegation,
+    SessionState,
+}
+
+/// Return the capabilities of a built-in or agent tool.
+/// Unknown tools (including MCP tools) deliberately receive no capabilities;
+/// callers must opt them into a mode explicitly instead of assuming safety.
+pub fn tool_capabilities(name: &str) -> &'static [ToolCapability] {
+    use ToolCapability::*;
+    match name {
+        "view_file" | "list_directory" | "grep" | "glob" | "find_symbol" | "get_project_map" => &[ReadWorkspace],
+        "get_time" => &[],
+        "search_web" => &[Network],
+        "ask_question" => &[UserInteraction],
+        "use_skill" | "todo_write" => &[SessionState],
+        "replace_file_content" | "multi_replace_file_content" | "write_to_file"
+        | "delete_file" | "move_file" | "copy_file" => &[WriteWorkspace],
+        "run_command" | "manage_task" => &[ExecuteCommands],
+        "spawn_agent" | "send_agent" | "set_goal" => &[AgentDelegation, SessionState],
+        "complete_task" => &[SessionState],
+        _ => &[],
+    }
+}
+
+/// Plan mode is intentionally deny-by-default for tools not explicitly known
+/// to be read-only or user-facing.
+pub fn allowed_in_plan_mode(name: &str) -> bool {
+    use ToolCapability::*;
+    let capabilities = tool_capabilities(name);
+    capabilities.iter().all(|cap| {
+        matches!(cap, ReadWorkspace | Network | UserInteraction | SessionState)
+    }) && (capabilities.contains(&ReadWorkspace)
+        || capabilities.contains(&Network)
+        || capabilities.contains(&UserInteraction)
+        || name == "get_time"
+        || name == "use_skill"
+        || name == "todo_write")
+}
+
 pub const TOOLS: &[Tool] = &[
     Tool {
         name: "ask_question",
@@ -1322,5 +1369,17 @@ mod tests {
         assert!(res.contains("sample.txt"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn plan_mode_allows_reads_but_denies_mutation_execution_and_unknown_tools() {
+        assert!(allowed_in_plan_mode("view_file"));
+        assert!(allowed_in_plan_mode("grep"));
+        assert!(allowed_in_plan_mode("search_web"));
+        assert!(allowed_in_plan_mode("ask_question"));
+        assert!(!allowed_in_plan_mode("write_to_file"));
+        assert!(!allowed_in_plan_mode("run_command"));
+        assert!(!allowed_in_plan_mode("spawn_agent"));
+        assert!(!allowed_in_plan_mode("unknown_mcp_tool"));
     }
 }
