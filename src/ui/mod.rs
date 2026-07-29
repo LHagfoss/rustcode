@@ -4,7 +4,7 @@ use std::time::Duration;
 use rand::seq::IndexedRandom;
 
 pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    let messages = vec!["Thinking...", "Analyzing code...", "Refactoring...", "Checking logic..."];
+    let messages = vec!["Thinking...", "Analyzing code...", "Refactoring...", "Checking logic...", "Compiling thoughts...", "Debugging reality..."];
     let spinner = vec!['|', '/', '-', '\\'];
     let mut i = 0;
     
@@ -1313,6 +1313,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 "Checking documentation...",
                 "Optimizing loops...",
                 "Debugging the universe...",
+                "Synthesizing solutions...",
+                "Querying knowledge base...",
             ];
             let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
             let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
@@ -1349,6 +1351,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     "Analyzing query...",
                     "Gathering context...",
                     "Checking codebase...",
+                    "Executing tool...",
+                    "Awaiting response...",
                 ];
                 let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                 let status_msg = random_statuses[(elapsed_secs as usize / 2) % random_statuses.len()];
