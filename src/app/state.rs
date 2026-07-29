@@ -475,6 +475,9 @@ pub struct AppState {
     pub input_text_area: Option<ratatui::layout::Rect>,
     pub scroll_to_bottom_btn: Option<ratatui::layout::Rect>,
     pub selected_text: Option<String>,
+    /// Transient top-right toast: (message, shown_at). Auto-expires (~3s) — the
+    /// render path checks elapsed time, so no timer/event is needed to clear it.
+    pub notice: Option<(String, std::time::Instant)>,
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
     pub selecting: bool,
@@ -602,6 +605,7 @@ impl AppState {
             chat_area: None,
             input_text_area: None,
             selected_text: None,
+            notice: None,
             sel_start: None,
             sel_end: None,
             selecting: false,
@@ -958,6 +962,11 @@ impl AppState {
         self.sel_end = None;
         self.selecting = false;
         self.sel_in_input = false;
+    }
+
+    /// Show a transient notice toast in the top-right corner.
+    pub fn set_notice(&mut self, text: impl Into<String>) {
+        self.notice = Some((text.into(), std::time::Instant::now()));
     }
 
     pub fn toggle_thought(&mut self, idx: usize) {

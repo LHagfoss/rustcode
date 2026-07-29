@@ -1274,9 +1274,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut s = app_state.lock().await;
                             if let Some(text) = s.selected_text.clone() {
                                 dbg_log!("[MAIN] KeyCopy copying selected text ({} chars): {:?}", text.len(), text);
-                                crate::clipboard::copy_to_clipboard(&text);
+                                if crate::clipboard::copy_to_clipboard(&text) {
+                                    s.set_notice("Copied to clipboard");
+                                }
                             }
                             s.clear_selection();
+                            needs_redraw = true;
                         }
                         KeyCode::Char('t')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
@@ -1507,7 +1510,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // Dragged: copy on release, like selecting on a web page.
                                     if let Some(text) = s.selected_text.take() {
                                         dbg_log!("[MAIN] MouseUp copying selected text ({} chars): {:?}", text.len(), text);
-                                        crate::clipboard::copy_to_clipboard(&text);
+                                        if crate::clipboard::copy_to_clipboard(&text) {
+                                            s.set_notice("Copied to clipboard");
+                                        }
                                     }
                                 } else {
                                     // A plain click: toggle a thought if one sits on this
@@ -1525,7 +1530,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .map(|(r, t)| (*r, t.clone()))
                                     {
                                         // Clicked a code block's [Copy] badge row.
-                                        crate::clipboard::copy_to_clipboard(&code);
+                                        if crate::clipboard::copy_to_clipboard(&code) {
+                                            s.set_notice("Copied to clipboard");
+                                        }
                                         s.last_copy_time = Some(std::time::Instant::now());
                                     }
                                 }
