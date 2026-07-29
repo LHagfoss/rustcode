@@ -3,7 +3,6 @@ use std::io::{self, Write};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-const MAX_ROUNDS: u32 = 10;
 
 /// Build the initial application state and apply any model overrides.
 pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
@@ -129,8 +128,8 @@ Emit exactly one complete, valid tool call inside a ```tool fenced block using J
 ```tool\n{\"name\": \"tool_name\", \"arguments\": {...}}\n```\n\
 Use the keys \"name\" and \"arguments\" exactly, and do not wrap numbers or booleans in quotes.";
 
-/// Execute the main agent round loop: stream a response, detect tool calls,
-/// and repeat until no tool is invoked or max rounds are reached.
+/// Execute the main agent loop: stream a response, detect tool calls, and
+/// repeat until the model finishes or a safety guard requires termination.
 ///
 /// Robustness: a transient stream error or a single malformed/prose round must
 /// not abandon the task (the interactive TUI recovers from both). Stream errors
@@ -147,9 +146,10 @@ pub async fn run_round_loop(
     let mut stream_retries = 0u32;
     let mut malformed_retries = 0u32;
 
-    let mut rounds = 0u32;
-    while rounds <= MAX_ROUNDS {
-        println!("\n=== Round {} ===", rounds);
+    let mut steps = 0u32;
+    let mut loop_detector = crate::network::loop_detect::LoopDetector::new(6);
+    while !cancel_token.is_cancelled() {
+        println!("\n=== Step {} ===", steps);
 
         // Reset streaming buffer.
         {
@@ -204,17 +204,37 @@ pub async fn run_round_loop(
 
         let response_content = { state_arc.lock().await.current_response.clone() };
 
+        let protocol = { state_arc.lock().await.config.tool_protocol };
+        if let Some(tool_call) = crate::tools::parse_tool_call(&response_content, protocol) {
+            let (exact, category) = crate::network::loop_detect::signatures(
+                &tool_call.name,
+                &tool_call.arguments,
+            );
+            match loop_detector.check_tool(&tool_call.name, &exact, &category) {
+                crate::network::loop_detect::LoopStatus::Abort(repeats) => {
+                    println!(
+                        "Loop detected after {repeats} repeated '{}' actions. Stopping safely.",
+                        tool_call.name
+                    );
+                    break;
+                }
+                crate::network::loop_detect::LoopStatus::Warning(repeats) => {
+                    println!(
+                        "Warning: '{}' has repeated {repeats} times.",
+                        tool_call.name
+                    );
+                }
+                crate::network::loop_detect::LoopStatus::Ok => {}
+            }
+        }
+
         if execute_tool_if_approved(&state_arc, response_content.clone())
             .await
             .is_some()
         {
             // Tool executed — loop continues with updated history.
             malformed_retries = 0;
-            rounds += 1;
-            if rounds >= MAX_ROUNDS {
-                println!("Reached max rounds ({}). Exiting.", MAX_ROUNDS);
-                break;
-            }
+            steps += 1;
             continue;
         }
 
@@ -234,13 +254,11 @@ pub async fn run_round_loop(
             s.history
                 .push(ChatMessage::new("tool", TOOL_REPAIR_FEEDBACK.to_string()));
             drop(s);
-            rounds += 1;
+            steps += 1;
             continue;
         }
 
-        if rounds < MAX_ROUNDS {
-            println!("\nNo tool call detected. Agent loop finished.");
-        }
+        println!("\nNo tool call detected. Agent loop finished.");
         break;
     }
 
