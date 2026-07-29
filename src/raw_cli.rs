@@ -46,35 +46,7 @@ pub async fn build_messages(state: &AppState) -> Vec<serde_json::Value> {
     let budget_token_limit = state.get_history_token_budget();
     crate::network::compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
-    let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
-        "role": "system",
-        "content": system_prompt,
-    })];
-
-    let mut first_user = true;
-    for m in history_snapshot {
-        let msg = match m.role.as_str() {
-            "tool" => serde_json::json!({
-                "role": "user",
-                "content": format!("<tool_result>\n{}\n</tool_result>", m.content),
-            }),
-            "user" if first_user => {
-                first_user = false;
-                serde_json::json!({
-                    "role": "user",
-                    "content": crate::network::parse_multimodal_content(&m.content),
-                })
-            }
-            "user" => serde_json::json!({
-                "role": "user",
-                "content": crate::network::parse_multimodal_content(&m.content),
-            }),
-            _ => serde_json::json!({"role": m.role, "content": m.content}),
-        };
-        msgs.push(msg);
-    }
-
-    msgs
+    crate::network::history::to_messages(&history_snapshot, system_prompt)
 }
 
 /// Prompt the user to confirm tool execution and run it if confirmed.
