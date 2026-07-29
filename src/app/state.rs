@@ -446,6 +446,18 @@ impl PromptCache {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeKind {
+    Notice,
+    Warning,
+}
+
+pub struct Notice {
+    pub text: String,
+    pub kind: NoticeKind,
+    pub shown_at: std::time::Instant,
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -545,7 +557,7 @@ pub struct AppState {
     pub selected_text: Option<String>,
     /// Transient top-right toast: (message, shown_at). Auto-expires (~3s) — the
     /// render path checks elapsed time, so no timer/event is needed to clear it.
-    pub notice: Option<(String, std::time::Instant)>,
+    pub notice: Option<Notice>,
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
     pub selecting: bool,
@@ -1038,7 +1050,19 @@ impl AppState {
 
     /// Show a transient notice toast in the top-right corner.
     pub fn set_notice(&mut self, text: impl Into<String>) {
-        self.notice = Some((text.into(), std::time::Instant::now()));
+        self.notice = Some(Notice {
+            text: text.into(),
+            kind: NoticeKind::Notice,
+            shown_at: std::time::Instant::now(),
+        });
+    }
+
+    pub fn set_warning(&mut self, text: impl Into<String>) {
+        self.notice = Some(Notice {
+            text: text.into(),
+            kind: NoticeKind::Warning,
+            shown_at: std::time::Instant::now(),
+        });
     }
 
     pub fn toggle_thought(&mut self, idx: usize) {
