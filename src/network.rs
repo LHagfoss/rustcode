@@ -37,6 +37,10 @@ pub(crate) use stream::StreamBuffer;
 pub(crate) mod output;
 pub(crate) use output::truncate_tool_output;
 
+#[path = "network/events.rs"]
+pub(crate) mod events;
+pub(crate) use events::ToolResult;
+
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
@@ -2181,16 +2185,16 @@ async fn execute_tool_batch(
     edit_root: &Option<std::path::PathBuf>,
     compile_dirty: &mut bool,
     compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
-) -> Vec<(String, String, Option<String>)> {
+) -> Vec<ToolResult> {
     if !approved {
         return tool_calls
             .iter()
             .map(|call| {
-                (
-                    call.name.clone(),
-                    "error: user denied this tool call".to_string(),
-                    None,
-                )
+                ToolResult {
+                    tool_name: call.name.clone(),
+                    content: "error: user denied this tool call".to_string(),
+                    diff: None,
+                }
             })
             .collect::<Vec<_>>();
     }
@@ -2318,7 +2322,11 @@ async fn execute_tool_batch(
             (name_clone, result, diff_opt)
         }
         .await;
-        results.push((name, result, diff_opt));
+        results.push(ToolResult {
+            tool_name: name,
+            content: result,
+            diff: diff_opt,
+        });
         if cancel_token.is_cancelled() {
             break;
         }
@@ -2342,9 +2350,14 @@ async fn execute_tool_batch(
                 snippet.truncate(3000);
                 snippet.push_str("\n... (compiler output truncated) ...");
             }
-            if let Some((_, res, _)) = results.iter_mut().find(|(n, _, _)| is_mutating_tool(n)) {
-                res.push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
-                res.push_str(&snippet);
+            if let Some(result) = results
+                .iter_mut()
+                .find(|result| is_mutating_tool(&result.tool_name))
+            {
+                result
+                    .content
+                    .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
+                result.content.push_str(&snippet);
             }
         }
     }
@@ -2773,11 +2786,14 @@ pub async fn process_queue_orchestrator(
                     let mut s = state.lock().await;
                     s.status = AppStatus::Streaming;
                     let mut completed = false;
-                    for (name, result, diff_opt) in results {
+                    for result in results {
+                        let name = result.tool_name;
+                        let content = result.content;
+                        let diff_opt = result.diff;
                         dbg_log!(
                             "Tool '{}' finished with result length: {} chars",
                             name,
-                            result.len()
+                            content.len()
                         );
                         if name == "complete_task" {
                             completed = true;
@@ -2788,19 +2804,18 @@ pub async fn process_queue_orchestrator(
                         // shouldn't inherit the pre-edit read history and trip the
                         // frequency signal. Failed edits (result starts with
                         // "error") are not progress and must keep accumulating.
-                        if is_mutating_tool(&name)
-                            && !result.trim_start().to_ascii_lowercase().starts_with("error")
+                        if is_mutating_tool(&name) && !content.trim_start().to_ascii_lowercase().starts_with("error")
                         {
                             loop_detector.reset();
                         }
                         // Output-stagnation signal: repeated identical results
                         // (e.g. "No matches found") despite varied commands.
                         if let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
-                            loop_detector.record_output(&result)
+                            loop_detector.record_output(&content)
                         {
                             dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
                         }
-                        let truncated_result = truncate_tool_output(&name, result);
+                        let truncated_result = truncate_tool_output(&name, content);
                         s.history.push(
                             ChatMessage::new("tool", format!("{name}: {truncated_result}"))
                                 .with_diff(diff_opt),
