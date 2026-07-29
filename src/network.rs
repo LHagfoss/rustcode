@@ -401,6 +401,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "delete_file"
             | "move_file"
             | "copy_file"
+            | "spawn_agent"
+            | "send_agent"
     )
 }
 
@@ -3465,6 +3467,13 @@ mod tests {
         assert!(!is_read_only_tool("write_to_file"));
         assert!(!is_read_only_tool("run_command"));
         assert!(!is_read_only_tool("todo_write"));
+    }
+
+    #[test]
+    fn test_delegation_is_checked_as_potentially_mutating() {
+        assert!(is_mutating_tool("spawn_agent"));
+        assert!(is_mutating_tool("send_agent"));
+        assert!(!is_mutating_tool("todo_write"));
     }
 
     #[test]
