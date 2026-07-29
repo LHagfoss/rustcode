@@ -2474,6 +2474,7 @@ pub async fn process_queue_orchestrator(
             let mut continuation_count = 0;
             const MAX_CONTINUATIONS: usize = 5;
             let mut stream_err = None;
+            let mut response_finish_reason: Option<String> = None;
 
             loop {
                 let mut current_msgs = msgs.clone();
@@ -2527,6 +2528,7 @@ pub async fn process_queue_orchestrator(
                         break;
                     }
                 };
+                response_finish_reason = finish_reason.clone();
 
                 let chunk_content = stream_buffer.lock().await.content.clone();
                 accumulated_content.push_str(&chunk_content);
@@ -2611,7 +2613,18 @@ pub async fn process_queue_orchestrator(
             }
 
             let protocol = { state.lock().await.config.tool_protocol };
-            let tool_calls = crate::tools::parse_tool_calls(&final_content, protocol);
+            let response_events = events::classify_response(
+                &final_content,
+                response_finish_reason.as_deref(),
+                protocol,
+            );
+            let tool_calls = response_events
+                .iter()
+                .filter_map(|event| match event {
+                    events::AgentEvent::ToolCall(call) => Some(call.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             if !tool_calls.is_empty() {
                 dbg_log!("Parsed {} tool call requests", tool_calls.len());
 
