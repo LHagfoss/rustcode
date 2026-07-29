@@ -2248,6 +2248,38 @@ async fn execute_tool_batch(
             .collect::<Vec<_>>();
     }
 
+    // Independent reads may run concurrently. The recursive single-call path
+    // keeps all existing repeat detection, cancellation, and result shaping in
+    // one place; `join_all` preserves input order for deterministic history.
+    if !made_edits
+        && tool_calls.len() > 1
+        && tool_calls
+            .iter()
+            .all(|call| crate::tools::supports_parallel_execution(&call.name))
+    {
+        let futures = tool_calls.iter().map(|call| async {
+            let mut read_dirty = false;
+            let mut read_cache = None;
+            execute_tool_batch(
+                client,
+                state,
+                cancel_token,
+                std::slice::from_ref(call),
+                approved,
+                false,
+                &None,
+                &mut read_dirty,
+                &mut read_cache,
+            )
+            .await
+        });
+        return futures_util::future::join_all(futures)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+    }
+
     dbg_log!("Executing {} tool calls sequentially", tool_calls.len());
     let mut results = Vec::with_capacity(tool_calls.len());
     for call in tool_calls {
