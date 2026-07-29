@@ -2,6 +2,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 // Re-exports needed by filesystem tools
+pub(crate) use super::coerce_array;
 pub(crate) use super::parse_json_number;
 pub(crate) use super::resolve_tool_path;
 
@@ -198,7 +199,7 @@ fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
     let target_keys = &["target_content", "target", "old_string", "old_text", "oldString", "oldText"];
     let replacement_keys = &["replacement_content", "replacement", "new_string", "new_text", "newString", "newText"];
 
-    if let Some(edits_arr) = args.get("edits").and_then(|e| e.as_array()) {
+    if let Some(edits_arr) = args.get("edits").and_then(coerce_array) {
         if edits_arr.is_empty() {
             return Err("edits array cannot be empty".to_string());
         }
@@ -535,7 +536,7 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
         .ok_or("missing 'path' argument")?;
     let replacements_val = args
         .get("replacements")
-        .and_then(|r| r.as_array())
+        .and_then(coerce_array)
         .ok_or("missing 'replacements' array")?;
 
     let resolved_path = resolve(path);
@@ -671,7 +672,7 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
 
     std::fs::write(&resolved_path, content).map_err(|e| format!("cannot write '{path}': {e}"))?;
 
-    let lines = content.lines().count().max(1);
+    let lines = content.lines().count();
     Ok(format!(
         "wrote '{path}' ({lines} lines, {} bytes)",
         content.len()

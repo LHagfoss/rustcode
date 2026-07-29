@@ -3433,7 +3433,7 @@ mod tests {
             Some("file")
         );
         assert_eq!(
-            classify_tool_msg(&ChatMessage::new("tool", "check_match: 2-1")),
+            classify_tool_msg(&ChatMessage::new("tool", "get_weather: sunny")),
             Some("other")
         );
         assert_eq!(classify_tool_msg(&ChatMessage::new("assistant", "hi")), None);
