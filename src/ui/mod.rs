@@ -55,7 +55,7 @@ const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93);
 const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101);
 const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);
 /// Uniform text-selection background — vibrant selection blue for high visibility.
-const COLOR_SELECTION: Color = Color::Rgb(60, 95, 150);
+const COLOR_SELECTION: Color = Color::Rgb(240, 240, 240);
 const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
 
 const LOGO: &[&str] = &[
@@ -1741,7 +1741,7 @@ fn highlight_selection(
 
         for col in col_from..=col_to {
             if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
-                cell.set_fg(Color::Rgb(255, 255, 255));
+                cell.set_fg(Color::Rgb(0, 0, 0));
                 cell.set_bg(COLOR_SELECTION);
             }
         }
