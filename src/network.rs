@@ -555,7 +555,15 @@ pub async fn stream_request(
     // text protocols leave the payload untouched.
     let tool_protocol = { state.lock().await.config.tool_protocol };
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        let schema = crate::tools::native_tools_schema(true);
+        // Served from the same PromptCache as the system prompt (built together
+        // under one key), so this is a hit after prepare_turn_request ran.
+        let schema = {
+            let mut s = state.lock().await;
+            let agent_mode = s.agent_mode;
+            s.prompt_cache
+                .native_schema(true, tool_protocol, agent_mode)
+                .to_vec()
+        };
         if !schema.is_empty() {
             payload["tools"] = serde_json::Value::Array(schema);
             payload["tool_choice"] = serde_json::json!("auto");
@@ -2069,6 +2077,51 @@ async fn spawn_title_generation(
 /// warm: this lists the files already in context (so the agent doesn't re-read
 /// them) and re-injects the persistent task plan so work continues across turns
 /// instead of re-planning from scratch.
+/// Render the volatile runtime block — the "cache divider" that must sit at the
+/// very end of the request payload, after the static (cacheable) prefix and the
+/// conversation. Everything here changes turn-to-turn (clock, cwd, quota), so
+/// keeping it strictly at the tail lets the provider's implicit prefix cache
+/// cover the entire static prefix plus the stable conversation history.
+fn build_volatile_context_block(
+    token_usage: Option<&crate::app::TokenUsage>,
+    quota_remaining: Option<f32>,
+    context_window: u32,
+) -> String {
+    let now = chrono::Local::now();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "(unknown)".to_string());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "(unknown)".to_string());
+
+    let mut b = String::from("# Runtime Context (volatile — do not rely on this being cached)\n");
+    b.push_str(&format!(
+        "- Current date/time: {}\n",
+        now.format("%A %Y-%m-%d %H:%M:%S %Z")
+    ));
+    b.push_str(&format!("- Working directory: {cwd}\n"));
+    b.push_str(&format!(
+        "- Platform: {} {}\n",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
+    b.push_str(&format!("- Shell: {shell}\n"));
+    b.push_str(&format!("- Context window: {context_window} tokens\n"));
+    if let Some(u) = token_usage {
+        b.push_str(&format!(
+            "- Last-turn token usage: prompt {} / completion {} / total {}",
+            u.prompt_tokens, u.completion_tokens, u.total_tokens
+        ));
+        if let Some(cached) = u.cached_tokens {
+            b.push_str(&format!(" (cached {cached})"));
+        }
+        b.push('\n');
+    }
+    if let Some(q) = quota_remaining {
+        b.push_str(&format!("- Model quota remaining: {q:.1}%\n"));
+    }
+    b
+}
+
 fn build_dynamic_context_tail(
     context_section: String,
     read_files: &[String],
@@ -2157,11 +2210,17 @@ async fn prepare_turn_request(
     let budget_token_limit = { state.lock().await.get_history_token_budget() };
     compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
-    let (read_files, todos) = {
+    let (read_files, todos, volatile_usage, volatile_quota, volatile_window) = {
         let s = state.lock().await;
         let mut files: Vec<String> = s.read_file_mtimes.keys().cloned().collect();
         files.sort();
-        (files, s.todos.clone())
+        (
+            files,
+            s.todos.clone(),
+            s.current_token_usage.clone(),
+            s.model_quota_remaining,
+            s.active_context_window(),
+        )
     };
 
     let current_snapshot = crate::context::ContextSnapshot::capture();
@@ -2183,7 +2242,16 @@ async fn prepare_turn_request(
     // the whole tool-definition block. Turn-varying context (environment
     // delta, files-in-context, task plan) is appended to the LAST message
     // instead, so it never invalidates the cached prefix.
-    let system_prompt = crate::tools::tool_system_prompt(true, protocol, agent_mode);
+    //
+    // The static system prompt is served from AppState's PromptCache: it's only
+    // rebuilt (skill scan + MCP schema serialization) when the protocol, agent
+    // mode, or MCP tool set changes, not on every turn.
+    let system_prompt = {
+        let mut s = state.lock().await;
+        s.prompt_cache
+            .system_prompt(true, protocol, agent_mode)
+            .to_string()
+    };
     // Store the snapshot if this is the first turn
     {
         let mut s = state.lock().await;
@@ -2193,8 +2261,19 @@ async fn prepare_turn_request(
     }
 
     // Build the turn-varying context tail (appended to the last message
-    // after the history is assembled, to preserve the cached prefix).
-    let dynamic_context = build_dynamic_context_tail(context_section, &read_files, &todos);
+    // after the history is assembled, to preserve the cached prefix). The
+    // volatile runtime block (clock/cwd/quota) goes last, as the explicit cache
+    // divider at the very end of the payload.
+    let mut dynamic_context = build_dynamic_context_tail(context_section, &read_files, &todos);
+    let volatile_block = build_volatile_context_block(
+        volatile_usage.as_ref(),
+        volatile_quota,
+        volatile_window,
+    );
+    if !dynamic_context.is_empty() {
+        dynamic_context.push_str("\n\n");
+    }
+    dynamic_context.push_str(&volatile_block);
     let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
         "role": "system",
         "content": system_prompt.clone(),
