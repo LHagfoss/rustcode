@@ -362,6 +362,7 @@ pub fn is_agent_tool(name: &str) -> bool {
 /// default and must not be parallelized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSafety {
+    ControlPlane,
     ReadOnly,
     WorkspaceMutation,
     ProcessControl,
@@ -372,6 +373,7 @@ pub enum ToolSafety {
 
 pub fn tool_safety(name: &str) -> ToolSafety {
     match name {
+        "use_skill" => ToolSafety::ControlPlane,
         "view_file" | "list_directory" | "grep" | "glob" | "get_time" | "find_symbol"
         | "get_project_map" | "search_web" => ToolSafety::ReadOnly,
         "replace_file_content" | "multi_replace_file_content" | "write_to_file"
@@ -385,6 +387,21 @@ pub fn tool_safety(name: &str) -> ToolSafety {
 
 pub fn supports_parallel_execution(name: &str) -> bool {
     matches!(tool_safety(name), ToolSafety::ReadOnly)
+}
+
+/// Enforce a control-plane barrier. A control-plane call such as `use_skill`
+/// must execute alone so its result can affect the next model request before
+/// any side-effecting call from the same response is considered.
+pub fn isolate_control_plane_call(calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize) {
+    let Some(index) = calls
+        .iter()
+        .position(|call| matches!(tool_safety(&call.name), ToolSafety::ControlPlane))
+    else {
+        return (calls, 0);
+    };
+
+    let control_call = calls[index].clone();
+    (vec![control_call], calls.len().saturating_sub(1))
 }
 
 /// Agent tools that live outside the `TOOLS` table. `(name, description, args)`
@@ -1445,6 +1462,7 @@ mod tests {
 
     #[test]
     fn tool_safety_is_conservative_and_parallelizes_only_reads() {
+        assert_eq!(tool_safety("use_skill"), ToolSafety::ControlPlane);
         assert_eq!(tool_safety("grep"), ToolSafety::ReadOnly);
         assert!(supports_parallel_execution("view_file"));
         assert_eq!(tool_safety("write_to_file"), ToolSafety::WorkspaceMutation);
@@ -1452,6 +1470,26 @@ mod tests {
         assert_eq!(tool_safety("run_command"), ToolSafety::ProcessControl);
         assert_eq!(tool_safety("unknown_mcp_tool"), ToolSafety::Unknown);
         assert!(!supports_parallel_execution("unknown_mcp_tool"));
+    }
+
+    #[test]
+    fn control_plane_calls_are_isolated_from_side_effects() {
+        let calls = vec![
+            ToolCall {
+                name: "use_skill".to_string(),
+                arguments: serde_json::json!({"name": "spotify"}),
+            },
+            ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({"command": "spotify-cli p volume 3"}),
+            },
+        ];
+
+        let (isolated, deferred) = isolate_control_plane_call(calls);
+
+        assert_eq!(isolated.len(), 1);
+        assert_eq!(isolated[0].name, "use_skill");
+        assert_eq!(deferred, 1);
     }
 
     #[test]
