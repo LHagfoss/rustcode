@@ -296,7 +296,102 @@ pub(super) fn wrap_code_spans<'a>(
     out
 }
 
+/// Colours for a diff cell keyed on its leading sign char.
+/// Returns `(bg, fg, is_empty)`. `~` marks a column with no line on that side.
+fn diff_cell_colors(prefix: char) -> (Color, Color, bool) {
+    match prefix {
+        '+' => (Color::Rgb(24, 40, 24), Color::Rgb(160, 240, 160), false), // add
+        '-' => (Color::Rgb(48, 20, 20), Color::Rgb(240, 150, 150), false), // delete
+        '~' => (Color::Rgb(22, 22, 26), Color::Rgb(22, 22, 26), true),     // absent
+        _ => (COLOR_BG, COLOR_TEXT, false),                                // context
+    }
+}
+
+/// Truncate `spans` to exactly `width` display columns, then pad the remainder
+/// with `bg` so the cell background fills edge to edge. Single row, no wrap.
+fn fit_line_spans<'a>(
+    spans: Vec<Span<'a>>,
+    width: usize,
+    bg: Color,
+    show_picker: bool,
+) -> Vec<Span<'a>> {
+    let mut out: Vec<Span> = Vec::new();
+    let mut w = 0usize;
+    for span in spans {
+        if w >= width {
+            break;
+        }
+        let mut seg = String::new();
+        let mut seg_w = 0usize;
+        for ch in span.content.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if w + seg_w + cw > width {
+                break;
+            }
+            seg.push(ch);
+            seg_w += cw;
+        }
+        if !seg.is_empty() {
+            out.push(Span::styled(seg, span.style));
+            w += seg_w;
+        }
+    }
+    if w < width {
+        out.push(Span::styled(
+            " ".repeat(width - w),
+            get_themed_style(COLOR_TEXT, bg, Modifier::empty(), show_picker),
+        ));
+    }
+    out
+}
+
+/// Render one side (old or new) of a side-by-side diff row into `col_width`
+/// columns: a sign gutter, syntax-highlighted code, then background fill.
+fn diff_cell_spans<'a>(cell: &str, col_width: usize, show_picker: bool) -> Vec<Span<'a>> {
+    let (prefix, code) = {
+        let mut chars = cell.chars();
+        match chars.next() {
+            Some(c @ ('+' | '-' | ' ' | '~')) => (c, chars.as_str()),
+            _ => (' ', cell),
+        }
+    };
+    let (bg, fg, is_empty) = diff_cell_colors(prefix);
+
+    let sign = match prefix {
+        '+' => '+',
+        '-' => '-',
+        _ => ' ',
+    };
+    let mut spans = vec![Span::styled(
+        format!("{sign} "),
+        get_themed_style(fg, bg, Modifier::BOLD, show_picker),
+    )];
+    if !is_empty {
+        spans.extend(highlight_rust_line_with_colors(code, fg, bg, show_picker));
+    }
+    fit_line_spans(spans, col_width, bg, show_picker)
+}
+
+/// Render a diff row. Rows produced by `get_diff_preview` carry a `\0` that
+/// splits the old (left) and new (right) columns — those render side by side,
+/// each filling half the width with its own sign gutter and syntax highlight.
+/// Rows without a `\0` (fenced ```diff blocks) fall back to a single column.
 pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: bool) -> Line<'a> {
+    if let Some((left, right)) = line.split_once('\0') {
+        let sep_w = 3usize;
+        let avail = width.saturating_sub(sep_w);
+        let lw = avail / 2;
+        let rw = avail - lw;
+        let mut spans = diff_cell_spans(left, lw, show_picker);
+        spans.push(Span::styled(
+            " │ ".to_string(),
+            get_themed_style(Color::Rgb(90, 90, 90), COLOR_BG, Modifier::empty(), show_picker),
+        ));
+        spans.extend(diff_cell_spans(right, rw, show_picker));
+        return Line::from(spans);
+    }
+
+    // Single-column fallback for unified ```diff fenced blocks.
     let (prefix, code) = if line.is_empty() {
         (' ', "")
     } else {
@@ -376,6 +471,23 @@ mod tests {
         let rows = wrap_code_spans(Vec::new(), 8, COLOR_ELEMENT, false);
         assert_eq!(rows.len(), 1);
         assert_eq!(row_width(&rows[0]), 8);
+    }
+
+    #[test]
+    fn side_by_side_diff_fills_full_width() {
+        // A `\0`-separated row renders old|new columns spanning the whole width.
+        let line = highlight_diff_line("-let x = 1;\0+let x = 2;", 40, false);
+        assert_eq!(row_width(&line), 40);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains('│'), "expected a column separator");
+    }
+
+    #[test]
+    fn unified_diff_row_without_nul_still_single_column() {
+        let line = highlight_diff_line("+added line", 40, false);
+        assert_eq!(row_width(&line), 40);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!text.contains('│'), "unified fallback must not add a separator");
     }
 }
 
