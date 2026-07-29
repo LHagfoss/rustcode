@@ -1457,6 +1457,7 @@ async fn confirm_and_execute(
 
 /// Max tool rounds a subagent gets before being cut off.
 const MAX_SUBAGENT_ROUNDS: usize = 15;
+const MAX_ACTIVE_SUBAGENTS: usize = 4;
 
 fn push_status_line(s: &mut AppState, text: String) {
     s.history.push(ChatMessage::new("system", text));
@@ -1657,6 +1658,17 @@ reply compact and information-dense.\n\n{}",
     }
 }
 
+async fn set_subagent_status(
+    state: &Arc<Mutex<AppState>>,
+    agent_id: u32,
+    status: crate::app::SubAgentStatus,
+) {
+    let mut s = state.lock().await;
+    if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == agent_id) {
+        agent.status = status;
+    }
+}
+
 /// Handle spawn_agent / send_agent from the main agent: run a nested
 /// subagent conversation (the main agent waits) and return the subagent's
 /// reply as the tool result.
@@ -1685,6 +1697,16 @@ async fn handle_agent_tool(
                 .map(|s| s.to_string());
             let agent_id = {
                 let mut s = state.lock().await;
+                let active_count = s
+                    .subagents
+                    .iter()
+                    .filter(|agent| agent.status == crate::app::SubAgentStatus::Running)
+                    .count();
+                if active_count >= MAX_ACTIVE_SUBAGENTS {
+                    return format!(
+                        "error: maximum active subagents reached ({MAX_ACTIVE_SUBAGENTS}); wait for an existing agent to finish"
+                    );
+                }
                 let id = s.next_subagent_id;
                 s.next_subagent_id += 1;
                 s.subagents.push(crate::app::SubAgent {
@@ -1692,12 +1714,25 @@ async fn handle_agent_tool(
                     task: task.to_string(),
                     model,
                     history: vec![ChatMessage::new("user", task)],
+                    status: crate::app::SubAgentStatus::Running,
                 });
                 let brief: String = task.chars().take(60).collect();
                 push_status_line(&mut s, format!("agent-{id} spawned: {brief}"));
                 id
             };
             let reply = run_subagent(client, state, cancel_token, agent_id).await;
+            set_subagent_status(
+                state,
+                agent_id,
+                if reply.starts_with("error:") {
+                    crate::app::SubAgentStatus::Failed
+                } else if cancel_token.is_cancelled() {
+                    crate::app::SubAgentStatus::Cancelled
+                } else {
+                    crate::app::SubAgentStatus::Completed
+                },
+            )
+            .await;
             push_status_line(&mut *state.lock().await, format!("agent-{agent_id} done"));
             format!("(subagent id {agent_id} — follow up with send_agent)\n{reply}")
         }
@@ -1740,10 +1775,28 @@ async fn handle_agent_tool(
                 };
                 push_status_line(&mut s, format!("agent-{id} ← follow-up ({task})"));
                 if let Some(a) = s.subagents.iter_mut().find(|a| a.id == id) {
+                    if a.status == crate::app::SubAgentStatus::Failed
+                        || a.status == crate::app::SubAgentStatus::Cancelled
+                    {
+                        return format!("error: subagent {id} is not available for follow-up");
+                    }
+                    a.status = crate::app::SubAgentStatus::Running;
                     a.history.push(ChatMessage::new("user", message));
                 }
             }
             let reply = run_subagent(client, state, cancel_token, id).await;
+            set_subagent_status(
+                state,
+                id,
+                if reply.starts_with("error:") {
+                    crate::app::SubAgentStatus::Failed
+                } else if cancel_token.is_cancelled() {
+                    crate::app::SubAgentStatus::Cancelled
+                } else {
+                    crate::app::SubAgentStatus::Completed
+                },
+            )
+            .await;
             push_status_line(&mut *state.lock().await, format!("agent-{id} done"));
             format!("(subagent id {id})\n{reply}")
         }
