@@ -1450,8 +1450,6 @@ async fn confirm_and_execute(
     (result, diff_opt)
 }
 
-/// Max tool rounds a subagent gets before being cut off.
-const MAX_SUBAGENT_ROUNDS: usize = 15;
 const MAX_ACTIVE_SUBAGENTS: usize = 4;
 
 fn push_status_line(s: &mut AppState, text: String) {
@@ -1475,6 +1473,7 @@ async fn run_subagent(
         content: String::new(),
     }));
     let mut rounds = 0usize;
+    let mut loop_detector = loop_detect::LoopDetector::new(6);
     loop {
         if cancel_token.is_cancelled() {
             return "error: cancelled".to_string();
@@ -1603,9 +1602,23 @@ reply compact and information-dense.\n\n{}",
         if let Some(tool_call) = crate::tools::parse_tool_call(&content, protocol) {
             let name = &tool_call.name;
             let args = &tool_call.arguments;
-            if rounds >= MAX_SUBAGENT_ROUNDS {
+            if let Err(reason) = crate::tools::validate_tool_calls(std::slice::from_ref(&tool_call)) {
+                let mut s = state.lock().await;
+                if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
+                    a.history.push(ChatMessage::new("assistant", &content));
+                    a.history.push(ChatMessage::new(
+                        "tool",
+                        format!("{name}: error: tool call rejected before execution: {reason}"),
+                    ));
+                }
+                continue;
+            }
+            let (exact, category) = loop_detect::signatures(name, args);
+            if let loop_detect::LoopStatus::Abort(repeats) =
+                loop_detector.check_tool(name, &exact, &category)
+            {
                 return format!(
-                    "error: subagent {agent_id} hit the {MAX_SUBAGENT_ROUNDS}-round tool limit without a final reply"
+                    "error: subagent {agent_id} stopped after {repeats} repeated '{name}' actions"
                 );
             }
             rounds += 1;
