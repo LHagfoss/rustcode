@@ -85,13 +85,13 @@ pub async fn execute_tool_if_approved(
 ) -> Option<String> {
     let protocol = { state_arc.lock().await.config.tool_protocol };
 
-    let (tool_name, tool_args) = crate::tools::parse_tool_call(&response_content, protocol)?;
+    let tool_call = crate::tools::parse_tool_call(&response_content, protocol)?;
 
     println!("\nDetected Tool Call:");
-    println!("  Name: {}", tool_name);
+    println!("  Name: {}", tool_call.name);
     println!(
         "  Arguments: {}",
-        serde_json::to_string_pretty(&tool_args).unwrap_or_default()
+        serde_json::to_string_pretty(&tool_call.arguments).unwrap_or_default()
     );
 
     print!("\nExecute tool? (y/N): ");
@@ -106,7 +106,7 @@ pub async fn execute_tool_if_approved(
     match user_input.trim().to_lowercase().as_str() {
         "y" | "yes" => {
             println!("Executing tool...");
-            let result = crate::tools::execute(&tool_name, &tool_args);
+            let result = crate::tools::execute(&tool_call.name, &tool_call.arguments);
             println!("Result: {}", result);
 
             // Record assistant response and tool result in history.
