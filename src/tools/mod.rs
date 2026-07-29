@@ -947,12 +947,18 @@ pub fn tool_system_prompt(
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
+        if agent_mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(t.name) {
+            continue;
+        }
         p.push_str(&format!(
             "- {} | Args: {} | {}\n",
             t.name, t.arguments, t.description
         ));
     }
     for (name, desc, schema) in collect_mcp_tools() {
+        if agent_mode == crate::config::AgentMode::Plan {
+            continue;
+        }
         p.push_str(&format!(
             "- {} | Args: {} | {}\n",
             name,
@@ -960,7 +966,7 @@ pub fn tool_system_prompt(
             desc
         ));
     }
-    if include_agent_tools {
+    if include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str(
             "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
             - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Send follow-up to subagent.\n\
