@@ -29,6 +29,10 @@ use text::{
     strip_think_blocks, strip_tool_call_syntax,
 };
 
+#[path = "network/stream.rs"]
+pub(crate) mod stream;
+pub(crate) use stream::StreamBuffer;
+
 
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -440,10 +444,6 @@ fn tool_signature(name: &str, args: &serde_json::Value) -> String {
         _ => serde_json::to_string(args).unwrap_or_default(),
     };
     format!("{name}:{key}")
-}
-
-pub struct StreamBuffer {
-    pub content: String,
 }
 
 fn align_alternating_messages(raw_msgs: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
