@@ -528,6 +528,8 @@ pub struct AppState {
     pub auto_confirm: bool,
 
     pub subagents: Vec<SubAgent>,
+    pub delegation_armed: bool,
+    pub delegation_active: bool,
     pub continuous_mode: bool,
     pub next_subagent_id: u32,
 
@@ -674,6 +676,8 @@ impl AppState {
             auto_confirm: false,
             active_session_id,
             subagents: Vec::new(),
+            delegation_armed: false,
+            delegation_active: false,
             next_subagent_id: 1,
             todos: Vec::new(),
             read_file_mtimes: std::collections::HashMap::new(),

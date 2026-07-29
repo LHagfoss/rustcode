@@ -69,6 +69,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Delete current session and start fresh",
     },
     CommandInfo {
+        name: "/delegate",
+        desc: "Allow subagents for the next task only",
+    },
+    CommandInfo {
         name: "/discord",
         desc: "Toggle Discord Rich Presence",
     },

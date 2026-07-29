@@ -559,11 +559,12 @@ pub async fn stream_request(
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         // Served from the same PromptCache as the system prompt (built together
         // under one key), so this is a hit after prepare_turn_request ran.
+        let delegation_active = { state.lock().await.delegation_active };
         let schema = {
             let mut s = state.lock().await;
             let agent_mode = s.agent_mode;
             s.prompt_cache
-                .native_schema(true, tool_protocol, agent_mode)
+                .native_schema(delegation_active, tool_protocol, agent_mode)
                 .to_vec()
         };
         if !schema.is_empty() {
@@ -1715,6 +1716,9 @@ async fn handle_agent_tool(
 ) -> String {
     match name {
         "spawn_agent" => {
+            if !state.lock().await.delegation_active {
+                return "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string();
+            }
             let Some(task) = args
                 .get("task")
                 .and_then(|t| t.as_str())
@@ -1745,6 +1749,9 @@ async fn handle_agent_tool(
             format!("(subagent id {agent_id} — follow up with send_agent)\n{reply}")
         }
         "send_agent" => {
+            if !state.lock().await.delegation_active {
+                return "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string();
+            }
             let id = args.get("id").and_then(|v| {
                 v.as_u64()
                     .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
@@ -2124,8 +2131,9 @@ async fn prepare_turn_request(
     // mode, or MCP tool set changes, not on every turn.
     let system_prompt = {
         let mut s = state.lock().await;
+        let delegation_active = s.delegation_active;
         s.prompt_cache
-            .system_prompt(true, protocol, agent_mode)
+            .system_prompt(delegation_active, protocol, agent_mode)
             .to_string()
     };
     // Store the snapshot if this is the first turn
@@ -2406,6 +2414,7 @@ pub async fn process_queue_orchestrator(
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
                 s.status = AppStatus::Idle;
+                s.delegation_active = false;
                 // Clear the single-flight guard under the same lock that saw the
                 // queue empty, so an enqueue racing this exit either lands before
                 // (queue non-empty here → we keep going) or after (guard clear →

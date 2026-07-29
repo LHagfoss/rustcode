@@ -183,6 +183,20 @@ pub async fn handle_enter(
                 start_new_session(&mut s);
             }
 
+            "/delegate" => {
+                if tokens.get(1).is_some_and(|mode| *mode == "off") {
+                    s.delegation_armed = false;
+                    s.delegation_active = false;
+                    s.history.push(ChatMessage::new("system", "Subagents disabled."));
+                } else {
+                    s.delegation_armed = true;
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Subagents enabled for the next task only. Send your task now.",
+                    ));
+                }
+            }
+
             "/cancel" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
@@ -211,6 +225,8 @@ pub async fn handle_enter(
                 if goal_text.trim().is_empty() {
                     s.history.push(ChatMessage::new("system", "Usage: /goal <task description>"));
                 } else {
+                    s.delegation_active = s.delegation_armed;
+                    s.delegation_armed = false;
                     s.continuous_mode = true;
                     let goal_msg = format!("Goal: {}\n\nContinuous autoloop mode is active. You must execute tools in a loop to complete the goal, and call the 'complete_task' tool when you are fully finished.", goal_text);
                     s.history.push(ChatMessage::new("user", goal_msg));
@@ -719,6 +735,8 @@ pub async fn handle_enter(
         return should_exit;
     }
 
+    s.delegation_active = s.delegation_armed;
+    s.delegation_armed = false;
     s.pending_queue.push(raw_input);
     s.input_buffer.clear();
     s.cursor_position = 0;
@@ -817,6 +835,8 @@ pub fn start_new_session(s: &mut AppState) {
     s.temp_input.clear();
     s.status = AppStatus::Idle;
     s.subagents.clear();
+    s.delegation_armed = false;
+    s.delegation_active = false;
     s.next_subagent_id = 1;
     s.todos.clear();
     s.read_file_mtimes.clear();
