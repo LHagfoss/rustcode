@@ -119,7 +119,7 @@ pub async fn run_round_loop(
     let mut malformed_retries = 0u32;
 
     let mut steps = 0u32;
-    let mut loop_detector = crate::network::loop_detect::LoopDetector::new(6);
+    let mut turn_runner = crate::network::runner::TurnRunner::new();
     while !cancel_token.is_cancelled() {
         println!("\n=== Step {} ===", steps);
 
@@ -178,11 +178,7 @@ pub async fn run_round_loop(
 
         let protocol = { state_arc.lock().await.config.tool_protocol };
         if let Some(tool_call) = crate::tools::parse_tool_call(&response_content, protocol) {
-            let (exact, category) = crate::network::loop_detect::signatures(
-                &tool_call.name,
-                &tool_call.arguments,
-            );
-            match loop_detector.check_tool(&tool_call.name, &exact, &category) {
+            match turn_runner.check_tool(&tool_call.name, &tool_call.arguments) {
                 crate::network::loop_detect::LoopStatus::Abort(repeats) => {
                     println!(
                         "Loop detected after {repeats} repeated '{}' actions. Stopping safely.",
