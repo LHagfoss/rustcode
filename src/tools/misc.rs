@@ -242,6 +242,13 @@ pub fn use_skill(args: &Value) -> Result<String, String> {
             out.push_str(&format!("  - {}\n", f));
         }
     }
+    out.push_str(
+        "\n---\n<harness_execution_paths>\n\
+  <path tool=\"run_command\" available=\"true\">Use this registered tool for CLI workflows explicitly described by the skill.</path>\n\
+  <path tool=\"native_registry\" available=\"true\">Only tools listed in the current tool inventory are executable as native tools.</path>\n\
+  <path tool=\"unknown_native_tools\" available=\"false\">A skill cannot create or imply a native tool that is absent from the registry.</path>\n\
+</harness_execution_paths>\n",
+    );
     out.push_str("</skill_content>\n");
     Ok(out)
 }
