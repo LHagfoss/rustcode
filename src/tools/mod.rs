@@ -18,6 +18,112 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// Validate parsed calls before they reach an executor. Text protocols are
+/// intentionally permissive while parsing, but execution must be strict and
+/// fail closed when the model emits an unknown tool or malformed arguments.
+pub fn validate_tool_calls(calls: &[ToolCall]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    let has_control_plane = calls
+        .iter()
+        .any(|call| matches!(tool_safety(&call.name), ToolSafety::ControlPlane));
+
+    if has_control_plane && calls.len() > 1 {
+        return Err(
+            "control-plane calls such as use_skill must be emitted alone; retry the deferred action in the next turn"
+                .to_string(),
+        );
+    }
+
+    for call in calls {
+        let fingerprint = format!("{}:{}", call.name, call.arguments);
+        if !seen.insert(fingerprint) {
+            return Err(format!("duplicate tool call rejected: {}", call.name));
+        }
+
+        let Some(schema) = registered_tool_schema(&call.name) else {
+            return Err(format!(
+                "unknown or unavailable tool '{}'; use only tools in the current registry",
+                call.name
+            ));
+        };
+
+        if let Err(reason) = validate_value_against_schema(&call.arguments, &schema, "$") {
+            return Err(format!("invalid arguments for '{}': {reason}", call.name));
+        }
+    }
+
+    Ok(())
+}
+
+fn registered_tool_schema(name: &str) -> Option<Value> {
+    if let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) {
+        return Some(schema_for_tool(tool.name));
+    }
+    if let Some((_, _, schema)) = collect_mcp_tools().into_iter().find(|(n, _, _)| n == name) {
+        return Some(schema);
+    }
+    if AGENT_TOOL_SPECS.iter().any(|(n, _, _)| *n == name) {
+        return Some(schema_for_agent_tool(name));
+    }
+    None
+}
+
+fn validate_value_against_schema(
+    value: &Value,
+    schema: &Value,
+    path: &str,
+) -> Result<(), String> {
+    let expected = schema.get("type").and_then(Value::as_str).unwrap_or("object");
+    let type_matches = match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        _ => true,
+    };
+    if !type_matches {
+        return Err(format!("{path} must be {expected}"));
+    }
+
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for field in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(field) {
+                    return Err(format!("{path}.{field} is required"));
+                }
+            }
+        }
+        if schema
+            .get("additionalProperties")
+            .and_then(Value::as_bool)
+            == Some(false)
+        {
+            if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+                if let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key)) {
+                    return Err(format!("{path}.{unknown} is not an advertised argument"));
+                }
+            }
+        }
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            for (key, child) in properties {
+                if let Some(actual) = object.get(key) {
+                    validate_value_against_schema(actual, child, &format!("{path}.{key}"))?;
+                }
+            }
+        }
+    }
+    if let Some(items) = schema.get("items")
+        && let Some(array) = value.as_array()
+    {
+        for (index, item) in array.iter().enumerate() {
+            validate_value_against_schema(item, items, &format!("{path}[{index}]"))?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub struct BackgroundTaskInfo {
     pub id: String,
@@ -1490,6 +1596,37 @@ mod tests {
         assert_eq!(isolated.len(), 1);
         assert_eq!(isolated[0].name, "use_skill");
         assert_eq!(deferred, 1);
+    }
+
+    #[test]
+    fn validation_rejects_unknown_duplicate_and_mixed_calls() {
+        let valid = ToolCall {
+            name: "grep".to_string(),
+            arguments: serde_json::json!({"pattern": "TODO"}),
+        };
+        assert!(validate_tool_calls(std::slice::from_ref(&valid)).is_ok());
+        assert!(validate_tool_calls(&[valid.clone(), valid]).is_err());
+        assert!(validate_tool_calls(&[ToolCall {
+            name: "not_registered".to_string(),
+            arguments: serde_json::json!({}),
+        }])
+        .is_err());
+        assert!(validate_tool_calls(&[ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({}),
+        }])
+        .is_err());
+        assert!(validate_tool_calls(&[
+            ToolCall {
+                name: "use_skill".to_string(),
+                arguments: serde_json::json!({"name": "x"}),
+            },
+            ToolCall {
+                name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "x"}),
+            },
+        ])
+        .is_err());
     }
 
     #[test]
