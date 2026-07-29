@@ -820,21 +820,39 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     input_margin
 }
 
+/// snake_case / kebab-case → PascalCase, e.g. `use_skill` → `UseSkill`. Used so
+/// custom and MCP tools render like the built-ins (no underscores, capitalized)
+/// instead of leaking their raw internal names.
+fn to_pascal_case(name: &str) -> String {
+    name.split(['_', '-'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, String) {
     let action_label = match name {
-        "view_file" => "Read",
-        "replace_file_content" | "multi_replace_file_content" => "Edit",
-        "write_to_file" => "Write",
-        "delete_file" => "Delete",
-        "move_file" => "Move",
-        "copy_file" => "Copy",
-        "list_directory" | "glob" => "ListDir",
-        "grep" => "Grep",
-        "find_symbol" => "Symbol",
-        "run_command" => "Bash",
-        "search_web" => "Search",
-        "get_project_map" => "ProjectMap",
-        _ => name,
+        "view_file" => "Read".to_string(),
+        "replace_file_content" | "multi_replace_file_content" => "Edit".to_string(),
+        "write_to_file" => "Write".to_string(),
+        "delete_file" => "Delete".to_string(),
+        "move_file" => "Move".to_string(),
+        "copy_file" => "Copy".to_string(),
+        "list_directory" | "glob" => "ListDir".to_string(),
+        "grep" => "Grep".to_string(),
+        "find_symbol" => "Symbol".to_string(),
+        "run_command" => "Bash".to_string(),
+        "search_web" => "Search".to_string(),
+        "get_project_map" => "ProjectMap".to_string(),
+        // Custom/agent/MCP tools (complete_task, use_skill, spawn_agent, …) and
+        // anything else fall back to a generic PascalCase form.
+        other => to_pascal_case(other),
     };
 
     let target_arg = match name {
@@ -860,10 +878,17 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         "search_web" | "find_symbol" => {
             args.get("query").and_then(|v| v.as_str()).unwrap_or("?").to_string()
         }
+        // Custom tools: surface their most meaningful single argument so the
+        // call reads like UseSkill(git-feature-workflow), SetGoal(...), etc.
+        "use_skill" => args.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        "spawn_agent" => args.get("task").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        "send_agent" => args.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        "set_goal" => args.get("goal").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        "ask_question" => args.get("question").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         _ => "".to_string(),
     };
 
-    (action_label.to_string(), target_arg)
+    (action_label, target_arg)
 }
 
 fn format_tool_call_brief(name: &str, args: &serde_json::Value) -> String {
@@ -1158,15 +1183,15 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     ("", msg.content.as_str())
                 };
                 let action_label = match tool_name {
-                    "view_file" => "Read",
-                    "replace_file_content" | "multi_replace_file_content" => "Edit",
-                    "write_to_file" => "Write",
-                    "list_directory" | "glob" => "ListDir",
-                    "grep" => "Grep",
-                    "run_command" => "Bash",
-                    _ => tool_name,
+                    "view_file" => "Read".to_string(),
+                    "replace_file_content" | "multi_replace_file_content" => "Edit".to_string(),
+                    "write_to_file" => "Write".to_string(),
+                    "list_directory" | "glob" => "ListDir".to_string(),
+                    "grep" => "Grep".to_string(),
+                    "run_command" => "Bash".to_string(),
+                    other => to_pascal_case(other),
                 };
-                (action_label.to_string(), tool_result.lines().next().unwrap_or("").to_string())
+                (action_label, tool_result.lines().next().unwrap_or("").to_string())
             };
 
             lines.push(Line::from(vec![
@@ -1872,6 +1897,33 @@ mod tests {
         let text = extract_selection(&buf, (0, 0), (12, 0), chat_area, 0);
         assert_eq!(text.trim(), "Grep(spinner)", "first two chars must survive");
         assert!(text.starts_with("Gr"), "got: {text:?}");
+    }
+
+    #[test]
+    fn custom_tools_render_pascalcase_with_param() {
+        use super::{format_pi_tool_action, to_pascal_case};
+
+        assert_eq!(to_pascal_case("use_skill"), "UseSkill");
+        assert_eq!(to_pascal_case("complete_task"), "CompleteTask");
+        assert_eq!(to_pascal_case("git-feature-workflow"), "GitFeatureWorkflow");
+
+        let (label, arg) = format_pi_tool_action(
+            "use_skill",
+            &serde_json::json!({"name": "git-feature-workflow"}),
+        );
+        assert_eq!(label, "UseSkill");
+        assert_eq!(arg, "git-feature-workflow");
+
+        // No meaningful param → empty arg, so it renders as CompleteTask().
+        let (label, arg) =
+            format_pi_tool_action("complete_task", &serde_json::json!({"result": "done"}));
+        assert_eq!(label, "CompleteTask");
+        assert_eq!(arg, "");
+
+        // Built-in aliases are unchanged.
+        let (label, _) =
+            format_pi_tool_action("run_command", &serde_json::json!({"command": "ls"}));
+        assert_eq!(label, "Bash");
     }
 
     // The input box reuses extract_selection with its own rect and scroll 0.
