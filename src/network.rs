@@ -1,5 +1,4 @@
 use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker, TokenUsage, ToolConfirmation};
-use crate::app::actions::{generate_auto_recap};
 use futures_util::{StreamExt, future::join_all};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -2641,16 +2640,6 @@ pub async fn process_queue_orchestrator(
             }
 
             final_content = accumulated_content;
-
-            // If auto-recap is enabled, generate a recap of the last turn.
-            let auto_recap_enabled = { state.lock().await.auto_recap_enabled };
-            if auto_recap_enabled {
-                let state_clone = Arc::clone(&state);
-                let client_clone = client.clone();
-                tokio::spawn(async move {
-                    crate::app::actions::generate_auto_recap(&state_clone, &client_clone).await;
-                });
-            }
             dbg_log!(
                 "Stream completed successfully. Content length: {} chars",
                 final_content.len()
@@ -2937,11 +2926,6 @@ pub async fn process_queue_orchestrator(
                         }
 
                         dbg_log!("complete_task called, turning off continuous mode and breaking loop immediately");
-                        let state_clone = Arc::clone(&state);
-                        let client_clone = client.clone();
-                        tokio::spawn(async move {
-                            generate_auto_recap(&state_clone, &client_clone).await;
-                        });
                         s.continuous_mode = false;
                         s.status = AppStatus::Idle;
                         s.history.push(ChatMessage::new(

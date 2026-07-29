@@ -29,10 +29,6 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Copy last assistant reply to clipboard",
     },
     CommandInfo {
-        name: "/recap",
-        desc: "Toggle automatic recap of last turn",
-    },
-    CommandInfo {
         name: "/exit",
         desc: "Exit the app",
     },
