@@ -1843,86 +1843,6 @@ async fn handle_agent_tool(
     }
 }
 
-async fn evaluate_and_expand_prompt(
-    client: &reqwest::Client,
-    config: &crate::config::AppConfig,
-    prompt: &str,
-) -> Option<(bool, String)> {
-    let small_model_name = config.default.small();
-    let (url, model) = crate::config::resolve_model_endpoint(config, small_model_name);
-
-    let system_prompt = "You are a prompt optimizer and task classification assistant.\n\
-Analyze the user's input and output ONLY a JSON object matching this schema: {\"is_goal\": boolean, \"expanded_prompt\": string}.\n\n\
-Rules:\n\
-- is_goal = false for greetings, casual chat, simple questions, or single-step requests.\n\
-- is_goal = true ONLY for multi-step coding tasks requiring editing files, fixing bugs, refactoring, building, or git workflows.\n\n\
-Examples:\n\
-Input: \"hello how are you\"\n\
-Output: {\"is_goal\": false, \"expanded_prompt\": \"hello how are you\"}\n\n\
-Input: \"what is rustcode\"\n\
-Output: {\"is_goal\": false, \"expanded_prompt\": \"what is rustcode\"}\n\n\
-Input: \"fix the scrollbar bug in ui.rs and run tests\"\n\
-Output: {\"is_goal\": true, \"expanded_prompt\": \"Fix the scrollbar rendering bug in src/ui.rs, update the scroll offset logic, and run tests to verify.\"}\n\n\
-Return ONLY valid JSON. No markdown code blocks. No introductory text.";
-
-    let payload = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.1,
-        "max_tokens": 1024,
-    });
-
-    let res = client.post(&url)
-        .json(&payload)
-        .send()
-        .await
-        .ok()?;
-
-    if !res.status().is_success() {
-        return None;
-    }
-
-    #[derive(serde::Deserialize)]
-    struct ExpansionResult {
-        is_goal: bool,
-        expanded_prompt: String,
-    }
-
-    let json: serde_json::Value = res.json().await.ok()?;
-    let text = json.get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("content")?
-        .as_str()?;
-
-    let trimmed = text.trim();
-    let cleaned = trimmed
-        .strip_prefix("```json").unwrap_or(trimmed)
-        .strip_prefix("```").unwrap_or(trimmed)
-        .strip_suffix("```").unwrap_or(trimmed)
-        .trim();
-
-    if let Ok(parsed) = serde_json::from_str::<ExpansionResult>(cleaned) {
-        let p_lower = prompt.trim().to_lowercase();
-        let is_conversational = p_lower.starts_with("hello")
-            || p_lower.starts_with("hi")
-            || p_lower.starts_with("hey")
-            || p_lower.contains("how are you")
-            || p_lower.contains("who are you")
-            || p_lower.contains("what can you do")
-            || p_lower.starts_with("thanks")
-            || p_lower.starts_with("thank you");
-
-        let is_actual_goal = parsed.is_goal && !is_conversational;
-        Some((is_actual_goal, parsed.expanded_prompt))
-    } else {
-        None
-    }
-}
-
 /// Generate a title from the first user message using the small model.
 /// Returns None if the message starts with '/' (slash command).
 pub async fn generate_title(
@@ -1981,46 +1901,6 @@ pub async fn generate_title(
     }
 }
 
-
-/// First-prompt only: run the small-model prompt optimizer / goal detector.
-/// Pops the placeholder status message and, on success, replaces `next_prompt`
-/// with the expanded prompt (and may flip continuous mode on).
-async fn optimize_first_prompt(
-    client: &reqwest::Client,
-    state: &Arc<Mutex<AppState>>,
-    next_prompt: &mut String,
-) {
-    let config = {
-        let s = state.lock().await;
-        s.config.clone()
-    };
-    {
-        let mut s = state.lock().await;
-        push_status_line(&mut s, "Optimizing prompt and detecting goal status...".to_string());
-    }
-    let original_prompt = next_prompt.clone();
-    if let Some((is_goal, _)) =
-        evaluate_and_expand_prompt(client, &config, next_prompt).await
-    {
-        let mut s = state.lock().await;
-        s.history.pop();
-        let small_model_name = config.default.small().to_string();
-        *next_prompt = original_prompt;
-
-        if is_goal {
-            s.continuous_mode = true;
-            push_status_line(
-                &mut s,
-                format!(
-                    "Continuous mode (/goal) activated automatically by prompt classifier ({small_model_name})."
-                ),
-            );
-        }
-    } else {
-        let mut s = state.lock().await;
-        s.history.pop();
-    }
-}
 
 /// Push the incoming prompt (user message, or a background-task wakeup system
 /// note) onto history, persist it, and reset the per-response scratch fields.
@@ -2558,10 +2438,6 @@ pub async fn process_queue_orchestrator(
         if !is_wakeup {
             let s = state.lock().await;
             is_first_prompt = s.history.is_empty();
-        }
-
-        if is_first_prompt {
-            optimize_first_prompt(&client, &state, &mut next_prompt).await;
         }
 
         record_prompt_to_history(&state, is_wakeup, &next_prompt).await;
@@ -3396,7 +3272,10 @@ mod tests {
         ];
         inject_system_reminder(&mut msgs2);
         assert_eq!(msgs2.len(), 4);
-        assert!(msgs2[3]["content"].as_str().unwrap().contains("REMINDER: You are rustcode."));
+        assert!(msgs2[3]["content"]
+            .as_str()
+            .unwrap()
+            .contains("REMINDER: Follow the configured tool protocol"));
         assert!(msgs2[3]["content"].as_str().unwrap().contains("tell me a story"));
     }
 

@@ -673,9 +673,9 @@ pub fn tool_system_prompt(
     if agent_mode == crate::config::AgentMode::Plan {
         p.push_str(
             "CRITICAL: You are operating in PLAN MODE (Read-only / Design mode).\n\
-             - File writing, editing, or deletion tools are disabled.\n\
-             - You can read files and grep the codebase to design solutions, but you CANNOT write or modify files.\n\
-             - Under no circumstances should you call write or edit tools. Explain the plan, and tell the user to switch to Build Mode (press Tab) if they want you to implement the changes.\n\n"
+             - File writing, deletion, shell commands, delegation, and unknown tools are disabled.\n\
+             - You can read, search, ask questions, and design solutions, but you CANNOT modify files or execute commands.\n\
+             - Explain the plan and tell the user to switch to Build Mode (press Tab) to implement it.\n\n"
         );
     }
 
@@ -685,16 +685,16 @@ pub fn tool_system_prompt(
 - For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
 # Rules\n\
 - Be concise and direct. No filler or preamble. Execute tools immediately without conversational fluff.\n\
-- Answer concisely in fewer than 4 lines of text (excluding tool call blocks) unless the user explicitly requests detail.\n\
+- Keep responses concise, but include changed files, verification, blockers, and next steps when relevant.\n\
 - DO NOT add code comments (such as `// ...` or `/* ... */`) to code files unless explicitly requested by the user.\n\
-- After completing a file edit or tool action, stop directly without outputting post-edit summaries or preambles (\"Here is what I changed...\").\n\
+- After edits, inspect the result and run the most relevant check when safe and useful; then report what changed and what was verified.\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
 - Editing an existing file: use `replace_file_content` (pass an `edits` array to batch several changes in one call). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
 - EXECUTE TOOL CALLS SEQUENTIALLY: Emit at most 1 or 2 tool calls at a time. Never output speculative multi-step batches of 5+ tool calls (such as predicting edits, builds, git commits, and PR creations all in a single turn). Execute tools step-by-step and inspect results.\n\
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
 - Match project code style.\n\
 - Before adding new code, study how the nearest EXISTING code does the same thing (sibling functions, other match arms, similar handlers) and mirror its patterns — function signatures, how shared state/locks are passed, error handling. Do NOT invent a new pattern when neighbors establish one; diverging from local conventions is a common source of subtle bugs (deadlocks, double-locks, lifetime issues) that compile fine but break at runtime.\n\
-- Only run tests/builds or commit/push code when explicitly requested by the user.\n\
+- Run focused tests or checks after code changes unless the user says not to; ask before expensive or externally visible operations.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
 - Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations.\n\
 - When the task is complete, output a plain-text final summary (with no tool block).\n\n\
@@ -717,7 +717,7 @@ pub fn tool_system_prompt(
                 - Keys must be \"name\" and \"arguments\".\n\
                 - Pass correct type for arguments (no quotes for numbers/booleans).\n\
                 - Use the ```tool fence ONLY. Never use ```tool_code, ```json, or any other fence for tool calls, and never repeat the same call in multiple fences.\n\
-                - To run several tools at once, emit up to 2 separate ```tool blocks (one JSON object each); they execute in parallel.\n\n"
+                - Emit one tool call at a time. The harness executes calls sequentially so later calls can depend on earlier results.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
