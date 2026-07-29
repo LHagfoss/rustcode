@@ -2970,15 +2970,20 @@ pub async fn process_queue_orchestrator(
                 s.history
                     .push(ChatMessage::new("assistant", &final_content));
 
-                let feedback = "tool_error: The tool call block was malformed or could not be parsed. \
+                let reason = crate::tools::diagnose_failed_tool_call(&final_content)
+                    .map(|r| format!("{r}\n\n"))
+                    .unwrap_or_default();
+                let feedback = format!(
+                    "tool_error: The tool call block was malformed or could not be parsed. {reason}\
 Please output a single, complete, valid tool call block inside a ```tool fenced block using JSON format:\n\n\
 ```tool\n\
-{\"name\": \"tool_name\", \"arguments\": {...}}\n\
+{{\"name\": \"tool_name\", \"arguments\": {{...}}}}\n\
 ```\n\n\
-Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans.";
+Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans."
+                );
 
                 s.history
-                    .push(ChatMessage::new("tool", feedback.to_string()));
+                    .push(ChatMessage::new("tool", feedback));
                 crate::config::save_history(&s.history);
                 s.current_response.clear();
                 s.status = AppStatus::Streaming;
