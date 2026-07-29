@@ -160,7 +160,15 @@ pub async fn handle_enter(
             }
             "/quota" => {
                 trigger_quota_fetch(&s, state, client);
-            }            "/new" => {
+            }
+            "/update" => {
+                s.input_buffer.clear();
+                s.cursor_position = 0;
+                drop(s);
+                trigger_update(state, client);
+                return false;
+            }
+            "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
                 start_new_session(&mut s);
@@ -1130,6 +1138,7 @@ pub fn build_info_text() -> String {
         Description: A terminal-based coding assistant.\n\n\
         Basic Slash Commands:\n\
         \x20 /changelog - View the latest changes.\n\
+        \x20 /update    - Upgrade rustcode via Homebrew if a newer version exists.\n\
         \x20 /help      - Get help on commands and keybindings.\n\
         \x20 /tools     - List available tools for the harness.\n",
         env!("CARGO_PKG_VERSION")
@@ -1186,6 +1195,76 @@ pub fn select_picker_model(s: &mut AppState) {
             format!("Switched to model profile '{}'", profile.name),
         ));
     }
+}
+
+/// Check the Homebrew tap for a newer rustcode and, if one exists, run
+/// `brew upgrade rustcode`. Spawns its own task so the UI stays live during the
+/// network fetch and the (potentially slow) brew upgrade. Progress and results
+/// are pushed into the chat history as system messages.
+pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
+    let state_clone = Arc::clone(state);
+    let client_clone = client.clone();
+    tokio::spawn(async move {
+        {
+            let mut s = state_clone.lock().await;
+            s.history.push(ChatMessage::new(
+                "system",
+                "Checking lhagfoss/tap for updates...",
+            ));
+        }
+
+        let current = crate::update::current_version();
+        let latest = match crate::update::latest_tap_version(&client_clone).await {
+            Some(v) => v,
+            None => {
+                let mut s = state_clone.lock().await;
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "Update check failed: couldn't read the Homebrew tap. Try: brew upgrade rustcode",
+                ));
+                return;
+            }
+        };
+
+        // Only act when the tap actually has something newer.
+        if latest <= current {
+            let mut s = state_clone.lock().await;
+            s.history.push(ChatMessage::new(
+                "system",
+                format!(
+                    "rustcode v{} is up to date.",
+                    crate::update::format_version(current)
+                ),
+            ));
+            return;
+        }
+
+        {
+            let mut s = state_clone.lock().await;
+            s.history.push(ChatMessage::new(
+                "system",
+                format!(
+                    "Update available!: run `brew upgrade rustcode` or /update in rustcode\n  v{} -> v{}\nRunning brew upgrade rustcode...",
+                    crate::update::format_version(current),
+                    crate::update::format_version(latest)
+                ),
+            ));
+        }
+
+        let result = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
+        let mut s = state_clone.lock().await;
+        let msg = match result {
+            Ok(Ok(())) => format!(
+                "Installed rustcode v{}. Restart rustcode to get the new version.",
+                crate::update::format_version(latest)
+            ),
+            Ok(Err(e)) => {
+                format!("brew upgrade failed: {e}\nRun manually: brew upgrade rustcode")
+            }
+            Err(e) => format!("update task error: {e}"),
+        };
+        s.history.push(ChatMessage::new("system", msg));
+    });
 }
 
 pub fn trigger_quota_fetch(

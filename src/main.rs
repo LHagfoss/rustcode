@@ -12,6 +12,7 @@ mod raw_cli;
 mod skills;
 mod symbols;
 mod tools;
+mod update;
 mod ui;
 mod discord_rpc;
 
@@ -974,6 +975,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         "/quota" => {
                                             crate::app::actions::trigger_quota_fetch(
                                                 &s,
+                                                &app_state,
+                                                &client,
+                                            );
+                                        }
+                                        "/update" => {
+                                            crate::app::actions::trigger_update(
                                                 &app_state,
                                                 &client,
                                             );
