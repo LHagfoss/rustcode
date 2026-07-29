@@ -221,7 +221,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "run_command",
         description: "Run a shell command and return its stdout/stderr and exit code.                       Supports an optional working directory, environment overrides, timeout (default 120s),                       and background execution ('background': true). Note: Interactive 'sudo' requiring passwords is disabled; use non-privileged commands or 'sudo -n'.",
-        arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
+        arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "env": "optional object of environment variable overrides", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
         handler: exec::run_command,
         requires_confirmation: true,
     },
@@ -366,12 +366,28 @@ fn schema_from_arguments(arguments: &str) -> Value {
             // then fail to read via `as_array()`. Emit a real array schema so the
             // model passes structured data. Everything else stays an optional
             // string (handlers coerce scalars via parse_json_number/bool).
+            let token_is_bool = matches!(
+                token.as_str(),
+                "ignore_case" | "background" | "overwrite" | "is_multi_select"
+            );
+            let token_is_number = matches!(
+                token.as_str(),
+                "start_line" | "end_line" | "content_offset" | "timeout_ms"
+            );
+            let token_is_object = token == "env";
             if is_array_literal || desc.to_lowercase().contains("array") {
                 prop.insert("type".into(), Value::String("array".into()));
                 prop.insert(
                     "items".into(),
                     serde_json::json!({ "type": "object" }),
                 );
+            } else if token_is_bool || desc.to_lowercase().contains(" bool") {
+                prop.insert("type".into(), Value::String("boolean".into()));
+            } else if token_is_number {
+                prop.insert("type".into(), Value::String("integer".into()));
+            } else if token_is_object {
+                prop.insert("type".into(), Value::String("object".into()));
+                prop.insert("additionalProperties".into(), Value::Bool(true));
             } else {
                 prop.insert("type".into(), Value::String("string".into()));
             }
@@ -943,8 +959,7 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert_eq!(props["pattern"]["type"], "string");
         assert_eq!(props["pattern"]["description"], "regex pattern");
-        // Non-string values (bool/number) still register as optional string props.
-        assert_eq!(props["ignore_case"]["type"], "string");
+        assert_eq!(props["ignore_case"]["type"], "boolean");
         assert!(props.contains_key("path"));
     }
 
@@ -965,6 +980,30 @@ mod tests {
         );
         let props2 = schema2["properties"].as_object().unwrap();
         assert_eq!(props2["options"]["type"], "array");
+    }
+
+    #[test]
+    fn native_schema_preserves_scalar_and_object_argument_types() {
+        let tools = native_tools_schema(true);
+        let run = tools
+            .iter()
+            .find(|tool| tool["function"]["name"] == "run_command")
+            .unwrap();
+        let props = run["function"]["parameters"]["properties"]
+            .as_object()
+            .unwrap();
+        assert_eq!(props["background"]["type"], "boolean");
+        assert_eq!(props["timeout_ms"]["type"], "integer");
+        assert_eq!(props["env"]["type"], "object");
+
+        let write = tools
+            .iter()
+            .find(|tool| tool["function"]["name"] == "write_to_file")
+            .unwrap();
+        assert_eq!(
+            write["function"]["parameters"]["properties"]["overwrite"]["type"],
+            "boolean"
+        );
     }
 
     #[test]

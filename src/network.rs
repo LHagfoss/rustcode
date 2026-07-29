@@ -2338,7 +2338,9 @@ async fn prepare_turn_request(
 /// against pointless repeats (a `view_file` re-read is only blocked when the
 /// file is unchanged on disk), agent tools go through `handle_agent_tool`, and
 /// everything else through `confirm_and_execute` (confirmation already handled
-/// by the caller). If any mutating tool ran, a single cached compiler check is
+/// by the caller). Read-only batches run concurrently; any batch containing a
+/// mutating or agent tool runs in request order so conflicting edits cannot race.
+/// If any mutating tool succeeds, a single cached compiler check is
 /// appended to the first mutating tool's result so build errors surface inline.
 #[allow(clippy::too_many_arguments)]
 async fn execute_tool_batch(
@@ -2347,7 +2349,6 @@ async fn execute_tool_batch(
     cancel_token: &tokio_util::sync::CancellationToken,
     tool_calls: &[(String, serde_json::Value)],
     approved: bool,
-    made_edits: bool,
     edit_root: &Option<std::path::PathBuf>,
     compile_dirty: &mut bool,
     compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
@@ -2365,7 +2366,12 @@ async fn execute_tool_batch(
             .collect::<Vec<_>>();
     }
 
-    dbg_log!("Executing {} tool calls in parallel", tool_calls.len());
+    let can_run_in_parallel = tool_calls.iter().all(|(name, _)| is_read_only_tool(name));
+    dbg_log!(
+        "Executing {} tool calls {}",
+        tool_calls.len(),
+        if can_run_in_parallel { "in parallel" } else { "sequentially" }
+    );
     let mut futures = Vec::new();
     for (name, args) in tool_calls {
         let client_clone = client.clone();
@@ -2480,8 +2486,20 @@ async fn execute_tool_batch(
         };
         futures.push(fut);
     }
-    let mut results = join_all(futures).await;
-    if made_edits {
+    let mut results = if can_run_in_parallel {
+        join_all(futures).await
+    } else {
+        let mut ordered = Vec::with_capacity(futures.len());
+        for future in futures {
+            ordered.push(future.await);
+        }
+        ordered
+    };
+    let successful_mutation = results.iter().any(|(name, result, _)| {
+        is_mutating_tool(name) && !result.trim_start().to_ascii_lowercase().starts_with("error")
+    });
+    if successful_mutation {
+        *compile_dirty = true;
         {
             let mut s = state.lock().await;
             s.recent_read_calls.clear();
@@ -2778,11 +2796,7 @@ pub async fn process_queue_orchestrator(
                     // Remember that code was touched, and where, so the finish
                     // gate can compile-check before accepting a "done".
                     if is_mutating_tool(name) {
-                        made_edits = true;
                         edit_root = Some(get_tool_project_root(name, args));
-                        // A mutating tool will run this round — invalidate the
-                        // cached compiler result so the next check recompiles.
-                        compile_dirty = true;
                     }
                 }
                 match loop_status {
@@ -2919,12 +2933,18 @@ pub async fn process_queue_orchestrator(
                         &cancel_token,
                         &tool_calls,
                         approved,
-                        made_edits,
                         &edit_root,
                         &mut compile_dirty,
                         &mut compile_cache,
                     )
                     .await;
+
+                    if results.iter().any(|(name, result, _)| {
+                        is_mutating_tool(name)
+                            && !result.trim_start().to_ascii_lowercase().starts_with("error")
+                    }) {
+                        made_edits = true;
+                    }
 
                     if cancel_token.is_cancelled() {
                         dbg_log!("Orchestrator: Cancelled during tool execution");

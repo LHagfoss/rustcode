@@ -1,3 +1,11 @@
+## [Unreleased]
+
+### Fixed
+- Harden native tool schemas, tool execution ordering, and MCP tool-list refresh behavior ([`HEAD`](https://github.com/LHagfoss/rustcode/commit/HEAD))
+
+### Performance
+- Cache the static prompt and native tool schema while keeping runtime context volatile ([#97](https://github.com/LHagfoss/rustcode/pull/97) / [`7461b61`](https://github.com/LHagfoss/rustcode/commit/7461b61))
+
 ## [v0.6.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.6.0) - 2026-07-29
 ### Features
 - Add `/update` to check the Homebrew tap and upgrade rustcode when a newer version exists ([#96](https://github.com/LHagfoss/rustcode/pull/96) / [`8aa4aae`](https://github.com/LHagfoss/rustcode/commit/8aa4aae))

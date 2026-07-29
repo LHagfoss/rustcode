@@ -61,6 +61,11 @@ impl McpClient {
             tokio::sync::oneshot::Sender<Value>,
         >::new()));
         let pending_clone = Arc::clone(&pending);
+        let next_id = Arc::new(Mutex::new(1));
+        let next_id_reader = Arc::clone(&next_id);
+        let tools = Arc::new(StdMutex::new(Vec::new()));
+        let tools_reader = Arc::clone(&tools);
+        let tx_reader = tx.clone();
 
         // Stdin writer task
         tokio::spawn(async move {
@@ -82,18 +87,44 @@ impl McpClient {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if let Ok(msg) = serde_json::from_str::<Value>(&line)
-                    && let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
+                if let Ok(msg) = serde_json::from_str::<Value>(&line) {
+                    if let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
                         let mut pend = pending_clone.lock().await;
                         if let Some(sender) = pend.remove(&id) {
                             let _ = sender.send(msg);
                         }
+                    } else if msg.get("method").and_then(|m| m.as_str())
+                        == Some("notifications/tools/list_changed")
+                    {
+                        let tx = tx_reader.clone();
+                        let pending = Arc::clone(&pending_clone);
+                        let next_id = Arc::clone(&next_id_reader);
+                        let tools = Arc::clone(&tools_reader);
+                        tokio::spawn(async move {
+                            let id = {
+                                let mut ids = next_id.lock().await;
+                                let id = *ids;
+                                *ids += 1;
+                                id
+                            };
+                            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                            pending.lock().await.insert(id, reply_tx);
+                            if tx.send(json!({
+                                "jsonrpc": "2.0", "id": id, "method": "tools/list", "params": {}
+                            })).await.is_ok()
+                                && let Ok(reply) = reply_rx.await
+                                && let Some(updated) = reply.get("result").and_then(|r| r.get("tools")).and_then(|t| t.as_array())
+                            {
+                                if let Ok(mut known_tools) = tools.lock() {
+                                    *known_tools = updated.clone();
+                                    bump_mcp_generation();
+                                }
+                            }
+                        });
                     }
+                }
             }
         });
-
-        let next_id = Arc::new(Mutex::new(1));
-        let tools = Arc::new(StdMutex::new(Vec::new()));
 
         let client = Arc::new(Self {
             name: name.clone(),
@@ -266,6 +297,26 @@ mod tests {
         let tools = client.get_tools().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].get("name").unwrap().as_str().unwrap(), "test_tool");
+
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn refreshes_tools_after_list_changed_notification() {
+        let generation_before = mcp_generation();
+        let script = "read line; echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}'; read line; read line; echo '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"before\"}]}}'; echo '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}'; read line; echo '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"tools\":[{\"name\":\"after\"}]}}'; sleep 1";
+        let client = McpClient::start(
+            "refresh_mock".to_string(),
+            "sh".to_string(),
+            vec!["-c".to_string(), script.to_string()],
+        )
+        .await
+        .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let tools = client.get_tools().unwrap();
+        assert_eq!(tools[0]["name"], "after");
+        assert!(mcp_generation() > generation_before);
 
         client.shutdown().await;
     }
