@@ -44,6 +44,9 @@ pub(crate) use events::{ToolResult, ToolResultMetadata};
 #[path = "network/history.rs"]
 pub(crate) mod history;
 
+#[path = "network/runner.rs"]
+pub(crate) mod runner;
+
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
@@ -1557,8 +1560,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             model_name
         );
         let mut accumulated_content = String::new();
-        let mut continuation_count = 0;
-        const MAX_CONTINUATIONS: usize = 5;
+        let mut turn_runner = runner::TurnRunner::new();
 
         loop {
             let mut current_msgs = msgs.clone();
@@ -1593,14 +1595,11 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             let chunk_content = stream_buffer.lock().await.content.clone();
             accumulated_content.push_str(&chunk_content);
 
-            if continuation_count < MAX_CONTINUATIONS
-                && is_cut_off(&accumulated_content, finish_reason.as_deref())
-            {
+            if turn_runner.allow_continuation(is_cut_off(&accumulated_content, finish_reason.as_deref())) {
                 dbg_log!(
                     "Subagent LLM response cut off. Auto-continuing (round {})...",
-                    continuation_count + 1
+                    turn_runner.continuation_count()
                 );
-                continuation_count += 1;
                 continue;
             }
             break;
@@ -2665,8 +2664,7 @@ pub async fn process_queue_orchestrator(
                 model_name
             );
             let mut accumulated_content = String::new();
-            let mut continuation_count = 0;
-            const MAX_CONTINUATIONS: usize = 5;
+            let mut turn_runner = runner::TurnRunner::new();
             let mut stream_err = None;
             let mut response_finish_reason: Option<String> = None;
 
@@ -2732,14 +2730,11 @@ pub async fn process_queue_orchestrator(
                     s.current_response = accumulated_content.clone();
                 }
 
-                if continuation_count < MAX_CONTINUATIONS
-                    && is_cut_off(&accumulated_content, finish_reason.as_deref())
-                {
+                if turn_runner.allow_continuation(is_cut_off(&accumulated_content, finish_reason.as_deref())) {
                     dbg_log!(
                         "Orchestrator: LLM response cut off. Auto-continuing (round {})...",
-                        continuation_count + 1
+                        turn_runner.continuation_count()
                     );
-                    continuation_count += 1;
                     continue;
                 }
                 break;
