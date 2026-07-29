@@ -166,8 +166,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
 
-    #[serde(default = "default_max_tool_rounds")]
-    pub max_tool_rounds: usize,
     #[serde(default)]
     pub agent_mode: AgentMode,
     #[serde(default = "default_false")]
@@ -189,10 +187,6 @@ pub enum AgentMode {
 
 
 
-
-fn default_max_tool_rounds() -> usize {
-    1000
-}
 
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -252,7 +246,6 @@ impl Default for AppConfig {
             last_active_session_id: None,
             mcp_servers: Vec::new(),
 
-            max_tool_rounds: 1000,
             agent_mode: AgentMode::default(),
             discord_rpc_enabled: false,
         }
