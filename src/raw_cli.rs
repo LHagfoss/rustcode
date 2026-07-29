@@ -247,6 +247,89 @@ pub async fn run_round_loop(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn build_messages_keeps_system_prompt_first() {
+        let state = build_state("inspect the project", None);
+
+        let messages = build_messages(&state).await;
+
+        assert_eq!(
+            messages.first().and_then(|m| m["role"].as_str()),
+            Some("system")
+        );
+        assert!(
+            messages[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("rustcode")
+        );
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "inspect the project");
+    }
+
+    #[tokio::test]
+    async fn build_messages_encodes_tool_results_as_user_context() {
+        let mut state = build_state("make the check pass", None);
+        state
+            .history
+            .push(ChatMessage::new("assistant", "I will inspect the error."));
+        state
+            .history
+            .push(ChatMessage::new("tool", "run_command: error output"));
+
+        let messages = build_messages(&state).await;
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(
+            messages[3]["content"],
+            "<tool_result>\nrun_command: error output\n</tool_result>"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_messages_excludes_slash_commands_from_model_history() {
+        let mut state = build_state("continue", None);
+        state.history.push(ChatMessage::new("user", "/delegate"));
+        state.history.push(ChatMessage::new("assistant", "working"));
+
+        let messages = build_messages(&state).await;
+
+        assert!(messages.iter().all(|message| {
+            message["content"]
+                .as_str()
+                .map(|content| !content.starts_with('/'))
+                .unwrap_or(true)
+        }));
+        assert_eq!(
+            messages.last().and_then(|m| m["content"].as_str()),
+            Some("working")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_messages_preserves_multimodal_user_content() {
+        let mut state = build_state("look at this", None);
+        state.history.push(ChatMessage::new(
+            "user",
+            "before ![image](file:///tmp/missing.png) after",
+        ));
+
+        let messages = build_messages(&state).await;
+        let content = messages.last().unwrap()["content"].as_array().unwrap();
+
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "before ");
+        assert_eq!(content[1]["text"], "![image](file:///tmp/missing.png)");
+        assert_eq!(content[2]["text"], " after");
+    }
+}
+
 /// Entry point for the raw CLI agent mode.
 pub async fn run_raw_cli(
     prompt: &str,
