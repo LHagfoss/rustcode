@@ -194,13 +194,22 @@ impl ChatMessage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubAgentStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
 /// A subagent spawned by the main agent via the spawn_agent tool. Keeps its
-/// own conversation history so the main agent can follow up with send_agent.
+/// own conversation history and explicit lifecycle state.
 pub struct SubAgent {
     pub id: u32,
     pub task: String,
     pub model: Option<String>,
     pub history: Vec<ChatMessage>,
+    pub status: SubAgentStatus,
 }
 
 /// One entry of the agent's persistent task plan, managed via the `todo_write` tool.
