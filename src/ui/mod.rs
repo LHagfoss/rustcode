@@ -1174,8 +1174,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 None
             };
 
-            let (action, arg) = if let Some((name, args)) = prev_tool_info {
-                format_pi_tool_action(&name, &args)
+            let (action, arg) = if let Some(tool_call) = prev_tool_info {
+                format_pi_tool_action(&tool_call.name, &tool_call.arguments)
             } else {
                 let (tool_name, tool_result) = if let Some(pos) = msg.content.find(": ") {
                     (&msg.content[..pos], &msg.content[pos + 2..])
@@ -1279,12 +1279,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             ]));
             lines.push(Line::from(""));
         } else if msg.role == "assistant" {
-            if let Some((name, args)) =
+            if let Some(tool_call) =
                 crate::tools::parse_tool_call(&msg.content, state.config.tool_protocol)
             {
                 let has_following_tool_result = state.history.get(msg_idx + 1).is_some_and(|m| m.role == "tool");
                 if !has_following_tool_result {
-                    let (action, arg) = format_pi_tool_action(&name, &args);
+                    let (action, arg) =
+                        format_pi_tool_action(&tool_call.name, &tool_call.arguments);
                     lines.push(Line::from(vec![
                         Span::styled(
                             action,
@@ -1370,7 +1371,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let is_tool_syntax = crate::tools::is_tool_call_start(&state.current_response);
 
             let should_hide_stream = match parsed_tool {
-                Some((ref tool_name, _)) => !crate::tools::is_code_editing_tool(tool_name),
+                Some(ref tool_call) => !crate::tools::is_code_editing_tool(&tool_call.name),
                 None => is_tool_syntax,
             };
 
@@ -1386,7 +1387,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                 let status_msg = random_statuses[(elapsed_secs as usize / 2) % random_statuses.len()];
 
-                let tool_label = parsed_tool.map(|(n, _)| format!("Executing {n}...")).unwrap_or_else(|| status_msg.to_string());
+                let tool_label = parsed_tool
+                    .map(|call| format!("Executing {}...", call.name))
+                    .unwrap_or_else(|| status_msg.to_string());
 
                 lines.push(Line::from(vec![
                     Span::styled(
