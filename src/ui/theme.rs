@@ -8,7 +8,7 @@ pub const COLOR_MUTED: Color = Color::Rgb(136, 146, 154);
 pub const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93);
 pub const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101);
 pub const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);
-pub const COLOR_SELECTION: Color = Color::Rgb(60, 95, 150);
+pub const COLOR_SELECTION: Color = Color::Rgb(240, 240, 240);
 pub const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
 
 pub fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool) -> Style {
