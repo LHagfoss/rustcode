@@ -42,6 +42,90 @@ pub(crate) enum FinishReason {
     Unknown(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResponseSource {
+    Native,
+    Fenced,
+    Tagged,
+    RepairedJson,
+    PlainText,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ModelResponse {
+    pub raw_content: String,
+    pub events: Vec<AgentEvent>,
+    pub source: ResponseSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnState {
+    AwaitingModel,
+    AwaitingApproval,
+    ExecutingTools,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnInput {
+    ModelFinished { has_tool_calls: bool },
+    ApprovalGranted,
+    ApprovalDenied,
+    ToolsFinished,
+    Cancelled,
+    Failed,
+}
+
+pub(crate) fn transition_turn(state: TurnState, input: TurnInput) -> TurnState {
+    match input {
+        TurnInput::Cancelled => TurnState::Cancelled,
+        TurnInput::Failed => TurnState::Failed,
+        TurnInput::ModelFinished { has_tool_calls: true } => TurnState::AwaitingApproval,
+        TurnInput::ModelFinished { has_tool_calls: false } => TurnState::Completed,
+        TurnInput::ApprovalGranted => TurnState::ExecutingTools,
+        TurnInput::ApprovalDenied => TurnState::Completed,
+        TurnInput::ToolsFinished => TurnState::AwaitingModel,
+    }
+}
+
+pub(crate) fn response_source(
+    content: &str,
+    protocol: crate::config::ToolProtocol,
+    has_tool_calls: bool,
+) -> ResponseSource {
+    if !has_tool_calls {
+        return ResponseSource::PlainText;
+    }
+    if protocol == crate::config::ToolProtocol::ApiNative {
+        return ResponseSource::Native;
+    }
+    if content.contains("```tool") {
+        return ResponseSource::Fenced;
+    }
+    if content.contains("[TOOL_CALLS]") {
+        return ResponseSource::Tagged;
+    }
+    ResponseSource::RepairedJson
+}
+
+pub(crate) fn normalize_response(
+    content: &str,
+    provider_finish_reason: Option<&str>,
+    protocol: crate::config::ToolProtocol,
+) -> ModelResponse {
+    let events = classify_response(content, provider_finish_reason, protocol);
+    let has_tool_calls = events
+        .iter()
+        .any(|event| matches!(event, AgentEvent::ToolCall(_)));
+    ModelResponse {
+        raw_content: content.to_string(),
+        source: response_source(content, protocol, has_tool_calls),
+        events,
+    }
+}
+
 impl FinishReason {
     pub fn from_provider(value: Option<&str>) -> Self {
         match value {
@@ -182,6 +266,41 @@ mod tests {
 
         assert_eq!(events[0], AgentEvent::TextDelta("done".to_string()));
         assert_eq!(events[1], AgentEvent::Finished(FinishReason::Stop));
+    }
+
+    #[test]
+    fn records_response_source_without_changing_event_contract() {
+        let response = normalize_response(
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"x\"}}\n```",
+            Some("stop"),
+            crate::config::ToolProtocol::Json,
+        );
+        assert_eq!(response.source, ResponseSource::Fenced);
+        assert!(matches!(response.events[0], AgentEvent::ToolCall(_)));
+        assert_eq!(response.raw_content, "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"x\"}}\n```");
+    }
+
+    #[test]
+    fn turn_state_transitions_have_terminal_safety_precedence() {
+        assert_eq!(
+            transition_turn(
+                TurnState::AwaitingModel,
+                TurnInput::ModelFinished { has_tool_calls: true }
+            ),
+            TurnState::AwaitingApproval
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingApproval, TurnInput::ApprovalGranted),
+            TurnState::ExecutingTools
+        );
+        assert_eq!(
+            transition_turn(TurnState::ExecutingTools, TurnInput::ToolsFinished),
+            TurnState::AwaitingModel
+        );
+        assert_eq!(
+            transition_turn(TurnState::ExecutingTools, TurnInput::Cancelled),
+            TurnState::Cancelled
+        );
     }
 
     #[test]

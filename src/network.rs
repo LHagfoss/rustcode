@@ -2807,11 +2807,17 @@ pub async fn process_queue_orchestrator(
             }
 
             let protocol = { state.lock().await.config.tool_protocol };
-            let response_events = events::classify_response(
+            let model_response = events::normalize_response(
                 &final_content,
                 response_finish_reason.as_deref(),
                 protocol,
             );
+            dbg_log!(
+                "Model response normalized from {:?}; raw length={} chars",
+                model_response.source,
+                model_response.raw_content.len()
+            );
+            let response_events = model_response.events;
             let parsed_tool_calls = response_events
                 .iter()
                 .filter_map(|event| match event {
