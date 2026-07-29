@@ -1264,20 +1264,14 @@ async fn confirm_and_execute(
     display_name: &str,
     bypass_confirm: bool,
 ) -> (String, Option<String>) {
-    // Plan Mode Enforcement: block mutating/writing tools
-    {
+    let (agent_mode, auto_confirm) = {
         let s = state.lock().await;
-        if s.agent_mode == crate::config::AgentMode::Plan
-            && !crate::tools::allowed_in_plan_mode(name)
-        {
-            return (
-                "error: Plan mode is active. This tool is not allowed because it can modify workspace state, execute commands, delegate work, or has no declared safety capability. \
-                 I can read, search, ask questions, and design solutions, but I cannot modify files or execute commands right now. \
-                 If you want me to implement these changes, please switch to Build mode (press Tab)."
-                    .to_string(),
-                None,
-            );
-        }
+        (s.agent_mode, s.auto_confirm)
+    };
+    if let crate::tools::AuthorizationDecision::Deny(reason) =
+        crate::tools::authorize_tool(name, agent_mode, auto_confirm, bypass_confirm)
+    {
+        return (format!("error: {reason}"), None);
     }
 
     struct ToolCleanup {
@@ -1299,9 +1293,10 @@ async fn confirm_and_execute(
 
     let diff_opt = get_diff_preview(name, args);
 
-    let needs_confirm = !bypass_confirm
-        && crate::tools::needs_confirmation(name)
-        && !state.lock().await.auto_confirm;
+    let needs_confirm = matches!(
+        crate::tools::authorize_tool(name, agent_mode, auto_confirm, bypass_confirm),
+        crate::tools::AuthorizationDecision::RequireConfirmation
+    );
     let mut result = if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
         let tool_name = name.to_string();
@@ -2796,9 +2791,17 @@ pub async fn process_queue_orchestrator(
 
                     if !auto_confirm {
                         for call in &tool_calls {
-                            if crate::tools::needs_confirmation(&call.name)
-                                && !crate::tools::is_agent_tool(&call.name)
-                            {
+                            let mode = { state.lock().await.agent_mode };
+                            let decision = crate::tools::authorize_tool(
+                                &call.name,
+                                mode,
+                                false,
+                                false,
+                            );
+                            if matches!(
+                                decision,
+                                crate::tools::AuthorizationDecision::RequireConfirmation
+                            ) && !crate::tools::is_agent_tool(&call.name) {
                                 let path =
                                     if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str()) {
                                         p.to_string()

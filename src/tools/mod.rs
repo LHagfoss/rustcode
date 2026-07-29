@@ -285,6 +285,37 @@ pub enum ToolCapability {
     SessionState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorizationDecision {
+    Allow,
+    RequireConfirmation,
+    Deny(String),
+}
+
+/// Single authorization policy used by every execution path. Unknown tools
+/// are never silently treated as safe; registered MCP tools must still opt in
+/// through confirmation unless the caller has explicitly bypassed it.
+pub fn authorize_tool(
+    name: &str,
+    mode: crate::config::AgentMode,
+    auto_confirm: bool,
+    bypass_confirmation: bool,
+) -> AuthorizationDecision {
+    if mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(name) {
+        return AuthorizationDecision::Deny(
+            "Plan mode blocks workspace mutation, command execution, delegation, and unknown tools"
+                .to_string(),
+        );
+    }
+    if !bypass_confirmation
+        && !auto_confirm
+        && (needs_confirmation(name) || matches!(tool_safety(name), ToolSafety::Unknown))
+    {
+        return AuthorizationDecision::RequireConfirmation;
+    }
+    AuthorizationDecision::Allow
+}
+
 /// Return the capabilities of a built-in or agent tool.
 /// Unknown tools (including MCP tools) deliberately receive no capabilities;
 /// callers must opt them into a mode explicitly instead of assuming safety.
@@ -1627,6 +1658,26 @@ mod tests {
             },
         ])
         .is_err());
+    }
+
+    #[test]
+    fn authorization_is_centralized_and_conservative() {
+        assert!(matches!(
+            authorize_tool("write_to_file", crate::config::AgentMode::Plan, true, false),
+            AuthorizationDecision::Deny(_)
+        ));
+        assert_eq!(
+            authorize_tool("write_to_file", crate::config::AgentMode::Build, false, false),
+            AuthorizationDecision::RequireConfirmation
+        );
+        assert_eq!(
+            authorize_tool("mcp_unknown", crate::config::AgentMode::Build, false, false),
+            AuthorizationDecision::RequireConfirmation
+        );
+        assert_eq!(
+            authorize_tool("grep", crate::config::AgentMode::Build, false, false),
+            AuthorizationDecision::Allow
+        );
     }
 
     #[test]
