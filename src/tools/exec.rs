@@ -1,6 +1,5 @@
 use serde_json::Value;
 use std::io::Read;
-use std::path::PathBuf;
 use std::process::{Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -61,8 +60,9 @@ pub fn run_command(args: &Value) -> Result<String, String> {
                 None
             }
         }
-        Some(other) => Some(PathBuf::from(other)),
-        None => None,
+        Some(other) => Some(crate::tools::resolve_tool_path(other)),
+        None => super::ACTIVE_WORKSPACE_ROOT
+            .with(|root| root.borrow().clone()),
     };
 
     if let Some(ref cwd_path) = resolved_cwd
