@@ -242,7 +242,7 @@ async fn force_compact_internal(
 
 /// Prefix that marks a compaction summary message, used to detect and preserve
 /// prior summaries during incremental compaction.
-const SUMMARY_MARKER: &str = "[Session History Summary]";
+pub(crate) const SUMMARY_MARKER: &str = "[Session History Summary]";
 
 async fn generate_summary(
     client: &reqwest::Client,
