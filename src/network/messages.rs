@@ -1,24 +1,43 @@
 pub(crate) const RESPONSE_RESERVE_TOKENS: u32 = 1024;
 
-fn estimate_msg_chars(msg: &serde_json::Value) -> usize {
+fn estimate_msg_tokens(msg: &serde_json::Value) -> u32 {
     match msg.get("content") {
-        Some(serde_json::Value::String(s)) => s.len(),
-        Some(other) => other.to_string().len(),
+        Some(serde_json::Value::String(s)) => crate::network::count_tokens(s),
+        Some(other) => crate::network::count_tokens(&other.to_string()),
         None => 0,
     }
 }
 
-/// Drop the oldest non-system messages until the payload fits the token
-/// budget (~4 chars/token), keeping the system prompt and the latest
-/// exchange. Returns how many messages were dropped.
+/// Drop complete oldest conversation exchanges until the payload fits the
+/// token budget. System messages and the latest exchange are preserved; an
+/// assistant/tool pair is never orphaned by trimming. Returns how many
+/// messages were dropped.
 pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_tokens: u32) -> usize {
-    let budget_chars = budget_tokens as usize * 4;
-    let mut total: usize = msgs.iter().map(estimate_msg_chars).sum();
+    let mut total: u32 = msgs.iter().map(estimate_msg_tokens).sum();
     let mut dropped = 0;
-    while total > budget_chars && msgs.len() > 3 {
-        total -= estimate_msg_chars(&msgs[1]);
-        msgs.remove(1);
-        dropped += 1;
+    while total > budget_tokens && msgs.len() > 3 {
+        let Some(start) = msgs.iter().position(|m| m.get("role").and_then(|r| r.as_str()) != Some("system")) else {
+            break;
+        };
+
+        // Remove from the first user turn through the message before the next
+        // user turn. This keeps each assistant/tool response attached to the
+        // request that produced it.
+        let end = msgs
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, m)| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .map(|(i, _)| i)
+            .unwrap_or(start + 1);
+        let remove_end = end.min(msgs.len().saturating_sub(2));
+        if remove_end <= start {
+            break;
+        }
+        for msg in msgs.drain(start..remove_end) {
+            total = total.saturating_sub(estimate_msg_tokens(&msg));
+            dropped += 1;
+        }
     }
     dropped
 }
@@ -114,5 +133,21 @@ mod tests {
         let mut msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
         append_to_last_message(&mut msgs, "");
         assert_eq!(msgs[0]["content"], "hi");
+    }
+
+    #[test]
+    fn trim_removes_complete_old_exchange() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "system", "content": "system"}),
+            serde_json::json!({"role": "user", "content": "old request"}),
+            serde_json::json!({"role": "assistant", "content": "old tool call"}),
+            serde_json::json!({"role": "user", "content": "old tool result"}),
+            serde_json::json!({"role": "assistant", "content": "latest answer"}),
+        ];
+        let dropped = trim_msgs_to_budget(&mut msgs, 8);
+        assert_eq!(dropped, 2);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["content"], "old tool result");
+        assert_eq!(msgs[2]["content"], "latest answer");
     }
 }
