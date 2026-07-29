@@ -120,6 +120,21 @@ pub(crate) fn parse_json_number(v: &Value) -> Option<u64> {
     }
 }
 
+/// Read a JSON array argument, tolerating a provider that delivered it as a
+/// stringified JSON array (`"[{...}]"`) instead of a real array — some strict
+/// function-calling backends do this despite the schema.
+pub(crate) fn coerce_array(v: &Value) -> Option<Vec<Value>> {
+    if let Some(a) = v.as_array() {
+        return Some(a.clone());
+    }
+    if let Some(s) = v.as_str()
+        && let Ok(Value::Array(a)) = serde_json::from_str::<Value>(s)
+    {
+        return Some(a);
+    }
+    None
+}
+
 pub(crate) fn parse_json_bool(v: &Value) -> Option<bool> {
     if let Some(b) = v.as_bool() {
         Some(b)
@@ -146,13 +161,6 @@ pub struct Tool {
 }
 
 pub const TOOLS: &[Tool] = &[
-    Tool {
-        name: "check_match",
-        description: "Check football match data from api-sports.io.                      Useful for checking live scores during matches or finding specific games.                     Example: check_match with team='Norway' and date='2026-07-11'",
-        arguments: r#"{"date": "YYYY-MM-DD format required", "team": "optional team name filter", "status": "optional status (LIVE, FT, NS)"}"#,
-        handler: misc::check_match,
-        requires_confirmation: false,
-    },
     Tool {
         name: "ask_question",
         description: "Ask the user a multiple-choice question to clarify underspecified requirements, solicit design choices, or select an option. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands.",
@@ -343,13 +351,30 @@ fn schema_from_arguments(arguments: &str) -> Value {
             while m < bytes.len() && (bytes[m] as char).is_whitespace() {
                 m += 1;
             }
+            // An array-literal value (`[...]`) marks a structured param even
+            // when no description string follows it (e.g. `options`).
+            let is_array_literal = m < bytes.len() && bytes[m] == b'[';
             let desc = if m < bytes.len() && bytes[m] == b'"' {
                 read_string(m + 1).0
             } else {
                 String::new()
             };
             let mut prop = serde_json::Map::new();
-            prop.insert("type".into(), Value::String("string".into()));
+            // Params whose description says "array" carry structured JSON (e.g.
+            // `edits`, `replacements`). Advertising them as `string` makes
+            // strict ApiNative providers stringify the value, which the handlers
+            // then fail to read via `as_array()`. Emit a real array schema so the
+            // model passes structured data. Everything else stays an optional
+            // string (handlers coerce scalars via parse_json_number/bool).
+            if is_array_literal || desc.to_lowercase().contains("array") {
+                prop.insert("type".into(), Value::String("array".into()));
+                prop.insert(
+                    "items".into(),
+                    serde_json::json!({ "type": "object" }),
+                );
+            } else {
+                prop.insert("type".into(), Value::String("string".into()));
+            }
             if !desc.is_empty() {
                 prop.insert("description".into(), Value::String(desc));
             }
@@ -454,7 +479,7 @@ pub fn tool_system_prompt(
 - DO NOT add code comments (such as `// ...` or `/* ... */`) to code files unless explicitly requested by the user.\n\
 - After completing a file edit or tool action, stop directly without outputting post-edit summaries or preambles (\"Here is what I changed...\").\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
-- For editing, use `replace_file_content`. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
+- Editing an existing file: use `replace_file_content` (pass an `edits` array to batch several changes in one call). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
 - EXECUTE TOOL CALLS SEQUENTIALLY: Emit at most 1 or 2 tool calls at a time. Never output speculative multi-step batches of 5+ tool calls (such as predicting edits, builds, git commits, and PR creations all in a single turn). Execute tools step-by-step and inspect results.\n\
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
 - Match project code style.\n\
@@ -913,6 +938,33 @@ mod tests {
         // Non-string values (bool/number) still register as optional string props.
         assert_eq!(props["ignore_case"]["type"], "string");
         assert!(props.contains_key("path"));
+    }
+
+    #[test]
+    fn schema_from_arguments_marks_array_params() {
+        // Description says "array" → real array schema, not string.
+        let schema = schema_from_arguments(
+            r#"{"path": "file path", "edits": "optional array of {old_string, new_string}"}"#,
+        );
+        let props = schema["properties"].as_object().unwrap();
+        assert_eq!(props["edits"]["type"], "array");
+        assert_eq!(props["edits"]["items"]["type"], "object");
+        assert_eq!(props["path"]["type"], "string");
+
+        // Array-literal value with no description → still an array.
+        let schema2 = schema_from_arguments(
+            r#"{"question": "q", "options": ["Option 1", "Option 2"]}"#,
+        );
+        let props2 = schema2["properties"].as_object().unwrap();
+        assert_eq!(props2["options"]["type"], "array");
+    }
+
+    #[test]
+    fn coerce_array_accepts_real_and_stringified() {
+        assert_eq!(coerce_array(&serde_json::json!([1, 2])).unwrap().len(), 2);
+        assert_eq!(coerce_array(&serde_json::json!("[1, 2, 3]")).unwrap().len(), 3);
+        assert!(coerce_array(&serde_json::json!("not json")).is_none());
+        assert!(coerce_array(&serde_json::json!(5)).is_none());
     }
 
     #[test]
