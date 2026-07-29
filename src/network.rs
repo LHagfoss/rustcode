@@ -2928,11 +2928,6 @@ pub async fn process_queue_orchestrator(
                         dbg_log!("complete_task called, turning off continuous mode and breaking loop immediately");
                         s.continuous_mode = false;
                         s.status = AppStatus::Idle;
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            "Continuous mode completed."
-                        ));
-
                         // Extract task result text from the complete_task call
                         let task_result_summary = tool_calls
                             .iter()

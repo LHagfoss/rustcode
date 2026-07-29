@@ -1036,7 +1036,7 @@ pub async fn summarize_session(
         }
 
         // Drive the existing status-bar spinner + elapsed timer.
-        s.history.push(ChatMessage::new("system", "Summarizing session..."));
+
         s.status = AppStatus::Streaming;
         s.generation_start_time = Some(started);
         s.current_response.clear();
