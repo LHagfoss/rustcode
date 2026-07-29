@@ -41,7 +41,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -1702,6 +1702,57 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             state.selected_text = None;
         }
     }
+
+    // Transient notice toast, painted above everything (even modals).
+    render_notice(f, state);
+}
+
+/// How long a notice toast stays on screen before it fades out.
+const NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Computes the top-right rect for a notice toast holding `text_width` columns
+/// of text, or `None` if the screen is too small. Box = text + side padding +
+/// borders, inset one cell from the top-right corner and clamped to the screen.
+fn notice_rect(area: ratatui::layout::Rect, text_width: u16) -> Option<ratatui::layout::Rect> {
+    let box_h = 3u16;
+    let box_w = (text_width + 4).min(area.width.saturating_sub(2)).max(3);
+    if area.width < box_w + 1 || area.height < box_h + 1 {
+        return None;
+    }
+    let x = area.x + area.width - box_w - 1;
+    let y = area.y + 1;
+    Some(ratatui::layout::Rect::new(x, y, box_w, box_h))
+}
+
+/// Draws a small auto-expiring toast in the top-right corner. Cleared lazily
+/// once expired; the ≤100ms idle redraw guarantees it disappears on time.
+fn render_notice(f: &mut Frame, state: &mut AppState) {
+    let Some((msg, shown_at)) = state.notice.as_ref() else {
+        return;
+    };
+    if shown_at.elapsed() >= NOTICE_TTL {
+        state.notice = None;
+        return;
+    }
+
+    let Some(rect) = notice_rect(f.area(), msg.width() as u16) else {
+        return;
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(COLOR_TIP))
+        .style(Style::default().bg(COLOR_PANEL));
+    let para = Paragraph::new(Line::from(Span::styled(
+        msg.clone(),
+        Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL),
+    )))
+    .block(block)
+    .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(Clear, rect);
+    f.render_widget(para, rect);
 }
 
 fn highlight_selection(
@@ -1897,6 +1948,29 @@ mod tests {
         let text = extract_selection(&buf, (0, 0), (12, 0), chat_area, 0);
         assert_eq!(text.trim(), "Grep(spinner)", "first two chars must survive");
         assert!(text.starts_with("Gr"), "got: {text:?}");
+    }
+
+    #[test]
+    fn notice_toast_sits_top_right_and_clamps() {
+        use super::notice_rect;
+        use ratatui::layout::Rect;
+
+        let screen = Rect::new(0, 0, 100, 40);
+        let r = notice_rect(screen, 18).unwrap();
+        // 18 text + 4 padding/borders = 22 wide.
+        assert_eq!(r.width, 22);
+        assert_eq!(r.height, 3);
+        // Right-aligned with a one-column gutter, one row down from the top.
+        assert_eq!(r.x, 100 - 22 - 1);
+        assert_eq!(r.y, 1);
+        assert!(r.x + r.width < screen.width, "must stay on screen");
+
+        // Very wide text is clamped to the screen width.
+        let wide = notice_rect(screen, 500).unwrap();
+        assert!(wide.x + wide.width <= screen.width);
+
+        // Tiny screen → no toast.
+        assert!(notice_rect(Rect::new(0, 0, 2, 1), 5).is_none());
     }
 
     #[test]
