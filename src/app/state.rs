@@ -210,6 +210,9 @@ pub struct SubAgent {
     pub model: Option<String>,
     pub history: Vec<ChatMessage>,
     pub status: SubAgentStatus,
+    pub write_access: bool,
+    pub allowed_paths: Vec<String>,
+    pub verification_command: Option<String>,
 }
 
 /// One entry of the agent's persistent task plan, managed via the `todo_write` tool.
