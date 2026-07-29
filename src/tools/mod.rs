@@ -357,6 +357,36 @@ pub fn is_agent_tool(name: &str) -> bool {
     )
 }
 
+/// Execution capability used by the scheduler to decide which calls may
+/// safely run concurrently. Unknown and stateful tools are conservative by
+/// default and must not be parallelized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolSafety {
+    ReadOnly,
+    WorkspaceMutation,
+    ProcessControl,
+    Interactive,
+    Delegation,
+    Unknown,
+}
+
+pub fn tool_safety(name: &str) -> ToolSafety {
+    match name {
+        "view_file" | "list_directory" | "grep" | "glob" | "get_time" | "find_symbol"
+        | "get_project_map" | "search_web" => ToolSafety::ReadOnly,
+        "replace_file_content" | "multi_replace_file_content" | "write_to_file"
+        | "delete_file" | "move_file" | "copy_file" => ToolSafety::WorkspaceMutation,
+        "run_command" | "background_output" | "write_stdin" => ToolSafety::ProcessControl,
+        "ask_question" => ToolSafety::Interactive,
+        "spawn_agent" | "send_agent" | "set_goal" | "todo_write" => ToolSafety::Delegation,
+        _ => ToolSafety::Unknown,
+    }
+}
+
+pub fn supports_parallel_execution(name: &str) -> bool {
+    matches!(tool_safety(name), ToolSafety::ReadOnly)
+}
+
 /// Agent tools that live outside the `TOOLS` table. `(name, description, args)`
 /// mirrors what `tool_system_prompt` lists for the text protocols, reused here
 /// to build the native function schema.
@@ -1404,5 +1434,16 @@ mod tests {
         assert!(!allowed_in_plan_mode("run_command"));
         assert!(!allowed_in_plan_mode("spawn_agent"));
         assert!(!allowed_in_plan_mode("unknown_mcp_tool"));
+    }
+
+    #[test]
+    fn tool_safety_is_conservative_and_parallelizes_only_reads() {
+        assert_eq!(tool_safety("grep"), ToolSafety::ReadOnly);
+        assert!(supports_parallel_execution("view_file"));
+        assert_eq!(tool_safety("write_to_file"), ToolSafety::WorkspaceMutation);
+        assert!(!supports_parallel_execution("write_to_file"));
+        assert_eq!(tool_safety("run_command"), ToolSafety::ProcessControl);
+        assert_eq!(tool_safety("unknown_mcp_tool"), ToolSafety::Unknown);
+        assert!(!supports_parallel_execution("unknown_mcp_tool"));
     }
 }
