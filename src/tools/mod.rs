@@ -547,8 +547,8 @@ pub fn isolate_control_plane_call(calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize
 const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     (
         "spawn_agent",
-        "Delegate a task to a fresh subagent.",
-        r#"{"task": "task description"}"#,
+        "Delegate a task to a read-only subagent. Write access, allowed paths, and verification must be explicit.",
+        r#"{"task": "task description", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test"}"#,
     ),
     (
         "send_agent",
@@ -816,7 +816,7 @@ fn schema_for_tool(name: &str) -> Value {
 fn schema_for_agent_tool(name: &str) -> Value {
     match name {
         "spawn_agent" => {
-            serde_json::json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]})
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"}},"required":["task"]})
         }
         "send_agent" => {
             serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"}},"required":["id","message"]})
