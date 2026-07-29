@@ -744,6 +744,13 @@ pub fn tool_system_prompt(
 - Use `todo_write` ONLY for complex code refactors or multi-stage tasks (3+ steps). For routine tasks, git operations, single-file edits, or simple questions, DO NOT use `todo_write` — execute tools directly. Do not update `todo_write` after every single command; only update it when completing major milestones.\n\n"
     );
 
+    p.push_str(
+        "# Delegation Policy\n\\
+- Do not spawn subagents unless the user explicitly requests delegation/parallel agent work or applicable project instructions require it.\n\\
+- Before delegating, identify the critical path and keep blockers in the main agent. Delegate only bounded, self-contained side tasks with clear outputs and disjoint write scopes.\n\\
+- Review every subagent result and inspect its workspace changes before treating the task as complete.\n\\n",
+    );
+
     p.push_str("# Tool Format\n");
     match protocol {
         crate::config::ToolProtocol::Json => {
@@ -1445,5 +1452,16 @@ mod tests {
         assert_eq!(tool_safety("run_command"), ToolSafety::ProcessControl);
         assert_eq!(tool_safety("unknown_mcp_tool"), ToolSafety::Unknown);
         assert!(!supports_parallel_execution("unknown_mcp_tool"));
+    }
+
+    #[test]
+    fn prompt_makes_delegation_explicitly_opt_in() {
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        assert!(prompt.contains("Do not spawn subagents unless the user explicitly requests"));
+        assert!(prompt.contains("Review every subagent result"));
     }
 }
