@@ -6,11 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
-mod filesystem;
-mod search;
 mod exec;
+mod filesystem;
 mod misc;
-
+mod search;
 
 #[allow(dead_code)]
 pub struct BackgroundTaskInfo {
@@ -26,8 +25,9 @@ pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTas
     TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-pub(crate) static WAKEUP_CALLBACK: OnceLock<Box<dyn Fn(String, String, String) + Send + Sync + 'static>> =
-    OnceLock::new();
+pub(crate) static WAKEUP_CALLBACK: OnceLock<
+    Box<dyn Fn(String, String, String) + Send + Sync + 'static>,
+> = OnceLock::new();
 
 pub fn register_wakeup_callback<F>(cb: F)
 where
@@ -67,13 +67,14 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
 
     if found_sandbox
         && let Some(session_id) = get_active_session_id()
-            && let Some(sandbox_dir) = crate::config::get_active_session_sandbox_dir(&session_id) {
-                let mut resolved = sandbox_dir;
-                for part in parts_sandbox {
-                    resolved.push(part);
-                }
-                return resolved;
-            }
+        && let Some(sandbox_dir) = crate::config::get_active_session_sandbox_dir(&session_id)
+    {
+        let mut resolved = sandbox_dir;
+        for part in parts_sandbox {
+            resolved.push(part);
+        }
+        return resolved;
+    }
 
     // Check if the path contains a component named "artifacts"
     let mut parts_artifacts = Vec::new();
@@ -89,15 +90,14 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
 
     if found_artifacts
         && let Some(session_id) = get_active_session_id()
-            && let Some(artifacts_dir) =
-                crate::config::get_active_session_artifacts_dir(&session_id)
-            {
-                let mut resolved = artifacts_dir;
-                for part in parts_artifacts {
-                    resolved.push(part);
-                }
-                return resolved;
-            }
+        && let Some(artifacts_dir) = crate::config::get_active_session_artifacts_dir(&session_id)
+    {
+        let mut resolved = artifacts_dir;
+        for part in parts_artifacts {
+            resolved.push(part);
+        }
+        return resolved;
+    }
 
     if raw_path.starts_with("~/") || raw_path == "~" {
         if let Ok(home) = std::env::var("HOME") {
@@ -196,7 +196,6 @@ pub const TOOLS: &[Tool] = &[
         handler: search::list_directory,
         requires_confirmation: false,
     },
-
     Tool {
         name: "delete_file",
         description: "Delete a file from the filesystem",
@@ -287,7 +286,7 @@ pub const TOOLS: &[Tool] = &[
         arguments: r#"{"result": "summary of what was achieved and final results"}"#,
         handler: misc::complete_task_tool,
         requires_confirmation: false,
-     },
+    },
     Tool {
         name: "use_skill",
         description: "Load a skill by name to get its instructions and available files.",
@@ -301,17 +300,36 @@ pub const TOOLS: &[Tool] = &[
 pub const MAX_TOOL_ROUNDS: usize = 60;
 
 pub fn is_agent_tool(name: &str) -> bool {
-    matches!(name, "spawn_agent" | "send_agent" | "set_goal" | "todo_write")
+    matches!(
+        name,
+        "spawn_agent" | "send_agent" | "set_goal" | "todo_write"
+    )
 }
 
 /// Agent tools that live outside the `TOOLS` table. `(name, description, args)`
 /// mirrors what `tool_system_prompt` lists for the text protocols, reused here
 /// to build the native function schema.
 const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
-    ("spawn_agent", "Delegate a task to a fresh subagent.", r#"{"task": "task description"}"#),
-    ("send_agent", "Send a follow-up message to a running subagent.", r#"{"id": "subagent id", "message": "message text"}"#),
-    ("set_goal", "Set a new long-running task and switch the agent to continuous autoloop mode.", r#"{"goal": "goal description"}"#),
-    ("todo_write", "Replace the persistent task plan with a list of steps.", r#"{"todos": "list of steps, each with content, status and priority"}"#),
+    (
+        "spawn_agent",
+        "Delegate a task to a fresh subagent.",
+        r#"{"task": "task description"}"#,
+    ),
+    (
+        "send_agent",
+        "Send a follow-up message to a running subagent.",
+        r#"{"id": "subagent id", "message": "message text"}"#,
+    ),
+    (
+        "set_goal",
+        "Set a new long-running task and switch the agent to continuous autoloop mode.",
+        r#"{"goal": "goal description"}"#,
+    ),
+    (
+        "todo_write",
+        "Replace the persistent task plan with a list of steps.",
+        r#"{"todos": "list of steps, each with content, status and priority"}"#,
+    ),
 ];
 
 /// Derive a permissive JSON Schema object from a tool's human-readable
@@ -368,10 +386,7 @@ fn schema_from_arguments(arguments: &str) -> Value {
             // string (handlers coerce scalars via parse_json_number/bool).
             if is_array_literal || desc.to_lowercase().contains("array") {
                 prop.insert("type".into(), Value::String("array".into()));
-                prop.insert(
-                    "items".into(),
-                    serde_json::json!({ "type": "object" }),
-                );
+                prop.insert("items".into(), serde_json::json!({ "type": "object" }));
             } else {
                 prop.insert("type".into(), Value::String("string".into()));
             }
@@ -429,7 +444,7 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
             "function": {
                 "name": t.name,
                 "description": t.description,
-                "parameters": schema_from_arguments(t.arguments),
+                "parameters": schema_for_tool(t.name),
             }
         }));
     }
@@ -444,18 +459,144 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
         }));
     }
     if include_agent_tools {
-        for (name, desc, args) in AGENT_TOOL_SPECS {
+        for (name, desc, _args) in AGENT_TOOL_SPECS {
             tools.push(serde_json::json!({
                 "type": "function",
                 "function": {
                     "name": name,
                     "description": desc,
-                    "parameters": schema_from_arguments(args),
+                    "parameters": schema_for_agent_tool(name),
                 }
             }));
         }
     }
     tools
+}
+
+/// Canonical JSON Schemas for built-in tools.
+///
+/// The text protocol still uses `Tool::arguments` as compact documentation, but
+/// native providers must receive real types, required fields, and nested item
+/// schemas. Keeping this in one place prevents the API-native contract from
+/// silently drifting away from the handlers.
+fn schema_for_tool(name: &str) -> Value {
+    match name {
+        "ask_question" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "question": { "type": "string", "description": "Question to ask the user" },
+                "options": { "type": "array", "items": { "type": "string" }, "description": "Choices shown to the user" },
+                "is_multi_select": { "type": "boolean", "default": false }
+            },
+            "required": ["question", "options"]
+        }),
+        "get_time" | "get_project_map" => serde_json::json!({
+            "type": "object", "properties": {}, "additionalProperties": false
+        }),
+        "grep" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": { "type": "string" }, "path": { "type": "string" },
+                "include": { "type": "string" }, "ignore_case": { "type": "boolean", "default": false }
+            }, "required": ["pattern"]
+        }),
+        "glob" => serde_json::json!({
+            "type": "object", "properties": {
+                "pattern": { "type": "string" }, "path": { "type": "string" }
+            }, "required": ["pattern"]
+        }),
+        "list_directory" => serde_json::json!({
+            "type": "object", "properties": { "path": { "type": "string" } }
+        }),
+        "delete_file" => serde_json::json!({
+            "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"]
+        }),
+        "move_file" | "copy_file" => serde_json::json!({
+            "type": "object", "properties": {
+                "src": { "type": "string" }, "dest": { "type": "string" }
+            }, "required": ["src", "dest"]
+        }),
+        "run_command" => serde_json::json!({
+            "type": "object", "properties": {
+                "command": { "type": "string" }, "cwd": { "type": "string" },
+                "timeout_ms": { "type": "integer", "minimum": 1 },
+                "background": { "type": "boolean", "default": false },
+                "env": { "type": "object", "additionalProperties": { "type": "string" } }
+            }, "required": ["command"]
+        }),
+        "manage_task" => serde_json::json!({
+            "type": "object", "properties": {
+                "action": { "type": "string", "enum": ["list", "status", "kill"] },
+                "task_id": { "type": "string" }
+            }, "required": ["action"]
+        }),
+        "search_web" => serde_json::json!({
+            "type": "object", "properties": {
+                "query": { "type": "string" }, "domain": { "type": "string" }
+            }, "required": ["query"]
+        }),
+        "find_symbol" => serde_json::json!({
+            "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"]
+        }),
+        "view_file" => serde_json::json!({
+            "type": "object", "properties": {
+                "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
+                "end_line": { "type": "integer", "minimum": 1 }, "content_offset": { "type": "integer", "minimum": 0 }
+            }, "required": ["path"]
+        }),
+        "replace_file_content" => serde_json::json!({
+            "type": "object", "properties": {
+                "path": { "type": "string" }, "target_content": { "type": "string" },
+                "replacement_content": { "type": "string" },
+                "edits": { "type": "array", "items": { "type": "object", "properties": {
+                    "old_string": { "type": "string" }, "new_string": { "type": "string" },
+                    "start_line": { "type": "integer" }, "end_line": { "type": "integer" }
+                }, "required": ["old_string", "new_string"] } }
+            }, "required": ["path"]
+        }),
+        "multi_replace_file_content" => serde_json::json!({
+            "type": "object", "properties": {
+                "path": { "type": "string" }, "replacements": { "type": "array", "items": { "type": "object", "properties": {
+                    "start_line": { "type": "integer" }, "end_line": { "type": "integer" },
+                    "target_content": { "type": "string" }, "replacement_content": { "type": "string" }
+                }, "required": ["start_line", "end_line", "target_content", "replacement_content"] } }
+            }, "required": ["path", "replacements"]
+        }),
+        "write_to_file" => serde_json::json!({
+            "type": "object", "properties": {
+                "path": { "type": "string" }, "content": { "type": "string" },
+                "overwrite": { "type": "boolean", "default": false }
+            }, "required": ["path", "content"]
+        }),
+        "complete_task" => serde_json::json!({
+            "type": "object", "properties": { "result": { "type": "string" } }, "required": ["result"]
+        }),
+        "use_skill" => serde_json::json!({
+            "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"]
+        }),
+        _ => schema_from_arguments("{}"),
+    }
+}
+
+fn schema_for_agent_tool(name: &str) -> Value {
+    match name {
+        "spawn_agent" => {
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]})
+        }
+        "send_agent" => {
+            serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"}},"required":["id","message"]})
+        }
+        "set_goal" => {
+            serde_json::json!({"type":"object","properties":{"goal":{"type":"string"}},"required":["goal"]})
+        }
+        "todo_write" => serde_json::json!({
+            "type":"object", "properties": {"todos": {"type":"array", "items": {"type":"object", "properties": {
+                "content":{"type":"string"}, "status":{"type":"string","enum":["pending","in_progress","completed"]},
+                "priority":{"type":"string","enum":["high","medium","low"]}
+            }, "required":["content"]}}}, "required":["todos"]
+        }),
+        _ => schema_from_arguments("{}"),
+    }
 }
 
 pub fn tool_system_prompt(
@@ -469,12 +610,17 @@ pub fn tool_system_prompt(
     if !skills.is_empty() {
         p.push_str("\n# Available Skills\n");
         p.push_str("Skills provide specialized instructions and workflows for specific tasks.\n");
-        p.push_str("Use the 'use_skill' tool to load a skill when a task matches its description.\n\n");
+        p.push_str(
+            "Use the 'use_skill' tool to load a skill when a task matches its description.\n\n",
+        );
         p.push_str("<available_skills>\n");
         for skill in &skills {
             p.push_str("  <skill>\n");
             p.push_str(&format!("    <name>{}</name>\n", skill.name));
-            p.push_str(&format!("    <description>{}</description>\n", skill.description));
+            p.push_str(&format!(
+                "    <description>{}</description>\n",
+                skill.description
+            ));
             p.push_str("  </skill>\n");
         }
         p.push_str("</available_skills>\n\n");
@@ -636,11 +782,11 @@ fn repair_json(s: &str) -> String {
     if repaired.ends_with(',') {
         repaired.pop();
     }
-    
+
     let mut in_string = false;
     let mut escaped = false;
     let mut stack = Vec::new();
-    
+
     for c in repaired.chars() {
         if escaped {
             escaped = false;
@@ -661,20 +807,21 @@ fn repair_json(s: &str) -> String {
                 stack.push(']');
             } else if (c == '}' || c == ']')
                 && let Some(&last) = stack.last()
-                    && last == c {
-                        stack.pop();
-                    }
+                && last == c
+            {
+                stack.pop();
+            }
         }
     }
-    
+
     if in_string {
         repaired.push('"');
     }
-    
+
     while let Some(close_char) = stack.pop() {
         repaired.push(close_char);
     }
-    
+
     repaired
 }
 
@@ -703,9 +850,10 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<(String, Value)>) {
                 } else {
                     let pattern = &*BRACE_OBJ_RE;
                     if let Some(mat) = pattern.find(raw_args)
-                        && let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str()) {
-                            calls.push((name, json_val));
-                        }
+                        && let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str())
+                    {
+                        calls.push((name, json_val));
+                    }
                 }
             }
         }
@@ -730,9 +878,10 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<(String, Value)>) {
         if is_tool_fence {
             let repaired = repair_json(block.trim());
             if let Ok(json_value) = serde_json::from_str::<Value>(&repaired)
-                && let Some(call) = extract_tool_call(&json_value) {
-                    calls.push(call);
-                }
+                && let Some(call) = extract_tool_call(&json_value)
+            {
+                calls.push(call);
+            }
         }
 
         if next.is_empty() {
@@ -807,9 +956,10 @@ fn parse_tool_calls_impl(
             cleaned.to_string()
         };
         if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse)
-            && let Some(call) = extract_tool_call(&json_value) {
-                calls.push(call);
-            }
+            && let Some(call) = extract_tool_call(&json_value)
+        {
+            calls.push(call);
+        }
     }
 
     // Try to find JSON objects in the text
@@ -818,9 +968,10 @@ fn parse_tool_calls_impl(
         for mat in pattern.find_iter(text) {
             let json_str = mat.as_str();
             if let Ok(json_value) = serde_json::from_str::<Value>(json_str)
-                && let Some(call) = extract_tool_call(&json_value) {
-                    calls.push(call);
-                }
+                && let Some(call) = extract_tool_call(&json_value)
+            {
+                calls.push(call);
+            }
         }
     }
 
@@ -851,7 +1002,10 @@ pub fn is_code_editing_tool(name: &str) -> bool {
 
 pub fn is_tool_call_start(text: &str) -> bool {
     let trimmed = text.trim();
-    trimmed.contains("```tool") || trimmed.contains("[TOOL_CALLS]") || (trimmed.starts_with('{') && (trimmed.contains("\"name\"") || trimmed.contains("\"tool\"")))
+    trimmed.contains("```tool")
+        || trimmed.contains("[TOOL_CALLS]")
+        || (trimmed.starts_with('{')
+            && (trimmed.contains("\"name\"") || trimmed.contains("\"tool\"")))
 }
 
 pub fn parse_tool_call(
@@ -868,45 +1022,45 @@ pub fn execute(name: &str, args: &Value) -> String {
                 && tools
                     .iter()
                     .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
-                {
-                    let handle = tokio::runtime::Handle::current();
-                    let client_clone = Arc::clone(client);
-                    let name_owned = name.to_string();
-                    let args_clone = args.clone();
+            {
+                let handle = tokio::runtime::Handle::current();
+                let client_clone = Arc::clone(client);
+                let name_owned = name.to_string();
+                let args_clone = args.clone();
 
-                    let res = handle.block_on(async move {
-                        client_clone
-                            .call(
-                                "tools/call",
-                                serde_json::json!({
-                                    "name": name_owned,
-                                    "arguments": args_clone
-                                }),
-                            )
-                            .await
-                    });
+                let res = handle.block_on(async move {
+                    client_clone
+                        .call(
+                            "tools/call",
+                            serde_json::json!({
+                                "name": name_owned,
+                                "arguments": args_clone
+                            }),
+                        )
+                        .await
+                });
 
-                    return match res {
-                        Ok(val) => {
-                            if let Some(content_arr) = val
-                                .get("result")
-                                .and_then(|r| r.get("content"))
-                                .and_then(|c| c.as_array())
-                            {
-                                let mut text_parts = Vec::new();
-                                for item in content_arr {
-                                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                                        text_parts.push(text.to_string());
-                                    }
+                return match res {
+                    Ok(val) => {
+                        if let Some(content_arr) = val
+                            .get("result")
+                            .and_then(|r| r.get("content"))
+                            .and_then(|c| c.as_array())
+                        {
+                            let mut text_parts = Vec::new();
+                            for item in content_arr {
+                                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                    text_parts.push(text.to_string());
                                 }
-                                text_parts.join("\n")
-                            } else {
-                                serde_json::to_string_pretty(&val).unwrap_or_default()
                             }
+                            text_parts.join("\n")
+                        } else {
+                            serde_json::to_string_pretty(&val).unwrap_or_default()
                         }
-                        Err(e) => format!("error: MCP tool call failed: {e}"),
-                    };
-                }
+                    }
+                    Err(e) => format!("error: MCP tool call failed: {e}"),
+                };
+            }
         }
     }
 
@@ -960,9 +1114,8 @@ mod tests {
         assert_eq!(props["path"]["type"], "string");
 
         // Array-literal value with no description → still an array.
-        let schema2 = schema_from_arguments(
-            r#"{"question": "q", "options": ["Option 1", "Option 2"]}"#,
-        );
+        let schema2 =
+            schema_from_arguments(r#"{"question": "q", "options": ["Option 1", "Option 2"]}"#);
         let props2 = schema2["properties"].as_object().unwrap();
         assert_eq!(props2["options"]["type"], "array");
     }
@@ -970,7 +1123,10 @@ mod tests {
     #[test]
     fn coerce_array_accepts_real_and_stringified() {
         assert_eq!(coerce_array(&serde_json::json!([1, 2])).unwrap().len(), 2);
-        assert_eq!(coerce_array(&serde_json::json!("[1, 2, 3]")).unwrap().len(), 3);
+        assert_eq!(
+            coerce_array(&serde_json::json!("[1, 2, 3]")).unwrap().len(),
+            3
+        );
         assert!(coerce_array(&serde_json::json!("not json")).is_none());
         assert!(coerce_array(&serde_json::json!(5)).is_none());
     }
@@ -999,7 +1155,11 @@ mod tests {
         assert!(names.contains(&"todo_write"));
         // Excluded when not requested.
         let no_agents = native_tools_schema(false);
-        assert!(!no_agents.iter().any(|t| t["function"]["name"] == "spawn_agent"));
+        assert!(
+            !no_agents
+                .iter()
+                .any(|t| t["function"]["name"] == "spawn_agent")
+        );
     }
 
     #[test]
@@ -1010,11 +1170,13 @@ mod tests {
             "{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\"}}"
         );
         assert_eq!(
-            repair_json("{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello"),
+            repair_json(
+                "{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello"
+            ),
             "{\"name\": \"test\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello\"}}"
         );
     }
-    
+
     #[test]
     fn test_parse_truncated_tool_call() {
         let text = "```tool\n{\"name\": \"write_to_file\", \"arguments\": {\"path\": \"/foo\", \"content\": \"hello";
@@ -1022,13 +1184,17 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "write_to_file");
         assert_eq!(calls[0].1.get("path").unwrap().as_str().unwrap(), "/foo");
-        assert_eq!(calls[0].1.get("content").unwrap().as_str().unwrap(), "hello");
+        assert_eq!(
+            calls[0].1.get("content").unwrap().as_str().unwrap(),
+            "hello"
+        );
     }
 
     #[test]
     fn diagnose_reports_specific_json_error() {
         // Invalid JSON (bad escape + trailing junk) that repair can't rescue.
-        let text = "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"a\\zb\"} garbage}\n```";
+        let text =
+            "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"a\\zb\"} garbage}\n```";
         let diag = diagnose_failed_tool_call(text);
         assert!(diag.is_some(), "should diagnose an unparseable fence");
         let d = diag.unwrap();
@@ -1048,13 +1214,19 @@ mod tests {
         let calls1 = parse_tool_calls(text1, crate::config::ToolProtocol::Json);
         assert_eq!(calls1.len(), 1);
         assert_eq!(calls1[0].0, "glob");
-        assert_eq!(calls1[0].1.get("pattern").unwrap().as_str().unwrap(), "**/*.rs");
+        assert_eq!(
+            calls1[0].1.get("pattern").unwrap().as_str().unwrap(),
+            "**/*.rs"
+        );
 
         let text2 = "Let me check...[TOOL_CALLS]glob\":{\"pattern\":\"**/*.rs\"}";
         let calls2 = parse_tool_calls(text2, crate::config::ToolProtocol::Json);
         assert_eq!(calls2.len(), 1);
         assert_eq!(calls2[0].0, "glob");
-        assert_eq!(calls2[0].1.get("pattern").unwrap().as_str().unwrap(), "**/*.rs");
+        assert_eq!(
+            calls2[0].1.get("pattern").unwrap().as_str().unwrap(),
+            "**/*.rs"
+        );
 
         let text3 = "Plan:[TOOL_CALLS]todo_write[ARGS]{\"todos\": [{\"content\": \"Fix bug\"}]}";
         let calls3 = parse_tool_calls(text3, crate::config::ToolProtocol::Json);
@@ -1073,7 +1245,10 @@ mod tests {
         assert_eq!(calls[0].0, "grep");
         assert_eq!(calls[0].1.get("pattern").unwrap().as_str().unwrap(), "foo");
         assert_eq!(calls[1].0, "view_file");
-        assert_eq!(calls[1].1.get("path").unwrap().as_str().unwrap(), "src/x.rs");
+        assert_eq!(
+            calls[1].1.get("path").unwrap().as_str().unwrap(),
+            "src/x.rs"
+        );
     }
 
     #[test]
@@ -1138,7 +1313,8 @@ mod tests {
 
     #[test]
     fn test_view_file_tool_directory_fallback() {
-        let temp_dir = std::env::temp_dir().join(format!("rustcode_dir_test_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("rustcode_dir_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         std::fs::write(temp_dir.join("sample.txt"), "hello").unwrap();
 
