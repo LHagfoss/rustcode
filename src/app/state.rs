@@ -378,6 +378,74 @@ impl McpEditState {
     }
 }
 
+/// Identity of the static prompt artifacts: they only depend on these inputs
+/// plus the MCP tool generation. When any differs, the cache rebuilds.
+#[derive(Clone, PartialEq)]
+struct PromptCacheKey {
+    include_agent_tools: bool,
+    protocol: crate::config::ToolProtocol,
+    agent_mode: crate::config::AgentMode,
+    mcp_generation: u64,
+}
+
+/// Pre-computed static system prompt and native tool schema.
+///
+/// Both are otherwise rebuilt on every completion turn — including a filesystem
+/// skill scan and a full MCP schema re-serialization — even though they only
+/// change when the tool protocol, agent mode, or MCP tool set changes. This
+/// caches them and rebuilds lazily only when [`PromptCacheKey`] moves (the MCP
+/// generation acting as the dirty flag for mid-session server changes).
+#[derive(Default)]
+pub struct PromptCache {
+    key: Option<PromptCacheKey>,
+    system_prompt: String,
+    native_schema: Vec<serde_json::Value>,
+}
+
+impl PromptCache {
+    fn ensure(
+        &mut self,
+        include_agent_tools: bool,
+        protocol: crate::config::ToolProtocol,
+        agent_mode: crate::config::AgentMode,
+    ) {
+        let key = PromptCacheKey {
+            include_agent_tools,
+            protocol,
+            agent_mode,
+            mcp_generation: crate::mcp::mcp_generation(),
+        };
+        if self.key.as_ref() != Some(&key) {
+            self.system_prompt =
+                crate::tools::tool_system_prompt(include_agent_tools, protocol, agent_mode);
+            self.native_schema = crate::tools::native_tools_schema(include_agent_tools);
+            self.key = Some(key);
+        }
+    }
+
+    /// The cached static system prompt for these inputs, rebuilding if stale.
+    pub fn system_prompt(
+        &mut self,
+        include_agent_tools: bool,
+        protocol: crate::config::ToolProtocol,
+        agent_mode: crate::config::AgentMode,
+    ) -> &str {
+        self.ensure(include_agent_tools, protocol, agent_mode);
+        &self.system_prompt
+    }
+
+    /// The cached native tool schema for these inputs, rebuilding if stale.
+    pub fn native_schema(
+        &mut self,
+        include_agent_tools: bool,
+        protocol: crate::config::ToolProtocol,
+        agent_mode: crate::config::AgentMode,
+    ) -> &[serde_json::Value] {
+        self.ensure(include_agent_tools, protocol, agent_mode);
+        &self.native_schema
+    }
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -501,6 +569,9 @@ pub struct AppState {
     /// Snapshot of environment context from the first turn, used for delta diffing.
     pub context_snapshot: Option<crate::context::ContextSnapshot>,
     pub discord_rpc: DiscordRpcHandler,
+    /// Cached static system prompt + tool schema, rebuilt only when the tool
+    /// protocol, agent mode, or MCP tool set changes.
+    pub prompt_cache: PromptCache,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -621,6 +692,7 @@ impl AppState {
             continuous_mode: false,
             context_snapshot: None,
             discord_rpc: DiscordRpcHandler::new(),
+            prompt_cache: PromptCache::default(),
         }
     }
 

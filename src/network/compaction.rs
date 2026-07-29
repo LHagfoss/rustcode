@@ -10,6 +10,69 @@ pub fn estimate_tokens(text: &str) -> usize {
     bpe.encode_with_special_tokens(text).len()
 }
 
+/// Number of most-recent messages whose tool outputs are always kept verbatim.
+/// Older tool outputs are eligible for message-count-based pruning and, on
+/// structured compaction, everything before this suffix is folded into a summary.
+pub const KEEP_RECENT_TURNS: usize = 6;
+
+/// Tool outputs above this token size are collapsed once they age out of the
+/// recent window.
+const PRUNE_TOKEN_THRESHOLD: usize = 1000;
+
+/// Message-count-based pruning of historical tool outputs.
+///
+/// Keeps the most recent `keep_recent_count` messages fully intact for accuracy.
+/// For older messages, any tool result larger than [`PRUNE_TOKEN_THRESHOLD`] is
+/// replaced with a one-line summary that preserves the `tool_name:` prefix — so
+/// the tool call / result pairing and schema validity stay intact — along with
+/// the original token count and, when detectable, the command's exit status.
+pub fn prune_historical_tool_outputs(history: &mut [ChatMessage], keep_recent_count: usize) {
+    let len = history.len();
+    if len <= keep_recent_count {
+        return;
+    }
+    let cutoff = len - keep_recent_count;
+    for m in history[..cutoff].iter_mut() {
+        if m.role != "tool" {
+            continue;
+        }
+        // Skip anything already collapsed by a prior pass.
+        if m.content.contains("[Tool Output Truncated")
+            || m.content.contains("content cleared to save context")
+        {
+            continue;
+        }
+        let tokens = estimate_tokens(&m.content);
+        if tokens <= PRUNE_TOKEN_THRESHOLD {
+            continue;
+        }
+        // Preserve the "tool_name: " prefix so the call/result pairing survives.
+        let prefix = match m.content.find(": ") {
+            Some(pos) => m.content[..pos + 2].to_string(),
+            None => String::new(),
+        };
+        let status = detect_exit_status(&m.content);
+        m.content =
+            format!("{prefix}[Tool Output Truncated: {tokens} tokens reduced to summary.{status}]");
+    }
+}
+
+/// Best-effort extraction of a command exit code from raw tool output, so the
+/// pruned summary can still report whether the command succeeded.
+fn detect_exit_status(content: &str) -> String {
+    if let Some(idx) = content.find("exit code") {
+        let code: String = content[idx..]
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !code.is_empty() {
+            return format!(" Command exited with code {code}.");
+        }
+    }
+    String::new()
+}
+
 pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
     let mut total_tool_tokens = 0;
     // Walk backward through history
@@ -45,7 +108,10 @@ pub async fn maybe_compact(
     history: &mut Vec<ChatMessage>,
     budget: usize,
 ) -> bool {
-    // 1. First run local, zero-cost tool output pruning
+    // 1. First run local, zero-cost tool output pruning: collapse large tool
+    //    outputs that have aged past the recent window, then apply the hard
+    //    rolling token cap as a safety net.
+    prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     prune_old_tool_outputs(history);
 
     // 2. Estimate total tokens in the history
@@ -55,15 +121,16 @@ pub async fn maybe_compact(
     }
 
     // Determine how many messages to summarize.
-    // We want to keep at least the 8 most recent messages verbatim, but also
-    // retain a recent suffix of up to 30% of the token budget verbatim.
+    // We want to keep at least the KEEP_RECENT_TURNS most recent messages
+    // verbatim, but also retain a recent suffix of up to 30% of the token
+    // budget verbatim.
     let mut accumulated_tokens = 0;
     let keep_token_limit = (budget as f64 * 0.3) as usize; // Keep 30% of budget verbatim
 
     let mut keep_count = 0;
     for m in history.iter().rev() {
         let tokens = estimate_tokens(&m.content);
-        if accumulated_tokens + tokens <= keep_token_limit || keep_count < 8 {
+        if accumulated_tokens + tokens <= keep_token_limit || keep_count < KEEP_RECENT_TURNS {
             accumulated_tokens += tokens;
             keep_count += 1;
         } else {
@@ -86,10 +153,11 @@ pub async fn force_compact(
     history: &mut Vec<ChatMessage>,
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     prune_old_tool_outputs(history);
 
-    // Summarize all but the last 8 messages.
-    let summarize_count = history.len().saturating_sub(8);
+    // Summarize all but the most recent KEEP_RECENT_TURNS messages.
+    let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
     if summarize_count < 1 {
         return Err("Not enough messages to compact.".to_string());
     }
@@ -243,4 +311,54 @@ async fn generate_summary(
         .get("content")?
         .as_str()
         .map(|s| s.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_msg(content: &str) -> ChatMessage {
+        ChatMessage::new("tool", content)
+    }
+
+    #[test]
+    fn prune_historical_keeps_recent_and_collapses_old() {
+        let big = format!("run_command: {}", "x ".repeat(3000)); // > 1000 tokens
+        // A large tool output at the front, and a large one near the tail.
+        let mut history = vec![tool_msg(&big)]; // index 0: will age out
+        for i in 0..7 {
+            history.push(ChatMessage::new("user", format!("pad {i}")));
+        }
+        let recent_idx = history.len();
+        history.push(tool_msg(&big)); // within the last KEEP_RECENT_TURNS -> kept
+
+        prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
+
+        // Old, large tool output collapsed with prefix + token count preserved.
+        assert!(history[0].content.starts_with("run_command: [Tool Output Truncated:"));
+        assert!(history[0].content.contains("tokens reduced to summary"));
+        // Recent large tool output left fully intact.
+        assert!(history[recent_idx].content.starts_with("run_command: x x"));
+    }
+
+    #[test]
+    fn prune_historical_reports_exit_code() {
+        let big = format!("run_command: {} exit code 2", "y ".repeat(3000));
+        let mut history = vec![tool_msg(&big)];
+        for i in 0..8 {
+            history.push(ChatMessage::new("user", format!("m{i}")));
+        }
+        prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
+        assert!(history[0].content.contains("Command exited with code 2."));
+    }
+
+    #[test]
+    fn prune_historical_leaves_small_outputs_alone() {
+        let mut history = vec![tool_msg("grep: match at line 4")];
+        for i in 0..8 {
+            history.push(ChatMessage::new("user", format!("m{i}")));
+        }
+        prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
+        assert_eq!(history[0].content, "grep: match at line 4");
+    }
 }
