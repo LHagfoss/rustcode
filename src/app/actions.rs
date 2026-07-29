@@ -454,10 +454,7 @@ pub async fn handle_enter(
                 for t in crate::tools::TOOLS {
                     text.push_str(&format!("\n  {} - {}", t.name, t.description));
                 }
-                text.push_str(&format!(
-                    "\n\nMax {} tool rounds per prompt. Add tools in src/tools.rs.",
-                    s.config.max_tool_rounds
-                ));
+                text.push_str("\n\nTool execution is guarded by cancellation and loop detection; calls run sequentially.");
                 s.history.push(ChatMessage::new("system", text));
             }
             "/model" => {

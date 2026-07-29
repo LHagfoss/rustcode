@@ -296,9 +296,6 @@ pub const TOOLS: &[Tool] = &[
     },
 ];
 
-#[allow(dead_code)]
-pub const MAX_TOOL_ROUNDS: usize = 60;
-
 pub fn is_agent_tool(name: &str) -> bool {
     matches!(
         name,
