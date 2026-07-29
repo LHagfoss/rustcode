@@ -1,5 +1,5 @@
 use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker, TokenUsage, ToolConfirmation};
-use futures_util::{StreamExt, future::join_all};
+use futures_util::StreamExt;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -2334,12 +2334,11 @@ async fn prepare_turn_request(
 /// Execute a batch of tool calls and return `(name, result, diff)` per call.
 ///
 /// When `approved` is false every call resolves to a denial message. Otherwise
-/// the calls run concurrently via `join_all`; read-only calls are guarded
-/// against pointless repeats (a `view_file` re-read is only blocked when the
-/// file is unchanged on disk), agent tools go through `handle_agent_tool`, and
-/// everything else through `confirm_and_execute` (confirmation already handled
-/// by the caller). If any mutating tool ran, a single cached compiler check is
-/// appended to the first mutating tool's result so build errors surface inline.
+/// calls execute in model order. Read-only calls could be parallelized safely,
+/// but preserving one ordering rule for every batch prevents edits, commands,
+/// and reads from racing each other or hiding dependencies. If any mutating
+/// tool ran, a single cached compiler check is appended to the first mutating
+/// tool's result so build errors surface inline.
 #[allow(clippy::too_many_arguments)]
 async fn execute_tool_batch(
     client: &reqwest::Client,
@@ -2365,16 +2364,15 @@ async fn execute_tool_batch(
             .collect::<Vec<_>>();
     }
 
-    dbg_log!("Executing {} tool calls in parallel", tool_calls.len());
-    let mut futures = Vec::new();
+    dbg_log!("Executing {} tool calls sequentially", tool_calls.len());
+    let mut results = Vec::with_capacity(tool_calls.len());
     for (name, args) in tool_calls {
         let client_clone = client.clone();
         let state_clone = Arc::clone(state);
         let cancel_token_clone = cancel_token.clone();
         let name_clone = name.clone();
         let args_clone = args.clone();
-
-        let fut = async move {
+        let (name, result, diff_opt) = async move {
             let is_read_only = is_read_only_tool(&name_clone);
 
             // Repeat-loop guard for read-only tools. For view_file we go
@@ -2477,10 +2475,13 @@ async fn execute_tool_batch(
             }
 
             (name_clone, result, diff_opt)
-        };
-        futures.push(fut);
+        }
+        .await;
+        results.push((name, result, diff_opt));
+        if cancel_token.is_cancelled() {
+            break;
+        }
     }
-    let mut results = join_all(futures).await;
     if made_edits {
         {
             let mut s = state.lock().await;
@@ -2571,7 +2572,6 @@ pub async fn process_queue_orchestrator(
 
         let mut tool_rounds = 0;
         #[allow(unused_assignments)]
-        let mut limit_reached = false;
         #[allow(unused_assignments)]
         let mut last_sent_messages: Vec<serde_json::Value> = Vec::new();
         let mut final_content = String::new();
@@ -2579,7 +2579,6 @@ pub async fn process_queue_orchestrator(
         // already appends a clean summary message, so the post-loop "write final
         // assistant reply" must not re-append the raw tool-call block on top.
         let mut task_completed = false;
-        let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
         // Detects repetitive tool-call patterns (exact / semantic / stagnation /
         // churn) so continuous mode can't spin forever. One instance per task.
         let mut loop_detector = loop_detect::LoopDetector::new(6);
@@ -2816,7 +2815,7 @@ pub async fn process_queue_orchestrator(
                     loop_detect::LoopStatus::Ok => {}
                 }
 
-                if !cancel_token.is_cancelled() && tool_rounds < max_tool_rounds {
+                if !cancel_token.is_cancelled() {
                     tool_rounds += 1;
 
                     // Gather all confirmations needed
@@ -3031,15 +3030,11 @@ pub async fn process_queue_orchestrator(
                     dbg_log!("Tool round finished, looping back");
                     continue;
                 } else {
-                    dbg_log!("Tool rounds exceeded MAX_TOOL_ROUNDS or cancelled");
-                    if !cancel_token.is_cancelled() && tool_rounds >= max_tool_rounds
-                    {
-                        limit_reached = true;
-                    }
+                    dbg_log!("Tool execution cancelled");
                     break;
                 }
             } else if has_intended_tool_call(&final_content)
-                && tool_rounds < max_tool_rounds
+                && !cancel_token.is_cancelled()
             {
                 dbg_log!(
                     "Orchestrator: Detected malformed tool call, auto-correcting and retrying..."
@@ -3073,7 +3068,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             }
 
             let is_continuous = { state.lock().await.continuous_mode };
-            if is_continuous && !cancel_token.is_cancelled() && tool_rounds > 0 && tool_rounds < max_tool_rounds {
+            if is_continuous && !cancel_token.is_cancelled() && tool_rounds > 0 {
                 dbg_log!("Continuous mode active, assistant responded with text prose. Ending continuous mode turn.");
                 let mut s = state.lock().await;
                 s.continuous_mode = false;
@@ -3092,7 +3087,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 && !force_final
                 && !cancel_token.is_cancelled()
                 && finish_gate_retries < MAX_FINISH_GATE_RETRIES
-                && tool_rounds < max_tool_rounds
+                && !cancel_token.is_cancelled()
             {
                 let root = edit_root
                     .clone()
@@ -3151,16 +3146,6 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 let mut msg = ChatMessage::new("assistant", final_content.clone());
                 msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
                 s.history.push(msg);
-            }
-
-            if limit_reached {
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!(
-                        "⚠ Tool execution limit ({} rounds) reached. Type a message to continue or summarize.",
-                        max_tool_rounds
-                    ),
-                ));
             }
 
             drop(s);
