@@ -6,6 +6,19 @@ pub(crate) struct ToolResult {
     pub tool_name: String,
     pub content: String,
     pub diff: Option<String>,
+    pub metadata: ToolResultMetadata,
+}
+
+/// Machine-readable execution facts kept alongside human-readable output.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ToolResultMetadata {
+    pub call_id: Option<String>,
+    pub arguments_hash: String,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub changed_paths: Vec<String>,
+    pub truncated: bool,
+    pub full_output_artifact: Option<String>,
 }
 
 impl ToolResult {
@@ -139,12 +152,14 @@ mod tests {
             tool_name: "run_command".to_string(),
             content: "error: command failed".to_string(),
             diff: None,
+            metadata: ToolResultMetadata::default(),
         };
         assert!(result.is_error());
         assert!(!ToolResult {
             tool_name: "grep".to_string(),
             content: json!("match").to_string(),
             diff: None,
+            metadata: ToolResultMetadata::default(),
         }
         .is_error());
     }
