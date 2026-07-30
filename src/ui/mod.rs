@@ -26,7 +26,7 @@ mod highlight;
 mod markdown;
 mod modals;
 
-use highlight::{highlight_diff_line, highlight_rust_line, pad_to_width, wrap_code_spans};
+use highlight::{highlight_code_line, highlight_diff_line, pad_to_width, wrap_code_spans};
 use markdown::render_markdown;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
@@ -329,7 +329,7 @@ fn render_assistant_message<'a>(
                             " ".to_string(),
                             get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
                         )];
-                        s.extend(highlight_rust_line(line_str, show_picker));
+                        s.extend(highlight_code_line(line_str, &current_lang, show_picker));
                         s
                     };
                     lines.extend(wrap_code_spans(content_spans, box_width, COLOR_ELEMENT, show_picker));
