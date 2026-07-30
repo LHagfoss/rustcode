@@ -174,6 +174,10 @@ pub struct ChatMessage {
     pub response_time_ms: Option<u64>,
     #[serde(skip)]
     pub diff: Option<String>,
+    /// Ephemeral normal code preview for newly written files. It is derived
+    /// from the tool arguments and intentionally not persisted in history.
+    #[serde(skip)]
+    pub file_preview: Option<(String, String)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<ToolResultRecord>,
 }
@@ -198,12 +202,18 @@ impl ChatMessage {
             timestamp: current_timestamp(),
             response_time_ms: None,
             diff: None,
+            file_preview: None,
             tool_result: None,
         }
     }
 
     pub fn with_diff(mut self, diff: Option<String>) -> Self {
         self.diff = diff;
+        self
+    }
+
+    pub fn with_file_preview(mut self, preview: Option<(String, String)>) -> Self {
+        self.file_preview = preview;
         self
     }
 
