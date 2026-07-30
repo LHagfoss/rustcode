@@ -259,6 +259,12 @@ fn render_assistant_message<'a>(
                     fence_open = !fence_open;
                     let fence_text = line_str.trim();
                     if opening {
+                        if lines
+                            .last()
+                            .is_some_and(|line| line.spans.iter().any(|span| !span.content.is_empty()))
+                        {
+                            lines.push(Line::from(""));
+                        }
                         current_lang = fence_text.trim_start_matches('`').trim().to_lowercase();
 
                         let mut code_text = String::new();
@@ -337,6 +343,12 @@ fn render_assistant_message<'a>(
                                 show_picker,
                             ),
                         )));
+                        if processed_lines
+                            .get(i + 1)
+                            .is_some_and(|(_, text)| !text.trim().is_empty())
+                        {
+                            lines.push(Line::from(""));
+                        }
                         current_lang.clear();
                     }
                 } else if is_diff_lang(&current_lang)
