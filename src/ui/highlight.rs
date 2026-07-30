@@ -1,4 +1,4 @@
-//! Rust syntax highlighting and diff-line rendering for the chat viewport.
+//! Language-aware syntax highlighting and diff-line rendering for the chat viewport.
 //!
 //! Pure span/line builders extracted from `ui/mod.rs`. Colour constants and
 //! `get_themed_style` live in the parent module and are reached via `super::`.
@@ -7,9 +7,70 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use std::sync::OnceLock;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{FontStyle, Style as SyntectStyle, Theme, ThemeSet};
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_TEXT, get_themed_style};
+
+static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+static SYNTAX_THEME: OnceLock<Theme> = OnceLock::new();
+
+fn syntax_set() -> &'static SyntaxSet {
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn syntax_theme() -> &'static Theme {
+    SYNTAX_THEME.get_or_init(|| {
+        let mut themes = ThemeSet::load_defaults().themes;
+        themes
+            .remove("base16-ocean.dark")
+            .or_else(|| themes.into_values().next())
+            .expect("syntect ships at least one default theme")
+    })
+}
+
+fn syntect_style(style: SyntectStyle, show_picker: bool) -> Style {
+    let mut modifier = Modifier::empty();
+    if style.font_style.contains(FontStyle::BOLD) {
+        modifier |= Modifier::BOLD;
+    }
+    if style.font_style.contains(FontStyle::ITALIC) {
+        modifier |= Modifier::ITALIC;
+    }
+    get_themed_style(
+        Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b),
+        COLOR_ELEMENT,
+        modifier,
+        show_picker,
+    )
+}
+
+/// Highlight one code line using the fenced block's language identifier.
+/// Unknown languages deliberately fall back to plain code styling instead of
+/// guessing Rust, which was the source of misleading colors in other blocks.
+pub(super) fn highlight_code_line<'a>(
+    line: &str,
+    language: &str,
+    show_picker: bool,
+) -> Vec<Span<'a>> {
+    let syntax: &SyntaxReference = syntax_set()
+        .find_syntax_by_token(language)
+        .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
+    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    match highlighter.highlight_line(line, syntax_set()) {
+        Ok(ranges) => ranges
+            .into_iter()
+            .map(|(style, text)| Span::styled(text.to_string(), syntect_style(style, show_picker)))
+            .collect(),
+        Err(_) => vec![Span::styled(
+            line.to_string(),
+            get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+        )],
+    }
+}
 
 pub(super) fn pad_to_width(s: &str, width: usize) -> String {
     let current = s.width();
@@ -488,6 +549,21 @@ mod tests {
         assert_eq!(row_width(&line), 40);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(!text.contains('│'), "unified fallback must not add a separator");
+    }
+
+    #[test]
+    fn highlights_non_rust_fenced_languages() {
+        let spans = highlight_code_line("def greet(name):", "python", false);
+        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "def greet(name):");
+        assert!(spans.len() > 1, "Python should receive token-level styling");
+    }
+
+    #[test]
+    fn unknown_language_falls_back_without_guessing_rust() {
+        let spans = highlight_code_line("for value in words", "made-up-language", false);
+        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, "for value in words");
     }
 }
 
