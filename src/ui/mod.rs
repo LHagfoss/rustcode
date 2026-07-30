@@ -27,7 +27,7 @@ mod markdown;
 mod modals;
 mod tool_result;
 
-use highlight::{highlight_code_line, highlight_diff_line, pad_to_width, render_unified_diff, wrap_code_spans};
+use highlight::{highlight_code_block, highlight_code_line, highlight_diff_line, pad_to_width, render_unified_diff, wrap_code_spans};
 use markdown::render_markdown;
 use tool_result::render_tool_result;
 use modals::{
@@ -304,8 +304,19 @@ fn render_assistant_message<'a>(
                                 get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
                             ),
                         ];
-                        copy_registry.push((lines.len(), code_text));
+                        copy_registry.push((lines.len(), code_text.clone()));
                         lines.push(Line::from(spans));
+                        if !is_plain_lang(&current_lang) && !is_diff_lang(&current_lang) {
+                            for body_spans in highlight_code_block(&code_text, &current_lang, show_picker) {
+                                let mut content_spans = vec![Span::styled(
+                                    " ".to_string(),
+                                    get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                                )];
+                                content_spans.extend(body_spans);
+                                lines.extend(wrap_code_spans(content_spans, box_width, COLOR_ELEMENT, show_picker));
+                            }
+                            i = j.saturating_sub(1);
+                        }
                     } else {
                         // Closing fence: one solid trailing row to close the panel.
                         lines.push(Line::from(Span::styled(
