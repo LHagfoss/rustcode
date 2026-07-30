@@ -673,8 +673,13 @@ pub async fn stream_request(
                                              .and_then(|c| c.as_str());
 
                                          if let Some(tool_calls) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
+                                             const MAX_TOOL_CALL_INDEX: usize = 127;
                                              for tc in tool_calls {
-                                                 let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                                 let mut idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                                 if idx > MAX_TOOL_CALL_INDEX {
+                                                     eprintln!("Warning: tool call index {} exceeds max allowed ({}), clamping.", idx, MAX_TOOL_CALL_INDEX);
+                                                     idx = idx.min(MAX_TOOL_CALL_INDEX);
+                                                 }
                                                  while accumulators.len() <= idx {
                                                      accumulators.push(ToolAccumulator {
                                                          name: String::new(),
