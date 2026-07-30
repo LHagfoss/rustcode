@@ -54,3 +54,6 @@ opt-level = 1
 opt-level = 1
 [profile.release.package.rusqlite]
 opt-level = 1
+
+[dev-dependencies]
+tempfile = "3.10"
