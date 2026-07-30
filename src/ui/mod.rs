@@ -23,11 +23,11 @@ pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
 
 pub mod theme;
 mod highlight;
+mod markdown;
 mod modals;
 
-use highlight::{
-    format_markdown_spans, highlight_diff_line, highlight_rust_line, pad_to_width, wrap_code_spans,
-};
+use highlight::{highlight_diff_line, highlight_rust_line, pad_to_width, wrap_code_spans};
+use markdown::render_markdown;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
@@ -342,9 +342,8 @@ fn render_assistant_message<'a>(
                     i += 1;
                 }
 
-                for line_str in normal_block {
-                    lines.push(Line::from(format_markdown_spans(&line_str, show_picker)));
-                }
+                let normal_text = normal_block.join("\n");
+                lines.extend(render_markdown(&normal_text, content_width, show_picker));
             }
         }
         lines.push(Line::from(""));
