@@ -7,7 +7,7 @@ use ratatui::{
 use std::path::Path;
 
 use super::{
-    COLOR_BG, COLOR_ELEMENT, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_line,
+    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_line,
 };
 
 const MAX_RENDERED_TOOL_LINES: usize = 300;
@@ -21,8 +21,8 @@ fn language_for_path(path: &str) -> &str {
 
 fn line_number<'a>(old: &str, _width: usize, show_picker: bool) -> Span<'a> {
     Span::styled(
-        format!("{old:>5} "),
-        get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+        format!("{old:>5} │ "),
+        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
     )
 }
 
@@ -40,15 +40,23 @@ pub(super) fn render_tool_result<'a>(
         "grep" => render_search_result(result, width, show_picker),
         "glob" | "list_directory" => render_directory_result(result, show_picker),
         "run_command" => render_command_result(result, show_picker),
-        _ => result
-            .lines()
-            .map(|line| {
-                Line::from(Span::styled(
-                    line.to_string(),
-                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
-                ))
-            })
-            .collect(),
+        "replace_file_content"
+        | "multi_replace_file_content"
+        | "write_to_file"
+        | "delete_file"
+        | "move_file"
+        | "copy_file" => render_mutation_result(result, show_picker),
+        // The action line already communicates control-plane lifecycle. Their
+        // raw acknowledgement is implementation noise in the transcript.
+        "use_skill"
+        | "set_goal"
+        | "todo_write"
+        | "spawn_agent"
+        | "send_agent"
+        | "complete_task"
+        | "ask_question"
+        | "manage_task" => Vec::new(),
+        _ => Vec::new(),
     };
 
     if lines.len() > MAX_RENDERED_TOOL_LINES {
@@ -60,6 +68,22 @@ pub(super) fn render_tool_result<'a>(
         )));
     }
     lines
+}
+
+fn render_mutation_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
+    let Some(summary) = result.lines().find(|line| !line.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let failed = summary.starts_with("error:") || summary.starts_with("Error:");
+    let (icon, color) = if failed {
+        ("✗", Color::Rgb(229, 123, 123))
+    } else {
+        ("✓", super::COLOR_SECONDARY)
+    };
+    vec![Line::from(Span::styled(
+        format!("  {icon} {summary}"),
+        get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+    ))]
 }
 
 fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
@@ -146,7 +170,9 @@ fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<
                 language = language_for_path(path);
             }
             lines.push(Line::from(Span::styled(
-                raw.to_string(),
+                raw.strip_prefix("[File: ").and_then(|header| header.strip_suffix(']'))
+                    .map(|header| header.replace(", ", " · "))
+                    .unwrap_or_else(|| raw.to_string()),
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
             )));
             continue;
@@ -217,7 +243,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert!(text.starts_with("    4 "));
+        assert!(text.starts_with("    4 │ "));
         assert!(text.contains("fn main"));
     }
 
@@ -264,6 +290,24 @@ mod tests {
         );
         assert!(lines[0].spans[0].content.contains("✗ exit 1"));
         assert!(lines[1].spans[0].content.contains("! permission denied"));
+    }
+
+    #[test]
+    fn edit_results_show_only_a_compact_success_summary() {
+        let lines = render_tool_result(
+            "replace_file_content",
+            "successfully replaced target_content in 'src/main.rs'\n\n```diff\n-old\n+new\n```",
+            80,
+            false,
+        );
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].spans[0].content.contains("✓ successfully replaced"));
+    }
+
+    #[test]
+    fn control_plane_results_are_hidden() {
+        assert!(render_tool_result("use_skill", "loaded skill", 80, false).is_empty());
+        assert!(render_tool_result("spawn_agent", "agent done", 80, false).is_empty());
     }
 
     #[test]
