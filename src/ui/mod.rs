@@ -26,7 +26,7 @@ mod highlight;
 mod markdown;
 mod modals;
 
-use highlight::{highlight_code_line, highlight_diff_line, pad_to_width, wrap_code_spans};
+use highlight::{highlight_code_line, highlight_diff_line, pad_to_width, render_unified_diff, wrap_code_spans};
 use markdown::render_markdown;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
@@ -1206,9 +1206,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
             if let Some(ref diff) = msg.diff {
                 let code_content_width = inner_area.width as usize;
-                for diff_line in diff.lines() {
-                    lines.push(highlight_diff_line(diff_line, code_content_width, show_picker));
-                }
+                lines.extend(render_unified_diff(diff, code_content_width, show_picker));
             }
 
         } else if msg.role == "user" {
