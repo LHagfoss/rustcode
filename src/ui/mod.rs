@@ -950,6 +950,70 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
     lines.push(Line::from(""));
 }
 
+fn render_status_panel<'a>(
+    content: &str,
+    width: u16,
+    show_picker: bool,
+    lines: &mut Vec<Line<'a>>,
+) {
+    let lower = content.to_ascii_lowercase();
+    let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
+        .iter()
+        .any(|word| lower.contains(word));
+    let (label, icon, accent) = if is_warning {
+        ("Warning", "!", Color::Rgb(229, 192, 123))
+    } else if lower.starts_with("session status") {
+        ("Status", "·", Color::Rgb(100, 175, 235))
+    } else if lower.starts_with("session usage") {
+        ("Usage", "·", Color::Rgb(100, 175, 235))
+    } else if lower.starts_with("available tools") {
+        ("Tools", "·", Color::Rgb(127, 216, 143))
+    } else {
+        ("Notice", "·", Color::Rgb(100, 175, 235))
+    };
+    let panel_width = width.max(24) as usize;
+    let inner_width = panel_width.saturating_sub(4).max(10);
+    let mut body = Vec::new();
+    for raw in content.lines() {
+        let mut current = String::new();
+        for word in raw.split_whitespace() {
+            if current.is_empty() {
+                current.push_str(word);
+            } else if current.width() + 1 + word.width() <= inner_width {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                body.push(current);
+                current = word.to_string();
+            }
+        }
+        body.push(current);
+    }
+    if body.is_empty() {
+        body.push(String::new());
+    }
+
+    let header = format!("╭─ {icon} {label} ");
+    let top = format!("{}{}╮", header, "─".repeat(panel_width.saturating_sub(header.width() + 1)));
+    lines.push(Line::from(Span::styled(
+        pad_to_width(&top, panel_width),
+        get_themed_style(accent, COLOR_BG, Modifier::BOLD, show_picker),
+    )));
+    for row in body {
+        let text = pad_to_width(&row, inner_width);
+        lines.push(Line::from(Span::styled(
+            format!("│ {text} │"),
+            get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+        )));
+    }
+    let bottom = format!("╰{}╯", "─".repeat(panel_width.saturating_sub(2)));
+    lines.push(Line::from(Span::styled(
+        pad_to_width(&bottom, panel_width),
+        get_themed_style(accent, COLOR_BG, Modifier::empty(), show_picker),
+    )));
+    lines.push(Line::from(""));
+}
+
 fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
     let inner_area = chunks[0].inner(Margin {
         vertical: 0,
@@ -997,95 +1061,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             if msg.content.contains("Loop warning:") {
                 continue;
             }
-
-            let prev_was_tool = msg_idx > 0 && state.history.get(msg_idx - 1).is_some_and(|m| m.role == "tool");
-            if prev_was_tool {
-                lines.push(Line::from(""));
-            }
-
-            if msg.content.contains("🏁") || msg.content.contains("Goal Accomplished") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        " 🏁 ",
-                        Style::default().fg(Color::Rgb(152, 195, 121)).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(" {} ", msg.content),
-                        Style::default().fg(Color::Rgb(152, 195, 121)).bg(COLOR_PANEL).add_modifier(Modifier::BOLD),
-                    ),
-                ]));
-                lines.push(Line::from(""));
-                continue;
-            }
-
-            let collapsed = !state.expanded_thoughts.contains(&msg_idx);
-            let lower = msg.content.to_lowercase();
-            let is_prompt_opt = lower.contains("prompt optimized") || lower.contains("activated automatically");
-            let is_info_or_help = msg.content.starts_with("Available Commands:") || lower.contains("copied code/reply") || lower.contains("resumed session") || lower.contains("quota status");
-            let is_warning = !is_prompt_opt && !is_info_or_help && (lower.contains("warning") || lower.contains("loop") || lower.contains("abort") || lower.contains("error"));
-            let label = if is_warning { "Warning" } else { "Notice" };
-            let theme_color = if is_warning {
-                Color::Rgb(229, 192, 123)
-            } else {
-                Color::Rgb(100, 175, 235)
-            };
-
-            let first_line = msg.content.lines().next().unwrap_or(label);
-            let preview = if first_line.len() > 65 {
-                format!("{}...", &first_line[..65])
-            } else {
-                first_line.to_string()
-            };
-
-            let toggle = if collapsed { "+ " } else { "− " };
-            thought_clicks.push((lines.len(), msg_idx));
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    toggle,
-                    get_themed_style(
-                        theme_color,
-                        COLOR_BG,
-                        Modifier::BOLD,
-                        show_picker,
-                    ),
-                ),
-                Span::styled(
-                    format!("{label}: {preview}"),
-                    get_themed_style(
-                        theme_color,
-                        COLOR_BG,
-                        Modifier::BOLD,
-                        show_picker,
-                    ),
-                ),
-            ]));
-
-            if !collapsed {
-                for raw_line in msg.content.lines() {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            "│ ",
-                            get_themed_style(
-                                theme_color,
-                                COLOR_BG,
-                                Modifier::BOLD,
-                                show_picker,
-                            ),
-                        ),
-                        Span::styled(
-                            raw_line,
-                            get_themed_style(
-                                theme_color,
-                                COLOR_BG,
-                                Modifier::empty(),
-                                show_picker,
-                            ),
-                        ),
-                    ]));
-                }
-            }
-            lines.push(Line::from(""));
+            render_status_panel(&msg.content, inner_area.width, show_picker, &mut lines);
 
         } else if msg.role == "tool" {
             let prev_tool_info = if msg_idx > 0 {
@@ -1642,7 +1618,7 @@ const NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 /// of text, or `None` if the screen is too small. Box = text + side padding +
 /// borders, inset one cell from the top-right corner and clamped to the screen.
 fn notice_rect(area: ratatui::layout::Rect, text_width: u16) -> Option<ratatui::layout::Rect> {
-    let box_h = 3u16;
+    let box_h = 5u16;
     let box_w = (text_width + 4).min(area.width.saturating_sub(2)).max(3);
     if area.width < box_w + 1 || area.height < box_h + 1 {
         return None;
@@ -1663,17 +1639,18 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         return;
     }
 
-    let Some(rect) = notice_rect(f.area(), notice.text.width() as u16) else {
+    let Some(rect) = notice_rect(f.area(), 64) else {
         return;
     };
 
-    let accent = match notice.kind {
-        NoticeKind::Notice => COLOR_TIP,
+    let (label, accent) = match notice.kind {
+        NoticeKind::Notice => ("Notice", COLOR_TIP),
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
+        .title(format!(" {label} "))
         .border_style(Style::default().fg(accent))
         .style(Style::default().bg(COLOR_PANEL));
     let para = Paragraph::new(Line::from(Span::styled(
@@ -1681,7 +1658,8 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL),
     )))
     .block(block)
-    .alignment(ratatui::layout::Alignment::Center);
+    .alignment(ratatui::layout::Alignment::Left)
+    .wrap(Wrap { trim: true });
 
     f.render_widget(Clear, rect);
     f.render_widget(para, rect);
@@ -1891,7 +1869,7 @@ mod tests {
         let r = notice_rect(screen, 18).unwrap();
         // 18 text + 4 padding/borders = 22 wide.
         assert_eq!(r.width, 22);
-        assert_eq!(r.height, 3);
+        assert_eq!(r.height, 5);
         // Right-aligned with a one-column gutter, one row down from the top.
         assert_eq!(r.x, 100 - 22 - 1);
         assert_eq!(r.y, 1);
