@@ -244,8 +244,12 @@ pub fn list_project_file_paths(query: &str) -> Vec<String> {
     files
 }
 
+fn safe_byte_index(s: &str, char_pos: usize) -> usize {
+    s.char_indices().nth(char_pos).map(|(i, _)| i).unwrap_or(s.len())
+}
+
 pub fn get_at_word_query(input_buffer: &str, cursor_pos: usize) -> Option<(usize, String)> {
-    let pos = cursor_pos.min(input_buffer.len());
+    let pos = safe_byte_index(input_buffer, cursor_pos);
     let before = &input_buffer[..pos];
     if let Some(at_idx) = before.rfind('@') {
         let query = &before[at_idx + 1..];
