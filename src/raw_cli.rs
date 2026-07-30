@@ -145,18 +145,48 @@ pub async fn run_round_loop(
             content: String::new(),
         }));
 
-        if let Err(e) = crate::network::stream_request(
-            client,
-            state_arc.clone(),
-            cancel_token.clone(),
-            &api_base_url,
-            &model_name,
-            &msgs,
-            stream_buffer.clone(),
-            false,
-        )
-        .await
-        {
+        let request_client = client.clone();
+        let request_state = state_arc.clone();
+        let request_cancel = cancel_token.clone();
+        let request_buffer = stream_buffer.clone();
+        let request_api_url = api_base_url.clone();
+        let request_model = model_name.clone();
+        let request_msgs = msgs.clone();
+        let response = crate::network::runner::collect_response(move |previous| {
+            let mut current_msgs = request_msgs.clone();
+            if !previous.is_empty() {
+                current_msgs.push(serde_json::json!({"role": "assistant", "content": previous}));
+                current_msgs.push(serde_json::json!({"role": "user", "content": "continue"}));
+            }
+            let request_client = request_client.clone();
+            let request_state = request_state.clone();
+            let request_cancel = request_cancel.clone();
+            let request_buffer = request_buffer.clone();
+            let request_api_url = request_api_url.clone();
+            let request_model = request_model.clone();
+            async move {
+                request_buffer.lock().await.content.clear();
+                let finish_reason = crate::network::stream_request(
+                    &request_client,
+                    request_state,
+                    request_cancel,
+                    &request_api_url,
+                    &request_model,
+                    &current_msgs,
+                    request_buffer.clone(),
+                    false,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                let content = request_buffer.lock().await.content.clone();
+                Ok((content, finish_reason))
+            }
+        })
+        .await;
+
+        let response_content = match response {
+            Ok((content, _finish_reason)) => content,
+            Err(e) => {
             stream_retries += 1;
             if stream_retries <= MAX_STREAM_RETRIES {
                 let delay = std::time::Duration::from_millis(500 * stream_retries as u64);
@@ -169,12 +199,11 @@ pub async fn run_round_loop(
             }
             println!("Stream error: {e} — giving up after {MAX_STREAM_RETRIES} retries.");
             break;
-        }
+            }
+        };
         stream_retries = 0;
 
         println!();
-
-        let response_content = { state_arc.lock().await.current_response.clone() };
 
         let protocol = { state_arc.lock().await.config.tool_protocol };
         if let Some(tool_call) = crate::tools::parse_tool_call(&response_content, protocol) {

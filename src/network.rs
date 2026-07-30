@@ -1591,53 +1591,55 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             rounds,
             model_name
         );
-        let mut accumulated_content = String::new();
-        let mut turn_runner = runner::TurnRunner::new();
-
-        loop {
-            let mut current_msgs = msgs.clone();
-            if !accumulated_content.is_empty() {
+        let request_client = client.clone();
+        let request_state = Arc::clone(state);
+        let request_cancel = cancel_token.clone();
+        let request_buffer = Arc::clone(&stream_buffer);
+        let request_api_url = api_base_url.clone();
+        let request_model = model_name.clone();
+        let request_msgs = msgs.clone();
+        let (content, _finish_reason) = match runner::collect_response(move |previous| {
+            let mut current_msgs = request_msgs.clone();
+            if !previous.is_empty() {
                 current_msgs.push(serde_json::json!({
                     "role": "assistant",
-                    "content": accumulated_content
+                    "content": previous
                 }));
                 current_msgs.push(serde_json::json!({
                     "role": "user",
                     "content": "continue"
                 }));
             }
-            stream_buffer.lock().await.content.clear();
-            let stream_result = stream_request(
-                client,
-                Arc::clone(state),
-                cancel_token.clone(),
-                &api_base_url,
-                &model_name,
-                &current_msgs,
-                Arc::clone(&stream_buffer),
-                true,
-            )
-            .await;
-
-            let finish_reason = match stream_result {
-                Ok(fr) => fr,
-                Err(e) => return format!("error: subagent request failed: {e}"),
-            };
-
-            let chunk_content = stream_buffer.lock().await.content.clone();
-            accumulated_content.push_str(&chunk_content);
-
-            if turn_runner.allow_continuation(is_cut_off(&accumulated_content, finish_reason.as_deref())) {
-                dbg_log!(
-                    "Subagent LLM response cut off. Auto-continuing (round {})...",
-                    turn_runner.continuation_count()
-                );
-                continue;
+            let request_client = request_client.clone();
+            let request_state = Arc::clone(&request_state);
+            let request_cancel = request_cancel.clone();
+            let request_buffer = Arc::clone(&request_buffer);
+            let request_api_url = request_api_url.clone();
+            let request_model = request_model.clone();
+            async move {
+                request_buffer.lock().await.content.clear();
+                let finish_reason = stream_request(
+                    &request_client,
+                    request_state,
+                    request_cancel,
+                    &request_api_url,
+                    &request_model,
+                    &current_msgs,
+                    Arc::clone(&request_buffer),
+                    true,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                let chunk_content = request_buffer.lock().await.content.clone();
+                Ok((chunk_content, finish_reason))
             }
-            break;
-        }
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => return format!("error: subagent request failed: {e}"),
+        };
 
-        let content = accumulated_content;
         if content.is_empty() {
             return "error: subagent returned an empty reply".to_string();
         }
@@ -2735,109 +2737,86 @@ pub async fn process_queue_orchestrator(
                 api_base_url,
                 model_name
             );
-            let mut accumulated_content = String::new();
-            let mut turn_runner = runner::TurnRunner::new();
-            let mut stream_err = None;
-            let mut response_finish_reason: Option<String> = None;
-
-            loop {
-                let mut current_msgs = msgs.clone();
-                if !accumulated_content.is_empty() {
+            last_sent_messages = msgs.clone();
+            state.lock().await.current_response.clear();
+            let request_client = client.clone();
+            let request_state = Arc::clone(&state);
+            let request_cancel = cancel_token.clone();
+            let request_buffer = Arc::clone(&stream_buffer);
+            let request_api_url = api_base_url.clone();
+            let request_model = model_name.clone();
+            let request_msgs = msgs.clone();
+            let (accumulated_content, response_finish_reason) = match runner::collect_response(move |previous| {
+                let mut current_msgs = request_msgs.clone();
+                if !previous.is_empty() {
                     current_msgs.push(serde_json::json!({
                         "role": "assistant",
-                        "content": accumulated_content
+                        "content": previous
                     }));
                     current_msgs.push(serde_json::json!({
                         "role": "user",
                         "content": "continue"
                     }));
                 }
-                last_sent_messages = current_msgs.clone();
-
-                state.lock().await.current_response.clear();
-                stream_buffer.lock().await.content.clear();
-
-                let stream_result = stream_request(
-                    &client,
-                    Arc::clone(&state),
-                    cancel_token.clone(),
-                    &api_base_url,
-                    &model_name,
-                    &current_msgs,
-                    Arc::clone(&stream_buffer),
-                    false,
-                )
-                .await;
-
-                if cancel_token.is_cancelled() {
-                    dbg_log!("Orchestrator: Stream request cancelled by token");
+                let request_client = request_client.clone();
+                let request_state = Arc::clone(&request_state);
+                let request_cancel = request_cancel.clone();
+                let request_buffer = Arc::clone(&request_buffer);
+                let request_api_url = request_api_url.clone();
+                let request_model = request_model.clone();
+                async move {
+                    request_state.lock().await.current_response.clear();
+                    request_buffer.lock().await.content.clear();
+                    let finish_reason = stream_request(
+                        &request_client,
+                        request_state.clone(),
+                        request_cancel,
+                        &request_api_url,
+                        &request_model,
+                        &current_msgs,
+                        Arc::clone(&request_buffer),
+                        false,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    let chunk_content = request_buffer.lock().await.content.clone();
+                    Ok((chunk_content, finish_reason))
+                }
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    turn_machine.recover_error();
+                    dbg_log!("Stream request failed: {}", e);
                     let mut s = state.lock().await;
-                    let chunk_content = stream_buffer.lock().await.content.clone();
-                    accumulated_content.push_str(&chunk_content);
-                    if !accumulated_content.is_empty() {
-                        let mut msg = ChatMessage::new("assistant", accumulated_content.clone());
-                        msg.response_time_ms = Some(prompt_start_time.elapsed().as_millis() as u64);
-                        s.history.push(msg);
-                        crate::config::save_history(&s.history);
-                    }
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!("Error from LLM Provider: {e}"),
+                    ));
+                    crate::config::save_history(&s.history);
                     s.current_response.clear();
+                    s.current_token_usage = None;
                     s.status = AppStatus::Idle;
                     break;
                 }
+            };
 
-                let finish_reason = match stream_result {
-                    Ok(fr) => fr,
-                    Err(e) => {
-                        stream_err = Some(e);
-                        turn_machine.recover_error();
-                        break;
-                    }
-                };
-                response_finish_reason = finish_reason.clone();
-                crate::logger::operational_event(
-                    "model.response",
-                    serde_json::json!({
-                        "round": tool_rounds,
-                        "finish_reason": finish_reason,
-                        "content_bytes": accumulated_content.len(),
-                    }),
-                );
-
-                let chunk_content = stream_buffer.lock().await.content.clone();
-                accumulated_content.push_str(&chunk_content);
-
-                {
-                    let mut s = state.lock().await;
-                    s.current_response = accumulated_content.clone();
-                }
-
-                if turn_runner.allow_continuation(is_cut_off(&accumulated_content, finish_reason.as_deref())) {
-                    dbg_log!(
-                        "Orchestrator: LLM response cut off. Auto-continuing (round {})...",
-                        turn_runner.continuation_count()
-                    );
-                    continue;
-                }
-                break;
+            crate::logger::operational_event(
+                "model.response",
+                serde_json::json!({
+                    "round": tool_rounds,
+                    "finish_reason": response_finish_reason,
+                    "content_bytes": accumulated_content.len(),
+                }),
+            );
+            {
+                let mut s = state.lock().await;
+                s.current_response = accumulated_content.clone();
             }
 
             if cancel_token.is_cancelled() {
                 turn_machine.cancel();
-                break;
-            }
-
-            if let Some(e) = stream_err {
-                dbg_log!("Stream request failed: {}", e);
-                let mut s = state.lock().await;
-
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!("Error from LLM Provider: {e}"),
-                ));
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
-                s.current_token_usage = None;
-                s.status = AppStatus::Idle;
                 break;
             }
 
