@@ -75,14 +75,20 @@ pub(crate) enum TurnInput {
     Cancelled,
 }
 
-pub(crate) fn transition_turn(state: TurnState, input: TurnInput) -> TurnState {
-    let _current_state = state;
-    match input {
-        TurnInput::Cancelled => TurnState::Cancelled,
-        TurnInput::ModelFinished { has_tool_calls: true } => TurnState::AwaitingApproval,
-        TurnInput::ModelFinished { has_tool_calls: false } => TurnState::Completed,
-        TurnInput::ApprovalGranted => TurnState::ExecutingTools,
-        TurnInput::ToolsFinished => TurnState::AwaitingModel,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InvalidTransition {
+    pub from: TurnState,
+    pub input: TurnInput,
+}
+
+pub(crate) fn transition_turn(state: TurnState, input: TurnInput) -> Result<TurnState, InvalidTransition> {
+    match (state, input) {
+        (_, TurnInput::Cancelled) => Ok(TurnState::Cancelled),
+        (TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: true }) => Ok(TurnState::AwaitingApproval),
+        (TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: false }) => Ok(TurnState::Completed),
+        (TurnState::AwaitingApproval, TurnInput::ApprovalGranted) => Ok(TurnState::ExecutingTools),
+        (TurnState::ExecutingTools, TurnInput::ToolsFinished) => Ok(TurnState::AwaitingModel),
+        _ => Err(InvalidTransition { from: state, input }),
     }
 }
 
@@ -214,6 +220,7 @@ impl TurnMachine {
             self.state = TurnState::Cancelled;
             return TurnAction::Cancel;
         }
+        debug_assert_eq!(self.state, TurnState::AwaitingModel);
         if force_final || task_completed || !has_tool_calls {
             self.state = TurnState::Completed;
             return TurnAction::FinishResponse;
@@ -223,18 +230,21 @@ impl TurnMachine {
     }
 
     pub(crate) fn approval_granted(&mut self) {
+        debug_assert_eq!(self.state, TurnState::AwaitingApproval);
         if self.state == TurnState::AwaitingApproval {
             self.state = TurnState::ExecutingTools;
         }
     }
 
     pub(crate) fn approval_denied(&mut self) {
+        debug_assert_eq!(self.state, TurnState::AwaitingApproval);
         if self.state == TurnState::AwaitingApproval {
             self.state = TurnState::AwaitingModel;
         }
     }
 
     pub(crate) fn tools_finished(&mut self) {
+        debug_assert_eq!(self.state, TurnState::ExecutingTools);
         if self.state == TurnState::ExecutingTools {
             self.state = TurnState::AwaitingModel;
         }
@@ -358,19 +368,23 @@ mod tests {
                 TurnState::AwaitingModel,
                 TurnInput::ModelFinished { has_tool_calls: true }
             ),
-            TurnState::AwaitingApproval
+            Ok(TurnState::AwaitingApproval)
         );
         assert_eq!(
             transition_turn(TurnState::AwaitingApproval, TurnInput::ApprovalGranted),
-            TurnState::ExecutingTools
+            Ok(TurnState::ExecutingTools)
         );
         assert_eq!(
             transition_turn(TurnState::ExecutingTools, TurnInput::ToolsFinished),
-            TurnState::AwaitingModel
+            Ok(TurnState::AwaitingModel)
         );
         assert_eq!(
             transition_turn(TurnState::ExecutingTools, TurnInput::Cancelled),
-            TurnState::Cancelled
+            Ok(TurnState::Cancelled)
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingModel, TurnInput::ToolsFinished),
+            Err(InvalidTransition { from: TurnState::AwaitingModel, input: TurnInput::ToolsFinished })
         );
     }
 
