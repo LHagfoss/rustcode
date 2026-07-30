@@ -80,18 +80,21 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
     } else {
         ("✓", super::COLOR_SECONDARY)
     };
-    let mut lines = vec![Line::from(Span::styled(
-        format!("  {icon} {summary}"),
-        get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
-    ))];
-
-    if let Some(diff) = result
+    let embedded_diff = result
         .split_once("```diff")
         .and_then(|(_, body)| body.split_once("```").map(|(diff, _)| diff.trim()))
-        && !diff.is_empty()
-    {
-        lines.extend(render_unified_diff(diff, width, show_picker));
-    }
+        .filter(|diff| !diff.is_empty());
+
+    let lines = if let Some(diff) = embedded_diff {
+        // The action row plus the structured diff is the useful confirmation;
+        // the filesystem acknowledgement is redundant transcript noise.
+        render_unified_diff(diff, width, show_picker)
+    } else {
+        vec![Line::from(Span::styled(
+            format!("  {icon} {summary}"),
+            get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+        ))]
+    };
     lines
 }
 
