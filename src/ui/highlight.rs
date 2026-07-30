@@ -13,7 +13,7 @@ use syntect::highlighting::{FontStyle, Style as SyntectStyle, Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_TEXT, get_themed_style};
+use super::{COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_TEXT, get_themed_style};
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static SYNTAX_THEME: OnceLock<Theme> = OnceLock::new();
@@ -508,6 +508,50 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
     Line::from(final_spans)
 }
 
+/// Render a unified diff with a compact line-number gutter. Hunk headers reset
+/// the old/new counters; ordinary rows then receive the appropriate source
+/// line number while retaining the existing syntax-aware diff styling.
+pub(super) fn render_unified_diff<'a>(diff: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
+    let gutter = 12usize;
+    let body_width = width.saturating_sub(gutter).max(1);
+    let mut old_line = 1usize;
+    let mut new_line = 1usize;
+    let mut rendered = Vec::new();
+
+    for raw in diff.lines() {
+        if let Some((old, new)) = parse_hunk_header(raw) {
+            old_line = old;
+            new_line = new;
+            rendered.push(Line::from(vec![
+                Span::styled(format!("{:>5} {:>5} ", "", ""), get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker)),
+                Span::styled(raw.to_string(), get_themed_style(Color::Rgb(100, 175, 235), COLOR_BG, Modifier::BOLD, show_picker)),
+            ]));
+            continue;
+        }
+
+        let (old_number, new_number) = match raw.chars().next() {
+            Some('+') => { let n = new_line; new_line += 1; (String::new(), n.to_string()) }
+            Some('-') => { let n = old_line; old_line += 1; (n.to_string(), String::new()) }
+            Some(' ') => { let o = old_line; let n = new_line; old_line += 1; new_line += 1; (o.to_string(), n.to_string()) }
+            _ => (String::new(), String::new()),
+        };
+        let prefix = format!("{:>5} {:>5} ", old_number, new_number);
+        let mut line = vec![Span::styled(prefix, get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker))];
+        let body = highlight_diff_line(raw, body_width, show_picker);
+        line.extend(body.spans);
+        rendered.push(Line::from(line));
+    }
+    rendered
+}
+
+fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
+    let mut parts = line.split_whitespace();
+    if parts.next()? != "@@" { return None; }
+    let old = parts.next()?.strip_prefix('-')?.split(',').next()?.parse().ok()?;
+    let new = parts.next()?.strip_prefix('+')?.split(',').next()?.parse().ok()?;
+    Some((old, new))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +608,16 @@ mod tests {
         let spans = highlight_code_line("for value in words", "made-up-language", false);
         let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
         assert_eq!(text, "for value in words");
+    }
+
+    #[test]
+    fn unified_diff_adds_hunk_aware_line_numbers() {
+        let lines = render_unified_diff("@@ -4,2 +7,2 @@\n-old\n+new\n context", 60, false);
+        assert_eq!(lines.len(), 4);
+        let text: String = lines[1].spans.iter().map(|span| span.content.as_ref()).collect();
+        assert!(text.starts_with("    4     "));
+        let text: String = lines[2].spans.iter().map(|span| span.content.as_ref()).collect();
+        assert!(text.starts_with("          7 "));
     }
 }
 
