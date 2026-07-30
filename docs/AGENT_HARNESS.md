@@ -10,15 +10,30 @@ user input
   -> context/history preparation
   -> provider streaming request
   -> typed response classification
-  -> TurnAction decision
+  -> TurnMachine transitions
   -> tool execution and ToolResult records
   -> history update
   -> next turn or terminal response
 ```
 
 The response and turn boundaries live in `src/network/events.rs`. The
-orchestrator uses `TurnAction` to distinguish tool execution, final response,
-cancellation, and recovery paths.
+orchestrator uses `TurnMachine` to validate state transitions (e.g. streaming,
+waiting for tool approval, executing tools, or recovering from errors) and 
+ensure consistent turn lifecycle guarantees.
+
+The turn execution loop is encapsulated by the `run_single_turn` helper in `src/network.rs`.
+This runner executes a single model interaction and handles streaming, history, and
+tool dispatch consistently across both the graphical UI and the raw CLI.
+
+## Policies and Gates
+
+Different environments have different requirements for user interaction. `src/network/policy.rs`
+defines a `TurnPolicy` trait for abstracting approval and validation logic:
+
+- `InteractivePolicy` (UI): Prompts the user before executing dangerous tool calls, and 
+  verifies that the compilation state is green before accepting task completion.
+- `HeadlessPolicy` (Raw CLI): Auto-approves tool execution (unless mutating tools are used 
+  in read-only `plan_mode`), prioritizing uninterrupted execution without user interaction.
 
 ## Context and history
 
