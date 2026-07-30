@@ -22,7 +22,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use std::hash::{Hash, Hasher};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthStr, UnicodeWidthChar};
 
 fn safe_byte_index(s: &str, char_pos: usize) -> usize {
     s.char_indices().nth(char_pos).map(|(i, _)| i).unwrap_or(s.len())
@@ -391,7 +391,7 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
             lines_count += 1;
             col = 0;
         } else {
-            col += 1;
+            col += c.width().unwrap_or(1);
             if col == inner_width {
                 lines_count += 1;
                 col = 0;
@@ -759,7 +759,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
                         current_run = Some((style, c.to_string()));
                     }
                 }
-                col += 1;
+                col += c.width().unwrap_or(1);
             }
         }
 
@@ -2008,7 +2008,7 @@ mod tests {
     #[test]
     fn code_block_rows_fill_full_width() {
         use super::render_assistant_message;
-        use unicode_width::UnicodeWidthStr;
+        use unicode_width::{UnicodeWidthStr, UnicodeWidthChar};
 
         let content = "```text\nWhy Rust Outshines C#\n\nA short line\n```";
         let mut lines = Vec::new();
