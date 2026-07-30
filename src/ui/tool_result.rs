@@ -113,7 +113,14 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
     let mut lines = Vec::new();
     if !diffs.is_empty() {
         for diff in diffs {
-            lines.extend(render_unified_diff(diff, width, show_picker));
+            // The Edit heading already identifies this as a patch. Hunk metadata
+            // is useful to a patch parser but adds visual noise in the transcript.
+            let diff_body = diff
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("@@"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            lines.extend(render_unified_diff(&diff_body, width, show_picker));
         }
     } else {
         lines.push(Line::from(Span::styled(
@@ -353,6 +360,11 @@ mod tests {
         assert!(lines.iter().any(|line| {
             let text: String = line.spans.iter().map(|span| span.content.as_ref()).collect();
             text.contains("new")
+        }));
+        assert!(!lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("@@"))
         }));
     }
 
