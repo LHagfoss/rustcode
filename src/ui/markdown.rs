@@ -111,9 +111,6 @@ pub(super) fn render_markdown<'a>(content: &str, width: usize, show_picker: bool
     }
     let lines = render_markdown_uncached(content, width, show_picker);
     let mut cache = cache.lock().unwrap();
-    if cache.len() >= 128 {
-        cache.clear();
-    }
     cache.insert(key, lines.clone());
     lines
 }
