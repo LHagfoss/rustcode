@@ -101,15 +101,6 @@ fn view_file_range_from_tool_msg(content: &str) -> Option<(String, u32, u32)> {
     Some((path.to_string(), start, end))
 }
 
-/// Collapse redundant `view_file` results. A read is superseded ONLY when a
-/// LATER read of the same path covers its whole line range (a superset or an
-/// identical re-read). Distinct or partially-overlapping ranges are all kept,
-/// so the model never loses a part of a file it deliberately paged through — the
-/// bug that made range reads vanish behind a misleading "superseded" stub.
-fn dedupe_view_file_reads(_history: &mut [ChatMessage]) {
-    // Intentionally no-op: do NOT overwrite view_file outputs with "[superseded by...]"
-    // as it strips file context from history when no subsequent read occurs.
-}
 
 /// Reduce one tool message a single notch toward a stub (full → 2 lines → fully
 /// stubbed). Returns the new token count. Idempotent on already-stubbed messages.
@@ -187,7 +178,7 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
     }
 
     // Drop superseded reads of the same file before measuring tokens.
-    dedupe_view_file_reads(history);
+    // dedup disabled
 
     let mut tokens = Vec::with_capacity(history.len());
     for m in history.iter() {
@@ -2227,7 +2218,7 @@ async fn prepare_turn_request(
             (s.api_base_url.clone(), s.model_name.clone())
         };
         let mut s = state.lock().await;
-        dedupe_view_file_reads(&mut s.history);
+        // dedup disabled
         let budget = s.get_history_token_budget() as usize;
         if compaction::maybe_compact(client, &api_url, &model_name, &mut s.history, budget).await {
             dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
@@ -3757,37 +3748,7 @@ mod tests {
         assert_eq!(classify_tool_msg(&ChatMessage::new("assistant", "hi")), None);
     }
 
-    #[test]
-    fn test_dedupe_view_file_reads_keeps_newest() {
-        let mk = |content: &str| ChatMessage::new("tool", content);
-        let vf = |path: &str| {
-            format!("view_file: [File: {path}, Lines 1 to 10 of 10]\n1: a\n2: b")
-        };
-        let mut history = vec![
-            mk(&vf("src/main.rs")),
-            mk("grep: match"),
-            mk(&vf("src/main.rs")),
-            mk(&vf("src/other.rs")),
-            mk(&vf("src/main.rs")),
-        ];
-        dedupe_view_file_reads(&mut history);
-        assert!(history.iter().all(|m| !m.content.contains("[superseded")));
-    }
 
-    #[test]
-    fn test_dedupe_is_range_aware() {
-        let mk = |c: &str| ChatMessage::new("tool", c);
-        let vf =
-            |p: &str, s: u32, e: u32| format!("view_file: [File: {p}, Lines {s} to {e} of 999]\nx");
-
-        let mut h = vec![
-            mk(&vf("src/a.rs", 1, 40)),
-            mk(&vf("src/a.rs", 100, 140)),
-            mk(&vf("src/a.rs", 500, 540)),
-        ];
-        dedupe_view_file_reads(&mut h);
-        assert!(h.iter().all(|m| !m.content.contains("[superseded")));
-    }
 
     #[test]
     fn test_tool_signature_buckets_full_reads() {
