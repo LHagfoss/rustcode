@@ -66,29 +66,48 @@ fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool)
 /// `[Image #N]` chips for display. The raw markers stay in the underlying
 /// buffer / history so `parse_multimodal_content` can still attach the images
 /// when the message is sent — this only affects what the user sees.
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+
+thread_local! {
+    static MARKER_CACHE: RefCell<(u64, String)> = RefCell::new((0, String::new()));
+}
+
 fn collapse_image_markers(text: &str) -> String {
     const MARK: &str = "![image](file://";
     if !text.contains(MARK) {
         return text.to_string();
     }
-    let mut out = String::new();
-    let mut rest = text;
-    let mut n = 0;
-    while let Some(start) = rest.find(MARK) {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + MARK.len()..];
-        if let Some(close) = after.find(')') {
-            n += 1;
-            out.push_str(&format!("[Image #{n}]"));
-            rest = &after[close + 1..];
-        } else {
-            // Unclosed marker (e.g. mid-paste) — leave the remainder untouched.
-            out.push_str(&rest[start..]);
-            return out;
+    
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    MARKER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.0 == hash {
+            return cache.1.clone();
         }
-    }
-    out.push_str(rest);
-    out
+        let mut out = String::new();
+        let mut rest = text;
+        let mut n = 0;
+        while let Some(start) = rest.find(MARK) {
+            out.push_str(&rest[..start]);
+            let after = &rest[start + MARK.len()..];
+            if let Some(close) = after.find(')') {
+                n += 1;
+                out.push_str(&format!("[Image #{n}]"));
+                rest = &after[close + 1..];
+            } else {
+                out.push_str(&rest[start..]);
+                *cache = (hash, out.clone());
+                return out;
+            }
+        }
+        out.push_str(rest);
+        *cache = (hash, out.clone());
+        out
+    })
 }
 
 fn model_label(state: &AppState) -> String {
