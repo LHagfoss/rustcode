@@ -307,6 +307,32 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::run_command;
+
+    #[test]
+    fn run_command_executes_chained_shell_commands() {
+        let result = run_command(&serde_json::json!({
+            "command": "printf one; printf two"
+        }))
+        .expect("shell command should succeed");
+
+        assert!(result.contains("exit code: 0"));
+        assert!(result.contains("onetwo"));
+    }
+
+    #[test]
+    fn run_command_supports_conditional_chaining() {
+        let result = run_command(&serde_json::json!({
+            "command": "printf first && printf second"
+        }))
+        .expect("shell command should succeed");
+
+        assert!(result.contains("firstsecond"));
+    }
+}
+
 fn run_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> Result<Output, String> {
     let mut child = cmd
         .spawn()

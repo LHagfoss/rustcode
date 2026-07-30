@@ -423,7 +423,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "run_command",
-        description: "Run a shell command and return its stdout/stderr and exit code.                       Supports an optional working directory, environment overrides, timeout (default 120s),                       and background execution ('background': true). Note: Interactive 'sudo' requiring passwords is disabled; use non-privileged commands or 'sudo -n'.",
+        description: "Run one command through the platform shell and return stdout/stderr and the exit code. The command may use normal shell syntax, including ';' or '&&' to chain commands, pipes, redirects, and environment assignments. Supports an optional working directory, environment overrides, timeout (default 120s), and background execution ('background': true). Note: Interactive 'sudo' requiring passwords is disabled; use non-privileged commands or 'sudo -n'.",
         arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
         handler: exec::run_command,
         requires_confirmation: true,
@@ -887,6 +887,7 @@ pub fn tool_system_prompt(
         "You are rustcode, a terminal-based coding assistant.\n\
 - Use `sandbox/` for temporary scripts/builds, and `artifacts/` for persistent designs/reports.\n\
 - For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
+- `run_command` executes the complete `command` string through the platform shell. Chain related commands with `;` or `&&` (for example, `git status; git diff --stat`), and use pipes or redirects when they make the operation clearer.\n\
 # Rules\n\
 - Be concise and direct. No filler or preamble. Execute tools immediately without conversational fluff.\n\
 - Keep responses concise, but include changed files, verification, blockers, and next steps when relevant.\n\
