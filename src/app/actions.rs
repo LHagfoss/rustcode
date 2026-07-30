@@ -347,15 +347,17 @@ pub async fn handle_enter(
             }
             "/status" => {
                 trigger_quota_fetch(&s, state, client);
-                let mut text = String::from("Session usage:");
+                let mut text = String::from("Session status");
                 let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
                 let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
                 let tool_calls = s.history.iter().filter(|m| m.role == "tool").count();
                 text.push_str(&format!(
-                    "\n  messages: {} user, {} assistant, {} tool calls",
+                    "\nMessages: {} user · {} assistant · {} tool calls",
                     user_msgs, assistant_msgs, tool_calls
                 ));
-                text.push_str("\n  Fetching provider quota...");
+                text.push_str(&format!("\nModel: {}", s.model_name));
+                text.push_str(&format!("\nSession: {}", s.active_session_id));
+                text.push_str("\nQuota: fetching provider status…");
                 s.history.push(ChatMessage::new("system", text));
             }
             "/usage" | "/stats" => {
@@ -364,7 +366,7 @@ pub async fn handle_enter(
                 let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
                 let tool_calls = s.history.iter().filter(|m| m.role == "tool").count();
                 text.push_str(&format!(
-                    "\n  messages: {} user, {} assistant, {} tool calls",
+                    "\nMessages: {} user · {} assistant · {} tool calls",
                     user_msgs, assistant_msgs, tool_calls
                 ));
                 match &s.current_token_usage {
