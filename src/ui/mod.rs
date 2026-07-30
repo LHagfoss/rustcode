@@ -37,6 +37,8 @@ const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);
 /// Uniform text-selection background — vibrant selection blue for high visibility.
 const COLOR_SELECTION: Color = Color::Rgb(240, 240, 240);
 const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
+const COLOR_STATUS_BORDER: Color = Color::Rgb(92, 98, 104);
+const COLOR_TURN_SEPARATOR: Color = Color::Rgb(72, 78, 84);
 
 const LOGO: &[&str] = &[
     "                  ▄                   █      ",
@@ -945,7 +947,7 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
     lines.push(Line::from(""));
     lines.push(Line::from(Span::<'static>::styled(
         rule,
-        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        get_themed_style(COLOR_TURN_SEPARATOR, COLOR_BG, Modifier::empty(), show_picker),
     )));
     lines.push(Line::from(""));
 }
@@ -963,13 +965,13 @@ fn render_status_panel<'a>(
     let (label, icon, accent) = if is_warning {
         ("Warning", "!", Color::Rgb(229, 192, 123))
     } else if lower.starts_with("session status") {
-        ("Status", "·", Color::Rgb(100, 175, 235))
+        ("Status", "·", COLOR_STATUS_BORDER)
     } else if lower.starts_with("session usage") {
-        ("Usage", "·", Color::Rgb(100, 175, 235))
+        ("Usage", "·", COLOR_STATUS_BORDER)
     } else if lower.starts_with("available tools") {
-        ("Tools", "·", Color::Rgb(127, 216, 143))
+        ("Tools", "·", COLOR_STATUS_BORDER)
     } else {
-        ("Notice", "·", Color::Rgb(100, 175, 235))
+        ("Notice", "·", COLOR_STATUS_BORDER)
     };
     let panel_width = width.max(24) as usize;
     let inner_width = panel_width.saturating_sub(4).max(10);
@@ -1643,8 +1645,12 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         return;
     };
 
+    let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
+        .iter()
+        .any(|word| notice.text.to_ascii_lowercase().contains(word));
     let (label, accent) = match notice.kind {
-        NoticeKind::Notice => ("Notice", COLOR_TIP),
+        NoticeKind::Notice if is_warning => ("Warning", COLOR_TIP),
+        NoticeKind::Notice => ("Notice", COLOR_STATUS_BORDER),
     };
 
     let block = Block::default()
