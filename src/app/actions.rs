@@ -937,6 +937,17 @@ pub fn resume_latest_session(s: &mut AppState) {
     }
 }
 
+fn append_or_update_resume_notice(history: &mut Vec<ChatMessage>, notice: String) {
+    if let Some(last) = history.last_mut()
+        && last.role == "system"
+        && last.content.starts_with("Resumed session ")
+    {
+        last.content = notice;
+    } else {
+        history.push(ChatMessage::new("system", notice));
+    }
+}
+
 pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     let loaded = crate::config::load_session_file(&meta.path);
     if loaded.is_empty() {
@@ -969,10 +980,10 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     s.temp_input.clear();
     s.status = AppStatus::Idle;
     let count = s.history.len();
-    s.history.push(ChatMessage::new(
-        "system",
+    append_or_update_resume_notice(
+        &mut s.history,
         format!("Resumed session \"{}\" ({} messages)", meta.title, count),
-    ));
+    );
     crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
@@ -1448,6 +1459,34 @@ mod tests {
         assert!(text.contains("ChatGPT primary (5h): 80.0% remaining"));
         assert!(text.contains("ChatGPT secondary (1d): 50.0% remaining"));
         assert!(text.contains("resets "));
+    }
+
+    #[test]
+    fn resume_notice_updates_trailing_notice_instead_of_growing_history() {
+        let mut history = vec![
+            crate::app::ChatMessage::new("user", "hello"),
+            crate::app::ChatMessage::new("system", "Resumed session \"demo\" (1 messages)"),
+        ];
+
+        super::append_or_update_resume_notice(
+            &mut history,
+            "Resumed session \"demo\" (2 messages)".to_string(),
+        );
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.last().unwrap().content, "Resumed session \"demo\" (2 messages)");
+    }
+
+    #[test]
+    fn resume_notice_is_appended_after_real_conversation_content() {
+        let mut history = vec![crate::app::ChatMessage::new("user", "hello")];
+
+        super::append_or_update_resume_notice(
+            &mut history,
+            "Resumed session \"demo\" (1 messages)".to_string(),
+        );
+
+        assert_eq!(history.len(), 2);
     }
 
     #[tokio::test]
