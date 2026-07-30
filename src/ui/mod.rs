@@ -289,14 +289,9 @@ fn render_assistant_message<'a>(
                         } else {
                             COLOR_SECONDARY
                         };
-                        // Ordinary code fences belong to the conversation surface. Diff
-                        // fences keep their panel tint because the tint communicates change
-                        // state; the small copy badge remains intentionally prominent.
-                        let code_bg = if is_diff_lang(&current_lang) {
-                            COLOR_ELEMENT
-                        } else {
-                            COLOR_BG
-                        };
+                        // Keep code on a subtle panel so syntax spans remain visually grouped;
+                        // the Copy badge uses the same panel with a stronger foreground.
+                        let code_bg = COLOR_ELEMENT;
                         let left_text = format!(" {lang_label} ");
                         let pad_len = box_width
                             .saturating_sub(left_text.width() + button_badge.width());
@@ -322,7 +317,11 @@ fn render_assistant_message<'a>(
                                     " ".to_string(),
                                     get_themed_style(COLOR_TEXT, code_bg, Modifier::empty(), show_picker),
                                 )];
-                                content_spans.extend(body_spans);
+                                content_spans.extend(
+                                    body_spans
+                                        .into_iter()
+                                        .map(|span| Span::styled(span.content, span.style.bg(code_bg))),
+                                );
                                 lines.extend(wrap_code_spans(content_spans, box_width, code_bg, show_picker));
                             }
                             i = j.saturating_sub(1);
@@ -333,7 +332,7 @@ fn render_assistant_message<'a>(
                             " ".repeat(box_width),
                             get_themed_style(
                                 COLOR_MUTED,
-                                if is_diff_lang(&current_lang) { COLOR_ELEMENT } else { COLOR_BG },
+                                COLOR_ELEMENT,
                                 Modifier::empty(),
                                 show_picker,
                             ),
@@ -352,7 +351,7 @@ fn render_assistant_message<'a>(
                             format!(" {line_str}"),
                             get_themed_style(
                                 COLOR_TEXT,
-                                if is_diff_lang(&current_lang) { COLOR_ELEMENT } else { COLOR_BG },
+                                COLOR_ELEMENT,
                                 Modifier::empty(),
                                 show_picker,
                             ),
@@ -362,13 +361,17 @@ fn render_assistant_message<'a>(
                             " ".to_string(),
                             get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
                         )];
-                        s.extend(highlight_code_line(line_str, &current_lang, show_picker));
+                        s.extend(
+                            highlight_code_line(line_str, &current_lang, show_picker)
+                                .into_iter()
+                                .map(|span| Span::styled(span.content, span.style.bg(COLOR_ELEMENT))),
+                        );
                         s
                     };
                     lines.extend(wrap_code_spans(
                         content_spans,
                         box_width,
-                        if is_diff_lang(&current_lang) { COLOR_ELEMENT } else { COLOR_BG },
+                        COLOR_ELEMENT,
                         show_picker,
                     ));
                 }
@@ -1941,7 +1944,7 @@ pub fn extract_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::{collapse_image_markers, COLOR_BG};
+    use super::{collapse_image_markers, COLOR_ELEMENT};
 
     // Regression: selection clamped to chat_area.x + 2, so the first two columns
     // of every left-aligned line (tool calls, assistant text) could not be
@@ -2081,8 +2084,8 @@ mod tests {
         }
         for line in &lines[header_idx + 1..header_idx + 5] {
             assert!(
-                line.spans.iter().all(|span| span.style.bg == Some(COLOR_BG)),
-                "ordinary code fences should use the conversation background"
+                line.spans.iter().all(|span| span.style.bg == Some(COLOR_ELEMENT)),
+                "ordinary code fences should use the code panel background"
             );
         }
     }

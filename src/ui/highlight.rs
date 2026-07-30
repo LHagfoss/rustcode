@@ -544,8 +544,8 @@ pub(super) fn render_unified_diff<'a>(diff: &str, width: usize, show_picker: boo
             old_line = old;
             new_line = new;
             rendered.push(Line::from(vec![
-                Span::styled("      ", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker)),
-                Span::styled(raw.to_string(), get_themed_style(Color::Rgb(100, 175, 235), COLOR_BG, Modifier::BOLD, show_picker)),
+                Span::styled("      ", get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::BOLD, show_picker)),
+                Span::styled(raw.to_string(), get_themed_style(Color::Rgb(100, 175, 235), COLOR_ELEMENT, Modifier::BOLD, show_picker)),
             ]));
             continue;
         }
@@ -564,7 +564,7 @@ pub(super) fn render_unified_diff<'a>(diff: &str, width: usize, show_picker: boo
         let gutter_bg = match raw.chars().next() {
             Some('+') => Color::Rgb(24, 40, 24),
             Some('-') => Color::Rgb(48, 20, 20),
-            _ => COLOR_BG,
+            _ => COLOR_ELEMENT,
         };
         let mut line = vec![Span::styled(
             prefix,
@@ -653,5 +653,6 @@ mod tests {
         let text: String = lines[2].spans.iter().map(|span| span.content.as_ref()).collect();
         assert!(text.starts_with("    7 + "));
         assert_eq!(lines[2].spans[0].style.bg, Some(Color::Rgb(24, 40, 24)));
+        assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_ELEMENT));
     }
 }
