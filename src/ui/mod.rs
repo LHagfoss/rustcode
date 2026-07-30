@@ -25,9 +25,11 @@ pub mod theme;
 mod highlight;
 mod markdown;
 mod modals;
+mod tool_result;
 
 use highlight::{highlight_code_line, highlight_diff_line, pad_to_width, render_unified_diff, wrap_code_spans};
 use markdown::render_markdown;
+use tool_result::render_tool_result;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
@@ -1173,7 +1175,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 None
             };
 
-            let (action, arg) = if let Some(tool_call) = prev_tool_info {
+            let (action, arg) = if let Some(ref tool_call) = prev_tool_info {
                 format_pi_tool_action(&tool_call.name, &tool_call.arguments)
             } else {
                 let (tool_name, tool_result) = if let Some(pos) = msg.content.find(": ") {
@@ -1207,6 +1209,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             if let Some(ref diff) = msg.diff {
                 let code_content_width = inner_area.width as usize;
                 lines.extend(render_unified_diff(diff, code_content_width, show_picker));
+            } else if let Some(tool_call) = prev_tool_info {
+                let result = msg.content.split_once(": ").map(|(_, result)| result).unwrap_or(&msg.content);
+                lines.extend(render_tool_result(&tool_call.name, result, inner_area.width as usize, show_picker));
             }
 
         } else if msg.role == "user" {
