@@ -72,6 +72,31 @@ pub(super) fn highlight_code_line<'a>(
     }
 }
 
+/// Highlight a complete fenced block with one parser state, preserving
+/// multiline comments and strings across line boundaries.
+pub(super) fn highlight_code_block(
+    code: &str,
+    language: &str,
+    show_picker: bool,
+) -> Vec<Vec<Span<'static>>> {
+    let syntax: &SyntaxReference = syntax_set()
+        .find_syntax_by_token(language)
+        .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
+    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    code.lines()
+        .map(|line| match highlighter.highlight_line(line, syntax_set()) {
+            Ok(ranges) => ranges
+                .into_iter()
+                .map(|(style, text)| Span::styled(text.to_string(), syntect_style(style, show_picker)))
+                .collect(),
+            Err(_) => vec![Span::styled(
+                line.to_string(),
+                get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+            )],
+        })
+        .collect()
+}
+
 pub(super) fn pad_to_width(s: &str, width: usize) -> String {
     let current = s.width();
     if current < width {
