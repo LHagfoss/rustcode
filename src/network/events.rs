@@ -232,6 +232,17 @@ mod tests {
     }
 
     #[test]
+    fn api_native_responses_are_marked_native() {
+        let response = normalize_response(
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"x\"}}\n```",
+            Some("tool_calls"),
+            crate::config::ToolProtocol::ApiNative,
+        );
+        assert_eq!(response.source, ResponseSource::Native);
+        assert!(response.events.iter().any(|event| matches!(event, AgentEvent::ToolCall(_))));
+    }
+
+    #[test]
     fn tool_result_exposes_error_status() {
         let result = ToolResult {
             tool_name: "run_command".to_string(),

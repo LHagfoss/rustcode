@@ -777,8 +777,7 @@ pub async fn stream_request(
             continue;
         }
 
-        let args_json: serde_json::Value = serde_json::from_str(&acc.arguments)
-            .unwrap_or(serde_json::Value::Object(Default::default()));
+        let args_json = parse_native_tool_arguments(&acc.arguments);
 
         let tool_call_obj = serde_json::json!({
             "name": acc.name,
@@ -817,6 +816,20 @@ pub async fn stream_request(
         buf.content.len()
     );
     Ok(finish_reason)
+}
+
+/// Preserve malformed native arguments for validation and model feedback
+/// instead of silently turning them into an empty object. This keeps the raw
+/// provider failure visible while ensuring the call cannot execute.
+fn parse_native_tool_arguments(raw: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) if value.is_object() => value,
+        Ok(value) => serde_json::json!({ "_invalid_arguments": value }),
+        Err(error) => serde_json::json!({
+            "_invalid_arguments": raw,
+            "_parse_error": error.to_string(),
+        }),
+    }
 }
 
 fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
@@ -3507,6 +3520,13 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_native_arguments_are_preserved_for_validation() {
+        let value = parse_native_tool_arguments("{\"pattern\":");
+        assert!(value.get("_invalid_arguments").is_some());
+        assert!(value.get("_parse_error").is_some());
+    }
 
     #[test]
     fn test_context_length_from_model_info() {
