@@ -187,6 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             client_clone,
                             state_clone,
                             token_clone,
+                            std::sync::Arc::new(crate::network::policy::InteractivePolicy),
                         )
                         .await;
                     }
@@ -251,6 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         client_clone,
                         state_clone,
                         token_clone,
+                        std::sync::Arc::new(crate::network::policy::InteractivePolicy),
                     )
                     .await;
                 });

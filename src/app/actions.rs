@@ -752,8 +752,13 @@ pub async fn handle_enter(
         drop(s);
 
         tokio::spawn(async move {
-            crate::network::process_queue_orchestrator(client_clone, state_clone, token_clone)
-                .await;
+            crate::network::process_queue_orchestrator(
+                client_clone,
+                state_clone,
+                token_clone,
+                Arc::new(crate::network::policy::InteractivePolicy),
+            )
+            .await;
         });
     }
     false

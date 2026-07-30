@@ -47,6 +47,10 @@ pub(crate) mod history;
 #[path = "network/runner.rs"]
 pub(crate) mod runner;
 
+#[path = "network/policy.rs"]
+pub(crate) mod policy;
+pub(crate) use policy::{TurnPolicy, InteractivePolicy};
+
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
@@ -832,7 +836,7 @@ fn parse_native_tool_arguments(raw: &str) -> serde_json::Value {
     }
 }
 
-fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
+pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
     if name == "replace_file_content" {
         let search_block = args
             .get("target_content")
@@ -2622,10 +2626,11 @@ async fn execute_tool_batch(
     results
 }
 
-pub async fn process_queue_orchestrator(
+pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
+    policy: Arc<P>,
 ) {
     dbg_log!("Orchestrator started");
     loop {
@@ -2962,96 +2967,7 @@ pub async fn process_queue_orchestrator(
                 if !cancel_token.is_cancelled() {
                     tool_rounds += 1;
 
-                    // Gather all confirmations needed
-                    let mut confirmations = Vec::new();
-                    let auto_confirm = { state.lock().await.auto_confirm };
-
-                    if !auto_confirm {
-                        for call in &tool_calls {
-                            let mode = { state.lock().await.agent_mode };
-                            let decision = crate::tools::authorize_tool(
-                                &call.name,
-                                mode,
-                                false,
-                                false,
-                            );
-                            if matches!(
-                                decision,
-                                crate::tools::AuthorizationDecision::RequireConfirmation
-                            ) && !crate::tools::is_agent_tool(&call.name) {
-                                let path =
-                                    if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str()) {
-                                        p.to_string()
-                                    } else if let Some(cmd) =
-                                        call.arguments.get("command").and_then(|c| c.as_str())
-                                    {
-                                        cmd.to_string()
-                                    } else if let (Some(src), Some(dest)) = (
-                                        call.arguments.get("src").and_then(|s| s.as_str()),
-                                        call.arguments.get("dest").and_then(|d| d.as_str()),
-                                    ) {
-                                        format!("{src} -> {dest}")
-                                    } else {
-                                        "?".to_string()
-                                    };
-
-                                let diff_opt = get_diff_preview(&call.name, &call.arguments);
-                                let (preview, content_bytes) = if let Some(ref d) = diff_opt {
-                                    (d.clone(), d.len())
-                                } else {
-                                    let content =
-                                        call.arguments.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                                    let preview =
-                                        content.lines().take(6).collect::<Vec<_>>().join("\n");
-                                    (preview, content.len())
-                                };
-
-                                confirmations.push(crate::app::ToolConfirmation {
-                                    tool_name: call.name.clone(),
-                                    path,
-                                    content_preview: preview,
-                                    content_bytes,
-                                });
-                            }
-                        }
-                    }
-
-                    let mut approved = true;
-                    if !confirmations.is_empty() {
-                        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-                        {
-                            let mut s = state.lock().await;
-                            s.modal_scroll_row = 0;
-                            s.pending_tool_confirmation = Some(confirmations);
-                            s.tool_confirmation_response = Some(tx);
-                            s.status = AppStatus::AwaitingToolConfirmation;
-                        }
-
-                        let first_tool_name = &tool_calls[0].name;
-                        let _ = crate::notifications::notify_pending_confirmation(first_tool_name);
-
-                        dbg_log!(
-                            "Awaiting user batch confirmation for {} tools",
-                            tool_calls.len()
-                        );
-                        approved = match rx.await {
-                            Ok(true) => {
-                                dbg_log!("User approved batch tool calls");
-                                true
-                            }
-                            Ok(false) => {
-                                dbg_log!("User denied batch tool calls");
-                                let _ = crate::notifications::notify_finished(
-                                    crate::notifications::FinishedStatus::Denied,
-                                );
-                                false
-                            }
-                            Err(_) => {
-                                dbg_log!("Confirmation channel closed during batch confirmation");
-                                false
-                            }
-                        };
-                    }
+                    let approved = policy.should_approve(&state, &tool_calls).await;
 
                     // Update UI state immediately after confirmation is resolved
                     {
@@ -3303,7 +3219,8 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             // compile check and, if it fails, hand the errors back and force
             // another round. Skip on the forced wrap-up turn (tools already
             // disabled) and once the retry budget is spent, so we can't spin.
-            if made_edits
+            if policy.should_verify_completion()
+                && made_edits
                 && !force_final
                 && finish_gate_retries < MAX_FINISH_GATE_RETRIES
             {
