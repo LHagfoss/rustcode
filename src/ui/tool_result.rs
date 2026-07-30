@@ -7,7 +7,8 @@ use ratatui::{
 use std::path::Path;
 
 use super::{
-    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_line, render_unified_diff,
+    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_block,
+    highlight_code_line, render_unified_diff, wrap_code_spans,
 };
 
 const MAX_RENDERED_TOOL_LINES: usize = 300;
@@ -17,6 +18,28 @@ fn language_for_path(path: &str) -> &str {
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("text")
+}
+
+pub(super) fn render_file_preview<'a>(
+    path: &str,
+    content: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
+    let language = language_for_path(path);
+    let mut lines = vec![Line::from(Span::styled(
+        format!("  {} · {}", path, language),
+        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+    ))];
+    for spans in highlight_code_block(content, language, show_picker) {
+        let mut row = vec![Span::styled(
+            "  ",
+            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+        )];
+        row.extend(spans);
+        lines.extend(wrap_code_spans(row, width.max(10), COLOR_BG, show_picker));
+    }
+    lines
 }
 
 fn line_number<'a>(old: &str, _width: usize, show_picker: bool) -> Span<'a> {
@@ -241,7 +264,7 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_RENDERED_TOOL_LINES, render_tool_result};
+    use super::{MAX_RENDERED_TOOL_LINES, render_file_preview, render_tool_result};
 
     #[test]
     fn read_results_have_header_and_line_numbered_code() {
@@ -337,6 +360,20 @@ mod tests {
     fn control_plane_results_are_hidden() {
         assert!(render_tool_result("use_skill", "loaded skill", 80, false).is_empty());
         assert!(render_tool_result("spawn_agent", "agent done", 80, false).is_empty());
+    }
+
+    #[test]
+    fn write_previews_render_as_normal_highlighted_code() {
+        let lines = render_file_preview(
+            "src/temp.rs",
+            "fn greet() {\n    println!(\"hello\");\n}",
+            80,
+            false,
+        );
+        assert!(lines[0].spans[0].content.contains("src/temp.rs"));
+        assert!(lines.iter().any(|line| {
+            line.spans.iter().any(|span| span.content.contains("println!"))
+        }));
     }
 
     #[test]
