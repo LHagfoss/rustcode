@@ -36,6 +36,8 @@ pub(super) fn render_tool_result<'a>(
     match tool_name {
         "view_file" => render_read_result(result, width, show_picker),
         "grep" => render_search_result(result, width, show_picker),
+        "glob" | "list_directory" => render_directory_result(result, show_picker),
+        "run_command" => render_command_result(result, show_picker),
         _ => result
             .lines()
             .map(|line| {
@@ -46,6 +48,43 @@ pub(super) fn render_tool_result<'a>(
             })
             .collect(),
     }
+}
+
+fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
+    result
+        .lines()
+        .map(|raw| {
+            let (marker, color) = if raw.ends_with('/') {
+                ("▸ ", super::COLOR_PRIMARY)
+            } else if raw.contains(" file(s) matched") || raw.starts_with("no files") {
+                ("", super::COLOR_MUTED)
+            } else {
+                ("· ", super::COLOR_TEXT)
+            };
+            Line::from(vec![
+                Span::styled(
+                    marker,
+                    get_themed_style(color, COLOR_BG, Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    raw.to_string(),
+                    get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+                ),
+            ])
+        })
+        .collect()
+}
+
+fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
+    result
+        .lines()
+        .map(|raw| {
+            Line::from(Span::styled(
+                format!("  {raw}"),
+                get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+            ))
+        })
+        .collect()
 }
 
 fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
@@ -146,5 +185,19 @@ mod tests {
                 .iter()
                 .any(|span| span.content.contains("12"))
         );
+    }
+
+    #[test]
+    fn directory_results_get_tree_markers() {
+        let lines = render_tool_result("list_directory", "src/\nmain.rs", 80, false);
+        assert!(lines[0].spans[0].content.contains('▸'));
+        assert!(lines[1].spans[0].content.contains('·'));
+    }
+
+    #[test]
+    fn command_results_get_a_code_background() {
+        let lines = render_tool_result("run_command", "cargo test", 80, false);
+        assert!(lines[0].spans[0].style.bg.is_some());
+        assert!(lines[0].spans[0].content.contains("cargo test"));
     }
 }
