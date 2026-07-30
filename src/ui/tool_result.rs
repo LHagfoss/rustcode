@@ -7,7 +7,7 @@ use ratatui::{
 use std::path::Path;
 
 use super::{
-    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_line,
+    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_line, render_unified_diff,
 };
 
 const MAX_RENDERED_TOOL_LINES: usize = 300;
@@ -45,7 +45,7 @@ pub(super) fn render_tool_result<'a>(
         | "write_to_file"
         | "delete_file"
         | "move_file"
-        | "copy_file" => render_mutation_result(result, show_picker),
+        | "copy_file" => render_mutation_result(result, width, show_picker),
         // The action line already communicates control-plane lifecycle. Their
         // raw acknowledgement is implementation noise in the transcript.
         "use_skill"
@@ -70,7 +70,7 @@ pub(super) fn render_tool_result<'a>(
     lines
 }
 
-fn render_mutation_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
+fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
     let Some(summary) = result.lines().find(|line| !line.trim().is_empty()) else {
         return Vec::new();
     };
@@ -80,10 +80,19 @@ fn render_mutation_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> 
     } else {
         ("✓", super::COLOR_SECONDARY)
     };
-    vec![Line::from(Span::styled(
+    let mut lines = vec![Line::from(Span::styled(
         format!("  {icon} {summary}"),
         get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
-    ))]
+    ))];
+
+    if let Some(diff) = result
+        .split_once("```diff")
+        .and_then(|(_, body)| body.split_once("```").map(|(diff, _)| diff.trim()))
+        && !diff.is_empty()
+    {
+        lines.extend(render_unified_diff(diff, width, show_picker));
+    }
+    lines
 }
 
 fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
@@ -199,21 +208,20 @@ fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<
 }
 
 fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> Vec<Line<'a>> {
+    let mut language = "text";
     result
         .lines()
         .map(|raw| {
             let is_path = raw.ends_with(':') && !raw.starts_with("  ");
             if is_path {
+                language = language_for_path(raw.trim_end_matches(':'));
                 Line::from(Span::styled(
                     raw.to_string(),
                     get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
                 ))
             } else if let Some((number, text)) = raw.trim_start().split_once(": ") {
                 let mut row = vec![line_number(number, 0, show_picker)];
-                row.push(Span::styled(
-                    text.to_string(),
-                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
-                ));
+                row.extend(highlight_code_line(text, language, show_picker));
                 Line::from(row)
             } else {
                 Line::from(Span::styled(
@@ -296,12 +304,27 @@ mod tests {
     fn edit_results_show_only_a_compact_success_summary() {
         let lines = render_tool_result(
             "replace_file_content",
-            "successfully replaced target_content in 'src/main.rs'\n\n```diff\n-old\n+new\n```",
+            "successfully replaced target_content in 'src/main.rs'",
             80,
             false,
         );
         assert_eq!(lines.len(), 1);
         assert!(lines[0].spans[0].content.contains("✓ successfully replaced"));
+    }
+
+    #[test]
+    fn edit_results_preserve_embedded_diffs() {
+        let lines = render_tool_result(
+            "replace_file_content",
+            "successfully replaced target_content in 'src/main.rs'\n\n```diff\n@@\n-old\n+new\n```",
+            80,
+            false,
+        );
+        assert!(lines.len() > 1);
+        assert!(lines.iter().any(|line| {
+            let text: String = line.spans.iter().map(|span| span.content.as_ref()).collect();
+            text.contains("new")
+        }));
     }
 
     #[test]
