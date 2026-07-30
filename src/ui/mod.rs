@@ -1331,9 +1331,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                 let status_msg = random_statuses[(elapsed_secs as usize / 2) % random_statuses.len()];
 
-                let tool_label = parsed_tool
-                    .map(|call| format!("Executing {}...", call.name))
-                    .unwrap_or_else(|| status_msg.to_string());
+                let tool_label = if let Some(call) = parsed_tool {
+                    format!("Executing {}...", call.name)
+                } else if is_tool_syntax {
+                    "Parsing tool call...".to_string()
+                } else {
+                    status_msg.to_string()
+                };
 
                 lines.push(Line::from(vec![
                     Span::styled(
