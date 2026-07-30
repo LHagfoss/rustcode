@@ -1,6 +1,4 @@
 use crate::app::{AppState, ChatMessage};
-use std::io::{self, Write};
-use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -50,213 +48,58 @@ pub async fn build_messages(state: &AppState) -> Vec<serde_json::Value> {
 }
 
 /// Prompt the user to confirm tool execution and run it if confirmed.
-pub async fn execute_tool_if_approved(
-    state_arc: &Arc<Mutex<AppState>>,
-    response_content: String,
-) -> Option<String> {
-    let protocol = { state_arc.lock().await.config.tool_protocol };
+pub(crate) struct HeadlessPolicy;
 
-    let tool_call = crate::tools::parse_tool_call(&response_content, protocol)?;
-
-    println!("\nDetected Tool Call:");
-    println!("  Name: {}", tool_call.name);
-    println!(
-        "  Arguments: {}",
-        serde_json::to_string_pretty(&tool_call.arguments).unwrap_or_default()
-    );
-
-    print!("\nExecute tool? (y/N): ");
-    let _ = io::stdout().flush();
-
-    let mut user_input = String::new();
-    if io::stdin().read_line(&mut user_input).is_err() {
-        println!("Failed to read input. Exiting.");
-        return None;
+impl crate::network::policy::TurnPolicy for HeadlessPolicy {
+    fn should_approve(
+        &self,
+        state: &Arc<Mutex<AppState>>,
+        tool_calls: &[crate::tools::ToolCall],
+    ) -> impl std::future::Future<Output = bool> + Send {
+        let calls = tool_calls.to_vec();
+        let s_clone = Arc::clone(state);
+        async move {
+            let s = s_clone.lock().await;
+            for call in &calls {
+                println!("\n[Headless] Executing Tool: {}", call.name);
+                if s.agent_mode == crate::config::AgentMode::Plan && !crate::tools::allowed_in_plan_mode(&call.name) {
+                    println!("[Headless] Rejected: mutating tool in plan_mode");
+                    return false;
+                }
+            }
+            true
+        }
     }
 
-    match user_input.trim().to_lowercase().as_str() {
-        "y" | "yes" => {
-            println!("Executing tool...");
-            let result = crate::tools::execute(&tool_call.name, &tool_call.arguments);
-            println!("Result: {}", result);
-
-            // Record assistant response and tool result in history.
-            let mut s = state_arc.lock().await;
-            s.history.push(ChatMessage::new("assistant", response_content));
-            s.history.push(ChatMessage::new("tool", result.clone()));
-            Some(result)
-        }
-        _ => {
-            println!("Tool call rejected. Exiting agent loop.");
-            None
-        }
+    fn should_verify_completion(&self) -> bool {
+        true
     }
 }
 
-/// Feedback handed back when the model clearly meant to call a tool but the
-/// block didn't parse, so it can correct itself instead of the loop giving up.
-const TOOL_REPAIR_FEEDBACK: &str = "tool_error: your tool call could not be parsed. \
-Emit exactly one complete, valid tool call inside a ```tool fenced block using JSON, e.g.\n\
-```tool\n{\"name\": \"tool_name\", \"arguments\": {...}}\n```\n\
-Use the keys \"name\" and \"arguments\" exactly, and do not wrap numbers or booleans in quotes.";
-
-/// Execute the main agent loop: stream a response, detect tool calls, and
-/// repeat until the model finishes or a safety guard requires termination.
-///
-/// Robustness: a transient stream error or a single malformed/prose round must
-/// not abandon the task (the interactive TUI recovers from both). Stream errors
-/// are retried with backoff without consuming a round; a response that clearly
-/// intended a tool call but failed to parse is handed back for correction.
 pub async fn run_round_loop(
     client: &reqwest::Client,
     state_arc: Arc<Mutex<AppState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel_token = tokio_util::sync::CancellationToken::new();
+    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer {
+        content: String::new(),
+    }));
+    
+    let policy = Arc::new(HeadlessPolicy);
+    let mut ctx = crate::network::TurnContext::new();
 
-    const MAX_STREAM_RETRIES: u32 = 3;
-    const MAX_MALFORMED_RETRIES: u32 = 2;
-    let mut stream_retries = 0u32;
-    let mut malformed_retries = 0u32;
-
-    let mut steps = 0u32;
-    let mut turn_runner = crate::network::runner::TurnRunner::new();
+    println!("Starting headless agent loop...");
     while !cancel_token.is_cancelled() {
-        println!("\n=== Step {} ===", steps);
-
-        // Reset streaming buffer.
-        {
-            let mut s = state_arc.lock().await;
-            s.current_response.clear();
-        }
-
-        let msgs = {
-            let state_guard = state_arc.lock().await;
-            build_messages(state_guard.deref()).await
-        };
-
-        let (api_base_url, model_name) = {
-            let s = state_arc.lock().await;
-            (s.api_base_url.clone(), s.model_name.clone())
-        };
-
-        println!("Streaming response from {}...", model_name);
-
-        let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer {
-            content: String::new(),
-        }));
-
-        let request_client = client.clone();
-        let request_state = state_arc.clone();
-        let request_cancel = cancel_token.clone();
-        let request_buffer = stream_buffer.clone();
-        let request_api_url = api_base_url.clone();
-        let request_model = model_name.clone();
-        let request_msgs = msgs.clone();
-        let response = crate::network::runner::collect_response(move |previous| {
-            let mut current_msgs = request_msgs.clone();
-            if !previous.is_empty() {
-                current_msgs.push(serde_json::json!({"role": "assistant", "content": previous}));
-                current_msgs.push(serde_json::json!({"role": "user", "content": "continue"}));
-            }
-            let request_client = request_client.clone();
-            let request_state = request_state.clone();
-            let request_cancel = request_cancel.clone();
-            let request_buffer = request_buffer.clone();
-            let request_api_url = request_api_url.clone();
-            let request_model = request_model.clone();
-            async move {
-                request_buffer.lock().await.content.clear();
-                let finish_reason = crate::network::stream_request(
-                    &request_client,
-                    request_state,
-                    request_cancel,
-                    &request_api_url,
-                    &request_model,
-                    &current_msgs,
-                    request_buffer.clone(),
-                    false,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                let content = request_buffer.lock().await.content.clone();
-                Ok((content, finish_reason))
-            }
-        })
-        .await;
-
-        let response_content = match response {
-            Ok((content, _finish_reason)) => content,
-            Err(e) => {
-            stream_retries += 1;
-            if stream_retries <= MAX_STREAM_RETRIES {
-                let delay = std::time::Duration::from_millis(500 * stream_retries as u64);
-                println!(
-                    "Stream error: {e} — retry {stream_retries}/{MAX_STREAM_RETRIES} in {}ms",
-                    delay.as_millis()
-                );
-                tokio::time::sleep(delay).await;
-                continue; // retry the same round; don't spend the round budget
-            }
-            println!("Stream error: {e} — giving up after {MAX_STREAM_RETRIES} retries.");
+        if !crate::network::run_single_turn(client, &state_arc, &cancel_token, &policy, &stream_buffer, &mut ctx).await {
             break;
-            }
-        };
-        stream_retries = 0;
-
-        println!();
-
-        let protocol = { state_arc.lock().await.config.tool_protocol };
-        if let Some(tool_call) = crate::tools::parse_tool_call(&response_content, protocol) {
-            match turn_runner.check_tool(&tool_call.name, &tool_call.arguments) {
-                crate::network::loop_detect::LoopStatus::Abort(repeats) => {
-                    println!(
-                        "Loop detected after {repeats} repeated '{}' actions. Stopping safely.",
-                        tool_call.name
-                    );
-                    break;
-                }
-                crate::network::loop_detect::LoopStatus::Warning(repeats) => {
-                    println!(
-                        "Warning: '{}' has repeated {repeats} times.",
-                        tool_call.name
-                    );
-                }
-                crate::network::loop_detect::LoopStatus::Ok => {}
-            }
         }
+    }
 
-        if execute_tool_if_approved(&state_arc, response_content.clone())
-            .await
-            .is_some()
-        {
-            // Tool executed — loop continues with updated history.
-            malformed_retries = 0;
-            steps += 1;
-            continue;
+    if !ctx.final_content.is_empty() {
+        let prose = crate::network::text::strip_tool_call_syntax(&ctx.final_content);
+        if !prose.trim().is_empty() {
+            println!("\nAssistant: {}", prose.trim());
         }
-
-        // No tool executed. If the model clearly intended a tool call but it
-        // didn't parse, hand the error back and let it retry rather than
-        // abandoning the task.
-        if crate::network::text::has_intended_tool_call(&response_content)
-            && malformed_retries < MAX_MALFORMED_RETRIES
-        {
-            malformed_retries += 1;
-            println!(
-                "\nMalformed tool call — asking the model to correct it (retry {malformed_retries}/{MAX_MALFORMED_RETRIES})."
-            );
-            let mut s = state_arc.lock().await;
-            s.history
-                .push(ChatMessage::new("assistant", response_content));
-            s.history
-                .push(ChatMessage::new("tool", TOOL_REPAIR_FEEDBACK.to_string()));
-            drop(s);
-            steps += 1;
-            continue;
-        }
-
-        println!("\nNo tool call detected. Agent loop finished.");
-        break;
     }
 
     Ok(())
