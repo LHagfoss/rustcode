@@ -289,17 +289,25 @@ fn render_assistant_message<'a>(
                         } else {
                             COLOR_SECONDARY
                         };
+                        // Ordinary code fences belong to the conversation surface. Diff
+                        // fences keep their panel tint because the tint communicates change
+                        // state; the small copy badge remains intentionally prominent.
+                        let code_bg = if is_diff_lang(&current_lang) {
+                            COLOR_ELEMENT
+                        } else {
+                            COLOR_BG
+                        };
                         let left_text = format!(" {lang_label} ");
                         let pad_len = box_width
                             .saturating_sub(left_text.width() + button_badge.width());
                         let spans = vec![
                             Span::styled(
                                 left_text,
-                                get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::BOLD, show_picker),
+                                get_themed_style(COLOR_MUTED, code_bg, Modifier::BOLD, show_picker),
                             ),
                             Span::styled(
                                 " ".repeat(pad_len),
-                                get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                                get_themed_style(COLOR_MUTED, code_bg, Modifier::empty(), show_picker),
                             ),
                             Span::styled(
                                 button_badge,
@@ -312,10 +320,10 @@ fn render_assistant_message<'a>(
                             for body_spans in highlight_code_block(&code_text, &current_lang, show_picker) {
                                 let mut content_spans = vec![Span::styled(
                                     " ".to_string(),
-                                    get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                                    get_themed_style(COLOR_TEXT, code_bg, Modifier::empty(), show_picker),
                                 )];
                                 content_spans.extend(body_spans);
-                                lines.extend(wrap_code_spans(content_spans, box_width, COLOR_ELEMENT, show_picker));
+                                lines.extend(wrap_code_spans(content_spans, box_width, code_bg, show_picker));
                             }
                             i = j.saturating_sub(1);
                         }
@@ -323,7 +331,12 @@ fn render_assistant_message<'a>(
                         // Closing fence: one solid trailing row to close the panel.
                         lines.push(Line::from(Span::styled(
                             " ".repeat(box_width),
-                            get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                            get_themed_style(
+                                COLOR_MUTED,
+                                if is_diff_lang(&current_lang) { COLOR_ELEMENT } else { COLOR_BG },
+                                Modifier::empty(),
+                                show_picker,
+                            ),
                         )));
                         current_lang.clear();
                     }
@@ -337,17 +350,27 @@ fn render_assistant_message<'a>(
                     let content_spans = if is_plain_lang(&current_lang) || is_diff_lang(&current_lang) {
                         vec![Span::styled(
                             format!(" {line_str}"),
-                            get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                            get_themed_style(
+                                COLOR_TEXT,
+                                if is_diff_lang(&current_lang) { COLOR_ELEMENT } else { COLOR_BG },
+                                Modifier::empty(),
+                                show_picker,
+                            ),
                         )]
                     } else {
                         let mut s = vec![Span::styled(
                             " ".to_string(),
-                            get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
                         )];
                         s.extend(highlight_code_line(line_str, &current_lang, show_picker));
                         s
                     };
-                    lines.extend(wrap_code_spans(content_spans, box_width, COLOR_ELEMENT, show_picker));
+                    lines.extend(wrap_code_spans(
+                        content_spans,
+                        box_width,
+                        if is_diff_lang(&current_lang) { COLOR_ELEMENT } else { COLOR_BG },
+                        show_picker,
+                    ));
                 }
                 i += 1;
             } else {
@@ -1918,7 +1941,7 @@ pub fn extract_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::collapse_image_markers;
+    use super::{collapse_image_markers, COLOR_BG};
 
     // Regression: selection clamped to chat_area.x + 2, so the first two columns
     // of every left-aligned line (tool calls, assistant text) could not be
@@ -2055,6 +2078,12 @@ mod tests {
         for line in &lines[header_idx..header_idx + 5] {
             let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
             assert_eq!(w, width as usize, "code panel row must fill full width");
+        }
+        for line in &lines[header_idx + 1..header_idx + 5] {
+            assert!(
+                line.spans.iter().all(|span| span.style.bg == Some(COLOR_BG)),
+                "ordinary code fences should use the conversation background"
+            );
         }
     }
 }
