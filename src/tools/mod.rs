@@ -900,6 +900,7 @@ pub fn tool_system_prompt(
 - Keep responses concise, but include changed files, verification, blockers, and next steps when relevant.\n\
 - DO NOT add code comments (such as `// ...` or `/* ... */`) to code files unless explicitly requested by the user.\n\
 - After edits, inspect the result and run the most relevant check when safe and useful; then report what changed and what was verified.\n\
+- Choose verification from the project structure: first locate the nearest `Cargo.toml`, `package.json`, `pyproject.toml`, or equivalent manifest. Run project checks from that project root. Do NOT run `cargo check` on a standalone `.rs` file outside a Cargo project; use an appropriate standalone checker such as `rustc` only when practical, or clearly report that project verification is not applicable.\n\
 - Tool results are authoritative evidence. If a tool or compiler check reports an error, fix it before giving a final answer. Never replace a concrete tool result with a claim that tools were unavailable.\n\
 - A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
@@ -908,6 +909,7 @@ pub fn tool_system_prompt(
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
 - Match project code style.\n\
 - Before adding new code, study how the nearest EXISTING code does the same thing (sibling functions, other match arms, similar handlers) and mirror its patterns — function signatures, how shared state/locks are passed, error handling. Do NOT invent a new pattern when neighbors establish one; diverging from local conventions is a common source of subtle bugs (deadlocks, double-locks, lifetime issues) that compile fine but break at runtime.\n\
+- Prefer the smallest effective tool sequence: locate first, inspect only the relevant range, make one focused change, then verify from the correct project root. Do not repeat successful reads or run broad checks unrelated to the files changed.\n\
 - Run focused tests or checks after code changes unless the user says not to; ask before expensive or externally visible operations.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
 - Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations.\n\
@@ -1717,5 +1719,7 @@ mod tests {
         );
         assert!(prompt.contains("Do not spawn subagents unless the user explicitly requests"));
         assert!(prompt.contains("Review every subagent result"));
+        assert!(prompt.contains("Do NOT run `cargo check` on a standalone `.rs` file"));
+        assert!(prompt.contains("Prefer the smallest effective tool sequence"));
     }
 }
