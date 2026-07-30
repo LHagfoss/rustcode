@@ -82,13 +82,17 @@ impl McpClient {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if let Ok(msg) = serde_json::from_str::<Value>(&line)
-                    && let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
+                if let Ok(msg) = serde_json::from_str::<Value>(&line) {
+                    if let Some(id) = msg.get("id").and_then(|i| i.as_i64()) {
                         let mut pend = pending_clone.lock().await;
                         if let Some(sender) = pend.remove(&id) {
                             let _ = sender.send(msg);
                         }
                     }
+                } else {
+                    eprintln!("[mcp] ignoring non-JSON line from server: {}", 
+                        if line.len() > 100 { &line[..100] } else { &line });
+                }
             }
         });
 
