@@ -2902,6 +2902,9 @@ pub async fn process_queue_orchestrator(
                 !tool_calls.is_empty(),
                 task_completed,
             );
+            if turn_action == events::TurnAction::Cancel {
+                break;
+            }
             if matches!(turn_action, events::TurnAction::ExecuteTools) {
                 dbg_log!("Parsed {} tool call requests", tool_calls.len());
 
@@ -3061,24 +3064,24 @@ pub async fn process_queue_orchestrator(
                         crate::config::save_history(&s.history);
                     }
 
+                    if approved {
+                        turn_machine.approval_granted();
+                    } else {
+                        turn_machine.approval_denied();
+                    }
+
                     let results = execute_tool_batch(
                         &client,
                         &state,
                         &cancel_token,
                         &tool_calls,
-                        approved,
+                        turn_machine.state() == events::TurnState::ExecutingTools,
                         made_edits,
                         &edit_root,
                         &mut compile_dirty,
                         &mut compile_cache,
                     )
                     .await;
-
-                    if approved {
-                        turn_machine.approval_granted();
-                    } else {
-                        turn_machine.approval_denied();
-                    }
 
                     crate::logger::operational_event(
                         "tools.batch.finish",
@@ -3094,6 +3097,9 @@ pub async fn process_queue_orchestrator(
                         dbg_log!("Orchestrator: Cancelled during tool execution");
                         let mut s = state.lock().await;
                         s.status = AppStatus::Idle;
+                        if turn_machine.state() == events::TurnState::ExecutingTools {
+                            turn_machine.tools_finished();
+                        }
                         break;
                     }
 
@@ -3186,6 +3192,9 @@ pub async fn process_queue_orchestrator(
                                     crate::config::save_history(&s.history);
                                     s.current_response.clear();
                                     drop(s);
+                                    if turn_machine.state() == events::TurnState::ExecutingTools {
+                                        turn_machine.tools_finished();
+                                    }
                                     continue;
                                 }
                             } else {
@@ -3226,21 +3235,27 @@ pub async fn process_queue_orchestrator(
                         s.current_response.clear();
                         drop(s);
                         task_completed = true;
+                        if turn_machine.state() == events::TurnState::ExecutingTools {
+                            turn_machine.tools_finished();
+                        }
                         break;
                     }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
                     drop(s);
-                    turn_machine.tools_finished();
+                    if turn_machine.state() == events::TurnState::ExecutingTools {
+                        turn_machine.tools_finished();
+                    }
                     dbg_log!("Tool round finished, looping back");
                     continue;
                 } else {
                     dbg_log!("Tool execution cancelled");
+                    if turn_machine.state() == events::TurnState::ExecutingTools {
+                        turn_machine.tools_finished();
+                    }
                     break;
                 }
-            } else if has_intended_tool_call(&final_content)
-                && !cancel_token.is_cancelled()
-            {
+            } else if has_intended_tool_call(&final_content) {
                 dbg_log!(
                     "Orchestrator: Detected malformed tool call, auto-correcting and retrying..."
                 );
@@ -3273,7 +3288,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             }
 
             let is_continuous = { state.lock().await.continuous_mode };
-            if is_continuous && !cancel_token.is_cancelled() && tool_rounds > 0 {
+            if is_continuous && tool_rounds > 0 {
                 dbg_log!("Continuous mode active, assistant responded with text prose. Ending continuous mode turn.");
                 let mut s = state.lock().await;
                 s.continuous_mode = false;
@@ -3290,9 +3305,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             // disabled) and once the retry budget is spent, so we can't spin.
             if made_edits
                 && !force_final
-                && !cancel_token.is_cancelled()
                 && finish_gate_retries < MAX_FINISH_GATE_RETRIES
-                && !cancel_token.is_cancelled()
             {
                 let root = edit_root
                     .clone()
