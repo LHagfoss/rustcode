@@ -42,12 +42,6 @@ impl DiscordRpcHandler {
         }
     }
 
-    pub fn disconnect(&mut self) {
-        if let Some(mut client) = self.client.take() {
-            let _ = client.close();
-        }
-    }
-
     pub fn set_activity(&mut self, state: &str, details: &str) {
         if let Some(client) = &mut self.client {
             let activity = activity::Activity::new()

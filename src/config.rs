@@ -315,7 +315,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[rustcode] WARNING: Failed to parse config.toml ({e}). Keeping existing config on disk to prevent overwriting custom profiles.");
-            let mut cfg = default_config;
+            let cfg = default_config;
             // Retain original raw text if we cannot parse it so we don't save back default_config over user profiles
             cfg
         }

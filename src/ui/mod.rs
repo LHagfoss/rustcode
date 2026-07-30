@@ -1,27 +1,3 @@
-use std::io::{self, Write};
-use std::thread;
-use std::time::Duration;
-use rand::seq::IndexedRandom;
-
-pub fn show_spinner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    let messages = vec!["Thinking...", "Analyzing code...", "Refactoring...", "Checking logic...", "Compiling thoughts...", "Debugging reality..."];
-    let spinner = vec!['|', '/', '-', '\\'];
-    let mut i = 0;
-    
-    println!(); // Add padding above
-    while running.load(std::sync::atomic::Ordering::SeqCst) {
-        let msg = messages.choose(&mut rand::rng()).unwrap();
-        print!("\r{} {}", spinner[i % 4], msg);
-        io::stdout().flush().unwrap();
-        i += 1;
-        thread::sleep(Duration::from_millis(200));
-    }
-    print!("\r ");
-    io::stdout().flush().unwrap();
-    println!(); // Add padding below
-}
-
-pub mod theme;
 mod highlight;
 mod markdown;
 mod modals;
@@ -903,82 +879,6 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
     (action_label, target_arg)
 }
 
-fn format_tool_call_brief(name: &str, args: &serde_json::Value) -> String {
-    match name {
-        "view_file" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            let start = args.get("start_line").and_then(|v| v.as_i64()).unwrap_or(1);
-            let end = args.get("end_line").and_then(|v| v.as_i64());
-            if let Some(e) = end {
-                format!("view_file: view {} lines {}-{}", path, start, e)
-            } else {
-                format!("view_file: view {} starting at line {}", path, start)
-            }
-        }
-        "replace_file_content" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            let start = args.get("start_line").and_then(|v| v.as_i64()).unwrap_or(0);
-            let end = args.get("end_line").and_then(|v| v.as_i64()).unwrap_or(0);
-            format!("replace_file_content: replace {} lines {}-{}", path, start, end)
-        }
-        "multi_replace_file_content" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            let count = args.get("replacements").and_then(|r| r.as_array()).map(|a| a.len()).unwrap_or(0);
-            format!("multi_replace_file_content: apply {} edits to {}", count, path)
-        }
-        "write_to_file" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            let overwrite = args.get("overwrite").and_then(|o| o.as_bool()).unwrap_or(false);
-            if overwrite {
-                format!("write_to_file: overwrite {}", path)
-            } else {
-                format!("write_to_file: create {}", path)
-            }
-        }
-        "delete_file" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("delete_file: delete {}", path)
-        }
-        "move_file" => {
-            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
-            let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("move_file: {} -> {}", src, dest)
-        }
-        "copy_file" => {
-            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
-            let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("copy_file: {} -> {}", src, dest)
-        }
-        "run_command" => {
-            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("run_command: {}", cmd)
-        }
-        "search_web" => {
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("search_web: \"{}\"", query)
-        }
-        "find_symbol" => {
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("find_symbol: \"{}\"", query)
-        }
-        "grep" => {
-            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-            format!("grep: \"{}\" in {}", pattern, path)
-        }
-        "glob" => {
-            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-            format!("glob: \"{}\" in {}", pattern, path)
-        }
-        "list_directory" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-            format!("list_directory: {}", path)
-        }
-        _ => format!("{}: {}", name, args),
-    }
-}
-
 /// Memoized conversation render. Building every message's spans and wrapping
 /// them several times per frame is O(history) and dominates scroll latency on
 /// long sessions. The rendered lines only change when the history, viewport
@@ -1757,7 +1657,6 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
 
     let accent = match notice.kind {
         NoticeKind::Notice => COLOR_TIP,
-        NoticeKind::Warning => COLOR_PRIMARY,
     };
 
     let block = Block::default()

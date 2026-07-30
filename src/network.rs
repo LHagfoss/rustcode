@@ -2631,7 +2631,7 @@ pub async fn process_queue_orchestrator(
 ) {
     dbg_log!("Orchestrator started");
     loop {
-        let mut next_prompt = {
+        let next_prompt = {
             let mut s = state.lock().await;
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");

@@ -258,32 +258,11 @@ pub struct McpEditState {
 }
 
 impl McpEditState {
-    pub fn new(is_add: bool, edit_index: Option<usize>, name: String, command: String, args: String) -> Self {
-        let cursor_pos = name.len();
-        Self {
-            is_add,
-            edit_index,
-            name_input: name,
-            command_input: command,
-            args_input: args,
-            active_field: 0,
-            cursor_pos,
-        }
-    }
-
     pub fn active_buf_and_pos_mut(&mut self) -> (&mut String, &mut usize) {
         match self.active_field {
             0 => (&mut self.name_input, &mut self.cursor_pos),
             1 => (&mut self.command_input, &mut self.cursor_pos),
             _ => (&mut self.args_input, &mut self.cursor_pos),
-        }
-    }
-
-    pub fn active_buf_and_pos(&self) -> (&str, usize) {
-        match self.active_field {
-            0 => (&self.name_input, self.cursor_pos),
-            1 => (&self.command_input, self.cursor_pos),
-            _ => (&self.args_input, self.cursor_pos),
         }
     }
 
@@ -482,7 +461,6 @@ impl PromptCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoticeKind {
     Notice,
-    Warning,
 }
 
 pub struct Notice {
@@ -1090,14 +1068,6 @@ impl AppState {
         self.notice = Some(Notice {
             text: text.into(),
             kind: NoticeKind::Notice,
-            shown_at: std::time::Instant::now(),
-        });
-    }
-
-    pub fn set_warning(&mut self, text: impl Into<String>) {
-        self.notice = Some(Notice {
-            text: text.into(),
-            kind: NoticeKind::Warning,
             shown_at: std::time::Instant::now(),
         });
     }
