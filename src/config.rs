@@ -1114,4 +1114,45 @@ mod tests {
         assert_eq!(parsed3.default.big(), "my-big-model");
         assert_eq!(parsed3.default.small(), "my-small-model");
     }
+
+    use tempfile::TempDir;
+    use std::io::Write;
+
+    #[test]
+    fn test_load_valid_config() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        f.write_all(b"default = { big = \"test_model\", small = \"test_small\" }\n[[models]]\nname = \"test_model\"\nurl = \"http://test/v1/chat/completions\"\nmodel = \"test\"\n").unwrap();
+
+        let (url, model, config) = load_config_from(dir.path());
+        assert_eq!(config.default.big(), "test_model");
+        assert_eq!(config.models[0].name, "test_model");
+        assert_eq!(url, "http://test/v1/chat/completions");
+        assert_eq!(model, "test");
+    }
+
+    #[test]
+    fn test_load_invalid_config_returns_default() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let mut f = std::fs::File::create(&config_path).unwrap();
+        f.write_all(b"invalid toml content").unwrap();
+
+        let (_url, _model, config) = load_config_from(dir.path());
+        assert_eq!(config.default.big(), AppConfig::default().default.big());
+        
+        let backup_path = dir.path().join("config.toml.bak");
+        assert!(backup_path.exists());
+    }
+
+    #[test]
+    fn test_load_missing_config_returns_default() {
+        let dir = TempDir::new().unwrap();
+        let (_url, _model, config) = load_config_from(dir.path());
+        assert_eq!(config.default.big(), AppConfig::default().default.big());
+        
+        let config_path = dir.path().join("config.toml");
+        assert!(config_path.exists());
+    }
 }
