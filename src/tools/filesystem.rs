@@ -364,23 +364,44 @@ fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) ->
     Err(err_msg)
 }
 
-/// Slide a target-sized window over the file and return the byte-line range
-/// (start_idx, end_idx_exclusive, ratio) of the most similar region, comparing
-/// lines by trimmed equality. Used purely to build actionable error feedback.
+/// Find a bounded, line-similar region for actionable edit error feedback.
+///
+/// This deliberately avoids character-level diffing across every window. A
+/// failed edit must return an error promptly; it must never monopolize a
+/// worker thread while trying to produce a nicer diagnostic.
 fn closest_region(content: &str, target: &str) -> Option<(usize, usize, f32)> {
+    const MAX_COMPARISON_CELLS: usize = 250_000;
     let content_lines: Vec<&str> = content.lines().collect();
     let target_lines: Vec<&str> = target.lines().collect();
     if content_lines.is_empty() || target_lines.is_empty() {
         return None;
     }
     let win = target_lines.len().min(content_lines.len());
+    if content_lines.len().saturating_mul(win) > MAX_COMPARISON_CELLS {
+        return None;
+    }
     let mut best: Option<(usize, usize, f32)> = None;
     for i in 0..=(content_lines.len() - win) {
-        // Char-level similarity so near-misses (an escape or a typo) rank above
-        // unrelated lines — line-equality alone scores every mismatch as 0 and
-        // would just return the first window.
-        let window = content_lines[i..i + win].join("\n");
-        let ratio = similar::TextDiff::from_chars(window.as_str(), target).ratio();
+        let score: f32 = content_lines[i..i + win]
+            .iter()
+            .zip(target_lines.iter())
+            .map(|(actual, expected)| {
+                if actual.trim() == expected.trim() {
+                    return 1.0;
+                }
+                let expected_words: Vec<&str> = expected.split_whitespace().collect();
+                let actual_words: Vec<&str> = actual.split_whitespace().collect();
+                if expected_words.is_empty() {
+                    return 0.0;
+                }
+                expected_words
+                    .iter()
+                    .filter(|word| actual_words.contains(word))
+                    .count() as f32
+                    / expected_words.len() as f32
+            })
+            .sum();
+        let ratio = score / win as f32;
         if best.map(|(_, _, r)| ratio > r).unwrap_or(true) {
             best = Some((i, i + win, ratio));
         }
@@ -734,5 +755,18 @@ mod tests {
         let err = apply_single_edit_to_content(file, "f.rs", &edit).unwrap_err();
         assert!(err.contains("Closest region"), "got: {err}");
         assert!(err.contains("let x = 1;"), "should quote actual line: {err}");
+    }
+
+    #[test]
+    fn closest_region_is_bounded_for_large_inputs() {
+        let content = (0..10_000)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let target = (0..100)
+            .map(|i| format!("target {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(closest_region(&content, &target).is_none());
     }
 }
