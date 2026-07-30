@@ -87,12 +87,25 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
         let text = span.content.into_owned();
         for word in text.split_inclusive(|c: char| c.is_whitespace()) {
             let word_width = word.width();
-            if current_width > 0 && current_width + word_width > width {
-                lines.push(Line::from(std::mem::take(&mut current)));
-                current_width = 0;
+            if word_width > width {
+                use unicode_width::UnicodeWidthChar;
+                for ch in word.chars() {
+                    let ch_width = ch.width().unwrap_or(1);
+                    if current_width + ch_width > width && current_width > 0 {
+                        lines.push(Line::from(std::mem::take(&mut current)));
+                        current_width = 0;
+                    }
+                    current.push(Span::styled(ch.to_string(), style));
+                    current_width += ch_width;
+                }
+            } else {
+                if current_width > 0 && current_width + word_width > width {
+                    lines.push(Line::from(std::mem::take(&mut current)));
+                    current_width = 0;
+                }
+                current.push(Span::styled(word.to_string(), style));
+                current_width += word_width;
             }
-            current.push(Span::styled(word.to_string(), style));
-            current_width += word_width;
         }
     }
     if !current.is_empty() {
