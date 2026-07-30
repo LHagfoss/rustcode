@@ -174,6 +174,19 @@ pub struct ChatMessage {
     pub response_time_ms: Option<u64>,
     #[serde(skip)]
     pub diff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_result: Option<ToolResultRecord>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolResultRecord {
+    pub tool_name: String,
+    pub arguments_hash: String,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub changed_paths: Vec<String>,
+    pub truncated: bool,
+    pub full_output_artifact: Option<String>,
 }
 
 impl ChatMessage {
@@ -185,11 +198,17 @@ impl ChatMessage {
             timestamp: current_timestamp(),
             response_time_ms: None,
             diff: None,
+            tool_result: None,
         }
     }
 
     pub fn with_diff(mut self, diff: Option<String>) -> Self {
         self.diff = diff;
+        self
+    }
+
+    pub fn with_tool_result(mut self, record: ToolResultRecord) -> Self {
+        self.tool_result = Some(record);
         self
     }
 }

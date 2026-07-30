@@ -1,4 +1,4 @@
-use crate::app::ChatMessage;
+use crate::app::{ChatMessage, ToolResultRecord};
 use crate::tools::ToolCall;
 
 pub const MAX_CONTEXT_FRAGMENT_CHARS: usize = 16 * 1024;
@@ -12,7 +12,7 @@ pub(crate) enum HistoryEntry {
     User(String),
     Assistant(String),
     ToolCall(ToolCall),
-    ToolResult { tool_name: String, content: String },
+    ToolResult { tool_name: String, content: String, metadata: Option<ToolResultRecord> },
     System(String),
     ContextFragment(String),
     CompactionSummary(String),
@@ -41,7 +41,7 @@ pub(crate) fn normalize_history(history: &[ChatMessage]) -> Vec<HistoryEntry> {
                     .split_once(": ")
                     .map(|(name, content)| (name.to_string(), content.to_string()))
                     .unwrap_or_else(|| ("tool".to_string(), message.content.clone()));
-                HistoryEntry::ToolResult { tool_name, content }
+                HistoryEntry::ToolResult { tool_name, content, metadata: message.tool_result.clone() }
             }
             "system" if message.content.starts_with(crate::network::compaction::SUMMARY_MARKER) => {
                 HistoryEntry::CompactionSummary(message.content.clone())
@@ -116,10 +116,16 @@ pub(crate) fn to_messages(
     let mut first_user = true;
 
     messages.extend(normalize_history(history).into_iter().map(|entry| match entry {
-        HistoryEntry::ToolResult { tool_name, content } => serde_json::json!({
-            "role": "user",
-            "content": format!("<tool_result>\n{}: {}\n</tool_result>", tool_name, content),
-        }),
+        HistoryEntry::ToolResult { tool_name, content, metadata } => {
+            let metadata_line = metadata
+                .as_ref()
+                .map(|value| format!("\nmetadata: {}", serde_json::to_string(value).unwrap_or_default()))
+                .unwrap_or_default();
+            serde_json::json!({
+                "role": "user",
+                "content": format!("<tool_result>\n{}: {}{}\n</tool_result>", tool_name, content, metadata_line),
+            })
+        },
         HistoryEntry::User(content) if first_user => {
             first_user = false;
             serde_json::json!({
@@ -185,7 +191,7 @@ mod tests {
         ];
         let entries = normalize_history(&history);
         assert!(matches!(entries[1], HistoryEntry::ToolCall(_)));
-        assert!(matches!(entries[2], HistoryEntry::ToolResult { .. }));
+        assert!(matches!(entries[2], HistoryEntry::ToolResult { metadata: None, .. }));
         let messages = to_messages(&history, "system");
         assert_eq!(messages[3]["role"], "user");
         assert!(messages[3]["content"].as_str().unwrap().contains("grep:"));
@@ -197,5 +203,22 @@ mod tests {
         let rendered = render_context_fragments(&[fragment]);
         assert!(rendered.len() <= MAX_CONTEXT_FRAGMENT_CHARS + 32);
         assert!(rendered.contains("context fragment truncated"));
+    }
+
+    #[test]
+    fn preserves_structured_tool_metadata_in_provider_context() {
+        let message = ChatMessage::new("tool", "grep: found").with_tool_result(ToolResultRecord {
+            tool_name: "grep".to_string(),
+            arguments_hash: "abc".to_string(),
+            success: true,
+            exit_code: Some(0),
+            changed_paths: Vec::new(),
+            truncated: false,
+            full_output_artifact: None,
+        });
+        let entries = normalize_history(std::slice::from_ref(&message));
+        assert!(matches!(entries[0], HistoryEntry::ToolResult { metadata: Some(_), .. }));
+        let messages = to_messages(&[message], "system");
+        assert!(messages[1]["content"].as_str().unwrap().contains("metadata:"));
     }
 }
