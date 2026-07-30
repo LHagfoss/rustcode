@@ -3068,6 +3068,7 @@ pub async fn process_queue_orchestrator(
                     let mut completed = false;
                     for result in results {
                         let name = result.tool_name;
+                        let metadata = result.metadata.clone();
                         let mut content = result.content;
                         if name == "use_skill" && deferred_tool_calls > 0 {
                             content.push_str(&format!(
@@ -3103,7 +3104,16 @@ pub async fn process_queue_orchestrator(
                         let truncated_result = truncate_tool_output(&name, content);
                         s.history.push(
                             ChatMessage::new("tool", format!("{name}: {truncated_result}"))
-                                .with_diff(diff_opt),
+                                .with_diff(diff_opt)
+                                .with_tool_result(crate::app::ToolResultRecord {
+                                    tool_name: name.clone(),
+                                    arguments_hash: metadata.arguments_hash,
+                                    success: metadata.success,
+                                    exit_code: metadata.exit_code,
+                                    changed_paths: metadata.changed_paths,
+                                    truncated: metadata.truncated,
+                                    full_output_artifact: metadata.full_output_artifact,
+                                }),
                         );
                     }
                     if completed {
