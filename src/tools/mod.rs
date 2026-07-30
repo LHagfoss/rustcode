@@ -1569,6 +1569,7 @@ mod tests {
         });
         let res = filesystem::replace_file_content_tool(&args).unwrap();
         assert!(res.contains("successfully replaced"));
+        assert!(res.contains("@@ -1,1 +1,1 @@"));
         let updated = std::fs::read_to_string(&test_file).unwrap();
         assert!(updated.contains("fn foo_updated() {}"));
 
