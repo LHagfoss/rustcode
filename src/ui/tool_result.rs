@@ -10,6 +10,8 @@ use super::{
     COLOR_BG, COLOR_ELEMENT, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_line,
 };
 
+const MAX_RENDERED_TOOL_LINES: usize = 300;
+
 fn language_for_path(path: &str) -> &str {
     Path::new(path)
         .extension()
@@ -33,7 +35,7 @@ pub(super) fn render_tool_result<'a>(
     width: usize,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
-    match tool_name {
+    let mut lines = match tool_name {
         "view_file" => render_read_result(result, width, show_picker),
         "grep" => render_search_result(result, width, show_picker),
         "glob" | "list_directory" => render_directory_result(result, show_picker),
@@ -47,7 +49,17 @@ pub(super) fn render_tool_result<'a>(
                 ))
             })
             .collect(),
+    };
+
+    if lines.len() > MAX_RENDERED_TOOL_LINES {
+        let hidden = lines.len() - MAX_RENDERED_TOOL_LINES;
+        lines.truncate(MAX_RENDERED_TOOL_LINES);
+        lines.push(Line::from(Span::styled(
+            format!("  … {hidden} more lines hidden; use the tool result or rerun a narrower query"),
+            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+        )));
     }
+    lines
 }
 
 fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
@@ -154,7 +166,7 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::render_tool_result;
+    use super::{MAX_RENDERED_TOOL_LINES, render_tool_result};
 
     #[test]
     fn read_results_have_header_and_line_numbered_code() {
@@ -199,5 +211,17 @@ mod tests {
         let lines = render_tool_result("run_command", "cargo test", 80, false);
         assert!(lines[0].spans[0].style.bg.is_some());
         assert!(lines[0].spans[0].content.contains("cargo test"));
+    }
+
+    #[test]
+    fn large_results_are_collapsed_for_transcript_rendering() {
+        let result = (0..350)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = render_tool_result("run_command", &result, 80, false);
+
+        assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
+        assert!(lines.last().unwrap().spans[0].content.contains("50 more lines"));
     }
 }
