@@ -10,10 +10,22 @@ use ratatui::{
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, OnceLock};
 
 use super::{
     get_themed_style, COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT,
 };
+
+type MarkdownCache = HashMap<(u64, usize, bool), Vec<Line<'static>>>;
+static RENDER_CACHE: OnceLock<Mutex<MarkdownCache>> = OnceLock::new();
+
+fn cache_key(content: &str, width: usize, show_picker: bool) -> (u64, usize, bool) {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    (hasher.finish(), width, show_picker)
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct InlineStyle {
@@ -92,6 +104,21 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
 /// ordinary tagged lines so the existing code-panel/highlighter path remains
 /// the single owner of code block rendering.
 pub(super) fn render_markdown<'a>(content: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
+    let key = cache_key(content, width, show_picker);
+    let cache = RENDER_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(lines) = cache.lock().unwrap().get(&key).cloned() {
+        return lines;
+    }
+    let lines = render_markdown_uncached(content, width, show_picker);
+    let mut cache = cache.lock().unwrap();
+    if cache.len() >= 128 {
+        cache.clear();
+    }
+    cache.insert(key, lines.clone());
+    lines
+}
+
+fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut paragraph = Vec::<Span<'static>>::new();
     let mut inline = InlineStyle::default();
