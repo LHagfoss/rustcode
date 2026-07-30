@@ -211,6 +211,10 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
     prune_class(history, &mut tokens, &mut total, budget, "other").await;
 
     dbg_log!("Compact finished. New history tokens: {}", total);
+    crate::logger::operational_event(
+        "context.compaction",
+        serde_json::json!({"history_tokens": total, "budget": budget}),
+    );
 }
 
 
@@ -1492,6 +1496,10 @@ async fn run_subagent(
     cancel_token: &tokio_util::sync::CancellationToken,
     agent_id: u32,
 ) -> String {
+    crate::logger::operational_event(
+        "subagent.start",
+        serde_json::json!({"agent_id": agent_id}),
+    );
     let stream_buffer = Arc::new(Mutex::new(StreamBuffer {
         content: String::new(),
     }));
@@ -1499,6 +1507,10 @@ async fn run_subagent(
     let mut loop_detector = loop_detect::LoopDetector::new(6);
     loop {
         if cancel_token.is_cancelled() {
+            crate::logger::operational_event(
+                "subagent.finish",
+                serde_json::json!({"agent_id": agent_id, "status": "cancelled"}),
+            );
             return "error: cancelled".to_string();
         }
         let mut history_snapshot: Vec<ChatMessage> = {
@@ -1729,6 +1741,10 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
             a.history.push(ChatMessage::new("assistant", &content));
         }
+        crate::logger::operational_event(
+            "subagent.finish",
+            serde_json::json!({"agent_id": agent_id, "status": "completed", "rounds": rounds}),
+        );
         return strip_leading_think(&content).to_string();
     }
 }
@@ -2658,6 +2674,10 @@ pub async fn process_queue_orchestrator(
         }
 
         record_prompt_to_history(&state, is_wakeup, &next_prompt).await;
+        crate::logger::operational_event(
+            "turn.start",
+            serde_json::json!({"wakeup": is_wakeup}),
+        );
 
         if is_first_prompt {
             spawn_title_generation(&client, &state, next_prompt.clone()).await;
@@ -2772,6 +2792,14 @@ pub async fn process_queue_orchestrator(
                     }
                 };
                 response_finish_reason = finish_reason.clone();
+                crate::logger::operational_event(
+                    "model.response",
+                    serde_json::json!({
+                        "round": tool_rounds,
+                        "finish_reason": finish_reason,
+                        "content_bytes": accumulated_content.len(),
+                    }),
+                );
 
                 let chunk_content = stream_buffer.lock().await.content.clone();
                 accumulated_content.push_str(&chunk_content);
@@ -3069,6 +3097,16 @@ pub async fn process_queue_orchestrator(
                     )
                     .await;
 
+                    crate::logger::operational_event(
+                        "tools.batch.finish",
+                        serde_json::json!({
+                            "count": results.len(),
+                            "successes": results.iter().filter(|result| result.metadata.success).count(),
+                            "failed": results.iter().filter(|result| !result.metadata.success).count(),
+                            "changed_paths": results.iter().map(|result| result.metadata.changed_paths.len()).sum::<usize>(),
+                        }),
+                    );
+
                     if cancel_token.is_cancelled() {
                         dbg_log!("Orchestrator: Cancelled during tool execution");
                         let mut s = state.lock().await;
@@ -3297,6 +3335,15 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
 
         if !final_content.is_empty() {
             dbg_log!("Finishing agent loop, writing final assistant reply");
+            crate::logger::operational_event(
+                "turn.finish",
+                serde_json::json!({
+                    "completed_task": task_completed,
+                    "tool_rounds": tool_rounds,
+                    "content_bytes": final_content.len(),
+                    "cancelled": cancel_token.is_cancelled(),
+                }),
+            );
 
             let mut s = state.lock().await;
             s.continuous_mode = false;
