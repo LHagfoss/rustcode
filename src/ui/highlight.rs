@@ -42,7 +42,7 @@ fn syntect_style(style: SyntectStyle, show_picker: bool) -> Style {
     }
     get_themed_style(
         Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b),
-        COLOR_ELEMENT,
+        COLOR_BG,
         modifier,
         show_picker,
     )
@@ -67,7 +67,7 @@ pub(super) fn highlight_code_line<'a>(
             .collect(),
         Err(_) => vec![Span::styled(
             line.to_string(),
-            get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
         )],
     }
 }
@@ -91,7 +91,7 @@ pub(super) fn highlight_code_block(
                 .collect(),
             Err(_) => vec![Span::styled(
                 line.to_string(),
-                get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
             )],
         })
         .collect()
