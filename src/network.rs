@@ -2716,6 +2716,7 @@ pub async fn process_queue_orchestrator(
         let mut compile_cache: Option<(std::path::PathBuf, Option<String>)> = None;
         let mut finish_gate_retries: u32 = 0;
         const MAX_FINISH_GATE_RETRIES: u32 = 2;
+        let mut turn_machine = events::TurnMachine::new();
         loop {
             dbg_log!("Starting agent loop round {}", tool_rounds);
 
@@ -2788,6 +2789,7 @@ pub async fn process_queue_orchestrator(
                     Ok(fr) => fr,
                     Err(e) => {
                         stream_err = Some(e);
+                        turn_machine.recover_error();
                         break;
                     }
                 };
@@ -2820,6 +2822,7 @@ pub async fn process_queue_orchestrator(
             }
 
             if cancel_token.is_cancelled() {
+                turn_machine.cancel();
                 break;
             }
 
@@ -2918,9 +2921,8 @@ pub async fn process_queue_orchestrator(
             }
             let (tool_calls, deferred_tool_calls) =
                 crate::tools::isolate_control_plane_call(parsed_tool_calls);
-            let turn_action = events::next_turn_action(
+            let turn_action = turn_machine.model_finished(
                 cancel_token.is_cancelled(),
-                false,
                 force_final,
                 !tool_calls.is_empty(),
                 task_completed,
@@ -3097,6 +3099,12 @@ pub async fn process_queue_orchestrator(
                     )
                     .await;
 
+                    if approved {
+                        turn_machine.approval_granted();
+                    } else {
+                        turn_machine.approval_denied();
+                    }
+
                     crate::logger::operational_event(
                         "tools.batch.finish",
                         serde_json::json!({
@@ -3248,6 +3256,7 @@ pub async fn process_queue_orchestrator(
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
                     drop(s);
+                    turn_machine.tools_finished();
                     dbg_log!("Tool round finished, looping back");
                     continue;
                 } else {
