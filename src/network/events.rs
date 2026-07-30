@@ -261,28 +261,7 @@ impl TurnMachine {
     }
 }
 
-pub(crate) fn next_turn_action(
-    cancelled: bool,
-    stream_failed: bool,
-    force_final: bool,
-    has_tool_calls: bool,
-    task_completed: bool,
-) -> TurnAction {
-    if cancelled {
-        return TurnAction::Cancel;
-    }
-    if stream_failed {
-        return TurnAction::RecoverError;
-    }
-    if force_final || task_completed {
-        return TurnAction::FinishResponse;
-    }
-    if has_tool_calls {
-        TurnAction::ExecuteTools
-    } else {
-        TurnAction::FinishResponse
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -388,29 +367,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn prioritizes_safety_and_terminal_actions() {
-        assert_eq!(
-            next_turn_action(true, false, false, true, false),
-            TurnAction::Cancel
-        );
-        assert_eq!(
-            next_turn_action(false, true, false, true, false),
-            TurnAction::RecoverError
-        );
-        assert_eq!(
-            next_turn_action(false, false, true, true, false),
-            TurnAction::FinishResponse
-        );
-        assert_eq!(
-            next_turn_action(false, false, false, true, false),
-            TurnAction::ExecuteTools
-        );
-        assert_eq!(
-            next_turn_action(false, false, false, false, false),
-            TurnAction::FinishResponse
-        );
-    }
+
 
     #[test]
     fn turn_machine_owns_model_approval_execution_lifecycle() {
