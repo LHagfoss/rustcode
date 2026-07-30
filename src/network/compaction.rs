@@ -10,6 +10,8 @@ pub fn estimate_tokens(text: &str) -> usize {
     bpe.encode_with_special_tokens(text).len()
 }
 
+pub const DEFAULT_PRUNE_TOKEN_THRESHOLD: usize = 90_000;
+
 /// Number of most-recent messages whose tool outputs are always kept verbatim.
 /// Older tool outputs are eligible for message-count-based pruning and, on
 /// structured compaction, everything before this suffix is folded into a summary.
@@ -73,7 +75,7 @@ fn detect_exit_status(content: &str) -> String {
     String::new()
 }
 
-pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
+pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) {
     let mut total_tool_tokens = 0;
     // Walk backward through history
     for m in history.iter_mut().rev() {
@@ -87,7 +89,7 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage]) {
             // wiped mid-read — the amnesia that made the agent re-read forever.
             // NOTE: still a fixed cap; if you run a small-context model as the
             // main model, lower this to fit its window.
-            if total_tool_tokens > 90_000 && !m.content.contains("content cleared to save context") {
+            if total_tool_tokens > threshold && !m.content.contains("content cleared to save context") {
                 if let Some(pos) = m.content.find(": ") {
                     let tool_name = &m.content[..pos];
                     m.content = format!("{}: [Old tool result content cleared to save context]", tool_name);
@@ -112,7 +114,7 @@ pub async fn maybe_compact(
     //    outputs that have aged past the recent window, then apply the hard
     //    rolling token cap as a safety net.
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
-    prune_old_tool_outputs(history);
+    prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
 
     // 2. Estimate total tokens in the history
     let total_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
@@ -154,7 +156,7 @@ pub async fn force_compact(
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
-    prune_old_tool_outputs(history);
+    prune_old_tool_outputs(history, DEFAULT_PRUNE_TOKEN_THRESHOLD);
 
     // Summarize all but the most recent KEEP_RECENT_TURNS messages.
     let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
