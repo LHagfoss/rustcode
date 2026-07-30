@@ -14,7 +14,6 @@ pub(crate) enum HistoryEntry {
     ToolCall(ToolCall),
     ToolResult { tool_name: String, content: String, metadata: Option<ToolResultRecord> },
     System(String),
-    ContextFragment(String),
     CompactionSummary(String),
     Lifecycle(String),
 }
@@ -145,7 +144,7 @@ pub(crate) fn to_messages(
             "role": "assistant",
             "content": content,
         }),
-        HistoryEntry::System(content) | HistoryEntry::ContextFragment(content) |
+        HistoryEntry::System(content) |
         HistoryEntry::CompactionSummary(content) | HistoryEntry::Lifecycle(content) => serde_json::json!({
             "role": "system",
             "content": content,

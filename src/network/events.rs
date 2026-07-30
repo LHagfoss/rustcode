@@ -65,28 +65,23 @@ pub(crate) enum TurnState {
     ExecutingTools,
     Completed,
     Cancelled,
-    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnInput {
     ModelFinished { has_tool_calls: bool },
     ApprovalGranted,
-    ApprovalDenied,
     ToolsFinished,
     Cancelled,
-    Failed,
 }
 
 pub(crate) fn transition_turn(state: TurnState, input: TurnInput) -> TurnState {
     let _current_state = state;
     match input {
         TurnInput::Cancelled => TurnState::Cancelled,
-        TurnInput::Failed => TurnState::Failed,
         TurnInput::ModelFinished { has_tool_calls: true } => TurnState::AwaitingApproval,
         TurnInput::ModelFinished { has_tool_calls: false } => TurnState::Completed,
         TurnInput::ApprovalGranted => TurnState::ExecutingTools,
-        TurnInput::ApprovalDenied => TurnState::Completed,
         TurnInput::ToolsFinished => TurnState::AwaitingModel,
     }
 }

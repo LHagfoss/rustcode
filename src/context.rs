@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Default)]
 pub struct ContextSnapshot {
     cwd: String,
-    platform: String,
     date: String,
     git_branch: Option<String>,
     git_status_summary: Option<String>,
@@ -19,7 +18,6 @@ impl ContextSnapshot {
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "(unknown)".to_string());
-        let platform = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
         let date = chrono::Local::now().format("%A %Y-%m-%d").to_string();
 
         let git_branch = run_git(std::path::Path::new(&cwd), &["rev-parse", "--abbrev-ref", "HEAD"])
@@ -53,7 +51,7 @@ impl ContextSnapshot {
 
         let agent_doc = load_agent_doc(&cwd);
 
-        Self { cwd, platform, date, git_branch, git_status_summary, tree_entries, agent_doc }
+        Self { cwd, date, git_branch, git_status_summary, tree_entries, agent_doc }
     }
 
     /// Produce a delta description of what changed between the previous snapshot and now.

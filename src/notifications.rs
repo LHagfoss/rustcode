@@ -27,10 +27,8 @@ pub fn notify_pending_confirmation(details: &str) -> std::io::Result<()> {
 #[derive(Debug)]
 pub enum FinishedStatus {
     Success,
-    Warning,
     Cancelled,
     Denied,
-    Error(String),
 }
 
 /// Convenience: notify that the harness finished (success or error).
@@ -39,14 +37,8 @@ pub fn notify_finished(status: FinishedStatus) -> std::io::Result<()> {
         FinishedStatus::Success => {
             notify("rustcode", "Task complete.")?;
         }
-        FinishedStatus::Warning => {
-            notify("rustcode", "Warning: task completed with issues.")?;
-        }
         FinishedStatus::Cancelled | FinishedStatus::Denied => {
             notify("rustcode", "Operation cancelled or denied.")?;
-        }
-        FinishedStatus::Error(msg) => {
-            notify("rustcode", &msg)?;
         }
     }
     Ok(())
