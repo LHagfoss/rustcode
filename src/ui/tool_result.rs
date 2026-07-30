@@ -1,7 +1,7 @@
 //! Structured rendering for native tool results.
 
 use ratatui::{
-    style::Modifier,
+    style::{Color, Modifier},
     text::{Line, Span},
 };
 use std::path::Path;
@@ -88,15 +88,50 @@ fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>>
 }
 
 fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
-    result
-        .lines()
-        .map(|raw| {
-            Line::from(Span::styled(
-                format!("  {raw}"),
-                get_themed_style(COLOR_TEXT, COLOR_ELEMENT, Modifier::empty(), show_picker),
-            ))
-        })
-        .collect()
+    let mut exit_code = None;
+    let mut section = "stdout";
+    let mut output = Vec::new();
+
+    for raw in result.lines() {
+        if let Some(code) = raw.strip_prefix("exit code: ") {
+            exit_code = code.trim().parse::<i32>().ok();
+        } else if raw == "stdout:" {
+            section = "stdout";
+        } else if raw == "stderr:" {
+            section = "stderr";
+        } else if raw != "(no output)" && !raw.is_empty() {
+            output.push((section, raw));
+        }
+    }
+
+    let code = exit_code.unwrap_or(0);
+    let succeeded = code == 0;
+    let status_icon = if succeeded { "✓" } else { "✗" };
+    let status_color = if succeeded {
+        super::COLOR_SECONDARY
+    } else {
+        Color::Rgb(229, 123, 123)
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("  {status_icon} exit {code}"),
+            get_themed_style(status_color, COLOR_BG, Modifier::BOLD, show_picker),
+        ),
+    ])];
+
+    for (kind, raw) in output {
+        let (prefix, color) = if kind == "stderr" {
+            ("  ! ", Color::Rgb(229, 192, 123))
+        } else {
+            ("  │ ", COLOR_TEXT)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{prefix}{raw}"),
+            get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+        )));
+    }
+
+    lines
 }
 
 fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
@@ -207,10 +242,28 @@ mod tests {
     }
 
     #[test]
-    fn command_results_get_a_code_background() {
-        let lines = render_tool_result("run_command", "cargo test", 80, false);
-        assert!(lines[0].spans[0].style.bg.is_some());
-        assert!(lines[0].spans[0].content.contains("cargo test"));
+    fn command_results_have_compact_status_and_output() {
+        let lines = render_tool_result(
+            "run_command",
+            "exit code: 0\nstdout:\ncargo test\nstderr:\n",
+            80,
+            false,
+        );
+        assert!(lines[0].spans[0].content.contains("✓ exit 0"));
+        assert!(lines[1].spans[0].content.contains("│ cargo test"));
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn failed_commands_use_error_status_and_stderr_marker() {
+        let lines = render_tool_result(
+            "run_command",
+            "exit code: 1\nstderr:\npermission denied",
+            80,
+            false,
+        );
+        assert!(lines[0].spans[0].content.contains("✗ exit 1"));
+        assert!(lines[1].spans[0].content.contains("! permission denied"));
     }
 
     #[test]
@@ -222,6 +275,6 @@ mod tests {
         let lines = render_tool_result("run_command", &result, 80, false);
 
         assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
-        assert!(lines.last().unwrap().spans[0].content.contains("50 more lines"));
+        assert!(lines.last().unwrap().spans[0].content.contains("51 more lines"));
     }
 }
