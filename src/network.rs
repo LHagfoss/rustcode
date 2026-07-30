@@ -3168,6 +3168,11 @@ pub async fn process_queue_orchestrator(
                         );
                     }
                     if completed {
+                        let mut build_status = if made_edits {
+                            "pending"
+                        } else {
+                            "not run (no workspace edits detected)"
+                        };
                         // Finish gate check: verify the project builds cleanly before accepting completion
                         if made_edits {
                             let root = edit_root
@@ -3180,6 +3185,7 @@ pub async fn process_queue_orchestrator(
                                     // don't loop forever — but we must NOT let the agent
                                     // report a clean completion, so surface it loudly.
                                     dbg_log!("complete_task finish gate: build unverified — {errors}");
+                                    build_status = "unverified";
                                     s.history.push(ChatMessage::new(
                                         "system",
                                         format!("[⚠ Build could not be verified — {errors}]"),
@@ -3199,6 +3205,8 @@ pub async fn process_queue_orchestrator(
                                     drop(s);
                                     continue;
                                 }
+                            } else {
+                                build_status = "passed";
                             }
                         }
 
@@ -3212,8 +3220,22 @@ pub async fn process_queue_orchestrator(
                             .and_then(|call| call.arguments.get("result").and_then(|r| r.as_str()))
                             .map(|s| s.to_string());
 
-                        if let Some(summary_text) = task_result_summary {
+                        if let Some(mut summary_text) = task_result_summary {
                             if !summary_text.is_empty() {
+                                let mut changed_paths = std::collections::BTreeSet::new();
+                                for message in &s.history {
+                                    if let Some(metadata) = &message.tool_result {
+                                        changed_paths.extend(metadata.changed_paths.iter().cloned());
+                                    }
+                                }
+                                let paths = if changed_paths.is_empty() {
+                                    "none recorded".to_string()
+                                } else {
+                                    changed_paths.into_iter().collect::<Vec<_>>().join(", ")
+                                };
+                                summary_text.push_str(&format!(
+                                    "\n\n[harness verification: build={build_status}; changed_paths={paths}]"
+                                ));
                                 s.history.push(ChatMessage::new("assistant", summary_text));
                             }
                         }
