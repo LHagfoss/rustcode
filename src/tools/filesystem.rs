@@ -160,9 +160,13 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
     Ok(out)
 }
 
-pub fn generate_unified_diff(target: &str, replacement: &str) -> String {
+pub fn generate_unified_diff(target: &str, replacement: &str, start_line: Option<usize>) -> String {
     let diff = similar::TextDiff::from_lines(target, replacement);
     let mut out = String::new();
+    let old_count = target.lines().count();
+    let new_count = replacement.lines().count();
+    let line = start_line.unwrap_or(1);
+    out.push_str(&format!("@@ -{line},{old_count} +{line},{new_count} @@\n"));
     for change in diff.iter_all_changes() {
         let sign = match change.tag() {
             similar::ChangeTag::Delete => "-",
@@ -401,7 +405,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
 
     let mut combined_diffs = String::new();
     for (idx, edit) in chunks.iter().enumerate() {
-        let diff = generate_unified_diff(&edit.target, &edit.replacement);
+        let diff = generate_unified_diff(&edit.target, &edit.replacement, edit.start_line);
         if !combined_diffs.is_empty() {
             combined_diffs.push_str("\n");
         }
