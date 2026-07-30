@@ -41,7 +41,20 @@ pub fn run_command(args: &Value) -> Result<String, String> {
     }
 
     let trimmed_cmd = command_str.trim();
-    if (trimmed_cmd == "sudo" || trimmed_cmd.starts_with("sudo ")) && !trimmed_cmd.contains(" -n ") && !trimmed_cmd.starts_with("sudo -n ") {
+    let has_sudo = trimmed_cmd == "sudo"
+        || trimmed_cmd.starts_with("sudo ")
+        || trimmed_cmd.contains("; sudo")
+        || trimmed_cmd.contains("&&sudo")
+        || trimmed_cmd.contains("&& sudo")
+        || trimmed_cmd.contains("||sudo")
+        || trimmed_cmd.contains("|| sudo")
+        || trimmed_cmd.contains("|sudo")
+        || trimmed_cmd.contains("| sudo")
+        || trimmed_cmd.contains("$(sudo")
+        || trimmed_cmd.contains("`sudo")
+        || trimmed_cmd.contains("\nsudo");
+
+    if has_sudo && (!trimmed_cmd.contains(" -n ") && !trimmed_cmd.starts_with("sudo -n ") || trimmed_cmd.contains("sudo -S")) {
         return Err("Interactive 'sudo' commands requiring password input are disabled in subshell execution. Use non-privileged commands or pass 'sudo -n' to fail fast.".to_string());
     }
 
