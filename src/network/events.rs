@@ -187,6 +187,70 @@ pub(crate) enum TurnAction {
     RecoverError,
 }
 
+/// Typed lifecycle for one model/tool turn. The orchestrator owns side
+/// effects, while this state machine owns hand-off and terminal decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TurnMachine {
+    state: TurnState,
+}
+
+impl TurnMachine {
+    pub(crate) fn new() -> Self {
+        Self { state: TurnState::AwaitingModel }
+    }
+
+    pub(crate) fn state(self) -> TurnState {
+        self.state
+    }
+
+    pub(crate) fn model_finished(
+        &mut self,
+        cancelled: bool,
+        force_final: bool,
+        has_tool_calls: bool,
+        task_completed: bool,
+    ) -> TurnAction {
+        if cancelled {
+            self.state = TurnState::Cancelled;
+            return TurnAction::Cancel;
+        }
+        if force_final || task_completed || !has_tool_calls {
+            self.state = TurnState::Completed;
+            return TurnAction::FinishResponse;
+        }
+        self.state = TurnState::AwaitingApproval;
+        TurnAction::ExecuteTools
+    }
+
+    pub(crate) fn approval_granted(&mut self) {
+        if self.state == TurnState::AwaitingApproval {
+            self.state = TurnState::ExecutingTools;
+        }
+    }
+
+    pub(crate) fn approval_denied(&mut self) {
+        if self.state == TurnState::AwaitingApproval {
+            self.state = TurnState::AwaitingModel;
+        }
+    }
+
+    pub(crate) fn tools_finished(&mut self) {
+        if self.state == TurnState::ExecutingTools {
+            self.state = TurnState::AwaitingModel;
+        }
+    }
+
+    pub(crate) fn recover_error(&mut self) -> TurnAction {
+        self.state = TurnState::AwaitingModel;
+        TurnAction::RecoverError
+    }
+
+    pub(crate) fn cancel(&mut self) -> TurnAction {
+        self.state = TurnState::Cancelled;
+        TurnAction::Cancel
+    }
+}
+
 pub(crate) fn next_turn_action(
     cancelled: bool,
     stream_failed: bool,
@@ -332,5 +396,30 @@ mod tests {
             next_turn_action(false, false, false, false, false),
             TurnAction::FinishResponse
         );
+    }
+
+    #[test]
+    fn turn_machine_owns_model_approval_execution_lifecycle() {
+        let mut machine = TurnMachine::new();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+        assert_eq!(machine.model_finished(false, false, true, false), TurnAction::ExecuteTools);
+        assert_eq!(machine.state(), TurnState::AwaitingApproval);
+        machine.approval_granted();
+        assert_eq!(machine.state(), TurnState::ExecutingTools);
+        machine.tools_finished();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+        assert_eq!(machine.model_finished(false, false, false, false), TurnAction::FinishResponse);
+        assert_eq!(machine.state(), TurnState::Completed);
+    }
+
+    #[test]
+    fn turn_machine_terminal_inputs_override_tool_requests() {
+        let mut machine = TurnMachine::new();
+        assert_eq!(machine.model_finished(true, false, true, false), TurnAction::Cancel);
+        assert_eq!(machine.state(), TurnState::Cancelled);
+
+        let mut machine = TurnMachine::new();
+        assert_eq!(machine.model_finished(false, true, true, false), TurnAction::FinishResponse);
+        assert_eq!(machine.state(), TurnState::Completed);
     }
 }
