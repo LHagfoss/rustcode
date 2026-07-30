@@ -230,6 +230,17 @@ fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
 }
 
 fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) -> Result<String, String> {
+    let had_crlf = content.contains("\r\n");
+    let content_norm = content.replace("\r\n", "\n");
+    let result = apply_single_edit_to_content_inner(&content_norm, path, edit)?;
+    if had_crlf {
+        Ok(result.replace("\n", "\r\n"))
+    } else {
+        Ok(result)
+    }
+}
+
+fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEdit) -> Result<String, String> {
     if edit.target == edit.replacement {
         return Err("old_string and new_string are identical".to_string());
     }
@@ -420,7 +431,12 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         return Err(format!("'{path}' is a directory"));
     }
 
-    let chunks = extract_edit_chunks(args)?;
+    let mut chunks = extract_edit_chunks(args)?;
+    chunks.sort_by(|a, b| {
+        let a_line = a.start_line.unwrap_or(0);
+        let b_line = b.start_line.unwrap_or(0);
+        b_line.cmp(&a_line)
+    });
     let mut current_content = std::fs::read_to_string(&resolved_path)
         .map_err(|e| format!("cannot read '{path}': {e}"))?;
 
