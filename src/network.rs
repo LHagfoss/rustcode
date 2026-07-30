@@ -2626,6 +2626,598 @@ async fn execute_tool_batch(
     results
 }
 
+pub struct TurnContext {
+    pub tool_rounds: usize,
+    pub loop_detector: loop_detect::LoopDetector,
+    pub force_final: bool,
+    pub made_edits: bool,
+    pub edit_root: Option<std::path::PathBuf>,
+    pub compile_dirty: bool,
+    pub compile_cache: Option<(std::path::PathBuf, Option<String>)>,
+    pub finish_gate_retries: u32,
+    pub turn_machine: events::TurnMachine,
+    pub last_sent_messages: Vec<serde_json::Value>,
+    pub final_content: String,
+    pub task_completed: bool,
+}
+
+impl TurnContext {
+    pub fn new() -> Self {
+        Self {
+            tool_rounds: 0,
+            loop_detector: loop_detect::LoopDetector::new(6),
+            force_final: false,
+            made_edits: false,
+            edit_root: None,
+            compile_dirty: true,
+            compile_cache: None,
+            finish_gate_retries: 0,
+            turn_machine: events::TurnMachine::new(),
+            last_sent_messages: Vec::new(),
+            final_content: String::new(),
+            task_completed: false,
+        }
+    }
+}
+
+pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<StreamBuffer>>,
+    ctx: &mut TurnContext,
+) -> bool {
+    const MAX_FINISH_GATE_RETRIES: u32 = 2;
+    dbg_log!("Starting agent loop round {}", ctx.tool_rounds);
+
+            let msgs = prepare_turn_request(&client, &state, ctx.tool_rounds).await;
+
+            state.lock().await.current_response.clear();
+            stream_buffer.lock().await.content.clear();
+
+            let (api_base_url, model_name) = {
+                let s = state.lock().await;
+                (s.api_base_url.clone(), s.model_name.clone())
+            };
+
+            dbg_log!(
+                "Sending request to {} for model {}",
+                api_base_url,
+                model_name
+            );
+            ctx.last_sent_messages = msgs.clone();
+            state.lock().await.current_response.clear();
+            let request_client = client.clone();
+            let request_state = Arc::clone(&state);
+            let request_cancel = cancel_token.clone();
+            let request_buffer = Arc::clone(&stream_buffer);
+            let request_api_url = api_base_url.clone();
+            let request_model = model_name.clone();
+            let request_msgs = msgs.clone();
+            let (accumulated_content, response_finish_reason) = match runner::collect_response(move |previous| {
+                let mut current_msgs = request_msgs.clone();
+                if !previous.is_empty() {
+                    current_msgs.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": previous
+                    }));
+                    current_msgs.push(serde_json::json!({
+                        "role": "user",
+                        "content": "continue"
+                    }));
+                }
+                let request_client = request_client.clone();
+                let request_state = Arc::clone(&request_state);
+                let request_cancel = request_cancel.clone();
+                let request_buffer = Arc::clone(&request_buffer);
+                let request_api_url = request_api_url.clone();
+                let request_model = request_model.clone();
+                async move {
+                    request_state.lock().await.current_response.clear();
+                    request_buffer.lock().await.content.clear();
+                    let finish_reason = stream_request(
+                        &request_client,
+                        request_state.clone(),
+                        request_cancel,
+                        &request_api_url,
+                        &request_model,
+                        &current_msgs,
+                        Arc::clone(&request_buffer),
+                        false,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    let chunk_content = request_buffer.lock().await.content.clone();
+                    Ok((chunk_content, finish_reason))
+                }
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    ctx.turn_machine.recover_error();
+                    dbg_log!("Stream request failed: {}", e);
+                    let mut s = state.lock().await;
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!("Error from LLM Provider: {e}"),
+                    ));
+                    crate::config::save_history(&s.history);
+                    s.current_response.clear();
+                    s.current_token_usage = None;
+                    s.status = AppStatus::Idle;
+                    return false;
+                }
+            };
+
+            crate::logger::operational_event(
+                "model.response",
+                serde_json::json!({
+                    "round": ctx.tool_rounds,
+                    "finish_reason": response_finish_reason,
+                    "content_bytes": accumulated_content.len(),
+                }),
+            );
+            {
+                let mut s = state.lock().await;
+                s.current_response = accumulated_content.clone();
+            }
+
+            if cancel_token.is_cancelled() {
+                ctx.turn_machine.cancel();
+                return false;
+            }
+
+            ctx.final_content = accumulated_content;
+            dbg_log!(
+                "Stream completed successfully. Content length: {} chars",
+                ctx.final_content.len()
+            );
+
+            if ctx.final_content.is_empty() {
+                dbg_log!("Stream returned empty content, finishing");
+                let mut s = state.lock().await;
+                s.status = AppStatus::Idle;
+                s.current_token_usage = None;
+                return false;
+            }
+
+            // This is the forced wrap-up turn after a detected loop: tools were
+            // disabled via the injected directive. Push whatever prose the model
+            // produced and stop — never parse or execute tool calls here, or we'd
+            // risk re-entering the loop we just broke out of.
+            if ctx.force_final {
+                dbg_log!("Loop wrap-up: recording forced text answer and finishing");
+                let prose = strip_tool_call_syntax(&ctx.final_content);
+                // Filter out any system prompt leak or empty content
+                let clean_prose = prose
+                    .lines()
+                    .filter(|line| !line.trim().starts_with("- ") && !line.contains("system directive") && !line.contains("CRITICAL — you are stuck"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let answer = if clean_prose.trim().is_empty() {
+                    "I encountered a repeating loop while running tool actions and have stopped to prevent unnecessary repetition. I was unable to complete the task automatically. Please check the current changes or re-run with a more specific prompt."
+                        .to_string()
+                } else {
+                    clean_prose.trim().to_string()
+                };
+                let mut s = state.lock().await;
+                s.history.push(ChatMessage::new("assistant", &answer));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.continuous_mode = false;
+                s.status = AppStatus::Idle;
+                return false;
+            }
+
+            let protocol = { state.lock().await.config.tool_protocol };
+            let model_response = events::normalize_response(
+                &ctx.final_content,
+                response_finish_reason.as_deref(),
+                protocol,
+            );
+            dbg_log!(
+                "Model response normalized from {:?}; raw length={} chars",
+                model_response.source,
+                model_response.raw_content.len()
+            );
+            let response_events = model_response.events;
+            let parsed_tool_calls = response_events
+                .iter()
+                .filter_map(|event| match event {
+                    events::AgentEvent::ToolCall(call) => Some(call.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls) {
+                dbg_log!("Tool-call validation rejected response: {}", reason);
+                let mut s = state.lock().await;
+                s.history.push(ChatMessage::new("assistant", &ctx.final_content));
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!(
+                        "[Tool call rejected before execution: {reason}] Preserve the raw assistant response above for diagnostics, then emit one corrected tool call."
+                    ),
+                ));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.status = AppStatus::Streaming;
+                drop(s);
+                ctx.tool_rounds += 1;
+                return true;
+            }
+            let (tool_calls, deferred_tool_calls) =
+                crate::tools::isolate_control_plane_call(parsed_tool_calls);
+            let turn_action = ctx.turn_machine.model_finished(
+                cancel_token.is_cancelled(),
+                ctx.force_final,
+                !tool_calls.is_empty(),
+                ctx.task_completed,
+            );
+            if turn_action == events::TurnAction::Cancel {
+                return false;
+            }
+            if matches!(turn_action, events::TurnAction::ExecuteTools) {
+                dbg_log!("Parsed {} tool call requests", tool_calls.len());
+
+                // Loop detection: feed each requested call to the detector and
+                // keep the worst status. Abort stops auto-execution; Warning
+                // injects a nudge so the model changes approach.
+                let mut loop_status = loop_detect::LoopStatus::Ok;
+                for call in &tool_calls {
+                    let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
+                    let s = ctx.loop_detector.check_tool(&call.name, &exact, &category);
+                    if s.rank() > loop_status.rank() {
+                        loop_status = s;
+                    }
+                    // Remember that code was touched, and where, so the finish
+                    // gate can compile-check before accepting a "done".
+                    if is_mutating_tool(&call.name) {
+                        ctx.made_edits = true;
+                        ctx.edit_root = Some(get_tool_project_root(&call.name, &call.arguments));
+                        // A mutating tool will run this round — invalidate the
+                        // cached compiler result so the next check recompiles.
+                        ctx.compile_dirty = true;
+                    }
+                }
+                match loop_status {
+                    loop_detect::LoopStatus::Abort(n) => {
+                        dbg_log!("Loop detector: abort after {} repeats — forcing wrap-up turn", n);
+                        // Don't stop silently. Record the looping turn, then inject
+                        // a directive that disables tools and demands a prose
+                        // summary, and run exactly one more turn (`ctx.force_final`).
+                        let mut s = state.lock().await;
+                        s.history
+                            .push(ChatMessage::new("assistant", &ctx.final_content));
+                        s.history
+                            .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        drop(s);
+                        ctx.force_final = true;
+                        return true;
+                    }
+                    loop_detect::LoopStatus::Warning(n) => {
+                        dbg_log!("Loop detector: warning at {} repeats", n);
+                        let mut s = state.lock().await;
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "[Loop warning: this action has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — call view_file to check exact line numbers or change your approach.]"
+                            ),
+                        ));
+                        drop(s);
+                    }
+                    loop_detect::LoopStatus::Ok => {}
+                }
+
+                if !cancel_token.is_cancelled() {
+                    ctx.tool_rounds += 1;
+
+                    let approved = policy.should_approve(&state, &tool_calls).await;
+
+                    // Update UI state immediately after confirmation is resolved
+                    {
+                        let mut s = state.lock().await;
+                        s.pending_tool_confirmation = None;
+                        s.status = AppStatus::Streaming;
+                        s.stream_tracker = Some(StreamTracker::new());
+                        s.history
+                            .push(ChatMessage::new("assistant", &ctx.final_content));
+                        crate::config::save_history(&s.history);
+                    }
+
+                    if approved {
+                        ctx.turn_machine.approval_granted();
+                    } else {
+                        ctx.turn_machine.approval_denied();
+                    }
+
+                    let results = execute_tool_batch(
+                        &client,
+                        &state,
+                        &cancel_token,
+                        &tool_calls,
+                        ctx.turn_machine.state() == events::TurnState::ExecutingTools,
+                        ctx.made_edits,
+                        &ctx.edit_root,
+                        &mut ctx.compile_dirty,
+                        &mut ctx.compile_cache,
+                    )
+                    .await;
+
+                    crate::logger::operational_event(
+                        "tools.batch.finish",
+                        serde_json::json!({
+                            "count": results.len(),
+                            "successes": results.iter().filter(|result| result.metadata.success).count(),
+                            "failed": results.iter().filter(|result| !result.metadata.success).count(),
+                            "changed_paths": results.iter().map(|result| result.metadata.changed_paths.len()).sum::<usize>(),
+                        }),
+                    );
+
+                    if cancel_token.is_cancelled() {
+                        dbg_log!("Orchestrator: Cancelled during tool execution");
+                        let mut s = state.lock().await;
+                        s.status = AppStatus::Idle;
+                        if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
+                            ctx.turn_machine.tools_finished();
+                        }
+                        return false;
+                    }
+
+                    let mut s = state.lock().await;
+                    s.status = AppStatus::Streaming;
+                    let mut completed = false;
+                    for result in results {
+                        let name = result.tool_name;
+                        let metadata = result.metadata.clone();
+                        let mut content = result.content;
+                        if name == "use_skill" && deferred_tool_calls > 0 {
+                            content.push_str(&format!(
+                                "\n\n[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
+                            ));
+                        }
+                        let diff_opt = result.diff;
+                        dbg_log!(
+                            "Tool '{}' finished with result length: {} chars",
+                            name,
+                            content.len()
+                        );
+                        if name == "complete_task" {
+                            completed = true;
+                        }
+                        // Progress resets the loop detector: a successful mutating
+                        // tool means the agent moved the work forward, so any
+                        // re-reads that follow (to verify or find the next anchor)
+                        // shouldn't inherit the pre-edit read history and trip the
+                        // frequency signal. Failed edits (result starts with
+                        // "error") are not progress and must keep accumulating.
+                        if is_mutating_tool(&name) && !content.trim_start().to_ascii_lowercase().starts_with("error")
+                        {
+                            ctx.loop_detector.reset();
+                        }
+                        // Output-stagnation signal: repeated identical results
+                        // (e.g. "No matches found") despite varied commands.
+                        if let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
+                            ctx.loop_detector.record_output(&content)
+                        {
+                            dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
+                        }
+                        let truncated_result = truncate_tool_output(&name, content);
+                        s.history.push(
+                            ChatMessage::new("tool", format!("{name}: {truncated_result}"))
+                                .with_diff(diff_opt)
+                                .with_tool_result(crate::app::ToolResultRecord {
+                                    tool_name: name.clone(),
+                                    arguments_hash: metadata.arguments_hash,
+                                    success: metadata.success,
+                                    exit_code: metadata.exit_code,
+                                    changed_paths: metadata.changed_paths,
+                                    truncated: metadata.truncated,
+                                    full_output_artifact: metadata.full_output_artifact,
+                                }),
+                        );
+                    }
+                    if completed {
+                        let mut build_status = if ctx.made_edits {
+                            "pending"
+                        } else {
+                            "not run (no workspace edits detected)"
+                        };
+                        // Finish gate check: verify the project builds cleanly before accepting completion
+                        if ctx.made_edits {
+                            let root = ctx.edit_root
+                                .clone()
+                                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                            if let Some(errors) = cached_compiler_check(&root, &mut ctx.compile_dirty, &mut ctx.compile_cache).await {
+                                if errors.starts_with("__BUILD_UNVERIFIED__") {
+                                    // The checker itself couldn't run (missing toolchain,
+                                    // timeout, …). We can't prove the build is red, so we
+                                    // don't loop forever — but we must NOT let the agent
+                                    // report a clean completion, so surface it loudly.
+                                    dbg_log!("complete_task finish gate: build unverified — {errors}");
+                                    build_status = "unverified";
+                                    s.history.push(ChatMessage::new(
+                                        "system",
+                                        format!("[⚠ Build could not be verified — {errors}]"),
+                                    ));
+                                } else {
+                                    dbg_log!("complete_task finish gate failed with compiler errors");
+                                    s.history.push(ChatMessage::new(
+                                        "system",
+                                        format!(
+                                            "[Finish blocked — the build does not compile. You cannot report this \
+                                             task as done while there are compiler errors. Fix them, then finish. \
+                                             Compiler errors:\n{errors}]"
+                                        ),
+                                    ));
+                                    crate::config::save_history(&s.history);
+                                    s.current_response.clear();
+                                    drop(s);
+                                    if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
+                                        ctx.turn_machine.tools_finished();
+                                    }
+                                    return true;
+                                }
+                            } else {
+                                build_status = "passed";
+                            }
+                        }
+
+                        dbg_log!("complete_task called, turning off continuous mode and breaking loop immediately");
+                        s.continuous_mode = false;
+                        s.status = AppStatus::Idle;
+                        // Extract task result text from the complete_task call
+                        let task_result_summary = tool_calls
+                            .iter()
+                            .find(|call| call.name == "complete_task")
+                            .and_then(|call| call.arguments.get("result").and_then(|r| r.as_str()))
+                            .map(|s| s.to_string());
+
+                        if let Some(mut summary_text) = task_result_summary {
+                            if !summary_text.is_empty() {
+                                let mut changed_paths = std::collections::BTreeSet::new();
+                                for message in &s.history {
+                                    if let Some(metadata) = &message.tool_result {
+                                        changed_paths.extend(metadata.changed_paths.iter().cloned());
+                                    }
+                                }
+                                let paths = if changed_paths.is_empty() {
+                                    "none recorded".to_string()
+                                } else {
+                                    changed_paths.into_iter().collect::<Vec<_>>().join(", ")
+                                };
+                                summary_text.push_str(&format!(
+                                    "\n\n[harness verification: build={build_status}; changed_paths={paths}]"
+                                ));
+                                s.history.push(ChatMessage::new("assistant", summary_text));
+                            }
+                        }
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        drop(s);
+                        ctx.task_completed = true;
+                        if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
+                            ctx.turn_machine.tools_finished();
+                        }
+                        return false;
+                    }
+                    crate::config::save_history(&s.history);
+                    s.current_response.clear();
+                    drop(s);
+                    if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
+                        ctx.turn_machine.tools_finished();
+                    }
+                    dbg_log!("Tool round finished, looping back");
+                    return true;
+                } else {
+                    dbg_log!("Tool execution cancelled");
+                    if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
+                        ctx.turn_machine.tools_finished();
+                    }
+                    return false;
+                }
+            } else if has_intended_tool_call(&ctx.final_content) {
+                dbg_log!(
+                    "Orchestrator: Detected malformed tool call, auto-correcting and retrying..."
+                );
+                ctx.tool_rounds += 1;
+                let mut s = state.lock().await;
+                s.history
+                    .push(ChatMessage::new("assistant", &ctx.final_content));
+
+                let reason = crate::tools::diagnose_failed_tool_call(&ctx.final_content)
+                    .map(|r| format!("{r}\n\n"))
+                    .unwrap_or_default();
+                let feedback = format!(
+                    "tool_error: The tool call block was malformed or could not be parsed. {reason}\
+Please output a single, complete, valid tool call block inside a ```tool fenced block using JSON format:\n\n\
+```tool\n\
+{{\"name\": \"tool_name\", \"arguments\": {{...}}}}\n\
+```\n\n\
+Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans."
+                );
+
+                s.history
+                    .push(ChatMessage::new("tool", feedback));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.status = AppStatus::Streaming;
+                s.stream_tracker = Some(StreamTracker::new());
+                drop(s);
+                dbg_log!("Retrying agent loop round due to malformed tool call");
+                return true;
+            }
+
+            let is_continuous = { state.lock().await.continuous_mode };
+            if is_continuous && ctx.tool_rounds > 0 {
+                dbg_log!("Continuous mode active, assistant responded with text prose. Ending continuous mode turn.");
+                let mut s = state.lock().await;
+                s.continuous_mode = false;
+            } else if is_continuous && ctx.tool_rounds == 0 {
+                dbg_log!("Continuous mode active, but assistant gave a plain conversational reply (no tools used). Ending turn.");
+                let mut s = state.lock().await;
+                s.continuous_mode = false;
+            }
+
+            // Finish gate: the model wants to stop with a prose answer. If it
+            // edited code this task, don't accept "done" on a red build — run a
+            // compile check and, if it fails, hand the errors back and force
+            // another round. Skip on the forced wrap-up turn (tools already
+            // disabled) and once the retry budget is spent, so we can't spin.
+            if policy.should_verify_completion()
+                && ctx.made_edits
+                && !ctx.force_final
+                && ctx.finish_gate_retries < MAX_FINISH_GATE_RETRIES
+            {
+                let root = ctx.edit_root
+                    .clone()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                dbg_log!("Finish gate: compile-checking {} before accepting done", root.display());
+                if let Some(errors) = cached_compiler_check(&root, &mut ctx.compile_dirty, &mut ctx.compile_cache).await {
+                    if errors.starts_with("__BUILD_UNVERIFIED__") {
+                        // Checker couldn't run — surface it but accept done rather
+                        // than spinning against an environment we can't fix.
+                        dbg_log!("Finish gate: build unverified — {errors}");
+                        let mut s = state.lock().await;
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("[⚠ Build could not be verified — {errors}]"),
+                        ));
+                        crate::config::save_history(&s.history);
+                        drop(s);
+                    } else {
+                        ctx.finish_gate_retries += 1;
+                        ctx.tool_rounds += 1;
+                        dbg_log!("Finish gate: build is RED, forcing a fix round ({}/{})", ctx.finish_gate_retries, MAX_FINISH_GATE_RETRIES);
+                        let mut s = state.lock().await;
+                        s.history
+                            .push(ChatMessage::new("assistant", ctx.final_content.clone()));
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "[Finish blocked — the build does not compile. You cannot report this \
+                                 task as done while there are compiler errors. Fix them, then finish. \
+                                 Compiler errors:\n{errors}]"
+                            ),
+                        ));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        s.status = AppStatus::Streaming;
+                        s.stream_tracker = Some(StreamTracker::new());
+                        drop(s);
+                        return true;
+                    }
+                }
+                dbg_log!("Finish gate: build is green, accepting done");
+            }
+
+            return false;
+
+}
+
 pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -2688,587 +3280,13 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
 
         let prompt_start_time = std::time::Instant::now();
 
-        let mut tool_rounds = 0;
-        #[allow(unused_assignments)]
-        #[allow(unused_assignments)]
-        let mut last_sent_messages: Vec<serde_json::Value> = Vec::new();
-        let mut final_content = String::new();
-        // Set when the loop exits via a `complete_task` call. The break path
-        // already appends a clean summary message, so the post-loop "write final
-        // assistant reply" must not re-append the raw tool-call block on top.
-        let mut task_completed = false;
-        // Detects repetitive tool-call patterns (exact / semantic / stagnation /
-        // churn) so continuous mode can't spin forever. One instance per task.
-        let mut loop_detector = loop_detect::LoopDetector::new(6);
-        // When a loop is detected we don't just stop — we run one more turn with
-        // a directive that disables tools and forces a prose summary, so the user
-        // gets an answer instead of a silent dead-end. Set on the turn *before*
-        // that final wrap-up turn.
-        let mut force_final = false;
-        // Finish gate: if the model edited code this task, don't let it declare
-        // done on a red build. Track that an edit was requested and the project
-        // root to compile-check, plus a retry budget so the gate can't loop.
-        let mut made_edits = false;
-        let mut edit_root: Option<std::path::PathBuf> = None;
-        // Compiler-check dedup: `cargo check` is expensive and a single task can
-        // want the result at multiple points (inline after edits, then the finish
-        // gate). Track whether a mutating tool has dirtied the tree since the last
-        // check and cache the outcome so we don't recompile an unchanged tree two
-        // or three times per round.
-        let mut compile_dirty = true;
-        let mut compile_cache: Option<(std::path::PathBuf, Option<String>)> = None;
-        let mut finish_gate_retries: u32 = 0;
-        const MAX_FINISH_GATE_RETRIES: u32 = 2;
-        let mut turn_machine = events::TurnMachine::new();
-        loop {
-            dbg_log!("Starting agent loop round {}", tool_rounds);
+        let mut ctx = TurnContext::new();
+        while run_single_turn(&client, &state, &cancel_token, &policy, &stream_buffer, &mut ctx).await {}
 
-            let msgs = prepare_turn_request(&client, &state, tool_rounds).await;
-
-            state.lock().await.current_response.clear();
-            stream_buffer.lock().await.content.clear();
-
-            let (api_base_url, model_name) = {
-                let s = state.lock().await;
-                (s.api_base_url.clone(), s.model_name.clone())
-            };
-
-            dbg_log!(
-                "Sending request to {} for model {}",
-                api_base_url,
-                model_name
-            );
-            last_sent_messages = msgs.clone();
-            state.lock().await.current_response.clear();
-            let request_client = client.clone();
-            let request_state = Arc::clone(&state);
-            let request_cancel = cancel_token.clone();
-            let request_buffer = Arc::clone(&stream_buffer);
-            let request_api_url = api_base_url.clone();
-            let request_model = model_name.clone();
-            let request_msgs = msgs.clone();
-            let (accumulated_content, response_finish_reason) = match runner::collect_response(move |previous| {
-                let mut current_msgs = request_msgs.clone();
-                if !previous.is_empty() {
-                    current_msgs.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": previous
-                    }));
-                    current_msgs.push(serde_json::json!({
-                        "role": "user",
-                        "content": "continue"
-                    }));
-                }
-                let request_client = request_client.clone();
-                let request_state = Arc::clone(&request_state);
-                let request_cancel = request_cancel.clone();
-                let request_buffer = Arc::clone(&request_buffer);
-                let request_api_url = request_api_url.clone();
-                let request_model = request_model.clone();
-                async move {
-                    request_state.lock().await.current_response.clear();
-                    request_buffer.lock().await.content.clear();
-                    let finish_reason = stream_request(
-                        &request_client,
-                        request_state.clone(),
-                        request_cancel,
-                        &request_api_url,
-                        &request_model,
-                        &current_msgs,
-                        Arc::clone(&request_buffer),
-                        false,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                    let chunk_content = request_buffer.lock().await.content.clone();
-                    Ok((chunk_content, finish_reason))
-                }
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(e) => {
-                    turn_machine.recover_error();
-                    dbg_log!("Stream request failed: {}", e);
-                    let mut s = state.lock().await;
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        format!("Error from LLM Provider: {e}"),
-                    ));
-                    crate::config::save_history(&s.history);
-                    s.current_response.clear();
-                    s.current_token_usage = None;
-                    s.status = AppStatus::Idle;
-                    break;
-                }
-            };
-
-            crate::logger::operational_event(
-                "model.response",
-                serde_json::json!({
-                    "round": tool_rounds,
-                    "finish_reason": response_finish_reason,
-                    "content_bytes": accumulated_content.len(),
-                }),
-            );
-            {
-                let mut s = state.lock().await;
-                s.current_response = accumulated_content.clone();
-            }
-
-            if cancel_token.is_cancelled() {
-                turn_machine.cancel();
-                break;
-            }
-
-            final_content = accumulated_content;
-            dbg_log!(
-                "Stream completed successfully. Content length: {} chars",
-                final_content.len()
-            );
-
-            if final_content.is_empty() {
-                dbg_log!("Stream returned empty content, finishing");
-                let mut s = state.lock().await;
-                s.status = AppStatus::Idle;
-                s.current_token_usage = None;
-                break;
-            }
-
-            // This is the forced wrap-up turn after a detected loop: tools were
-            // disabled via the injected directive. Push whatever prose the model
-            // produced and stop — never parse or execute tool calls here, or we'd
-            // risk re-entering the loop we just broke out of.
-            if force_final {
-                dbg_log!("Loop wrap-up: recording forced text answer and finishing");
-                let prose = strip_tool_call_syntax(&final_content);
-                // Filter out any system prompt leak or empty content
-                let clean_prose = prose
-                    .lines()
-                    .filter(|line| !line.trim().starts_with("- ") && !line.contains("system directive") && !line.contains("CRITICAL — you are stuck"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let answer = if clean_prose.trim().is_empty() {
-                    "I encountered a repeating loop while running tool actions and have stopped to prevent unnecessary repetition. I was unable to complete the task automatically. Please check the current changes or re-run with a more specific prompt."
-                        .to_string()
-                } else {
-                    clean_prose.trim().to_string()
-                };
-                let mut s = state.lock().await;
-                s.history.push(ChatMessage::new("assistant", &answer));
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
-                s.continuous_mode = false;
-                s.status = AppStatus::Idle;
-                break;
-            }
-
-            let protocol = { state.lock().await.config.tool_protocol };
-            let model_response = events::normalize_response(
-                &final_content,
-                response_finish_reason.as_deref(),
-                protocol,
-            );
-            dbg_log!(
-                "Model response normalized from {:?}; raw length={} chars",
-                model_response.source,
-                model_response.raw_content.len()
-            );
-            let response_events = model_response.events;
-            let parsed_tool_calls = response_events
-                .iter()
-                .filter_map(|event| match event {
-                    events::AgentEvent::ToolCall(call) => Some(call.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls) {
-                dbg_log!("Tool-call validation rejected response: {}", reason);
-                let mut s = state.lock().await;
-                s.history.push(ChatMessage::new("assistant", &final_content));
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!(
-                        "[Tool call rejected before execution: {reason}] Preserve the raw assistant response above for diagnostics, then emit one corrected tool call."
-                    ),
-                ));
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
-                s.status = AppStatus::Streaming;
-                drop(s);
-                tool_rounds += 1;
-                continue;
-            }
-            let (tool_calls, deferred_tool_calls) =
-                crate::tools::isolate_control_plane_call(parsed_tool_calls);
-            let turn_action = turn_machine.model_finished(
-                cancel_token.is_cancelled(),
-                force_final,
-                !tool_calls.is_empty(),
-                task_completed,
-            );
-            if turn_action == events::TurnAction::Cancel {
-                break;
-            }
-            if matches!(turn_action, events::TurnAction::ExecuteTools) {
-                dbg_log!("Parsed {} tool call requests", tool_calls.len());
-
-                // Loop detection: feed each requested call to the detector and
-                // keep the worst status. Abort stops auto-execution; Warning
-                // injects a nudge so the model changes approach.
-                let mut loop_status = loop_detect::LoopStatus::Ok;
-                for call in &tool_calls {
-                    let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
-                    let s = loop_detector.check_tool(&call.name, &exact, &category);
-                    if s.rank() > loop_status.rank() {
-                        loop_status = s;
-                    }
-                    // Remember that code was touched, and where, so the finish
-                    // gate can compile-check before accepting a "done".
-                    if is_mutating_tool(&call.name) {
-                        made_edits = true;
-                        edit_root = Some(get_tool_project_root(&call.name, &call.arguments));
-                        // A mutating tool will run this round — invalidate the
-                        // cached compiler result so the next check recompiles.
-                        compile_dirty = true;
-                    }
-                }
-                match loop_status {
-                    loop_detect::LoopStatus::Abort(n) => {
-                        dbg_log!("Loop detector: abort after {} repeats — forcing wrap-up turn", n);
-                        // Don't stop silently. Record the looping turn, then inject
-                        // a directive that disables tools and demands a prose
-                        // summary, and run exactly one more turn (`force_final`).
-                        let mut s = state.lock().await;
-                        s.history
-                            .push(ChatMessage::new("assistant", &final_content));
-                        s.history
-                            .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
-                        crate::config::save_history(&s.history);
-                        s.current_response.clear();
-                        drop(s);
-                        force_final = true;
-                        continue;
-                    }
-                    loop_detect::LoopStatus::Warning(n) => {
-                        dbg_log!("Loop detector: warning at {} repeats", n);
-                        let mut s = state.lock().await;
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!(
-                                "[Loop warning: this action has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — call view_file to check exact line numbers or change your approach.]"
-                            ),
-                        ));
-                        drop(s);
-                    }
-                    loop_detect::LoopStatus::Ok => {}
-                }
-
-                if !cancel_token.is_cancelled() {
-                    tool_rounds += 1;
-
-                    let approved = policy.should_approve(&state, &tool_calls).await;
-
-                    // Update UI state immediately after confirmation is resolved
-                    {
-                        let mut s = state.lock().await;
-                        s.pending_tool_confirmation = None;
-                        s.status = AppStatus::Streaming;
-                        s.stream_tracker = Some(StreamTracker::new());
-                        s.history
-                            .push(ChatMessage::new("assistant", &final_content));
-                        crate::config::save_history(&s.history);
-                    }
-
-                    if approved {
-                        turn_machine.approval_granted();
-                    } else {
-                        turn_machine.approval_denied();
-                    }
-
-                    let results = execute_tool_batch(
-                        &client,
-                        &state,
-                        &cancel_token,
-                        &tool_calls,
-                        turn_machine.state() == events::TurnState::ExecutingTools,
-                        made_edits,
-                        &edit_root,
-                        &mut compile_dirty,
-                        &mut compile_cache,
-                    )
-                    .await;
-
-                    crate::logger::operational_event(
-                        "tools.batch.finish",
-                        serde_json::json!({
-                            "count": results.len(),
-                            "successes": results.iter().filter(|result| result.metadata.success).count(),
-                            "failed": results.iter().filter(|result| !result.metadata.success).count(),
-                            "changed_paths": results.iter().map(|result| result.metadata.changed_paths.len()).sum::<usize>(),
-                        }),
-                    );
-
-                    if cancel_token.is_cancelled() {
-                        dbg_log!("Orchestrator: Cancelled during tool execution");
-                        let mut s = state.lock().await;
-                        s.status = AppStatus::Idle;
-                        if turn_machine.state() == events::TurnState::ExecutingTools {
-                            turn_machine.tools_finished();
-                        }
-                        break;
-                    }
-
-                    let mut s = state.lock().await;
-                    s.status = AppStatus::Streaming;
-                    let mut completed = false;
-                    for result in results {
-                        let name = result.tool_name;
-                        let metadata = result.metadata.clone();
-                        let mut content = result.content;
-                        if name == "use_skill" && deferred_tool_calls > 0 {
-                            content.push_str(&format!(
-                                "\n\n[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
-                            ));
-                        }
-                        let diff_opt = result.diff;
-                        dbg_log!(
-                            "Tool '{}' finished with result length: {} chars",
-                            name,
-                            content.len()
-                        );
-                        if name == "complete_task" {
-                            completed = true;
-                        }
-                        // Progress resets the loop detector: a successful mutating
-                        // tool means the agent moved the work forward, so any
-                        // re-reads that follow (to verify or find the next anchor)
-                        // shouldn't inherit the pre-edit read history and trip the
-                        // frequency signal. Failed edits (result starts with
-                        // "error") are not progress and must keep accumulating.
-                        if is_mutating_tool(&name) && !content.trim_start().to_ascii_lowercase().starts_with("error")
-                        {
-                            loop_detector.reset();
-                        }
-                        // Output-stagnation signal: repeated identical results
-                        // (e.g. "No matches found") despite varied commands.
-                        if let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
-                            loop_detector.record_output(&content)
-                        {
-                            dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
-                        }
-                        let truncated_result = truncate_tool_output(&name, content);
-                        s.history.push(
-                            ChatMessage::new("tool", format!("{name}: {truncated_result}"))
-                                .with_diff(diff_opt)
-                                .with_tool_result(crate::app::ToolResultRecord {
-                                    tool_name: name.clone(),
-                                    arguments_hash: metadata.arguments_hash,
-                                    success: metadata.success,
-                                    exit_code: metadata.exit_code,
-                                    changed_paths: metadata.changed_paths,
-                                    truncated: metadata.truncated,
-                                    full_output_artifact: metadata.full_output_artifact,
-                                }),
-                        );
-                    }
-                    if completed {
-                        let mut build_status = if made_edits {
-                            "pending"
-                        } else {
-                            "not run (no workspace edits detected)"
-                        };
-                        // Finish gate check: verify the project builds cleanly before accepting completion
-                        if made_edits {
-                            let root = edit_root
-                                .clone()
-                                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                            if let Some(errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
-                                if errors.starts_with("__BUILD_UNVERIFIED__") {
-                                    // The checker itself couldn't run (missing toolchain,
-                                    // timeout, …). We can't prove the build is red, so we
-                                    // don't loop forever — but we must NOT let the agent
-                                    // report a clean completion, so surface it loudly.
-                                    dbg_log!("complete_task finish gate: build unverified — {errors}");
-                                    build_status = "unverified";
-                                    s.history.push(ChatMessage::new(
-                                        "system",
-                                        format!("[⚠ Build could not be verified — {errors}]"),
-                                    ));
-                                } else {
-                                    dbg_log!("complete_task finish gate failed with compiler errors");
-                                    s.history.push(ChatMessage::new(
-                                        "system",
-                                        format!(
-                                            "[Finish blocked — the build does not compile. You cannot report this \
-                                             task as done while there are compiler errors. Fix them, then finish. \
-                                             Compiler errors:\n{errors}]"
-                                        ),
-                                    ));
-                                    crate::config::save_history(&s.history);
-                                    s.current_response.clear();
-                                    drop(s);
-                                    if turn_machine.state() == events::TurnState::ExecutingTools {
-                                        turn_machine.tools_finished();
-                                    }
-                                    continue;
-                                }
-                            } else {
-                                build_status = "passed";
-                            }
-                        }
-
-                        dbg_log!("complete_task called, turning off continuous mode and breaking loop immediately");
-                        s.continuous_mode = false;
-                        s.status = AppStatus::Idle;
-                        // Extract task result text from the complete_task call
-                        let task_result_summary = tool_calls
-                            .iter()
-                            .find(|call| call.name == "complete_task")
-                            .and_then(|call| call.arguments.get("result").and_then(|r| r.as_str()))
-                            .map(|s| s.to_string());
-
-                        if let Some(mut summary_text) = task_result_summary {
-                            if !summary_text.is_empty() {
-                                let mut changed_paths = std::collections::BTreeSet::new();
-                                for message in &s.history {
-                                    if let Some(metadata) = &message.tool_result {
-                                        changed_paths.extend(metadata.changed_paths.iter().cloned());
-                                    }
-                                }
-                                let paths = if changed_paths.is_empty() {
-                                    "none recorded".to_string()
-                                } else {
-                                    changed_paths.into_iter().collect::<Vec<_>>().join(", ")
-                                };
-                                summary_text.push_str(&format!(
-                                    "\n\n[harness verification: build={build_status}; changed_paths={paths}]"
-                                ));
-                                s.history.push(ChatMessage::new("assistant", summary_text));
-                            }
-                        }
-                        crate::config::save_history(&s.history);
-                        s.current_response.clear();
-                        drop(s);
-                        task_completed = true;
-                        if turn_machine.state() == events::TurnState::ExecutingTools {
-                            turn_machine.tools_finished();
-                        }
-                        break;
-                    }
-                    crate::config::save_history(&s.history);
-                    s.current_response.clear();
-                    drop(s);
-                    if turn_machine.state() == events::TurnState::ExecutingTools {
-                        turn_machine.tools_finished();
-                    }
-                    dbg_log!("Tool round finished, looping back");
-                    continue;
-                } else {
-                    dbg_log!("Tool execution cancelled");
-                    if turn_machine.state() == events::TurnState::ExecutingTools {
-                        turn_machine.tools_finished();
-                    }
-                    break;
-                }
-            } else if has_intended_tool_call(&final_content) {
-                dbg_log!(
-                    "Orchestrator: Detected malformed tool call, auto-correcting and retrying..."
-                );
-                tool_rounds += 1;
-                let mut s = state.lock().await;
-                s.history
-                    .push(ChatMessage::new("assistant", &final_content));
-
-                let reason = crate::tools::diagnose_failed_tool_call(&final_content)
-                    .map(|r| format!("{r}\n\n"))
-                    .unwrap_or_default();
-                let feedback = format!(
-                    "tool_error: The tool call block was malformed or could not be parsed. {reason}\
-Please output a single, complete, valid tool call block inside a ```tool fenced block using JSON format:\n\n\
-```tool\n\
-{{\"name\": \"tool_name\", \"arguments\": {{...}}}}\n\
-```\n\n\
-Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans."
-                );
-
-                s.history
-                    .push(ChatMessage::new("tool", feedback));
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
-                s.status = AppStatus::Streaming;
-                s.stream_tracker = Some(StreamTracker::new());
-                drop(s);
-                dbg_log!("Retrying agent loop round due to malformed tool call");
-                continue;
-            }
-
-            let is_continuous = { state.lock().await.continuous_mode };
-            if is_continuous && tool_rounds > 0 {
-                dbg_log!("Continuous mode active, assistant responded with text prose. Ending continuous mode turn.");
-                let mut s = state.lock().await;
-                s.continuous_mode = false;
-            } else if is_continuous && tool_rounds == 0 {
-                dbg_log!("Continuous mode active, but assistant gave a plain conversational reply (no tools used). Ending turn.");
-                let mut s = state.lock().await;
-                s.continuous_mode = false;
-            }
-
-            // Finish gate: the model wants to stop with a prose answer. If it
-            // edited code this task, don't accept "done" on a red build — run a
-            // compile check and, if it fails, hand the errors back and force
-            // another round. Skip on the forced wrap-up turn (tools already
-            // disabled) and once the retry budget is spent, so we can't spin.
-            if policy.should_verify_completion()
-                && made_edits
-                && !force_final
-                && finish_gate_retries < MAX_FINISH_GATE_RETRIES
-            {
-                let root = edit_root
-                    .clone()
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                dbg_log!("Finish gate: compile-checking {} before accepting done", root.display());
-                if let Some(errors) = cached_compiler_check(&root, &mut compile_dirty, &mut compile_cache).await {
-                    if errors.starts_with("__BUILD_UNVERIFIED__") {
-                        // Checker couldn't run — surface it but accept done rather
-                        // than spinning against an environment we can't fix.
-                        dbg_log!("Finish gate: build unverified — {errors}");
-                        let mut s = state.lock().await;
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!("[⚠ Build could not be verified — {errors}]"),
-                        ));
-                        crate::config::save_history(&s.history);
-                        drop(s);
-                    } else {
-                        finish_gate_retries += 1;
-                        tool_rounds += 1;
-                        dbg_log!("Finish gate: build is RED, forcing a fix round ({}/{})", finish_gate_retries, MAX_FINISH_GATE_RETRIES);
-                        let mut s = state.lock().await;
-                        s.history
-                            .push(ChatMessage::new("assistant", final_content.clone()));
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!(
-                                "[Finish blocked — the build does not compile. You cannot report this \
-                                 task as done while there are compiler errors. Fix them, then finish. \
-                                 Compiler errors:\n{errors}]"
-                            ),
-                        ));
-                        crate::config::save_history(&s.history);
-                        s.current_response.clear();
-                        s.status = AppStatus::Streaming;
-                        s.stream_tracker = Some(StreamTracker::new());
-                        drop(s);
-                        continue;
-                    }
-                }
-                dbg_log!("Finish gate: build is green, accepting done");
-            }
-
-            break;
-        }
-
+        let final_content = ctx.final_content;
+        let tool_rounds = ctx.tool_rounds;
+        let task_completed = ctx.task_completed;
+        let last_sent_messages = ctx.last_sent_messages;
         if !final_content.is_empty() {
             dbg_log!("Finishing agent loop, writing final assistant reply");
             crate::logger::operational_event(
