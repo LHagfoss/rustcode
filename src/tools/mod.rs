@@ -106,6 +106,13 @@ fn validate_value_against_schema(
                 }
             }
         }
+        if let Some(ap_schema) = schema.get("additionalProperties").filter(|v| v.is_object()) {
+            if let Some(obj) = value.as_object() {
+                for (key, val) in obj {
+                    validate_value_against_schema(val, ap_schema, &format!("{path}.{key}"))?;
+                }
+            }
+        }
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
             for (key, child) in properties {
                 if let Some(actual) = object.get(key) {
