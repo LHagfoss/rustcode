@@ -6,6 +6,7 @@ pub(crate) struct ToolResult {
     pub tool_name: String,
     pub content: String,
     pub diff: Option<String>,
+    pub file_preview: Option<(String, String)>,
     pub metadata: ToolResultMetadata,
 }
 
@@ -296,6 +297,7 @@ mod tests {
             tool_name: "run_command".to_string(),
             content: "error: command failed".to_string(),
             diff: None,
+            file_preview: None,
             metadata: ToolResultMetadata::default(),
         };
         assert!(result.is_error());
@@ -303,6 +305,7 @@ mod tests {
             tool_name: "grep".to_string(),
             content: json!("match").to_string(),
             diff: None,
+            file_preview: None,
             metadata: ToolResultMetadata::default(),
         }
         .is_error());

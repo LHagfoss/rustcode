@@ -893,7 +893,7 @@ pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<S
             }
         }
         Some(cap_diff_lines(prev))
-    } else if name == "write_to_file" {
+    } else if name == "write_to_file" && args.get("__rustcode_legacy_write_diff").is_some() {
         let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
         let old_content = std::fs::read_to_string(path).unwrap_or_default();
         let new_content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
@@ -949,6 +949,16 @@ pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<S
     } else {
         None
     }
+}
+
+fn get_file_preview(name: &str, args: &serde_json::Value) -> Option<(String, String)> {
+    if name != "write_to_file" {
+        return None;
+    }
+    Some((
+        args.get("path")?.as_str()?.to_string(),
+        args.get("content")?.as_str()?.to_string(),
+    ))
 }
 
 fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> std::path::PathBuf {
@@ -2391,6 +2401,7 @@ async fn execute_tool_batch(
                     tool_name: call.name.clone(),
                     content: "error: user denied this tool call".to_string(),
                     diff: None,
+                    file_preview: None,
                     metadata: ToolResultMetadata {
                         success: false,
                         ..Default::default()
@@ -2576,9 +2587,10 @@ async fn execute_tool_batch(
             .to_ascii_lowercase()
             .starts_with("error");
         results.push(ToolResult {
-            tool_name: name,
+            tool_name: name.clone(),
             content,
             diff: diff_opt,
+            file_preview: get_file_preview(&name, args),
             metadata: ToolResultMetadata {
                 call_id: None,
                 arguments_hash: stable_arguments_hash(args),
@@ -3009,6 +3021,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.history.push(
                             ChatMessage::new("tool", format!("{name}: {truncated_result}"))
                                 .with_diff(diff_opt)
+                                .with_file_preview(result.file_preview)
                                 .with_tool_result(crate::app::ToolResultRecord {
                                     tool_name: name.clone(),
                                     arguments_hash: metadata.arguments_hash,

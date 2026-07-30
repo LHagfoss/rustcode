@@ -5,7 +5,7 @@ mod tool_result;
 
 use highlight::{highlight_code_block, highlight_code_line, highlight_diff_line, pad_to_width, render_unified_diff, wrap_code_spans};
 use markdown::render_markdown;
-use tool_result::render_tool_result;
+use tool_result::{render_file_preview, render_tool_result};
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
@@ -1164,7 +1164,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
             ]));
 
-            if let Some(ref diff) = msg.diff {
+            if let Some((ref path, ref content)) = msg.file_preview {
+                lines.extend(render_file_preview(
+                    path,
+                    content,
+                    inner_area.width as usize,
+                    show_picker,
+                ));
+            } else if let Some(ref diff) = msg.diff {
                 let code_content_width = inner_area.width as usize;
                 lines.extend(render_unified_diff(diff, code_content_width, show_picker));
             } else if let Some(tool_call) = prev_tool_info {
@@ -2027,7 +2034,7 @@ mod tests {
     #[test]
     fn code_block_rows_fill_full_width() {
         use super::render_assistant_message;
-        use unicode_width::{UnicodeWidthStr, UnicodeWidthChar};
+        use unicode_width::UnicodeWidthStr;
 
         let content = "```text\nWhy Rust Outshines C#\n\nA short line\n```";
         let mut lines = Vec::new();
