@@ -1005,7 +1005,7 @@ fn render_status_panel<'a>(
         let text = pad_to_width(&row, inner_width);
         lines.push(Line::from(Span::styled(
             format!("│ {text} │"),
-            get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
         )));
     }
     let bottom = format!("╰{}╯", "─".repeat(panel_width.saturating_sub(2)));
@@ -1658,10 +1658,10 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         .border_type(BorderType::Rounded)
         .title(format!(" {label} "))
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(COLOR_PANEL));
+        .style(Style::default().bg(COLOR_BG));
     let para = Paragraph::new(Line::from(Span::styled(
         notice.text.clone(),
-        Style::default().fg(COLOR_TEXT).bg(COLOR_PANEL),
+        Style::default().fg(COLOR_TEXT).bg(COLOR_BG),
     )))
     .block(block)
     .alignment(ratatui::layout::Alignment::Left)
