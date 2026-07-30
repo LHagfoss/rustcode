@@ -1318,7 +1318,6 @@ pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
 }
 
 pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
-    let show_picker = state.modal_open();
     let confirmations = match &state.pending_tool_confirmation {
         Some(c) if !c.is_empty() => c,
         _ => return,

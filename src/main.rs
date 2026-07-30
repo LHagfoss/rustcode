@@ -1161,10 +1161,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let page = s.page_rows();
                             s.scroll_down(page);
                         }
-                        KeyCode::End => {
-                            let mut s = app_state.lock().await;
-                            s.scroll_to_bottom();
-                        }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
                             let has_at = crate::app::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
