@@ -1,12 +1,9 @@
-use crate::network::loop_detect::{LoopDetector, LoopStatus};
-use serde_json::Value;
 use std::future::Future;
 
 /// Shared continuation and loop policy for every model-facing turn loop.
 pub(crate) struct TurnRunner {
     continuation_count: usize,
     max_continuations: usize,
-    loop_detector: LoopDetector,
 }
 
 impl TurnRunner {
@@ -14,7 +11,6 @@ impl TurnRunner {
         Self {
             continuation_count: 0,
             max_continuations: 5,
-            loop_detector: LoopDetector::new(6),
         }
     }
 
@@ -30,10 +26,6 @@ impl TurnRunner {
         self.continuation_count
     }
 
-    pub(crate) fn check_tool(&mut self, name: &str, arguments: &Value) -> LoopStatus {
-        let (exact, category) = crate::network::loop_detect::signatures(name, arguments);
-        self.loop_detector.check_tool(name, &exact, &category)
-    }
 }
 
 /// Collect one model response, transparently continuing responses cut off by
