@@ -24,6 +24,10 @@ use ratatui::{
 use std::hash::{Hash, Hasher};
 use unicode_width::UnicodeWidthStr;
 
+fn safe_byte_index(s: &str, char_pos: usize) -> usize {
+    s.char_indices().nth(char_pos).map(|(i, _)| i).unwrap_or(s.len())
+}
+
 /// Max visible rows in the slash-command popup; longer lists scroll internally.
 const MAX_POPUP_ROWS: u16 = 10;
 
@@ -708,8 +712,8 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
-        let raw_prefix =
-            &state.input_buffer[..state.cursor_position.min(state.input_buffer.len())];
+        let safe_end = safe_byte_index(&state.input_buffer, state.cursor_position);
+        let raw_prefix = &state.input_buffer[..safe_end];
         let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 
         let mut current_line_spans = Vec::new();
@@ -1583,7 +1587,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
         let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
             .unwrap_or((0, String::new()));
-        let at_files = if !at_query.is_empty() || state.input_buffer[..state.cursor_position.min(state.input_buffer.len())].ends_with('@') {
+        let at_files = if !at_query.is_empty() || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)].ends_with('@') {
             crate::app::list_project_file_paths(&at_query)
         } else {
             Vec::new()
