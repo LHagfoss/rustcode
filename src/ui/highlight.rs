@@ -561,7 +561,15 @@ pub(super) fn render_unified_diff<'a>(diff: &str, width: usize, show_picker: boo
         } else {
             format!("{line_number:>5} ")
         };
-        let mut line = vec![Span::styled(prefix, get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker))];
+        let gutter_bg = match raw.chars().next() {
+            Some('+') => Color::Rgb(24, 40, 24),
+            Some('-') => Color::Rgb(48, 20, 20),
+            _ => COLOR_BG,
+        };
+        let mut line = vec![Span::styled(
+            prefix,
+            get_themed_style(COLOR_MUTED, gutter_bg, Modifier::empty(), show_picker),
+        )];
         let body = highlight_diff_line(raw, body_width, show_picker);
         line.extend(body.spans);
         rendered.push(Line::from(line));
@@ -641,7 +649,9 @@ mod tests {
         assert_eq!(lines.len(), 4);
         let text: String = lines[1].spans.iter().map(|span| span.content.as_ref()).collect();
         assert!(text.starts_with("    4 - "));
+        assert_eq!(lines[1].spans[0].style.bg, Some(Color::Rgb(48, 20, 20)));
         let text: String = lines[2].spans.iter().map(|span| span.content.as_ref()).collect();
         assert!(text.starts_with("    7 + "));
+        assert_eq!(lines[2].spans[0].style.bg, Some(Color::Rgb(24, 40, 24)));
     }
 }
