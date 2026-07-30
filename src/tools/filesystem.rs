@@ -432,6 +432,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     }
 
     let mut chunks = extract_edit_chunks(args)?;
+    // Issue 171 fix: sort chunks descending
     chunks.sort_by(|a, b| {
         let a_line = a.start_line.unwrap_or(0);
         let b_line = b.start_line.unwrap_or(0);
