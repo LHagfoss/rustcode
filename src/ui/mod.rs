@@ -21,6 +21,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
+use std::hash::{Hash, Hasher};
 use unicode_width::UnicodeWidthStr;
 
 /// Max visible rows in the slash-command popup; longer lists scroll internally.
@@ -942,6 +943,41 @@ fn own_line(line: &Line) -> Line<'static> {
     owned
 }
 
+thread_local! {
+    static TOOL_RESULT_CACHE: std::cell::RefCell<std::collections::HashMap<u64, Vec<Line<'static>>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn cached_tool_result(
+    tool_name: &str,
+    result: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    tool_name.hash(&mut hasher);
+    result.hash(&mut hasher);
+    width.hash(&mut hasher);
+    show_picker.hash(&mut hasher);
+    let key = hasher.finish();
+
+    TOOL_RESULT_CACHE.with(|cache| {
+        if let Some(lines) = cache.borrow().get(&key) {
+            return lines.clone();
+        }
+        let lines = render_tool_result(tool_name, result, width, show_picker)
+            .iter()
+            .map(own_line)
+            .collect::<Vec<_>>();
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 256 {
+            cache.clear();
+        }
+        cache.insert(key, lines.clone());
+        lines
+    })
+}
+
 fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
     let rule = "─".repeat(width.max(1) as usize);
     lines.push(Line::from(""));
@@ -1110,7 +1146,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 lines.extend(render_unified_diff(diff, code_content_width, show_picker));
             } else if let Some(tool_call) = prev_tool_info {
                 let result = msg.content.split_once(": ").map(|(_, result)| result).unwrap_or(&msg.content);
-                lines.extend(render_tool_result(&tool_call.name, result, inner_area.width as usize, show_picker));
+                lines.extend(cached_tool_result(
+                    &tool_call.name,
+                    result,
+                    inner_area.width as usize,
+                    show_picker,
+                ));
             }
 
         } else if msg.role == "user" {
