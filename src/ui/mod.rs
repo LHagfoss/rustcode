@@ -940,6 +940,16 @@ fn own_line(line: &Line) -> Line<'static> {
     owned
 }
 
+fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
+    let rule = "─".repeat(width.max(1) as usize);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::<'static>::styled(
+        rule,
+        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+    )));
+    lines.push(Line::from(""));
+}
+
 fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
     let inner_area = chunks[0].inner(Margin {
         vertical: 0,
@@ -1126,7 +1136,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
 
         } else if msg.role == "user" {
-            lines.push(Line::from(""));
+            if msg_idx > 0 {
+                push_turn_separator(&mut lines, inner_area.width, show_picker);
+            }
             // Account for "▌" prefix (1 char) + internal bubble padding (2 left + 2 right) + right margin (3)
             let content_width = (inner_area.width as usize).saturating_sub(8);
             let display_content = collapse_image_markers(&msg.content);
