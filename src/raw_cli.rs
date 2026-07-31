@@ -24,30 +24,10 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
     state
 }
 
-/// Convert internal chat history into API message format, with tool results
-/// wrapped in `<tool_result>` tags and user messages passing through multimodal parsing.
-/// Applies history compaction to keep the prompt under token budget.
-pub async fn build_messages(state: &AppState) -> Vec<serde_json::Value> {
-    let protocol = state.config.tool_protocol;
-    let system_prompt = crate::tools::tool_system_prompt(false, protocol, state.agent_mode);
-
-    let mut history_snapshot: Vec<ChatMessage> = state
-        .history
-        .iter()
-        .filter(|m| {
-            matches!(m.role.as_str(), "user" | "assistant" | "tool")
-                && !m.content.starts_with('/')
-        })
-        .cloned()
-        .collect();
-
-    let budget_token_limit = state.get_history_token_budget();
-    crate::network::compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
-
-    crate::network::history::to_messages(&history_snapshot, system_prompt)
-}
-
-/// Prompt the user to confirm tool execution and run it if confirmed.
+/// Non-interactive turn policy for `--prompt` execution. Auto-approves tool
+/// calls (printing each to stdout) but still enforces plan-mode safety and runs
+/// the shared completion/finish gate, so headless runs match interactive
+/// execution without ever blocking for TUI confirmation.
 pub(crate) struct HeadlessPolicy;
 
 impl crate::network::policy::TurnPolicy for HeadlessPolicy {
@@ -84,16 +64,16 @@ pub async fn run_round_loop(
     let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer {
         content: String::new(),
     }));
-    
+
     let policy = Arc::new(HeadlessPolicy);
-    let mut ctx = crate::network::TurnContext::new();
 
     println!("Starting headless agent loop...");
-    while !cancel_token.is_cancelled() {
-        if !crate::network::run_single_turn(client, &state_arc, &cancel_token, &policy, &stream_buffer, &mut ctx).await {
-            break;
-        }
-    }
+    // Drive the prompt through the SAME shared turn lifecycle the interactive
+    // orchestrator uses (TurnMachine, approval/finish gates, build verification,
+    // token/history persistence). HeadlessPolicy keeps it non-interactive.
+    let ctx =
+        crate::network::run_agent_turn(client, &state_arc, &cancel_token, &policy, &stream_buffer)
+            .await;
 
     if !ctx.final_content.is_empty() {
         let prose = crate::network::text::strip_tool_call_syntax(&ctx.final_content);
@@ -108,83 +88,54 @@ pub async fn run_round_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::policy::TurnPolicy;
+    use crate::tools::ToolCall;
 
-    #[tokio::test]
-    async fn build_messages_keeps_system_prompt_first() {
+    fn call(name: &str) -> ToolCall {
+        ToolCall {
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn build_state_seeds_user_prompt_and_raw_mode() {
         let state = build_state("inspect the project", None);
-
-        let messages = build_messages(&state).await;
-
-        assert_eq!(
-            messages.first().and_then(|m| m["role"].as_str()),
-            Some("system")
-        );
-        assert!(
-            messages[0]["content"]
-                .as_str()
-                .unwrap()
-                .contains("rustcode")
-        );
-        assert_eq!(messages[1]["role"], "user");
-        assert_eq!(messages[1]["content"], "inspect the project");
+        assert!(state.raw_cli_mode);
+        assert_eq!(state.history.len(), 1);
+        assert_eq!(state.history[0].role, "user");
+        assert_eq!(state.history[0].content, "inspect the project");
     }
 
     #[tokio::test]
-    async fn build_messages_encodes_tool_results_as_user_context() {
-        let mut state = build_state("make the check pass", None);
-        state
-            .history
-            .push(ChatMessage::new("assistant", "I will inspect the error."));
-        state
-            .history
-            .push(ChatMessage::new("tool", "run_command: error output"));
+    async fn headless_policy_auto_approves_in_build_mode() {
+        let mut state = build_state("edit a file", None);
+        state.agent_mode = crate::config::AgentMode::Build;
+        let state = Arc::new(Mutex::new(state));
 
-        let messages = build_messages(&state).await;
-
-        assert_eq!(messages.len(), 4);
-        assert_eq!(messages[2]["role"], "assistant");
-        assert_eq!(messages[3]["role"], "user");
-        assert_eq!(
-            messages[3]["content"],
-            "<tool_result>\nrun_command: error output\n</tool_result>"
-        );
+        let approved = HeadlessPolicy
+            .should_approve(&state, &[call("write_file")])
+            .await;
+        assert!(approved, "headless build mode must not block on approval");
     }
 
     #[tokio::test]
-    async fn build_messages_excludes_slash_commands_from_model_history() {
-        let mut state = build_state("continue", None);
-        state.history.push(ChatMessage::new("user", "/delegate"));
-        state.history.push(ChatMessage::new("assistant", "working"));
+    async fn headless_policy_rejects_mutating_tool_in_plan_mode() {
+        let mut state = build_state("plan only", None);
+        state.agent_mode = crate::config::AgentMode::Plan;
+        let state = Arc::new(Mutex::new(state));
 
-        let messages = build_messages(&state).await;
-
-        assert!(messages.iter().all(|message| {
-            message["content"]
-                .as_str()
-                .map(|content| !content.starts_with('/'))
-                .unwrap_or(true)
-        }));
-        assert_eq!(
-            messages.last().and_then(|m| m["content"].as_str()),
-            Some("working")
-        );
+        let approved = HeadlessPolicy
+            .should_approve(&state, &[call("write_file")])
+            .await;
+        assert!(!approved, "plan mode must reject mutating tools headlessly");
     }
 
-    #[tokio::test]
-    async fn build_messages_preserves_multimodal_user_content() {
-        let mut state = build_state("look at this", None);
-        state.history.push(ChatMessage::new(
-            "user",
-            "before ![image](file:///tmp/missing.png) after",
-        ));
-
-        let messages = build_messages(&state).await;
-        let content = messages.last().unwrap()["content"].as_array().unwrap();
-
-        assert_eq!(content[0]["type"], "text");
-        assert_eq!(content[0]["text"], "before ");
-        assert_eq!(content[1]["text"], "![image](file:///tmp/missing.png)");
-        assert_eq!(content[2]["text"], " after");
+    #[test]
+    fn headless_policy_verifies_completion_like_interactive() {
+        // The finish gate (compiler/build verification before accepting done)
+        // is driven by this flag; raw CLI must match interactive behavior.
+        assert!(HeadlessPolicy.should_verify_completion());
     }
 }
 

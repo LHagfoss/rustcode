@@ -3260,6 +3260,102 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
 
 }
 
+/// Drive one already-recorded prompt through the shared agent loop and finalize
+/// it. This is the single turn-lifecycle implementation: it runs
+/// [`run_single_turn`] until the turn stops (so it shares the `TurnMachine`,
+/// approval/safety policy, retry behavior, compiler/build verification, and the
+/// `complete_task` finish gate), then records the assistant reply, resolves and
+/// tracks token usage, persists history/session, and fires completion
+/// side-effects.
+///
+/// Both the interactive queue orchestrator and the headless raw CLI call this,
+/// so `--prompt` execution and interactive execution can no longer diverge. It
+/// is non-interactive by construction: interactivity lives entirely in the
+/// injected [`policy::TurnPolicy`], which the raw CLI supplies as a headless,
+/// non-blocking implementation. Returns the finished [`TurnContext`] for the
+/// caller to inspect (final content, whether the task completed, tool rounds).
+pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<StreamBuffer>>,
+) -> TurnContext {
+    let prompt_start_time = std::time::Instant::now();
+
+    let mut ctx = TurnContext::new();
+    while run_single_turn(client, state, cancel_token, policy, stream_buffer, &mut ctx).await {}
+
+    if !ctx.final_content.is_empty() {
+        dbg_log!("Finishing agent loop, writing final assistant reply");
+        crate::logger::operational_event(
+            "turn.finish",
+            serde_json::json!({
+                "completed_task": ctx.task_completed,
+                "tool_rounds": ctx.tool_rounds,
+                "content_bytes": ctx.final_content.len(),
+                "cancelled": cancel_token.is_cancelled(),
+            }),
+        );
+
+        let mut s = state.lock().await;
+        s.continuous_mode = false;
+        s.response_time = Some(prompt_start_time.elapsed());
+        // On the complete_task path the summary was already appended; only
+        // record token usage / notify below, don't duplicate the reply.
+        if !ctx.task_completed {
+            let mut msg = ChatMessage::new("assistant", ctx.final_content.clone());
+            msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
+            s.history.push(msg);
+        }
+
+        drop(s);
+
+        let usage = {
+            let s = state.lock().await;
+            if s.current_token_usage.is_some() {
+                s.current_token_usage.clone()
+            } else {
+                drop(s);
+                dbg_log!("Estimating token usage...");
+                let est = estimate_token_usage(&ctx.last_sent_messages, &ctx.final_content).await;
+                dbg_log!("Token usage estimation result: {:?}", est);
+                est
+            }
+        };
+
+        let mut s = state.lock().await;
+        if let Some(msg) = s.history.iter_mut().rev().find(|m| m.role == "assistant") {
+            msg.token_usage = usage.clone();
+        }
+
+        crate::config::save_history(&s.history);
+        let active_id = s.active_session_id.clone();
+        crate::config::save_session_history(&active_id, &s.history);
+
+        s.current_response.clear();
+        s.status = AppStatus::Idle;
+
+        if let Some(u) = &usage {
+            crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
+        }
+        s.current_token_usage = usage;
+        drop(s);
+
+        // Fetch live Gemini model quota from proxy endpoint
+        let state_quota = Arc::clone(state);
+        let client_quota = client.clone();
+        tokio::spawn(async move {
+            fetch_model_quota(&client_quota, &state_quota).await;
+        });
+
+        // Notify the user that the agent loop completed successfully.
+        let _ = crate::notifications::notify_finished(crate::notifications::FinishedStatus::Success);
+    }
+
+    ctx
+}
+
 pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
     client: reqwest::Client,
     state: Arc<Mutex<AppState>>,
@@ -3320,83 +3416,7 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
             spawn_title_generation(&client, &state, next_prompt.clone()).await;
         }
 
-        let prompt_start_time = std::time::Instant::now();
-
-        let mut ctx = TurnContext::new();
-        while run_single_turn(&client, &state, &cancel_token, &policy, &stream_buffer, &mut ctx).await {}
-
-        let final_content = ctx.final_content;
-        let tool_rounds = ctx.tool_rounds;
-        let task_completed = ctx.task_completed;
-        let last_sent_messages = ctx.last_sent_messages;
-        if !final_content.is_empty() {
-            dbg_log!("Finishing agent loop, writing final assistant reply");
-            crate::logger::operational_event(
-                "turn.finish",
-                serde_json::json!({
-                    "completed_task": task_completed,
-                    "tool_rounds": tool_rounds,
-                    "content_bytes": final_content.len(),
-                    "cancelled": cancel_token.is_cancelled(),
-                }),
-            );
-
-            let mut s = state.lock().await;
-            s.continuous_mode = false;
-            s.response_time = Some(prompt_start_time.elapsed());
-            // On the complete_task path the summary was already appended; only
-            // record token usage / notify below, don't duplicate the reply.
-            if !task_completed {
-                let mut msg = ChatMessage::new("assistant", final_content.clone());
-                msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
-                s.history.push(msg);
-            }
-
-            drop(s);
-
-            let usage = {
-                let s = state.lock().await;
-                if s.current_token_usage.is_some() {
-                    s.current_token_usage.clone()
-                } else {
-                    drop(s);
-                    dbg_log!("Estimating token usage...");
-                    let est = estimate_token_usage(&last_sent_messages, &final_content).await;
-                    dbg_log!("Token usage estimation result: {:?}", est);
-                    est
-                }
-            };
-
-            let mut s = state.lock().await;
-            if let Some(msg) = s.history.iter_mut().rev().find(|m| m.role == "assistant") {
-                msg.token_usage = usage.clone();
-            }
-
-            crate::config::save_history(&s.history);
-            let active_id = s.active_session_id.clone();
-            crate::config::save_session_history(&active_id, &s.history);
-
-            s.current_response.clear();
-            s.status = AppStatus::Idle;
-
-            if let Some(u) = &usage {
-                crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
-            }
-            s.current_token_usage = usage;
-            drop(s);
-
-            // Fetch live Gemini model quota from proxy endpoint
-            let state_quota = Arc::clone(&state);
-            let client_quota = client.clone();
-            tokio::spawn(async move {
-                fetch_model_quota(&client_quota, &state_quota).await;
-            });
-
-            // Notify the user that the agent loop completed successfully.
-            let _ = crate::notifications::notify_finished(
-                crate::notifications::FinishedStatus::Success,
-            );
-        }
+        run_agent_turn(&client, &state, &cancel_token, &policy, &stream_buffer).await;
 
         if cancel_token.is_cancelled() {
             dbg_log!("Cancel token is cancelled, exiting orchestrator loop");
