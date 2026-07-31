@@ -401,7 +401,15 @@ fn render_assistant_message<'a>(
                 }
 
                 let normal_text = normal_block.join("\n");
-                lines.extend(render_markdown(&normal_text, content_width, show_picker));
+                // While generating, `content` is the live streaming buffer and
+                // changes every frame; caching it would grow the render cache
+                // without bound. Only settled history messages are cached.
+                lines.extend(render_markdown(
+                    &normal_text,
+                    content_width,
+                    show_picker,
+                    !is_generating,
+                ));
             }
         }
         lines.push(Line::from(""));
