@@ -1100,8 +1100,10 @@ mod tests {
     #[test]
     fn test_config_save_load() {
         let dir = temp_dir("config");
-        let mut config = AppConfig::default();
-        config.default = DefaultConfig::Simple("gemma4:e2b-it-qat".to_string());
+        let config = AppConfig {
+            default: DefaultConfig::Simple("gemma4:e2b-it-qat".to_string()),
+            ..AppConfig::default()
+        };
         save_config_to(&dir, &config);
 
         let (url, model, loaded) = load_config_from(&dir);
@@ -1114,8 +1116,10 @@ mod tests {
     #[test]
     fn test_default_profile_is_source_of_truth() {
         let dir = temp_dir("latest");
-        let mut config = AppConfig::default();
-        config.default = DefaultConfig::Simple("gemma4:e2b-it-qat".to_string());
+        let config = AppConfig {
+            default: DefaultConfig::Simple("gemma4:e2b-it-qat".to_string()),
+            ..AppConfig::default()
+        };
         save_config_to(&dir, &config);
 
         let (url, model, _) = load_config_from(&dir);

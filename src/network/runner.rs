@@ -22,10 +22,6 @@ impl TurnRunner {
         true
     }
 
-    pub(crate) fn continuation_count(&self) -> usize {
-        self.continuation_count
-    }
-
 }
 
 /// Collect one model response, transparently continuing responses cut off by
@@ -63,7 +59,6 @@ mod tests {
             assert!(runner.allow_continuation(true));
         }
         assert!(!runner.allow_continuation(true));
-        assert_eq!(runner.continuation_count(), 5);
     }
 
     #[tokio::test]

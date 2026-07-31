@@ -99,20 +99,16 @@ fn validate_value_against_schema(
             .get("additionalProperties")
             .and_then(Value::as_bool)
             == Some(false)
-        {
-            if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-                if let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key)) {
+            && let Some(properties) = schema.get("properties").and_then(Value::as_object)
+                && let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key)) {
                     return Err(format!("{path}.{unknown} is not an advertised argument"));
                 }
-            }
-        }
-        if let Some(ap_schema) = schema.get("additionalProperties").filter(|v| v.is_object()) {
-            if let Some(obj) = value.as_object() {
+        if let Some(ap_schema) = schema.get("additionalProperties").filter(|v| v.is_object())
+            && let Some(obj) = value.as_object() {
                 for (key, val) in obj {
                     validate_value_against_schema(val, ap_schema, &format!("{path}.{key}"))?;
                 }
             }
-        }
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
             for (key, child) in properties {
                 if let Some(actual) = object.get(key) {
@@ -145,9 +141,9 @@ pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTas
     TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-pub(crate) static WAKEUP_CALLBACK: OnceLock<
-    Box<dyn Fn(String, String, String) + Send + Sync + 'static>,
-> = OnceLock::new();
+type WakeupCallback = Box<dyn Fn(String, String, String) + Send + Sync + 'static>;
+
+pub(crate) static WAKEUP_CALLBACK: OnceLock<WakeupCallback> = OnceLock::new();
 
 pub fn register_wakeup_callback<F>(cb: F)
 where
@@ -232,13 +228,12 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
         return resolved;
     }
 
-    if raw_path.starts_with("~/") || raw_path == "~" {
-        if let Ok(home) = std::env::var("HOME") {
+    if (raw_path.starts_with("~/") || raw_path == "~")
+        && let Ok(home) = std::env::var("HOME") {
             let tail = raw_path.strip_prefix('~').unwrap_or("");
             let tail = tail.strip_prefix('/').unwrap_or(tail);
             return PathBuf::from(home).join(tail);
         }
-    }
 
     PathBuf::from(raw_path)
 }

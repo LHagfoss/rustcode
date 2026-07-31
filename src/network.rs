@@ -75,36 +75,6 @@ fn is_fully_stubbed(m: &ChatMessage) -> bool {
         || rest.starts_with("[superseded")
 }
 
-/// Extract `(path, start_line, end_line)` from an intact `view_file` result
-/// header, e.g. `view_file: [File: src/a.rs, Lines 10 to 40 of 200, ...]`.
-/// A read with no explicit line range is treated as the whole file
-/// (`0..=u32::MAX`) so a full read is recognised as covering any partial read.
-fn view_file_range_from_tool_msg(content: &str) -> Option<(String, u32, u32)> {
-    let rest = content.strip_prefix("view_file:")?;
-    let inner = rest.split("[File:").nth(1)?;
-    let path = inner.split([',', ']']).next()?.trim();
-    if path.is_empty() {
-        return None;
-    }
-    let (start, end) = match inner.split("Lines").nth(1) {
-        Some(after) => {
-            let nums: Vec<u32> = after
-                .split("of")
-                .next()
-                .unwrap_or(after)
-                .split(|c: char| !c.is_ascii_digit())
-                .filter_map(|s| s.parse().ok())
-                .collect();
-            match nums.as_slice() {
-                [s, e, ..] => (*s, *e),
-                _ => (0, u32::MAX),
-            }
-        }
-        None => (0, u32::MAX),
-    };
-    Some((path.to_string(), start, end))
-}
-
 
 /// Reduce one tool message a single notch toward a stub (full → 2 lines → fully
 /// stubbed). Returns the new token count. Idempotent on already-stubbed messages.
@@ -1713,7 +1683,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     "error: requested path is outside the subagent allowed_paths contract".to_string(),
                     None,
                 )
-            } else if crate::tools::is_agent_tool(&name) {
+            } else if crate::tools::is_agent_tool(name) {
                 (
                     "error: subagents cannot spawn or message other agents".to_string(),
                     None,
@@ -1731,8 +1701,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 confirm_and_execute(
                     state,
                     cancel_token,
-                    &name,
-                    &args,
+                    name,
+                    args,
                     &format!("agent-{agent_id} · {name}"),
                     false,
                     {
@@ -1748,7 +1718,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
-                let truncated_result = truncate_tool_output(&name, result);
+                let truncated_result = truncate_tool_output(name, result);
                 a.history.push(
                     ChatMessage::new("tool", format!("{name}: {truncated_result}")).with_diff(diff_opt),
                 );
@@ -1880,11 +1850,10 @@ async fn handle_agent_tool(
                     .and_then(|agent| agent.workspace_root.as_ref())
                     .and_then(|workspace| crate::config::write_subagent_review_manifest(workspace, agent_id))
             };
-            if let Some(manifest) = review_manifest {
-                if let Some(agent) = state.lock().await.subagents.iter_mut().find(|agent| agent.id == agent_id) {
+            if let Some(manifest) = review_manifest
+                && let Some(agent) = state.lock().await.subagents.iter_mut().find(|agent| agent.id == agent_id) {
                     agent.review_manifest = Some(manifest);
                 }
-            }
             set_subagent_status(
                 state,
                 agent_id,
@@ -2540,7 +2509,11 @@ async fn execute_tool_batch(
         let cancel_token_clone = cancel_token.clone();
         let name_clone = name.clone();
         let args_clone = args.clone();
-        let (name, result, diff_opt) = async move {
+        let plan_mode_denied = {
+            let plan_mode = state.lock().await.agent_mode == crate::config::AgentMode::Plan;
+            plan_mode && !crate::tools::allowed_in_plan_mode(name)
+        };
+        let (executed_name, result, diff_opt) = async move {
             let is_read_only = is_read_only_tool(&name_clone);
 
             // Repeat-loop guard for read-only tools. For view_file we go
@@ -2593,10 +2566,7 @@ async fn execute_tool_batch(
                     ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await,
                     None,
                 )
-            } else if {
-                let plan_mode = { state_clone.lock().await.agent_mode == crate::config::AgentMode::Plan };
-                plan_mode && !crate::tools::allowed_in_plan_mode(&name_clone)
-            } {
+            } else if plan_mode_denied {
                 (
                     "error: Plan mode is active; this tool is not permitted.".to_string(),
                     None,
@@ -2654,8 +2624,8 @@ async fn execute_tool_batch(
             (name_clone, result, diff_opt)
         }
         .await;
-        let content = truncate_tool_output(&name, result);
-        let changed_paths = if is_mutating_tool(&name) {
+        let content = truncate_tool_output(&executed_name, result);
+        let changed_paths = if is_mutating_tool(&executed_name) {
             args.get("path")
                 .and_then(|value| value.as_str())
                 .map(|path| vec![path.to_string()])
@@ -2674,10 +2644,10 @@ async fn execute_tool_batch(
             .to_ascii_lowercase()
             .starts_with("error");
         results.push(ToolResult {
-            tool_name: name.clone(),
+            tool_name: executed_name.clone(),
             content,
             diff: diff_opt,
-            file_preview: get_file_preview(&name, args),
+            file_preview: get_file_preview(&executed_name, args),
             metadata: ToolResultMetadata {
                 call_id: None,
                 arguments_hash: stable_arguments_hash(args),
@@ -2770,7 +2740,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     const MAX_FINISH_GATE_RETRIES: u32 = 2;
     dbg_log!("Starting agent loop round {}", ctx.tool_rounds);
 
-            let msgs = prepare_turn_request(&client, &state, ctx.tool_rounds).await;
+            let msgs = prepare_turn_request(client, state, ctx.tool_rounds).await;
 
             state.lock().await.current_response.clear();
             stream_buffer.lock().await.content.clear();
@@ -2787,9 +2757,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             );
             ctx.last_sent_messages = msgs.clone();
             let request_client = client.clone();
-            let request_state = Arc::clone(&state);
+            let request_state = Arc::clone(state);
             let request_cancel = cancel_token.clone();
-            let request_buffer = Arc::clone(&stream_buffer);
+            let request_buffer = Arc::clone(stream_buffer);
             let request_api_url = api_base_url.clone();
             let request_model = model_name.clone();
             let request_msgs = msgs.clone();
@@ -3029,7 +2999,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 if !cancel_token.is_cancelled() {
                     ctx.tool_rounds += 1;
 
-                    let approved = policy.should_approve(&state, &tool_calls).await;
+                    let approved = policy.should_approve(state, &tool_calls).await;
 
                     // Update UI state immediately after confirmation is resolved
                     {
@@ -3064,9 +3034,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     }
 
                     let results = execute_tool_batch(
-                        &client,
-                        &state,
-                        &cancel_token,
+                        client,
+                        state,
+                        cancel_token,
                         &tool_calls,
                         ctx.turn_machine.state() == events::TurnState::ExecutingTools,
                         ctx.made_edits,
@@ -3202,8 +3172,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             .and_then(|call| call.arguments.get("result").and_then(|r| r.as_str()))
                             .map(|s| s.to_string());
 
-                        if let Some(mut summary_text) = task_result_summary {
-                            if !summary_text.is_empty() {
+                        if let Some(mut summary_text) = task_result_summary
+                            && !summary_text.is_empty() {
                                 let mut changed_paths = std::collections::BTreeSet::new();
                                 for message in &s.history {
                                     if let Some(metadata) = &message.tool_result {
@@ -3220,7 +3190,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                                 ));
                                 s.history.push(ChatMessage::new("assistant", summary_text));
                             }
-                        }
                         crate::config::save_history(&s.history);
                         s.current_response.clear();
                         drop(s);
@@ -3334,7 +3303,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 dbg_log!("Finish gate: build is green, accepting done");
             }
 
-            return false;
+            false
 
 }
 
@@ -3563,8 +3532,8 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
     if let Some(quota_buckets) = buckets_arr {
         let mut matched_pct = None;
         for bucket in quota_buckets {
-            if let Some(model_id) = bucket.get("modelId").and_then(|m| m.as_str()) {
-                if let Some(fraction) = bucket.get("remainingFraction").and_then(|f| f.as_f64()) {
+            if let Some(model_id) = bucket.get("modelId").and_then(|m| m.as_str())
+                && let Some(fraction) = bucket.get("remainingFraction").and_then(|f| f.as_f64()) {
                     let pct = (fraction * 100.0) as f32;
                     if matched_pct.is_none() {
                         matched_pct = Some(pct);
@@ -3574,7 +3543,6 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
                         break;
                     }
                 }
-            }
         }
         if let Some(pct) = matched_pct {
             let mut s = state.lock().await;
@@ -3796,27 +3764,6 @@ mod tests {
         compact_history_to_budget(&mut history, 5000).await;
         assert_eq!(history[0].content, "\nHere is the answer");
         assert_eq!(history[1].content, "tool output");
-    }
-
-    #[test]
-    fn test_view_file_range_extraction() {
-        let content = "view_file: [File: src/main.rs, Lines 1 to 500 of 1128, Bytes offset: 0]\n1: mod app;";
-        assert_eq!(
-            view_file_range_from_tool_msg(content),
-            Some(("src/main.rs".to_string(), 1, 500))
-        );
-        // A read with no explicit range is treated as the whole file.
-        assert_eq!(
-            view_file_range_from_tool_msg("view_file: [File: src/a.rs]\ncontents"),
-            Some(("src/a.rs".to_string(), 0, u32::MAX))
-        );
-        // Stubs and non-view_file messages yield None.
-        assert_eq!(
-            view_file_range_from_tool_msg("view_file: [Tool output truncated: 123 pruned]"),
-            None
-        );
-        assert_eq!(view_file_range_from_tool_msg("grep: some match"), None);
-        assert_eq!(view_file_range_from_tool_msg(""), None);
     }
 
     #[test]

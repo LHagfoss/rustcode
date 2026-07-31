@@ -57,11 +57,10 @@ impl DiscordRpcHandler {
     }
 
     pub fn clear_activity(&mut self) {
-        if let Some(client) = &mut self.client {
-            if let Err(e) = client.clear_activity() {
+        if let Some(client) = &mut self.client
+            && let Err(e) = client.clear_activity() {
                 eprintln!("Failed to clear Discord RPC activity: {}", e);
                 self.client = None; // Disconnect on error
             }
-        }
     }
 }

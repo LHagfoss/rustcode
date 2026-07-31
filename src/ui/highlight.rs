@@ -600,7 +600,7 @@ mod tests {
         let rows = wrap_code_spans(spans, 6, COLOR_ELEMENT, false);
         assert_eq!(rows.len(), 3); // 16 chars / 6 = 3 rows
         for row in &rows {
-            assert_eq!(row_width(&row), 6);
+            assert_eq!(row_width(row), 6);
         }
     }
 
