@@ -34,6 +34,40 @@ pub fn is_read_only(name: &str) -> bool {
     )
 }
 
+/// Safe Git inspection commands are read-only even though they travel through
+/// the general-purpose shell tool. Treating every `run_command` call as a
+/// mutation makes harmless release inspection (`git log`, `git status`, etc.)
+/// escalate into a tool shutdown when a model repeats a query.
+fn is_read_only_category(name: &str, category: &str) -> bool {
+    if is_read_only(name) {
+        return true;
+    }
+    if name != "run_command" {
+        return false;
+    }
+
+    let Some(git_args) = category.strip_prefix("cmd:git") else {
+        return false;
+    };
+    let subcommand = git_args.trim_start_matches(':').split_whitespace().next();
+    matches!(
+        subcommand,
+        None
+            | Some(
+                "branch"
+                    | "describe"
+                    | "diff"
+                    | "log"
+                    | "ls-files"
+                    | "remote"
+                    | "rev-parse"
+                    | "show"
+                    | "status"
+                    | "tag"
+            )
+    )
+}
+
 /// Build `(exact_signature, category)` for a tool call.
 ///
 /// `exact` distinguishes every distinct call; `category` strips syntactic
@@ -248,7 +282,7 @@ impl LoopDetector {
     /// threshold, which is a real hang rather than legitimate re-reading.
     pub fn check_tool(&mut self, name: &str, exact: &str, category: &str) -> LoopStatus {
         let status = self.check(exact, category);
-        if is_read_only(name)
+        if is_read_only_category(name, category)
             && let LoopStatus::Abort(n) = status
             && n < self.abort.saturating_mul(3)
         {
@@ -413,6 +447,20 @@ mod tests {
             last = d.check_tool("write_to_file", "write_to_file:x", "write_to_file:x");
         }
         assert_eq!(last, LoopStatus::Abort(4));
+    }
+
+    #[test]
+    fn safe_git_inspection_repeats_warn_not_abort() {
+        let mut d = LoopDetector::new(4);
+        let mut last = LoopStatus::Ok;
+        for _ in 0..4 {
+            let (exact, category) = signatures(
+                "run_command",
+                &json!({"command": "git log v0.6.0..HEAD --oneline --no-merges"}),
+            );
+            last = d.check_tool("run_command", &exact, &category);
+        }
+        assert!(matches!(last, LoopStatus::Warning(_)), "got {last:?}");
     }
 
     #[test]
