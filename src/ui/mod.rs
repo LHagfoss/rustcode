@@ -14,7 +14,7 @@ use modals::{
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 
-use crate::app::{AppState, AppStatus, NoticeKind};
+use crate::app::{AppState, AppStatus, HoverTarget, NoticeKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin},
@@ -48,6 +48,9 @@ const COLOR_TURN_SEPARATOR: Color = Color::Rgb(72, 78, 84);
 /// Overlay surface for borderless popups (toast, scroll pill): darker than the
 /// app background so the pill reads as floating without needing a border.
 const COLOR_NOTICE_BG: Color = Color::Rgb(13, 14, 16);
+/// Background for a clickable element under the pointer — one step lighter than
+/// the surfaces around it, so hovering reads as "this responds to a click".
+const COLOR_HOVER_BG: Color = Color::Rgb(45, 50, 56);
 
 const LOGO: &[&str] = &[
     "                  ▄                   █      ",
@@ -1622,6 +1625,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         let btn_y = inner_area.y + inner_area.height.saturating_sub(1);
         let btn_rect = ratatui::layout::Rect::new(btn_x, btn_y, btn_width, 1);
         state.scroll_to_bottom_btn = Some(btn_rect);
+        let pill_bg = if state.hover == HoverTarget::ScrollPill {
+            COLOR_HOVER_BG
+        } else {
+            COLOR_NOTICE_BG
+        };
         f.render_widget(ratatui::widgets::Clear, btn_rect);
         f.render_widget(
             ratatui::widgets::Paragraph::new(label)
@@ -1629,7 +1637,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 .style(
                     Style::default()
                         .fg(COLOR_TEXT)
-                        .bg(COLOR_NOTICE_BG)
+                        .bg(pill_bg)
                         .add_modifier(Modifier::BOLD),
                 ),
             btn_rect,
@@ -1653,6 +1661,25 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         if wrapped_row >= scroll_offset && wrapped_row < scroll_offset + inner_area.height {
             let screen_row = inner_area.y + (wrapped_row - scroll_offset);
             state.code_copy_rows.push((screen_row, text));
+        }
+    }
+
+    // Hover feedback for the clickable chat rows. The rows live inside the
+    // memoized conversation lines, so tinting them here — after the paragraph
+    // is painted — keeps the pointer out of the cache key.
+    let hovered_row = match state.hover {
+        HoverTarget::ThoughtHeader(row) | HoverTarget::CopyBadge(row) => Some(row),
+        _ => None,
+    };
+    if let Some(row) = hovered_row
+        && row >= inner_area.y
+        && row < inner_area.y + inner_area.height
+    {
+        let buf = f.buffer_mut();
+        for col in inner_area.x..inner_area.x + inner_area.width {
+            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
+                cell.set_bg(COLOR_HOVER_BG);
+            }
         }
     }
 

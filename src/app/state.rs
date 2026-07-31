@@ -479,6 +479,21 @@ pub struct Notice {
     pub shown_at: std::time::Instant,
 }
 
+/// What the pointer is currently over. Only clickable things get a variant, so
+/// comparing the previous and current target tells the event loop whether a
+/// pointer move actually changed anything worth redrawing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HoverTarget {
+    #[default]
+    None,
+    /// The jump-to-latest pill.
+    ScrollPill,
+    /// A collapsible thought header, at this screen row.
+    ThoughtHeader(u16),
+    /// A code block's `[Copy]` badge, at this screen row.
+    CopyBadge(u16),
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -579,6 +594,8 @@ pub struct AppState {
     /// mouse selection can work there too (distinct from `chat_area`).
     pub input_text_area: Option<ratatui::layout::Rect>,
     pub scroll_to_bottom_btn: Option<ratatui::layout::Rect>,
+    /// Clickable element the pointer is over, refreshed on every mouse move.
+    pub hover: HoverTarget,
     pub selected_text: Option<String>,
     /// Transient top-right toast: (message, shown_at). Auto-expires (~3s) — the
     /// render path checks elapsed time, so no timer/event is needed to clear it.
@@ -695,6 +712,7 @@ impl AppState {
         Self {
             input_buffer: String::new(),
             scroll_to_bottom_btn: None,
+            hover: HoverTarget::None,
             history,
             current_response: String::new(),
             current_token_usage: None,
@@ -1110,6 +1128,25 @@ impl AppState {
         self.viewport_height.saturating_sub(1).max(1)
     }
 
+    /// Which clickable element sits under a screen cell. Hit-tested against the
+    /// rects and rows the last render recorded, so it is only meaningful for
+    /// coordinates from the current frame.
+    pub fn hover_target_at(&self, column: u16, row: u16) -> HoverTarget {
+        if let Some(rect) = self.scroll_to_bottom_btn
+            && rect.contains(ratatui::layout::Position::new(column, row))
+        {
+            return HoverTarget::ScrollPill;
+        }
+        // Chat rows are recorded in screen coordinates by the renderer.
+        if self.thought_toggle_rows.iter().any(|(r, _)| *r == row) {
+            return HoverTarget::ThoughtHeader(row);
+        }
+        if self.code_copy_rows.iter().any(|(r, _)| *r == row) {
+            return HoverTarget::CopyBadge(row);
+        }
+        HoverTarget::None
+    }
+
     pub fn clear_selection(&mut self) {
         self.sel_start = None;
         self.sel_end = None;
@@ -1133,4 +1170,24 @@ impl AppState {
     }
 
 
+}
+
+#[cfg(test)]
+mod hover_tests {
+    use super::{AppState, HoverTarget};
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn hover_target_prefers_the_pill_then_clickable_rows() {
+        let mut s = AppState::new();
+        s.scroll_to_bottom_btn = Some(Rect::new(60, 20, 20, 1));
+        s.thought_toggle_rows = vec![(5, 3)];
+        s.code_copy_rows = vec![(9, "code".to_string())];
+
+        assert_eq!(s.hover_target_at(65, 20), HoverTarget::ScrollPill);
+        assert_eq!(s.hover_target_at(0, 5), HoverTarget::ThoughtHeader(5));
+        assert_eq!(s.hover_target_at(40, 9), HoverTarget::CopyBadge(9));
+        // Nothing clickable on this row, and outside the pill rect.
+        assert_eq!(s.hover_target_at(40, 7), HoverTarget::None);
+    }
 }
