@@ -2868,12 +2868,29 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             }
             let (tool_calls, deferred_tool_calls) =
                 crate::tools::isolate_control_plane_call(parsed_tool_calls);
-            let turn_action = ctx.turn_machine.model_finished(
+            let turn_action = match ctx.turn_machine.model_finished(
                 cancel_token.is_cancelled(),
                 ctx.force_final,
                 !tool_calls.is_empty(),
                 ctx.task_completed,
-            );
+            ) {
+                Ok(action) => action,
+                Err(invalid) => {
+                    // An illegal internal transition is a bug, not a user error.
+                    // Debug builds already asserted inside the machine; in
+                    // release, log it and finish the turn defensively rather
+                    // than executing tools from an unexpected state.
+                    dbg_log!("Turn machine rejected model_finished: {invalid}");
+                    crate::logger::operational_event(
+                        "turn.invalid_transition",
+                        serde_json::json!({
+                            "stage": "model_finished",
+                            "detail": invalid.to_string(),
+                        }),
+                    );
+                    events::TurnAction::FinishResponse
+                }
+            };
             if turn_action == events::TurnAction::Cancel {
                 return false;
             }
@@ -2947,10 +2964,25 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         crate::config::save_history(&s.history);
                     }
 
-                    if approved {
-                        ctx.turn_machine.approval_granted();
+                    // Approval must be resolved on the machine BEFORE any tool
+                    // runs: execution is gated on the machine reaching
+                    // ExecutingTools, so a denial leaves it in AwaitingModel and
+                    // nothing executes.
+                    let transition = if approved {
+                        ctx.turn_machine.approval_granted()
                     } else {
-                        ctx.turn_machine.approval_denied();
+                        ctx.turn_machine.approval_denied()
+                    };
+                    if let Err(invalid) = transition {
+                        dbg_log!("Turn machine rejected approval transition: {invalid}");
+                        crate::logger::operational_event(
+                            "turn.invalid_transition",
+                            serde_json::json!({
+                                "stage": "approval",
+                                "approved": approved,
+                                "detail": invalid.to_string(),
+                            }),
+                        );
                     }
 
                     let results = execute_tool_batch(
@@ -2980,9 +3012,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         dbg_log!("Orchestrator: Cancelled during tool execution");
                         let mut s = state.lock().await;
                         s.status = AppStatus::Idle;
-                        if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
-                            ctx.turn_machine.tools_finished();
-                        }
+                        ctx.turn_machine.finish_tools_if_executing();
                         return false;
                     }
 
@@ -3076,9 +3106,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                                     crate::config::save_history(&s.history);
                                     s.current_response.clear();
                                     drop(s);
-                                    if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
-                                        ctx.turn_machine.tools_finished();
-                                    }
+                                    ctx.turn_machine.finish_tools_if_executing();
                                     return true;
                                 }
                             } else {
@@ -3119,24 +3147,18 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.current_response.clear();
                         drop(s);
                         ctx.task_completed = true;
-                        if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
-                            ctx.turn_machine.tools_finished();
-                        }
+                        ctx.turn_machine.finish_tools_if_executing();
                         return false;
                     }
                     crate::config::save_history(&s.history);
                     s.current_response.clear();
                     drop(s);
-                    if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
-                        ctx.turn_machine.tools_finished();
-                    }
+                    ctx.turn_machine.finish_tools_if_executing();
                     dbg_log!("Tool round finished, looping back");
                     return true;
                 } else {
                     dbg_log!("Tool execution cancelled");
-                    if ctx.turn_machine.state() == events::TurnState::ExecutingTools {
-                        ctx.turn_machine.tools_finished();
-                    }
+                    ctx.turn_machine.finish_tools_if_executing();
                     return false;
                 }
             } else if has_intended_tool_call(&ctx.final_content) {
