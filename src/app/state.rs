@@ -506,6 +506,8 @@ pub struct AppState {
 
     pub cwd_and_branch: String,
 
+    pub update_check: crate::update::UpdateState,
+
     pub active_suggestion_index: Option<usize>,
 
     pub show_model_picker: bool,
@@ -670,6 +672,7 @@ impl AppState {
             model_name,
             config,
             cwd_and_branch,
+            update_check: crate::update::UpdateState::Unknown,
             active_suggestion_index: None,
             show_model_picker: false,
             model_picker_index: 0,

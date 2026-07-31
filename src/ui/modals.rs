@@ -417,8 +417,19 @@ pub(super) fn render_welcome_screen(
         get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
     ))
     .style(Style::default().bg(COLOR_BG));
+    let version_label = match state.update_check {
+        crate::update::UpdateState::Available(latest) => format!(
+            "v{} · update available: v{}",
+            env!("CARGO_PKG_VERSION"),
+            crate::update::format_version(latest)
+        ),
+        crate::update::UpdateState::Checking => {
+            format!("v{} · checking for updates…", env!("CARGO_PKG_VERSION"))
+        }
+        _ => format!("v{}", env!("CARGO_PKG_VERSION")),
+    };
     let right_meta = Paragraph::new(Span::styled(
-        format!("v{}", env!("CARGO_PKG_VERSION")),
+        version_label,
         get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
     ))
     .alignment(ratatui::layout::Alignment::Right)
