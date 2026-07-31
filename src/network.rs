@@ -2264,7 +2264,7 @@ async fn prepare_turn_request(
             )
         };
         let pre_len = working_history.len();
-        let pre_tail = working_history.last().map(message_identity);
+        let pre_identity: Vec<u64> = working_history.iter().map(message_identity).collect();
 
         // Lock released here: this await performs I/O.
         let compacted =
@@ -2287,12 +2287,13 @@ async fn prepare_turn_request(
         // when it returns false, so the write-back is attempted regardless of
         // the return value; the flag only gates the cache invalidation below.
         let mut s = state.lock().await;
-        let tail_intact = match (pre_len.checked_sub(1), pre_tail) {
-            (Some(idx), Some(id)) => s.history.get(idx).map(message_identity) == Some(id),
-            (None, _) => true,
-            _ => false,
-        };
-        if s.history.len() >= pre_len && tail_intact {
+        let prefix_intact = s.history.len() >= pre_len
+            && s.history
+                .iter()
+                .take(pre_len)
+                .map(message_identity)
+                .eq(pre_identity.iter().copied());
+        if prefix_intact {
             if s.history.len() > pre_len {
                 working_history.extend(s.history.drain(pre_len..));
             }
