@@ -3297,6 +3297,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                         s.status = AppStatus::Streaming;
                         s.stream_tracker = Some(StreamTracker::new());
                         drop(s);
+                        if let Err(invalid) = ctx.turn_machine.retry_for_finish_gate() {
+                            dbg_log!("Turn machine rejected finish-gate retry: {invalid}");
+                            return false;
+                        }
                         return true;
                     }
                 }
