@@ -1,7 +1,10 @@
 use crate::app::ChatMessage;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
@@ -353,11 +356,142 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
     }
 }
 
-fn save_history_to(dir: &Path, history: &[ChatMessage]) {
-    let _ = fs::create_dir_all(dir);
-    if let Ok(json_str) = serde_json::to_string_pretty(history) {
-        let _ = fs::write(dir.join(HISTORY_FILE), json_str);
+/// How long the writer thread waits after the first queued change before it
+/// writes. A single agent turn saves the history many times (after the model
+/// response, after every tool batch, after loop-detector injections); the
+/// debounce collapses that burst into one write of the newest snapshot.
+const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// Coalescing, off-runtime writer for `history.json`.
+///
+/// Callers hand over a snapshot and return immediately; a dedicated OS thread
+/// (never a runtime worker) performs the serialization and the blocking write.
+struct HistoryWriter {
+    /// Newest unwritten snapshot per destination file.
+    pending: Mutex<HashMap<PathBuf, Vec<ChatMessage>>>,
+    wakeup: Condvar,
+    /// Serializes take-snapshot-then-write, so a slow write of an older
+    /// snapshot can never land on top of a newer one when the background
+    /// thread and an explicit flush run concurrently.
+    write_slot: Mutex<()>,
+}
+
+fn history_writer() -> &'static HistoryWriter {
+    static WRITER: OnceLock<&'static HistoryWriter> = OnceLock::new();
+    WRITER.get_or_init(|| {
+        let writer: &'static HistoryWriter = Box::leak(Box::new(HistoryWriter {
+            pending: Mutex::new(HashMap::new()),
+            wakeup: Condvar::new(),
+            write_slot: Mutex::new(()),
+        }));
+        let _ = std::thread::Builder::new()
+            .name("history-writer".to_string())
+            .spawn(move || {
+                loop {
+                    {
+                        let mut pending = lock(&writer.pending);
+                        while pending.is_empty() {
+                            pending = writer
+                                .wakeup
+                                .wait(pending)
+                                .unwrap_or_else(|e| e.into_inner());
+                        }
+                    }
+                    std::thread::sleep(HISTORY_WRITE_DEBOUNCE);
+                    drain_history_writes(writer);
+                }
+            });
+        writer
+    })
+}
+
+/// Poisoned mutexes are not fatal here: the protected data is a plain snapshot
+/// map, so recovering the inner value keeps history saving alive.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn queue_history_write(path: PathBuf, history: &[ChatMessage]) {
+    let writer = history_writer();
+    lock(&writer.pending).insert(path, history.to_vec());
+    writer.wakeup.notify_all();
+}
+
+fn drain_history_writes(writer: &HistoryWriter) {
+    let _slot = lock(&writer.write_slot);
+    let batch = std::mem::take(&mut *lock(&writer.pending));
+    for (path, history) in batch {
+        write_history_file(&path, &history);
     }
+}
+
+/// Write every queued history snapshot to disk before returning. Call on turn
+/// end and on shutdown so nothing queued can be lost.
+pub fn flush_history() {
+    drain_history_writes(history_writer());
+}
+
+/// Same guarantee as [`flush_history`], but the blocking write is moved to a
+/// blocking pool thread when called from inside a Tokio runtime.
+pub fn flush_history_async() {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(flush_history);
+        }
+        Err(_) => flush_history(),
+    }
+}
+
+/// Write a history file atomically: serialize compactly into a sibling temp
+/// file, then rename over the target. A crash mid-write leaves the previous
+/// complete file intact instead of a truncated one.
+fn write_history_file(path: &Path, history: &[ChatMessage]) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    // Compact, not pretty: this file is machine-read, and pretty-printing
+    // roughly doubles the bytes written on every save.
+    let Ok(json_str) = serde_json::to_string(history) else {
+        return;
+    };
+    let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+    if fs::write(&tmp, json_str).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    if fs::rename(&tmp, path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
+/// Process-wide cache of the active session id, so history saves never have to
+/// re-read and re-parse `config.toml` just to learn where to write.
+fn active_session_cache() -> &'static Mutex<Option<String>> {
+    static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Record the session that history saves should target. Called whenever the
+/// active session is created, resumed or switched.
+pub fn set_active_session_id(session_id: &str) {
+    let mut cache = lock(active_session_cache());
+    *cache = if session_id.is_empty() {
+        None
+    } else {
+        Some(session_id.to_string())
+    };
+}
+
+/// The active session id, read from `config.toml` at most once per process.
+fn active_session_id() -> Option<String> {
+    let mut cache = lock(active_session_cache());
+    if cache.is_none() {
+        let (_, _, config) = load_config();
+        *cache = config
+            .last_active_session_id
+            .filter(|id| !id.trim().is_empty());
+    }
+    cache.clone()
 }
 
 /// A saved chat session on disk, listed by /history and /resume.
@@ -434,23 +568,20 @@ fn session_meta_from(path: PathBuf, history: &[ChatMessage]) -> SessionMeta {
 /// Archive a chat into the sessions directory. No-op for histories without
 /// a real prompt. Returns the archive path on success.
 pub fn save_history(history: &[ChatMessage]) {
-    if let Some(dir) = get_config_dir() {
-        let (_, _, config) = load_config();
-        if let Some(ref session_id) = config.last_active_session_id {
-            save_session_history(session_id, history);
-        } else {
-            save_history_to(&dir, history);
+    match active_session_id() {
+        Some(session_id) => save_session_history(&session_id, history),
+        None => {
+            if let Some(dir) = get_config_dir() {
+                queue_history_write(dir.join(HISTORY_FILE), history);
+            }
         }
     }
 }
 
 pub fn save_session_history(session_id: &str, history: &[ChatMessage]) {
     if let Some(dir) = get_config_dir() {
-        let session_dir = dir.join(SESSIONS_DIR).join(session_id);
-        let _ = fs::create_dir_all(&session_dir);
-        if let Ok(json_str) = serde_json::to_string_pretty(history) {
-            let _ = fs::write(session_dir.join("history.json"), json_str);
-        }
+        let path = dir.join(SESSIONS_DIR).join(session_id).join(HISTORY_FILE);
+        queue_history_write(path, history);
     }
 }
 
@@ -556,6 +687,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
         if session_dir.exists() {
             let _ = fs::create_dir_all(session_dir.join("sandbox"));
             let _ = fs::create_dir_all(session_dir.join("artifacts"));
+            set_active_session_id(session_id);
             return session_id.clone();
         }
     }
@@ -573,12 +705,12 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
         let _ = fs::create_dir_all(session_dir.join("sandbox"));
         let _ = fs::create_dir_all(session_dir.join("artifacts"));
 
-        let json_str = serde_json::to_string_pretty(&legacy_history).unwrap_or_default();
-        let _ = fs::write(session_dir.join("history.json"), json_str);
+        write_history_file(&session_dir.join(HISTORY_FILE), &legacy_history);
         let _ = fs::remove_file(&legacy_history_path);
 
         config.last_active_session_id = Some(session_id.clone());
         save_config_to(&dir, config);
+        set_active_session_id(&session_id);
         return session_id;
     }
 
@@ -594,6 +726,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
 
     config.last_active_session_id = Some(session_id.clone());
     save_config_to(&dir, config);
+    set_active_session_id(&session_id);
     session_id
 }
 
@@ -614,6 +747,10 @@ pub fn create_new_session(config: &mut AppConfig) -> String {
 
     config.last_active_session_id = Some(session_id.clone());
     save_config_to(&dir, config);
+    // Any history still queued belongs to the session we are leaving; write it
+    // out before the active session id changes.
+    flush_history();
+    set_active_session_id(&session_id);
     session_id
 }
 
@@ -1012,13 +1149,57 @@ mod tests {
             ChatMessage::new("user", "Hello"),
             ChatMessage::new("assistant", "Hi there"),
         ];
-        save_history_to(&dir, &msgs);
+        write_history_file(&dir.join(HISTORY_FILE), &msgs);
         let loaded = load_session_file(&dir.join(HISTORY_FILE));
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].role, "user");
         assert_eq!(loaded[0].content, "Hello");
         assert_eq!(loaded[1].role, "assistant");
         assert_eq!(loaded[1].content, "Hi there");
+    }
+
+    #[test]
+    fn test_history_is_written_compactly_and_atomically() {
+        let dir = temp_dir("history-compact");
+        let msgs = vec![ChatMessage::new("user", "Hello")];
+        write_history_file(&dir.join(HISTORY_FILE), &msgs);
+
+        let raw = fs::read_to_string(dir.join(HISTORY_FILE)).unwrap();
+        assert!(
+            !raw.contains('\n'),
+            "history must be compact JSON, got: {raw}"
+        );
+        assert_eq!(load_session_file(&dir.join(HISTORY_FILE)).len(), 1);
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n != HISTORY_FILE)
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "atomic write left temp files behind: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn test_queued_history_writes_coalesce_and_flush() {
+        let dir = temp_dir("history-queue");
+        let path = dir.join(HISTORY_FILE);
+
+        for i in 0..5 {
+            let msgs: Vec<ChatMessage> = (0..=i)
+                .map(|n| ChatMessage::new("user", format!("msg {n}")))
+                .collect();
+            queue_history_write(path.clone(), &msgs);
+        }
+        flush_history();
+
+        // The flush must persist the newest snapshot, not an earlier one.
+        let loaded = load_session_file(&path);
+        assert_eq!(loaded.len(), 5);
+        assert_eq!(loaded[4].content, "msg 4");
     }
 
     #[test]
@@ -1066,7 +1247,7 @@ mod tests {
         let msgs: Vec<ChatMessage> = (0..80)
             .map(|i| ChatMessage::new("user", format!("msg {}", i)))
             .collect();
-        save_history_to(&dir, &msgs);
+        write_history_file(&dir.join(HISTORY_FILE), &msgs);
         let loaded = load_session_file(&dir.join(HISTORY_FILE));
         assert_eq!(loaded.len(), msgs.len());
         assert_eq!(loaded[0].content, "msg 0");

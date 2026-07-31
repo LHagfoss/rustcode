@@ -109,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(prompt) = cli_args.prompt {
         raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
+        crate::config::flush_history();
         return Ok(());
     }
 
@@ -1648,6 +1649,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    // Shutdown: nothing queued may be lost, so write it out synchronously.
+    crate::config::flush_history();
 
     disable_raw_mode()?;
     execute!(
