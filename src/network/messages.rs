@@ -75,7 +75,7 @@ pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str)
 /// system reminder right before the latest user message or tool result. This
 /// prevents the model from forgetting the core guidelines and tool formats
 /// due to attention dilution in long contexts.
-pub(crate) fn inject_system_reminder(msgs: &mut Vec<serde_json::Value>) {
+pub(crate) fn inject_system_reminder(msgs: &mut [serde_json::Value]) {
     if msgs.len() >= 4 {
         let reminder_text = "REMINDER: Follow the configured tool protocol exactly. Use tools only when needed, inspect results before choosing the next action, and report relevant verification when finished.";
         

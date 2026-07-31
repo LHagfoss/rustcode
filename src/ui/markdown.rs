@@ -262,14 +262,12 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                         get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                     ));
                 }
-                paragraph.push(Span::styled(
-                    text.to_string(),
-                    if heading.is_some() {
-                        heading_style(heading.unwrap(), show_picker)
-                    } else {
-                        text_style(style, show_picker)
-                    },
-                ));
+                let span_style = if let Some(level) = heading {
+                    heading_style(level, show_picker)
+                } else {
+                    text_style(style, show_picker)
+                };
+                paragraph.push(Span::styled(text.to_string(), span_style));
             }
             Event::SoftBreak | Event::HardBreak => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);

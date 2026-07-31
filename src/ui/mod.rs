@@ -71,7 +71,7 @@ use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 
 thread_local! {
-    static MARKER_CACHE: RefCell<(u64, String)> = RefCell::new((0, String::new()));
+    static MARKER_CACHE: RefCell<(u64, String)> = const { RefCell::new((0, String::new())) };
 }
 
 fn collapse_image_markers(text: &str) -> String {
@@ -116,20 +116,34 @@ fn model_label(state: &AppState) -> String {
     state.config.default.big().to_string()
 }
 
-fn render_assistant_message<'a>(
-    content: &'a str,
+struct AssistantRenderOptions<'a> {
     response_time_ms: Option<u64>,
-    model_name: &str,
-    lines: &mut Vec<Line<'a>>,
+    model_name: &'a str,
     is_generating: bool,
     viewport_width: u16,
     show_picker: bool,
     thought_collapsed: bool,
     msg_index: Option<usize>,
+    is_copied_recently: bool,
+}
+
+fn render_assistant_message<'a>(
+    content: &'a str,
+    lines: &mut Vec<Line<'a>>,
     click_registry: &mut Vec<(usize, usize)>,
     copy_registry: &mut Vec<(usize, String)>,
-    is_copied_recently: bool,
+    options: AssistantRenderOptions<'_>,
 ) {
+    let AssistantRenderOptions {
+        response_time_ms,
+        model_name,
+        is_generating,
+        viewport_width,
+        show_picker,
+        thought_collapsed,
+        msg_index,
+        is_copied_recently,
+    } = options;
     let mut think_content = None;
     let mut main_content = content;
 
@@ -971,6 +985,13 @@ struct ChatCache {
     total_wrapped_lines: u16,
 }
 
+type RenderedConversation = (
+    Vec<Line<'static>>,
+    Vec<(u16, usize)>,
+    Vec<(u16, String)>,
+    u16,
+);
+
 #[derive(PartialEq, Clone)]
 struct ChatKey {
     hist_len: usize,
@@ -1151,7 +1172,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     // rebuilds; when idle we reuse the cached lines whenever the key matches.
     let idle = !matches!(state.status, AppStatus::Streaming | AppStatus::Queued);
     let cache_key = chat_cache_key(state, inner_area.width, show_picker);
-    let cached: Option<(Vec<Line<'static>>, Vec<(u16, usize)>, Vec<(u16, String)>, u16)> = if idle {
+    let cached: Option<RenderedConversation> = if idle {
         CHAT_CACHE.with(|c| {
             c.borrow().as_ref().filter(|c| c.key == cache_key).map(|c| {
                 (
@@ -1166,12 +1187,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         None
     };
 
-    let (lines, header_wrapped_rows, copy_wrapped_rows, total_wrapped_lines): (
-        Vec<Line<'static>>,
-        Vec<(u16, usize)>,
-        Vec<(u16, String)>,
-        u16,
-    ) = if let Some(hit) = cached {
+    let (lines, header_wrapped_rows, copy_wrapped_rows, total_wrapped_lines): RenderedConversation = if let Some(hit) = cached {
         hit
     } else {
     let mut lines: Vec<Line> = Vec::new();
@@ -1348,17 +1364,19 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
             render_assistant_message(
                 &msg.content,
-                msg.response_time_ms,
-                &model_label(state),
                 &mut lines,
-                false,
-                inner_area.width,
-                show_picker,
-                collapsed,
-                Some(msg_idx),
                 &mut thought_clicks,
                 &mut copy_clicks,
-                is_copied_recently,
+                AssistantRenderOptions {
+                    response_time_ms: msg.response_time_ms,
+                    model_name: &model_label(state),
+                    is_generating: false,
+                    viewport_width: inner_area.width,
+                    show_picker,
+                    thought_collapsed: collapsed,
+                    msg_index: Some(msg_idx),
+                    is_copied_recently,
+                },
             );
             lines.push(Line::from(""));
         }
@@ -1453,17 +1471,19 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             } else {
                 render_assistant_message(
                     &state.current_response,
-                    None,
-                    &model_label(state),
                     &mut lines,
-                    true,
-                    inner_area.width,
-                    show_picker,
-                    false,
-                    None,
                     &mut thought_clicks,
                     &mut copy_clicks,
-                    is_copied_recently,
+                    AssistantRenderOptions {
+                        response_time_ms: None,
+                        model_name: &model_label(state),
+                        is_generating: true,
+                        viewport_width: inner_area.width,
+                        show_picker,
+                        thought_collapsed: false,
+                        msg_index: None,
+                        is_copied_recently,
+                    },
                 );
 
                 lines.push(Line::from(vec![
@@ -2139,7 +2159,7 @@ mod tests {
 
     #[test]
     fn code_block_rows_fill_full_width() {
-        use super::render_assistant_message;
+        use super::{AssistantRenderOptions, render_assistant_message};
         use unicode_width::UnicodeWidthStr;
 
         let content = "```text\nWhy Rust Outshines C#\n\nA short line\n```";
@@ -2148,8 +2168,20 @@ mod tests {
         let mut copies = Vec::new();
         let width: u16 = 80;
         render_assistant_message(
-            content, None, "model", &mut lines, false, width, false, true, None, &mut clicks,
-            &mut copies, false,
+            content,
+            &mut lines,
+            &mut clicks,
+            &mut copies,
+            AssistantRenderOptions {
+                response_time_ms: None,
+                model_name: "model",
+                is_generating: false,
+                viewport_width: width,
+                show_picker: false,
+                thought_collapsed: true,
+                msg_index: None,
+                is_copied_recently: false,
+            },
         );
 
         // Exactly one code panel → one copy button, anchored to the header row.
@@ -2172,15 +2204,27 @@ mod tests {
 
     #[test]
     fn diff_code_blocks_hide_patch_metadata() {
-        use super::render_assistant_message;
+        use super::{AssistantRenderOptions, render_assistant_message};
 
         let content = "```diff\n--- a/src/temp.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-old\n-removed\n```";
         let mut lines = Vec::new();
         let mut clicks = Vec::new();
         let mut copies = Vec::new();
         render_assistant_message(
-            content, None, "model", &mut lines, false, 80, false, true, None, &mut clicks,
-            &mut copies, false,
+            content,
+            &mut lines,
+            &mut clicks,
+            &mut copies,
+            AssistantRenderOptions {
+                response_time_ms: None,
+                model_name: "model",
+                is_generating: false,
+                viewport_width: 80,
+                show_picker: false,
+                thought_collapsed: true,
+                msg_index: None,
+                is_copied_recently: false,
+            },
         );
 
         let rendered: String = lines

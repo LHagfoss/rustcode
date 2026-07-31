@@ -1339,9 +1339,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         let screen_width = f.area().width;
         let screen_height = f.area().height;
         let width = if confirmation.content_preview.contains('\x00') {
-            (screen_width.saturating_sub(4)).min(160).max(80)
+            (screen_width.saturating_sub(4)).clamp(80, 160)
         } else {
-            (screen_width.saturating_sub(10)).min(120).max(60)
+            (screen_width.saturating_sub(10)).clamp(60, 120)
         };
         let has_preview = !confirmation.content_preview.trim().is_empty();
         let preview_lines = confirmation.content_preview.lines().count();
@@ -1665,7 +1665,7 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
     };
 
     let screen = f.area();
-    let width = screen.width.saturating_sub(10).min(84).max(48);
+    let width = screen.width.saturating_sub(10).clamp(48, 84);
 
     // Wrap the question to the inner width so the modal height fits it.
     let inner_w = width.saturating_sub(4).max(10) as usize;

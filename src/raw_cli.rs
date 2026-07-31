@@ -85,6 +85,34 @@ pub async fn run_round_loop(
     Ok(())
 }
 
+/// Entry point for the raw CLI agent mode.
+pub async fn run_raw_cli(
+    prompt: &str,
+    model_override: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let state = build_state(prompt, model_override);
+
+    let client_clone = client.clone();
+    let config_clone = state.config.clone();
+    let session_id = state.active_session_id.clone();
+    let prompt_str = prompt.to_string();
+    tokio::spawn(async move {
+        if let Some(title) =
+            crate::network::generate_title(&client_clone, &config_clone, &prompt_str).await
+        {
+            crate::config::save_session_title(&session_id, &title);
+        }
+    });
+
+    let state_arc = Arc::new(Mutex::new(state));
+
+    run_round_loop(&client, state_arc).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,30 +165,4 @@ mod tests {
         // is driven by this flag; raw CLI must match interactive behavior.
         assert!(HeadlessPolicy.should_verify_completion());
     }
-}
-
-/// Entry point for the raw CLI agent mode.
-pub async fn run_raw_cli(
-    prompt: &str,
-    model_override: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()?;
-
-    let state = build_state(prompt, model_override);
-    
-    let client_clone = client.clone();
-    let config_clone = state.config.clone();
-    let session_id = state.active_session_id.clone();
-    let prompt_str = prompt.to_string();
-    tokio::spawn(async move {
-        if let Some(title) = crate::network::generate_title(&client_clone, &config_clone, &prompt_str).await {
-            crate::config::save_session_title(&session_id, &title);
-        }
-    });
-
-    let state_arc = Arc::new(Mutex::new(state));
-
-    run_round_loop(&client, state_arc).await
 }
