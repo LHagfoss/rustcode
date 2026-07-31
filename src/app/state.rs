@@ -602,6 +602,13 @@ pub struct AppState {
     pub tip_index: usize,
 
     pub current_terminal_title: Option<String>,
+    /// Cached custom session title: the session id it was read for, and the
+    /// title found on disk (`None` when that session has no `title.txt`).
+    /// Keeps the draw loop from hitting the filesystem on every frame.
+    pub session_title_cache: Option<(String, Option<String>)>,
+    /// Set by background tasks that mutate state outside the input path, so the
+    /// draw loop knows to render once even though no key was pressed.
+    pub redraw_requested: bool,
 
     /// Snapshot of environment context from the first turn, used for delta diffing.
     pub context_snapshot: Option<crate::context::ContextSnapshot>,
@@ -642,6 +649,38 @@ fn get_cwd_and_branch() -> String {
 }
 
 impl AppState {
+    /// Custom title of the active session, read from disk at most once per
+    /// session id. Call [`AppState::invalidate_session_title_cache`] after
+    /// writing a new title so the next lookup picks it up.
+    pub fn cached_session_title(&mut self) -> Option<String> {
+        if let Some((cached_id, title)) = &self.session_title_cache
+            && *cached_id == self.active_session_id
+        {
+            return title.clone();
+        }
+        let title = crate::config::load_session_title(&self.active_session_id);
+        self.session_title_cache = Some((self.active_session_id.clone(), title.clone()));
+        title
+    }
+
+    /// Forget the cached session title so it is re-read from disk on the next
+    /// draw. Use after `save_session_title`.
+    pub fn invalidate_session_title_cache(&mut self) {
+        self.session_title_cache = None;
+    }
+
+    /// Ask the draw loop for one more frame. Background tasks that mutate state
+    /// while the app is otherwise idle should call this, since the loop no
+    /// longer redraws on a fixed timer.
+    pub fn request_redraw(&mut self) {
+        self.redraw_requested = true;
+    }
+
+    /// Consume a pending redraw request.
+    pub fn take_redraw_request(&mut self) -> bool {
+        std::mem::take(&mut self.redraw_requested)
+    }
+
     pub fn scroll_to_bottom(&mut self) {
         self.scroll_row = self.last_max_scroll;
     }
@@ -709,6 +748,8 @@ impl AppState {
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             current_terminal_title: None,
+            session_title_cache: None,
+            redraw_requested: false,
             last_max_scroll: 0,
             viewport_height: 0,
             mouse_capture_enabled: true,

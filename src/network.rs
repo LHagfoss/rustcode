@@ -2117,9 +2117,13 @@ async fn spawn_title_generation(
         let s = state.lock().await;
         (s.config.clone(), s.active_session_id.clone())
     };
+    let state_clone = Arc::clone(state);
     tokio::spawn(async move {
         if let Some(title) = generate_title(&client_clone, &config_clone, &first_msg).await {
             crate::config::save_session_title(&session_id, &title);
+            let mut s = state_clone.lock().await;
+            s.invalidate_session_title_cache();
+            s.request_redraw();
         }
     });
 }
@@ -3501,6 +3505,7 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
         if let Some(pct) = matched_pct {
             let mut s = state.lock().await;
             s.model_quota_remaining = Some(pct);
+            s.request_redraw();
         }
         return;
     }
@@ -3518,6 +3523,7 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
     {
         let mut s = state.lock().await;
         s.model_quota_remaining = Some((100.0 - used_percent).clamp(0.0, 100.0) as f32);
+        s.request_redraw();
     }
 }
 
