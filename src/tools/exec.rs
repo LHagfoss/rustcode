@@ -426,88 +426,6 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{has_interactive_sudo, run_command};
-
-    #[test]
-    fn run_command_executes_chained_shell_commands() {
-        let result = run_command(&serde_json::json!({
-            "command": "printf one; printf two"
-        }))
-        .expect("shell command should succeed");
-
-        assert!(result.contains("exit code: 0"));
-        assert!(result.contains("onetwo"));
-    }
-
-    #[test]
-    fn run_command_supports_conditional_chaining() {
-        let result = run_command(&serde_json::json!({
-            "command": "printf first && printf second"
-        }))
-        .expect("shell command should succeed");
-
-        assert!(result.contains("firstsecond"));
-    }
-
-    #[test]
-    fn interactive_sudo_is_detected() {
-        for cmd in [
-            "sudo",
-            "sudo apt update",
-            "sudo -S apt update",
-            "sudo --stdin apt update",
-            "sudo -nS apt update",
-            "sudo -u root apt update",
-            // The `-n` belongs to grep, not to sudo.
-            "sudo grep -n foo file",
-            "sudo -- grep -n foo file",
-            // A non-interactive command earlier in the line must not vouch for
-            // the sudo that follows it.
-            "echo -n hi && sudo rm x",
-            "echo -n hi; sudo rm x",
-            "echo -n hi | sudo tee /etc/hosts",
-            "echo -n hi\nsudo rm x",
-            "echo $(sudo cat /etc/shadow)",
-            "echo `sudo cat /etc/shadow`",
-            "/usr/bin/sudo apt update",
-        ] {
-            assert!(has_interactive_sudo(cmd), "expected rejection for: {cmd:?}");
-        }
-    }
-
-    #[test]
-    fn non_interactive_and_sudo_free_commands_are_allowed() {
-        for cmd in [
-            "",
-            "grep -n foo file",
-            "echo -n hi && echo there",
-            "echo 'sudo apt update'",
-            "sudo -n apt update",
-            "sudo --non-interactive apt update",
-            "sudo -n -u root apt update",
-            "sudo -u root -n apt update",
-            "sudo --user=root -n apt update",
-            "sudo -nu root apt update",
-            "sudo -n grep -S foo file",
-            "echo hi && sudo -n rm x",
-        ] {
-            assert!(!has_interactive_sudo(cmd), "expected allow for: {cmd:?}");
-        }
-    }
-
-    #[test]
-    fn interactive_sudo_is_rejected_by_run_command() {
-        let err = run_command(&serde_json::json!({
-            "command": "sudo grep -n foo file"
-        }))
-        .expect_err("interactive sudo should be rejected");
-
-        assert!(err.contains("Interactive 'sudo' commands"));
-    }
-}
-
 fn run_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> Result<Output, String> {
     let mut child = cmd
         .spawn()
@@ -568,4 +486,83 @@ fn truncate_bytes(bytes: &[u8], max: usize) -> String {
         head_end
     ));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{has_interactive_sudo, run_command};
+
+    #[test]
+    fn run_command_executes_chained_shell_commands() {
+        let result = run_command(&serde_json::json!({
+            "command": "printf one; printf two"
+        }))
+        .expect("shell command should succeed");
+
+        assert!(result.contains("exit code: 0"));
+        assert!(result.contains("onetwo"));
+    }
+
+    #[test]
+    fn run_command_supports_conditional_chaining() {
+        let result = run_command(&serde_json::json!({
+            "command": "printf first && printf second"
+        }))
+        .expect("shell command should succeed");
+
+        assert!(result.contains("firstsecond"));
+    }
+
+    #[test]
+    fn interactive_sudo_is_detected() {
+        for cmd in [
+            "sudo",
+            "sudo apt update",
+            "sudo -S apt update",
+            "sudo --stdin apt update",
+            "sudo -nS apt update",
+            "sudo -u root apt update",
+            "sudo grep -n foo file",
+            "sudo -- grep -n foo file",
+            "echo -n hi && sudo rm x",
+            "echo -n hi; sudo rm x",
+            "echo -n hi | sudo tee /etc/hosts",
+            "echo -n hi\nsudo rm x",
+            "echo $(sudo cat /etc/shadow)",
+            "echo `sudo cat /etc/shadow`",
+            "/usr/bin/sudo apt update",
+        ] {
+            assert!(has_interactive_sudo(cmd), "expected rejection for: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn non_interactive_and_sudo_free_commands_are_allowed() {
+        for cmd in [
+            "",
+            "grep -n foo file",
+            "echo -n hi && echo there",
+            "echo 'sudo apt update'",
+            "sudo -n apt update",
+            "sudo --non-interactive apt update",
+            "sudo -n -u root apt update",
+            "sudo -u root -n apt update",
+            "sudo --user=root -n apt update",
+            "sudo -nu root apt update",
+            "sudo -n grep -S foo file",
+            "echo hi && sudo -n rm x",
+        ] {
+            assert!(!has_interactive_sudo(cmd), "expected allow for: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn interactive_sudo_is_rejected_by_run_command() {
+        let err = run_command(&serde_json::json!({
+            "command": "sudo grep -n foo file"
+        }))
+        .expect_err("interactive sudo should be rejected");
+
+        assert!(err.contains("Interactive 'sudo' commands"));
+    }
 }

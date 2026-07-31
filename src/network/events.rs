@@ -22,15 +22,6 @@ pub(crate) struct ToolResultMetadata {
     pub full_output_artifact: Option<String>,
 }
 
-impl ToolResult {
-    pub fn is_error(&self) -> bool {
-        self.content
-            .trim_start()
-            .to_ascii_lowercase()
-            .starts_with("error")
-    }
-}
-
 /// Provider-independent reason that a model response stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -336,8 +327,6 @@ impl TurnMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
     #[test]
     fn maps_provider_finish_reasons() {
         assert_eq!(FinishReason::from_provider(Some("stop")), FinishReason::Stop);
@@ -358,26 +347,6 @@ mod tests {
         );
         assert_eq!(response.source, ResponseSource::Native);
         assert!(response.events.iter().any(|event| matches!(event, AgentEvent::ToolCall(_))));
-    }
-
-    #[test]
-    fn tool_result_exposes_error_status() {
-        let result = ToolResult {
-            tool_name: "run_command".to_string(),
-            content: "error: command failed".to_string(),
-            diff: None,
-            file_preview: None,
-            metadata: ToolResultMetadata::default(),
-        };
-        assert!(result.is_error());
-        assert!(!ToolResult {
-            tool_name: "grep".to_string(),
-            content: json!("match").to_string(),
-            diff: None,
-            file_preview: None,
-            metadata: ToolResultMetadata::default(),
-        }
-        .is_error());
     }
 
     #[test]

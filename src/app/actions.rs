@@ -1440,11 +1440,10 @@ fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) 
             format!(" ({window_label})")
         };
         text.push_str(&format!("\n  • ChatGPT {label}{suffix}: {remaining:.1}% remaining"));
-        if let Some(reset) = window.get("resets_at").and_then(|v| v.as_i64()) {
-            if let Some(dt) = chrono::DateTime::from_timestamp(reset, 0) {
+        if let Some(reset) = window.get("resets_at").and_then(|v| v.as_i64())
+            && let Some(dt) = chrono::DateTime::from_timestamp(reset, 0) {
                 text.push_str(&format!("; resets {}", dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")));
             }
-        }
     }
 }
 

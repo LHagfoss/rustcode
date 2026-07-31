@@ -445,7 +445,7 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     for (idx, edit) in chunks.iter().enumerate() {
         let diff = generate_unified_diff(&edit.target, &edit.replacement, edit.start_line);
         if !combined_diffs.is_empty() {
-            combined_diffs.push_str("\n");
+            combined_diffs.push('\n');
         }
         combined_diffs.push_str(&diff);
 
