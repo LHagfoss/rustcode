@@ -1229,6 +1229,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                 ));
             }
+            // Separate the complete tool card from the next transcript item.
+            // This keeps consecutive tool calls readable without adding padding
+            // inside the structured result itself.
+            lines.push(Line::from(""));
 
         } else if msg.role == "user" {
             if msg_idx > 0 {
