@@ -354,7 +354,12 @@ fn render_assistant_message<'a>(
                 } else if is_diff_lang(&current_lang)
                     && (line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@"))
                 {
-                    lines.push(highlight_diff_line(line_str, box_width, show_picker));
+                    let is_diff_metadata = line_str.starts_with("@@")
+                        || line_str.starts_with("--- ")
+                        || line_str.starts_with("+++ ");
+                    if !is_diff_metadata {
+                        lines.push(highlight_diff_line(line_str, box_width, show_picker));
+                    }
                 } else {
                     // Body line: leading gutter space, per-language rendering,
                     // then wrapped and padded so the panel bg fills full width.
@@ -2100,5 +2105,29 @@ mod tests {
                 "ordinary code fences should use the code panel background"
             );
         }
+    }
+
+    #[test]
+    fn diff_code_blocks_hide_patch_metadata() {
+        use super::render_assistant_message;
+
+        let content = "```diff\n--- a/src/temp.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-old\n-removed\n```";
+        let mut lines = Vec::new();
+        let mut clicks = Vec::new();
+        let mut copies = Vec::new();
+        render_assistant_message(
+            content, None, "model", &mut lines, false, 80, false, true, None, &mut clicks,
+            &mut copies, false,
+        );
+
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(!rendered.contains("a/src/temp.rs"));
+        assert!(!rendered.contains("/dev/null"));
+        assert!(!rendered.contains("@@ -1,2"));
+        assert!(rendered.contains("removed"));
     }
 }

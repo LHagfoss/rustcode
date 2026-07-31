@@ -983,7 +983,14 @@ fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> std::path::Pa
 
     loop {
         if current.join("Cargo.toml").exists() || current.join("tsconfig.json").exists() {
-            return current;
+            // `Path::parent()` turns a relative `src/...` path into `""` at
+            // the workspace root. That path works for joins but is invalid as
+            // a child-process cwd, causing cargo to fail with ENOENT. Always
+            // hand verification an existing absolute directory.
+            return current
+                .canonicalize()
+                .or_else(|_| std::env::current_dir())
+                .unwrap_or(current);
         }
         if let Some(parent) = current.parent() {
             current = parent.to_path_buf();
@@ -3796,6 +3803,17 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let check = run_compiler_check(&cwd).await;
         assert!(check.is_none());
+    }
+
+    #[test]
+    fn project_root_from_relative_file_is_a_real_directory() {
+        let root = get_tool_project_root(
+            "delete_file",
+            &serde_json::json!({"path": "src/temp.rs"}),
+        );
+        assert!(root.is_absolute());
+        assert!(root.is_dir());
+        assert!(root.join("Cargo.toml").exists());
     }
 
     #[test]
