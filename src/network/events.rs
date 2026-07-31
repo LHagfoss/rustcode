@@ -66,6 +66,9 @@ pub(crate) enum TurnInput {
     ApprovalDenied,
     ToolsFinished,
     ErrorRecovered,
+    /// The finish gate rejected a prose completion and the orchestrator is
+    /// intentionally starting another model round.
+    RetryRequested,
     Cancelled,
 }
 
@@ -99,6 +102,7 @@ impl std::fmt::Display for InvalidTransition {
 ///   AwaitingApproval --ErrorRecovered------> AwaitingModel
 ///   ExecutingTools  --ToolsFinished-------> AwaitingModel
 ///   ExecutingTools  --ErrorRecovered------> AwaitingModel
+///   Completed       --RetryRequested------> AwaitingModel
 ///   <any non-terminal> --Cancelled--------> Cancelled
 pub(crate) fn transition_turn(
     state: TurnState,
@@ -107,6 +111,7 @@ pub(crate) fn transition_turn(
     use TurnState::{AwaitingApproval, AwaitingModel, Cancelled, Completed, ExecutingTools};
     let next = match (state, input) {
         // Terminal states never transition again.
+        (Completed, TurnInput::RetryRequested) => AwaitingModel,
         (Completed | Cancelled, _) => return Err(InvalidTransition { from: state, input }),
         (_, TurnInput::Cancelled) => Cancelled,
         (AwaitingModel, TurnInput::ModelFinished { has_tool_calls: true }) => AwaitingApproval,
@@ -253,7 +258,14 @@ impl TurnMachine {
                 Ok(next)
             }
             Err(invalid) => {
-                debug_assert!(false, "{invalid}");
+                crate::logger::operational_event(
+                    "turn.invalid_transition",
+                    serde_json::json!({
+                        "from": format!("{:?}", invalid.from),
+                        "input": format!("{:?}", invalid.input),
+                        "detail": invalid.to_string(),
+                    }),
+                );
                 Err(invalid)
             }
         }
@@ -293,6 +305,10 @@ impl TurnMachine {
 
     pub(crate) fn tools_finished(&mut self) -> Result<(), InvalidTransition> {
         self.apply(TurnInput::ToolsFinished).map(|_| ())
+    }
+
+    pub(crate) fn retry_for_finish_gate(&mut self) -> Result<(), InvalidTransition> {
+        self.apply(TurnInput::RetryRequested).map(|_| ())
     }
 
     /// Finish the tool phase only when the machine is actually executing tools.
@@ -481,7 +497,7 @@ mod tests {
 
     #[test]
     fn terminal_states_reject_all_inputs_including_cancel() {
-        for terminal in [TurnState::Completed, TurnState::Cancelled] {
+        for terminal in [TurnState::Cancelled] {
             for input in [
                 TurnInput::ModelFinished { has_tool_calls: true },
                 TurnInput::ApprovalGranted,
@@ -495,6 +511,15 @@ mod tests {
                 );
             }
         }
+        assert!(transition_turn(TurnState::Completed, TurnInput::ModelFinished { has_tool_calls: true }).is_err());
+        assert!(transition_turn(TurnState::Completed, TurnInput::ApprovalGranted).is_err());
+        assert!(transition_turn(TurnState::Completed, TurnInput::ToolsFinished).is_err());
+        assert!(transition_turn(TurnState::Completed, TurnInput::ErrorRecovered).is_err());
+        assert!(transition_turn(TurnState::Completed, TurnInput::Cancelled).is_err());
+        assert_eq!(
+            transition_turn(TurnState::Completed, TurnInput::RetryRequested),
+            Ok(TurnState::AwaitingModel)
+        );
     }
 
     #[test]
@@ -565,15 +590,26 @@ mod tests {
 
     #[test]
     fn invalid_machine_transition_returns_err_without_changing_state() {
-        // Skip in debug builds where apply() asserts; this guards the release
-        // behavior that state is preserved on an illegal transition.
-        if cfg!(debug_assertions) {
-            return;
-        }
         let mut machine = TurnMachine::new();
         let err = machine.tools_finished();
         assert!(err.is_err());
         assert_eq!(machine.state(), TurnState::AwaitingModel);
+    }
+
+    #[test]
+    fn finish_gate_can_reopen_completed_turn_for_retry() {
+        let mut machine = TurnMachine::new();
+        assert_eq!(
+            machine.model_finished(false, false, false, false),
+            Ok(TurnAction::FinishResponse)
+        );
+        assert_eq!(machine.state(), TurnState::Completed);
+        machine.retry_for_finish_gate().unwrap();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+        assert_eq!(
+            machine.model_finished(false, false, true, false),
+            Ok(TurnAction::ExecuteTools)
+        );
     }
 
     #[test]
