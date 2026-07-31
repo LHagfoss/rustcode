@@ -1,3 +1,16 @@
+## [v0.8.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.8.0) - 2026-07-31
+
+### Features
+
+### Fixes
+
+### Refactor
+
+### Documentation
+
+### Chore
+
+
 ## [v0.7.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.7.2) - 2026-07-31
 ### Features
 - Check for updates on launch and via --upgrade ([#232](https://github.com/LHagfoss/rustcode/pull/232) / [`b428952`](https://github.com/LHagfoss/rustcode/commit/b428952))
