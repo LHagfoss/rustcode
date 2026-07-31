@@ -80,6 +80,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if cli_args.upgrade {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()?;
+        match crate::update::upgrade_if_available(&client).await {
+            Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
+                println!(
+                    "No update available. rustcode v{} is up to date (latest published: v{}).",
+                    crate::update::format_version(current),
+                    crate::update::format_version(latest)
+                );
+            }
+            Ok(crate::update::UpdateCheck::Available { current, latest }) => {
+                println!(
+                    "Updated rustcode from v{} to v{}.",
+                    crate::update::format_version(current),
+                    crate::update::format_version(latest)
+                );
+            }
+            Err(error) => {
+                eprintln!("Upgrade failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     if let Some(prompt) = cli_args.prompt {
         raw_cli::run_raw_cli(&prompt, model_override.as_deref()).await?;
         return Ok(());
@@ -141,6 +168,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
+    {
+        let mut state = app_state.lock().await;
+        state.update_check = crate::update::UpdateState::Checking;
+    }
+    let update_state = Arc::clone(&app_state);
+    let update_client = client.clone();
+    tokio::spawn(async move {
+        let result = crate::update::check_for_update(&update_client).await;
+        let mut state = update_state.lock().await;
+        state.update_check = match result {
+            Ok(crate::update::UpdateCheck::UpToDate { latest, .. }) => {
+                crate::update::UpdateState::UpToDate(latest)
+            }
+            Ok(crate::update::UpdateCheck::Available { latest, .. }) => {
+                crate::update::UpdateState::Available(latest)
+            }
+            Err(_) => crate::update::UpdateState::Failed,
+        };
+    });
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
 
     // Register the background task wakeup callback

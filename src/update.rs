@@ -21,6 +21,43 @@ const FORMULA_URLS: [&str; 2] = [
 /// tuple comparison is the version comparison.
 pub type Version = (u32, u32, u32);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateCheck {
+    UpToDate { current: Version, latest: Version },
+    Available { current: Version, latest: Version },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateState {
+    Unknown,
+    Checking,
+    UpToDate(Version),
+    Available(Version),
+    Failed,
+}
+
+pub async fn check_for_update(client: &reqwest::Client) -> Result<UpdateCheck, String> {
+    let current = current_version();
+    let latest = latest_tap_version(client)
+        .await
+        .ok_or_else(|| "couldn't read the Homebrew tap".to_string())?;
+    Ok(if latest > current {
+        UpdateCheck::Available { current, latest }
+    } else {
+        UpdateCheck::UpToDate { current, latest }
+    })
+}
+
+pub async fn upgrade_if_available(client: &reqwest::Client) -> Result<UpdateCheck, String> {
+    let check = check_for_update(client).await?;
+    if matches!(check, UpdateCheck::Available { .. }) {
+        tokio::task::spawn_blocking(run_brew_upgrade)
+            .await
+            .map_err(|e| format!("update task error: {e}"))??;
+    }
+    Ok(check)
+}
+
 /// The version this binary was built as.
 pub fn current_version() -> Version {
     parse_semver(env!("CARGO_PKG_VERSION")).unwrap_or((0, 0, 0))

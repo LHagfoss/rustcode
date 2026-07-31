@@ -1255,17 +1255,18 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
     tokio::spawn(async move {
         {
             let mut s = state_clone.lock().await;
+            s.update_check = crate::update::UpdateState::Checking;
             s.history.push(ChatMessage::new(
                 "system",
                 "Checking lhagfoss/tap for updates...",
             ));
         }
 
-        let current = crate::update::current_version();
-        let latest = match crate::update::latest_tap_version(&client_clone).await {
-            Some(v) => v,
-            None => {
+        let check = match crate::update::check_for_update(&client_clone).await {
+            Ok(check) => check,
+            Err(_) => {
                 let mut s = state_clone.lock().await;
+                s.update_check = crate::update::UpdateState::Failed;
                 s.history.push(ChatMessage::new(
                     "system",
                     "Update check failed: couldn't read the Homebrew tap. Try: brew upgrade rustcode",
@@ -1274,21 +1275,25 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             }
         };
 
-        // Only act when the tap actually has something newer.
-        if latest <= current {
-            let mut s = state_clone.lock().await;
-            s.history.push(ChatMessage::new(
-                "system",
-                format!(
-                    "rustcode v{} is up to date.",
-                    crate::update::format_version(current)
-                ),
-            ));
-            return;
-        }
+        let (current, latest) = match check {
+            crate::update::UpdateCheck::Available { current, latest } => (current, latest),
+            crate::update::UpdateCheck::UpToDate { current, latest } => {
+                let mut s = state_clone.lock().await;
+                s.update_check = crate::update::UpdateState::UpToDate(latest);
+                s.history.push(ChatMessage::new(
+                    "system",
+                    format!(
+                        "rustcode v{} is up to date.",
+                        crate::update::format_version(current)
+                    ),
+                ));
+                return;
+            }
+        };
 
         {
             let mut s = state_clone.lock().await;
+            s.update_check = crate::update::UpdateState::Available(latest);
             s.history.push(ChatMessage::new(
                 "system",
                 format!(

@@ -23,6 +23,10 @@ pub struct Cli {
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
 
+    /// Check for and install the latest Homebrew release, if available
+    #[arg(long = "upgrade")]
+    pub upgrade: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -44,4 +48,15 @@ pub enum SyncCommands {
     Push,
     /// Initialize remote Git repository for config sync
     Init { remote_url: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_upgrade_flag() {
+        let cli = Cli::try_parse_from(["rustcode", "--upgrade"]).unwrap();
+        assert!(cli.upgrade);
+    }
 }
