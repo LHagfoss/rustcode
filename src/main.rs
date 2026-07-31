@@ -131,9 +131,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    // Use SGR Mouse Mode (ESC[?1006h) — reliable on macOS Terminal.app and iTerm2
+    // Use SGR Mouse Mode (ESC[?1006h) — reliable on macOS Terminal.app and iTerm2.
+    // ESC[?1003h adds any-motion reporting, which crossterm's EnableMouseCapture
+    // leaves off; without it the terminal only reports motion while a button is
+    // held and buttons can never show a hover state.
     use std::io::Write;
-    write!(stdout, "\x1b[?1006h").ok();
+    write!(stdout, "\x1b[?1006h\x1b[?1003h").ok();
     execute!(
         stdout,
         EnterAlternateScreen,
@@ -1361,9 +1364,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.clear_selection();
                             use std::io::Write;
                             if s.mouse_capture_enabled {
-                                write!(terminal.backend_mut(), "\x1b[?1006h").ok();
+                                write!(terminal.backend_mut(), "\x1b[?1006h\x1b[?1003h").ok();
                             } else {
-                                write!(terminal.backend_mut(), "\x1b[?1006l").ok();
+                                s.hover = crate::app::HoverTarget::None;
+                                write!(terminal.backend_mut(), "\x1b[?1006l\x1b[?1003l").ok();
                             }
                         }
                         KeyCode::Char(c) => {
@@ -1481,7 +1485,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let mut s = app_state.lock().await;
                     let modal = s.modal_open();
+
+                    // Refresh the hover highlight for every pointer event, not just
+                    // motion: scrolling moves rows under a stationary pointer too.
+                    // Any-motion reporting fires on each cell crossed, so a redraw
+                    // is only worth it when the hovered element actually changes.
+                    let next_hover = if modal {
+                        crate::app::HoverTarget::None
+                    } else {
+                        s.hover_target_at(mouse.column, mouse.row)
+                    };
+                    if s.hover != next_hover {
+                        s.hover = next_hover;
+                        needs_redraw = true;
+                    }
+
                     match mouse.kind {
+                        MouseEventKind::Moved => {}
                         MouseEventKind::ScrollUp if !modal => {
                             s.scroll_up(3);
                             if s.selecting {
@@ -1674,6 +1694,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::config::flush_history();
 
     disable_raw_mode()?;
+    {
+        use std::io::Write;
+        write!(terminal.backend_mut(), "\x1b[?1003l").ok();
+    }
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
