@@ -79,7 +79,7 @@ pub(super) fn render_tool_result<'a>(
         | "complete_task"
         | "ask_question"
         | "manage_task" => Vec::new(),
-        _ => Vec::new(),
+        _ => render_generic_result(result, show_picker),
     };
 
     if lines.len() > MAX_RENDERED_TOOL_LINES {
@@ -152,6 +152,29 @@ fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>>
                     get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
                 ),
             ])
+        })
+        .collect()
+}
+
+/// Render an unclassified tool result as a quiet transcript block. The action
+/// line above already identifies the tool, so the body only needs a muted
+/// gutter and enough error contrast to remain actionable.
+fn render_generic_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
+    result
+        .lines()
+        .filter(|raw| !raw.trim().is_empty())
+        .map(|raw| {
+            let is_error = raw.trim_start().to_ascii_lowercase().starts_with("error")
+                || raw.trim_start().starts_with('✗');
+            let color = if is_error {
+                Color::Rgb(229, 123, 123)
+            } else {
+                COLOR_MUTED
+            };
+            Line::from(Span::styled(
+                format!("  │ {raw}"),
+                get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+            ))
         })
         .collect()
 }
@@ -271,7 +294,8 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_RENDERED_TOOL_LINES, render_file_preview, render_tool_result};
+    use super::{COLOR_MUTED, MAX_RENDERED_TOOL_LINES, render_file_preview, render_tool_result};
+    use ratatui::style::Color;
 
     #[test]
     fn read_results_have_header_and_line_numbered_code() {
@@ -372,6 +396,23 @@ mod tests {
     fn control_plane_results_are_hidden() {
         assert!(render_tool_result("use_skill", "loaded skill", 80, false).is_empty());
         assert!(render_tool_result("spawn_agent", "agent done", 80, false).is_empty());
+    }
+
+    #[test]
+    fn generic_results_are_muted_and_keep_errors_visible() {
+        let lines = render_tool_result(
+            "mcp_custom_tool",
+            "completed\nerror: remote service failed",
+            80,
+            false,
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].spans[0].content.starts_with("  │ completed"));
+        assert_eq!(lines[0].spans[0].style.fg, Some(COLOR_MUTED));
+        assert_eq!(
+            lines[1].spans[0].style.fg,
+            Some(Color::Rgb(229, 123, 123))
+        );
     }
 
     #[test]
