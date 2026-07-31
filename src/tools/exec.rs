@@ -30,6 +30,126 @@ fn is_shell_read_command(cmd: &str) -> bool {
     false
 }
 
+/// Short sudo options that consume a value (either glued to the flag or as the
+/// following token), e.g. `-u root`, `-p "prompt"`.
+const SUDO_SHORT_OPTS_WITH_VALUE: &str = "CghpRTtUu";
+/// Long sudo options that consume a value when not written as `--opt=value`.
+const SUDO_LONG_OPTS_WITH_VALUE: &[&str] = &[
+    "close-from",
+    "group",
+    "host",
+    "prompt",
+    "chroot",
+    "command-timeout",
+    "type",
+    "other-user",
+    "user",
+    "role",
+];
+
+/// Split a command line into the individual simple commands it may run.
+///
+/// This deliberately is not a shell parser: it only breaks on the separators
+/// that can introduce a new command (`;`, `&&`, `||`, `|`, `&`, newline) and on
+/// command-substitution / grouping boundaries (`$(`, `)`, backtick, `{`, `}`),
+/// so that each resulting segment can be inspected for its own first token.
+/// Splitting too eagerly (e.g. on a separator inside quotes) only makes the
+/// sudo guard more conservative, never less.
+fn split_command_segments(cmd: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    for ch in cmd.chars() {
+        match ch {
+            ';' | '\n' | '|' | '&' | '`' | '(' | ')' | '{' | '}' => {
+                segments.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    segments.push(current);
+    segments
+}
+
+fn is_sudo_binary(token: &str) -> bool {
+    token
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name == "sudo")
+}
+
+/// Decide whether a single simple command is an interactive `sudo` invocation.
+///
+/// Returns `true` only when the segment's *first* token is `sudo` and its own
+/// option list either fails to pass `-n`/`--non-interactive` or asks sudo to
+/// read the password from stdin via `-S`/`--stdin`. Options belonging to the
+/// sub-command (`sudo grep -n foo`) are never consulted: scanning stops at the
+/// first non-option token.
+fn segment_is_interactive_sudo(segment: &str) -> bool {
+    let mut tokens = segment.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return false;
+    };
+    if !is_sudo_binary(first) {
+        return false;
+    }
+
+    let mut non_interactive = false;
+    let mut reads_stdin = false;
+
+    while let Some(token) = tokens.next() {
+        if token == "--" {
+            break;
+        }
+        if let Some(long) = token.strip_prefix("--") {
+            let name = long.split('=').next().unwrap_or(long);
+            match name {
+                "non-interactive" => non_interactive = true,
+                "stdin" => reads_stdin = true,
+                _ => {
+                    if SUDO_LONG_OPTS_WITH_VALUE.contains(&name) && !long.contains('=') {
+                        tokens.next();
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(short) = token.strip_prefix('-')
+            && !short.is_empty()
+        {
+            let mut chars = short.chars();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    'n' => non_interactive = true,
+                    'S' => reads_stdin = true,
+                    c if SUDO_SHORT_OPTS_WITH_VALUE.contains(c) => {
+                        // The value is either glued to the flag (`-uroot`) or is
+                        // the next token (`-u root`); either way this bundle ends.
+                        if chars.next().is_none() {
+                            tokens.next();
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        // First non-option token: everything after this belongs to the
+        // sub-command sudo is about to run.
+        break;
+    }
+
+    reads_stdin || !non_interactive
+}
+
+/// True when any command in `cmd` is a `sudo` invocation that could prompt for
+/// (or be fed) a password.
+fn has_interactive_sudo(cmd: &str) -> bool {
+    split_command_segments(cmd)
+        .iter()
+        .any(|segment| segment_is_interactive_sudo(segment))
+}
+
 pub fn run_command(args: &Value) -> Result<String, String> {
     let command_str = args
         .get("command")
@@ -40,21 +160,7 @@ pub fn run_command(args: &Value) -> Result<String, String> {
         return Err("Do not use run_command with cat, sed, head, tail, or less/more to read files. Use the native 'view_file' tool instead. This keeps token usage low and allows the harness to manage file context correctly.".to_string());
     }
 
-    let trimmed_cmd = command_str.trim();
-    let has_sudo = trimmed_cmd == "sudo"
-        || trimmed_cmd.starts_with("sudo ")
-        || trimmed_cmd.contains("; sudo")
-        || trimmed_cmd.contains("&&sudo")
-        || trimmed_cmd.contains("&& sudo")
-        || trimmed_cmd.contains("||sudo")
-        || trimmed_cmd.contains("|| sudo")
-        || trimmed_cmd.contains("|sudo")
-        || trimmed_cmd.contains("| sudo")
-        || trimmed_cmd.contains("$(sudo")
-        || trimmed_cmd.contains("`sudo")
-        || trimmed_cmd.contains("\nsudo");
-
-    if has_sudo && (!trimmed_cmd.contains(" -n ") && !trimmed_cmd.starts_with("sudo -n ") || trimmed_cmd.contains("sudo -S")) {
+    if has_interactive_sudo(command_str.trim()) {
         return Err("Interactive 'sudo' commands requiring password input are disabled in subshell execution. Use non-privileged commands or pass 'sudo -n' to fail fast.".to_string());
     }
 
@@ -322,7 +428,7 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::run_command;
+    use super::{has_interactive_sudo, run_command};
 
     #[test]
     fn run_command_executes_chained_shell_commands() {
@@ -343,6 +449,62 @@ mod tests {
         .expect("shell command should succeed");
 
         assert!(result.contains("firstsecond"));
+    }
+
+    #[test]
+    fn interactive_sudo_is_detected() {
+        for cmd in [
+            "sudo",
+            "sudo apt update",
+            "sudo -S apt update",
+            "sudo --stdin apt update",
+            "sudo -nS apt update",
+            "sudo -u root apt update",
+            // The `-n` belongs to grep, not to sudo.
+            "sudo grep -n foo file",
+            "sudo -- grep -n foo file",
+            // A non-interactive command earlier in the line must not vouch for
+            // the sudo that follows it.
+            "echo -n hi && sudo rm x",
+            "echo -n hi; sudo rm x",
+            "echo -n hi | sudo tee /etc/hosts",
+            "echo -n hi\nsudo rm x",
+            "echo $(sudo cat /etc/shadow)",
+            "echo `sudo cat /etc/shadow`",
+            "/usr/bin/sudo apt update",
+        ] {
+            assert!(has_interactive_sudo(cmd), "expected rejection for: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn non_interactive_and_sudo_free_commands_are_allowed() {
+        for cmd in [
+            "",
+            "grep -n foo file",
+            "echo -n hi && echo there",
+            "echo 'sudo apt update'",
+            "sudo -n apt update",
+            "sudo --non-interactive apt update",
+            "sudo -n -u root apt update",
+            "sudo -u root -n apt update",
+            "sudo --user=root -n apt update",
+            "sudo -nu root apt update",
+            "sudo -n grep -S foo file",
+            "echo hi && sudo -n rm x",
+        ] {
+            assert!(!has_interactive_sudo(cmd), "expected allow for: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn interactive_sudo_is_rejected_by_run_command() {
+        let err = run_command(&serde_json::json!({
+            "command": "sudo grep -n foo file"
+        }))
+        .expect_err("interactive sudo should be rejected");
+
+        assert!(err.contains("Interactive 'sudo' commands"));
     }
 }
 
