@@ -198,18 +198,18 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
 
     let code = exit_code.unwrap_or(0);
     let succeeded = code == 0;
-    let status_icon = if succeeded { "✓" } else { "✗" };
-    let status_color = if succeeded {
-        super::COLOR_SECONDARY
-    } else {
-        Color::Rgb(229, 123, 123)
-    };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            format!("  {status_icon} exit {code}"),
-            get_themed_style(status_color, COLOR_BG, Modifier::BOLD, show_picker),
-        ),
-    ])];
+    let mut lines = Vec::new();
+    if !succeeded {
+        lines.push(Line::from(Span::styled(
+            format!("  ✗ exit {code}"),
+            get_themed_style(
+                Color::Rgb(229, 123, 123),
+                COLOR_BG,
+                Modifier::BOLD,
+                show_picker,
+            ),
+        )));
+    }
 
     for (kind, raw) in output {
         let (prefix, color) = if kind == "stderr" {
@@ -343,9 +343,11 @@ mod tests {
             80,
             false,
         );
-        assert!(lines[0].spans[0].content.contains("✓ exit 0"));
-        assert!(lines[1].spans[0].content.contains("│ cargo test"));
-        assert_eq!(lines.len(), 2);
+        assert!(!lines.iter().any(|line| {
+            line.spans.iter().any(|span| span.content.contains("exit 0"))
+        }));
+        assert!(lines[0].spans[0].content.contains("│ cargo test"));
+        assert_eq!(lines.len(), 1);
     }
 
     #[test]
@@ -438,6 +440,7 @@ mod tests {
         let lines = render_tool_result("run_command", &result, 80, false);
 
         assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
-        assert!(lines.last().unwrap().spans[0].content.contains("51 more lines"));
+        // Successful exit status is no longer rendered as an extra transcript row.
+        assert!(lines.last().unwrap().spans[0].content.contains("50 more lines"));
     }
 }
