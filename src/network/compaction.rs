@@ -1,13 +1,85 @@
 use crate::app::ChatMessage;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::{Mutex, OnceLock};
 use tiktoken_rs::{cl100k_base, CoreBPE};
 
 
 static BPE: OnceLock<CoreBPE> = OnceLock::new();
 
+/// Number of distinct message contents kept in the live half of the token memo.
+/// Two halves are retained (see [`TokenMemo`]), so the real ceiling is twice
+/// this. Sized to comfortably hold a long session's history so a compaction
+/// pass never evicts an entry it is about to look up again.
+const TOKEN_MEMO_CAPACITY: usize = 4096;
+
+/// Bounded memo mapping message content to its BPE token count.
+///
+/// Compaction walks the whole history several times per turn, and the history
+/// itself barely changes between turns, so the same strings would otherwise be
+/// re-encoded over and over. Keying on the content means a message that *is*
+/// rewritten (by pruning) simply misses and gets encoded once under its new
+/// value — counts stay exactly what a direct encode would produce.
+///
+/// Eviction is generational rather than LRU: entries land in `live`, and when
+/// `live` fills it becomes `prev` and a fresh `live` is started. A hit in `prev`
+/// is promoted back into `live`, so anything still in use survives rotations
+/// while genuinely dead entries fall out after two of them. That keeps the
+/// memory bounded without the bookkeeping of a true LRU.
+#[derive(Default)]
+struct TokenMemo {
+    live: HashMap<(usize, u64), usize>,
+    prev: HashMap<(usize, u64), usize>,
+}
+
+static TOKEN_MEMO: OnceLock<Mutex<TokenMemo>> = OnceLock::new();
+
+/// Key on (byte length, hash) so a 64-bit hash collision between two strings of
+/// different lengths cannot hand back the wrong count.
+fn memo_key(text: &str) -> (usize, u64) {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    (text.len(), hasher.finish())
+}
+
+/// Exact token count for `text` under `cl100k_base`.
+///
+/// Uses `encode_ordinary`: message content is data (file contents, command
+/// output, user prose), never a control channel, so literal `<|endoftext|>`-style
+/// markers appearing inside it must be counted as the ordinary text they are
+/// rather than collapsed into a single special token. It is also the cheaper of
+/// the two encoders, since it skips the special-token scan.
+///
+/// Results are memoized (see [`TokenMemo`]); the first call for a given string
+/// pays a full BPE encode, repeats are a hash and a map lookup.
 pub fn estimate_tokens(text: &str) -> usize {
+    let key = memo_key(text);
+    let memo = TOKEN_MEMO.get_or_init(|| Mutex::new(TokenMemo::default()));
+
+    {
+        // A poisoned lock only means some other caller panicked mid-count; the
+        // map is still a valid cache, so recover rather than propagate.
+        let mut guard = memo.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&count) = guard.live.get(&key) {
+            return count;
+        }
+        if let Some(count) = guard.prev.remove(&key) {
+            guard.live.insert(key, count);
+            return count;
+        }
+    }
+
+    // Encode outside the lock: this is the expensive part and there is no need
+    // to serialize concurrent counts of different messages behind it.
     let bpe = BPE.get_or_init(|| cl100k_base().unwrap());
-    bpe.encode_with_special_tokens(text).len()
+    let count = bpe.encode_ordinary(text).len();
+
+    let mut guard = memo.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.live.len() >= TOKEN_MEMO_CAPACITY {
+        guard.prev = std::mem::take(&mut guard.live);
+    }
+    guard.live.insert(key, count);
+    count
 }
 
 pub const DEFAULT_PRUNE_TOKEN_THRESHOLD: usize = 90_000;
@@ -113,11 +185,20 @@ pub async fn maybe_compact(
     // 1. First run local, zero-cost tool output pruning: collapse large tool
     //    outputs that have aged past the recent window, then apply the hard
     //    rolling token cap as a safety net.
+    //
+    //    These two passes each rewrite the messages they collapse, so their
+    //    counts are deliberately not shared: a collapsed message is a different
+    //    string and must be counted as such. The memo in `estimate_tokens` is
+    //    what keeps the passes cheap — every message the passes leave alone is
+    //    encoded once and looked up thereafter.
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
 
-    // 2. Estimate total tokens in the history
-    let total_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    // 2. Count the post-prune history once. `history` is not touched again
+    //    until compaction actually runs, so the same per-message counts serve
+    //    both the budget check and the keep-suffix walk below.
+    let per_message: Vec<usize> = history.iter().map(|m| estimate_tokens(&m.content)).collect();
+    let total_tokens: usize = per_message.iter().sum();
     if total_tokens < budget {
         return false;
     }
@@ -130,8 +211,7 @@ pub async fn maybe_compact(
     let keep_token_limit = (budget as f64 * 0.3) as usize; // Keep 30% of budget verbatim
 
     let mut keep_count = 0;
-    for m in history.iter().rev() {
-        let tokens = estimate_tokens(&m.content);
+    for &tokens in per_message.iter().rev() {
         if accumulated_tokens + tokens <= keep_token_limit || keep_count < KEEP_RECENT_TURNS {
             accumulated_tokens += tokens;
             keep_count += 1;
@@ -321,6 +401,67 @@ mod tests {
 
     fn tool_msg(content: &str) -> ChatMessage {
         ChatMessage::new("tool", content)
+    }
+
+    /// The memo must be a pure cache: whatever it returns, on a cold miss or a
+    /// warm hit, has to equal what a direct encode of the same string produces.
+    #[test]
+    fn memoized_counts_match_a_direct_encode() {
+        let bpe = cl100k_base().unwrap();
+        let long_repeat = "x ".repeat(5000);
+        let code_blob = format!("view_file: {}", "fn main() { println!(\"hi\"); }\n".repeat(200));
+        let samples: [&str; 6] = [
+            "",
+            "hello world",
+            "run_command: ls -la /usr/local/bin\nexit code 0",
+            "emoji ✅ and accents éàü and CJK 日本語テキスト",
+            &long_repeat,
+            &code_blob,
+        ];
+        for (i, s) in samples.iter().enumerate() {
+            let expected = bpe.encode_ordinary(s).len();
+            // Cold (or already-warm) first call, then a guaranteed cache hit.
+            assert_eq!(estimate_tokens(s), expected, "first count of sample {i}");
+            assert_eq!(estimate_tokens(s), expected, "cached count of sample {i}");
+        }
+    }
+
+    /// Distinct strings must not share a memo entry, and rewriting a message
+    /// (as pruning does) must be counted afresh rather than hitting the old
+    /// content's entry.
+    #[test]
+    fn memo_distinguishes_different_content() {
+        let bpe = cl100k_base().unwrap();
+        let original = format!("run_command: {}", "data ".repeat(400));
+        let rewritten = "run_command: [Tool Output Truncated: 400 tokens reduced to summary.]";
+
+        assert_eq!(estimate_tokens(&original), bpe.encode_ordinary(&original).len());
+        assert_eq!(estimate_tokens(rewritten), bpe.encode_ordinary(rewritten).len());
+        assert_ne!(estimate_tokens(&original), estimate_tokens(rewritten));
+    }
+
+    /// Filling the memo past its capacity must not grow it without bound, and
+    /// must not corrupt the counts that survive.
+    #[test]
+    fn memo_stays_bounded_and_correct_under_churn() {
+        let bpe = cl100k_base().unwrap();
+        let hot = "the hot message that keeps being counted every pass";
+        let hot_expected = bpe.encode_ordinary(hot).len();
+
+        for i in 0..(TOKEN_MEMO_CAPACITY * 2 + 100) {
+            estimate_tokens(&format!("unique filler message number {i}"));
+            if i % 64 == 0 {
+                assert_eq!(estimate_tokens(hot), hot_expected);
+            }
+        }
+
+        let memo = TOKEN_MEMO.get().expect("memo initialized by the calls above");
+        let guard = memo.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(guard.live.len() <= TOKEN_MEMO_CAPACITY);
+        assert!(guard.prev.len() <= TOKEN_MEMO_CAPACITY);
+        drop(guard);
+
+        assert_eq!(estimate_tokens(hot), hot_expected);
     }
 
     #[test]
