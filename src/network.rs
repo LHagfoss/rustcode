@@ -2697,6 +2697,7 @@ async fn execute_tool_batch(
 
 pub struct TurnContext {
     pub tool_rounds: usize,
+    pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
     pub force_final: bool,
     pub made_edits: bool,
@@ -2714,6 +2715,7 @@ impl TurnContext {
     pub fn new() -> Self {
         Self {
             tool_rounds: 0,
+            oversized_batch_rejections: 0,
             loop_detector: loop_detect::LoopDetector::new(6),
             force_final: false,
             made_edits: false,
@@ -2897,14 +2899,29 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
+            let oversized_batch = parsed_tool_calls.len() > crate::tools::MAX_TOOL_CALLS_PER_RESPONSE;
             if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls) {
                 dbg_log!("Tool-call validation rejected response: {}", reason);
                 let mut s = state.lock().await;
                 s.history.push(ChatMessage::new("assistant", &ctx.final_content));
+                let guidance = if oversized_batch {
+                    ctx.oversized_batch_rejections = ctx.oversized_batch_rejections.saturating_add(1);
+                    if ctx.oversized_batch_rejections >= 2 {
+                        ctx.force_final = true;
+                    }
+                    format!(
+                        " This response contained {} separate tool calls; no tools ran. Chain related shell operations inside one run_command, and emit at most {} independent tool calls after receiving results.",
+                        parsed_tool_calls.len(),
+                        crate::tools::MAX_TOOL_CALLS_PER_RESPONSE
+                    )
+                } else {
+                    ctx.oversized_batch_rejections = 0;
+                    String::new()
+                };
                 s.history.push(ChatMessage::new(
                     "system",
                     format!(
-                        "[Tool call rejected before execution: {reason}] Preserve the raw assistant response above for diagnostics, then emit one corrected tool call."
+                        "[Tool call rejected before execution: {reason}] Preserve the raw assistant response above for diagnostics, then emit one corrected tool call.{guidance}"
                     ),
                 ));
                 crate::config::save_history(&s.history);
@@ -2914,6 +2931,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 ctx.tool_rounds += 1;
                 return true;
             }
+            ctx.oversized_batch_rejections = 0;
             let (tool_calls, deferred_tool_calls) =
                 crate::tools::isolate_control_plane_call(parsed_tool_calls);
             let turn_action = match ctx.turn_machine.model_finished(

@@ -18,10 +18,22 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// Keep one model response small enough that every tool call can be grounded
+/// in the result of the previous turn. Shell commands may still contain any
+/// normal chaining operators because they are one tool call.
+pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 4;
+
 /// Validate parsed calls before they reach an executor. Text protocols are
 /// intentionally permissive while parsing, but execution must be strict and
 /// fail closed when the model emits an unknown tool or malformed arguments.
 pub fn validate_tool_calls(calls: &[ToolCall]) -> Result<(), String> {
+    if calls.len() > MAX_TOOL_CALLS_PER_RESPONSE {
+        return Err(format!(
+            "too many tool calls in one response ({}; maximum is {}); chain related shell operations inside one run_command and emit the next action after receiving results",
+            calls.len(),
+            MAX_TOOL_CALLS_PER_RESPONSE
+        ));
+    }
     let mut seen = std::collections::HashSet::new();
     let has_control_plane = calls
         .iter()
@@ -1669,6 +1681,13 @@ mod tests {
             arguments: serde_json::json!({}),
         }])
         .is_err());
+        let calls = (0..=MAX_TOOL_CALLS_PER_RESPONSE)
+            .map(|_| ToolCall {
+                name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "TODO"}),
+            })
+            .collect::<Vec<_>>();
+        assert!(validate_tool_calls(&calls).is_err());
         assert!(validate_tool_calls(&[ToolCall {
             name: "run_command".to_string(),
             arguments: serde_json::json!({}),
