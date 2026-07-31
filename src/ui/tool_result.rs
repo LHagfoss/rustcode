@@ -11,7 +11,7 @@ use super::{
     highlight_code_line, render_unified_diff, wrap_code_spans,
 };
 
-const MAX_RENDERED_TOOL_LINES: usize = 300;
+const MAX_RENDERED_TOOL_LINES: usize = 5;
 
 fn language_for_path(path: &str) -> &str {
     Path::new(path)
@@ -82,7 +82,16 @@ pub(super) fn render_tool_result<'a>(
         _ => render_generic_result(result, show_picker),
     };
 
-    if lines.len() > MAX_RENDERED_TOOL_LINES {
+    let is_diff_result = matches!(
+        tool_name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
+    ) && result.contains("```diff");
+    if !is_diff_result && lines.len() > MAX_RENDERED_TOOL_LINES {
         let hidden = lines.len() - MAX_RENDERED_TOOL_LINES;
         lines.truncate(MAX_RENDERED_TOOL_LINES);
         lines.push(Line::from(Span::styled(
@@ -441,6 +450,23 @@ mod tests {
 
         assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
         // Successful exit status is no longer rendered as an extra transcript row.
-        assert!(lines.last().unwrap().spans[0].content.contains("50 more lines"));
+        assert!(lines.last().unwrap().spans[0].content.contains("345 more lines"));
+    }
+
+    #[test]
+    fn embedded_diffs_are_not_truncated() {
+        let diff = (0..8)
+            .map(|index| format!("-removed line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = format!("successfully edited file\n\n```diff\n{diff}\n```");
+        let lines = render_tool_result("replace_file_content", &result, 80, false);
+
+        assert!(lines.len() > MAX_RENDERED_TOOL_LINES);
+        assert!(!lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("more lines hidden"))
+        }));
     }
 }
