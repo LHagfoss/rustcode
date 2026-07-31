@@ -10,10 +10,10 @@ use ratatui::{
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
+use super::lru::LruCache;
 use super::{
     get_themed_style, COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT,
 };
@@ -24,52 +24,7 @@ const RENDER_CACHE_CAP: usize = 256;
 type CacheKey = (u64, usize, bool);
 
 /// Bounded render cache with least-recently-used eviction.
-///
-/// Recency is tracked with a monotonic access counter stored next to each
-/// entry; on insert past the cap the entry with the lowest counter is dropped.
-/// The whole map is never cleared, so unrelated hot entries survive.
-struct MarkdownCache {
-    entries: HashMap<CacheKey, (u64, Vec<Line<'static>>)>,
-    cap: usize,
-    tick: u64,
-}
-
-impl MarkdownCache {
-    fn new(cap: usize) -> Self {
-        Self {
-            entries: HashMap::new(),
-            cap,
-            tick: 0,
-        }
-    }
-
-    fn get(&mut self, key: &CacheKey) -> Option<&Vec<Line<'static>>> {
-        self.tick += 1;
-        let tick = self.tick;
-        let (stamp, lines) = self.entries.get_mut(key)?;
-        *stamp = tick;
-        Some(lines)
-    }
-
-    fn insert(&mut self, key: CacheKey, lines: Vec<Line<'static>>) {
-        self.tick += 1;
-        if !self.entries.contains_key(&key) && self.entries.len() >= self.cap {
-            self.evict_lru();
-        }
-        self.entries.insert(key, (self.tick, lines));
-    }
-
-    fn evict_lru(&mut self) {
-        if let Some(oldest) = self
-            .entries
-            .iter()
-            .min_by_key(|(_, (stamp, _))| *stamp)
-            .map(|(key, _)| *key)
-        {
-            self.entries.remove(&oldest);
-        }
-    }
-}
+type MarkdownCache = LruCache<CacheKey, Vec<Line<'static>>>;
 
 static RENDER_CACHE: OnceLock<Mutex<MarkdownCache>> = OnceLock::new();
 
