@@ -985,6 +985,7 @@ struct ChatCache {
     lines: Vec<Line<'static>>,
     header_wrapped_rows: Vec<(u16, usize)>,
     copy_wrapped_rows: Vec<(u16, String)>,
+    msg_wrapped_rows: Vec<u16>,
     total_wrapped_lines: u16,
 }
 
@@ -992,6 +993,7 @@ type RenderedConversation = (
     Vec<Line<'static>>,
     Vec<(u16, usize)>,
     Vec<(u16, String)>,
+    Vec<u16>,
     u16,
 );
 
@@ -1182,6 +1184,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     c.lines.clone(),
                     c.header_wrapped_rows.clone(),
                     c.copy_wrapped_rows.clone(),
+                    c.msg_wrapped_rows.clone(),
                     c.total_wrapped_lines,
                 )
             })
@@ -1190,7 +1193,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         None
     };
 
-    let (lines, header_wrapped_rows, copy_wrapped_rows, total_wrapped_lines): RenderedConversation = if let Some(hit) = cached {
+    let (lines, header_wrapped_rows, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines): RenderedConversation = if let Some(hit) = cached {
         hit
     } else {
     let mut lines: Vec<Line> = Vec::new();
@@ -1198,7 +1201,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     let mut thought_clicks: Vec<(usize, usize)> = Vec::new();
     let mut copy_clicks: Vec<(usize, String)> = Vec::new();
 
+    // Line index where each message's block starts. Messages that render
+    // nothing produce a duplicate index; deduped below.
+    let mut msg_start_lines: Vec<usize> = Vec::new();
+
     for (msg_idx, msg) in state.history.iter().enumerate() {
+        msg_start_lines.push(lines.len());
         if msg.role == "system" {
             // Hide benign intermediate loop warnings from TUI display
             if msg.content.contains("Loop warning:") {
@@ -1517,44 +1525,40 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     // scrolled to the bottom
     lines.push(Line::from(""));
 
-    // Resolve each clickable thought header's wrapped start row. Lines wrap
-    // independently, so per-line line_count sums to the exact screen offset.
+    // Resolve wrapped start rows for everything the mouse can hit — thought
+    // headers, code-block [Copy] badges, and message boundaries — in a single
+    // pass. Lines wrap independently, so per-line line_count sums to the exact
+    // screen offset.
     let mut header_wrapped_rows: Vec<(u16, usize)> = Vec::new();
-    if let Some(&(last_line, _)) = thought_clicks.last() {
+    let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
+    let mut msg_wrapped_rows: Vec<u16> = Vec::new();
+    {
         let click_map: std::collections::HashMap<usize, usize> =
             thought_clicks.iter().copied().collect();
+        let copy_map: std::collections::HashMap<usize, String> =
+            copy_clicks.iter().cloned().collect();
+        // Messages that emitted no lines share their successor's start index,
+        // and a trailing index past the end belongs to no visible content.
+        let msg_line_set: std::collections::HashSet<usize> = msg_start_lines
+            .iter()
+            .copied()
+            .filter(|&i| i < lines.len())
+            .collect();
         let mut cum = 0u16;
         for (i, line) in lines.iter().enumerate() {
             if let Some(&midx) = click_map.get(&i) {
                 header_wrapped_rows.push((cum, midx));
             }
-            let h = Paragraph::new(vec![line.clone()])
-                .wrap(Wrap { trim: false })
-                .line_count(inner_area.width) as u16;
-            cum = cum.saturating_add(h);
-            if i >= last_line {
-                break;
-            }
-        }
-    }
-
-    // Same resolution for each code block's [Copy] badge row.
-    let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
-    if let Some((last_line, _)) = copy_clicks.last().cloned() {
-        let copy_map: std::collections::HashMap<usize, String> =
-            copy_clicks.iter().cloned().collect();
-        let mut cum = 0u16;
-        for (i, line) in lines.iter().enumerate() {
             if let Some(text) = copy_map.get(&i) {
                 copy_wrapped_rows.push((cum, text.clone()));
             }
+            if msg_line_set.contains(&i) {
+                msg_wrapped_rows.push(cum);
+            }
             let h = Paragraph::new(vec![line.clone()])
                 .wrap(Wrap { trim: false })
                 .line_count(inner_area.width) as u16;
             cum = cum.saturating_add(h);
-            if i >= last_line {
-                break;
-            }
         }
     }
 
@@ -1571,11 +1575,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 lines: owned_lines.clone(),
                 header_wrapped_rows: header_wrapped_rows.clone(),
                 copy_wrapped_rows: copy_wrapped_rows.clone(),
+                msg_wrapped_rows: msg_wrapped_rows.clone(),
                 total_wrapped_lines,
             };
             CHAT_CACHE.with(|c| *c.borrow_mut() = Some(cache));
         }
-        (owned_lines, header_wrapped_rows, copy_wrapped_rows, total_wrapped_lines)
+        (owned_lines, header_wrapped_rows, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines)
     };
 
     let conversation_paragraph = Paragraph::new(lines)
@@ -1601,25 +1606,32 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     f.render_widget(conversation_paragraph, inner_area);
 
-    // Sticky "scroll to bottom" pill — rendered AFTER the chat paragraph so it
-    // isn't painted over. Near the top, horizontally centered, small top padding.
+    // Sticky jump-to-latest pill — rendered AFTER the chat paragraph so it isn't
+    // painted over. Borderless dark pill in the bottom-right corner of the chat
+    // area, labelled with how many messages start below the viewport.
     // saturating_sub / min guard against narrow viewports.
     if state.scroll_row < state.last_max_scroll {
-        let btn_width = 18u16.min(inner_area.width);
-        let btn_x = inner_area.x + inner_area.width.saturating_sub(btn_width) / 2;
-        let btn_y = inner_area.y + 1;
+        let last_visible = scroll_offset + inner_area.height.saturating_sub(1);
+        let hidden = msg_wrapped_rows
+            .iter()
+            .filter(|&&row| row > last_visible)
+            .count();
+        let label = scroll_pill_label(hidden);
+        let btn_width = (label.chars().count() as u16).min(inner_area.width);
+        let btn_x = inner_area.x + inner_area.width.saturating_sub(btn_width);
+        let btn_y = inner_area.y + inner_area.height.saturating_sub(1);
         let btn_rect = ratatui::layout::Rect::new(btn_x, btn_y, btn_width, 1);
         state.scroll_to_bottom_btn = Some(btn_rect);
         f.render_widget(ratatui::widgets::Clear, btn_rect);
         f.render_widget(
-            ratatui::widgets::Paragraph::new("scroll to bottom ↓")
+            ratatui::widgets::Paragraph::new(label)
                 .alignment(ratatui::layout::Alignment::Center)
-                .style(get_themed_style(
-                    COLOR_BG,
-                    COLOR_PRIMARY,
-                    ratatui::prelude::Modifier::BOLD,
-                    false,
-                )),
+                .style(
+                    Style::default()
+                        .fg(COLOR_TEXT)
+                        .bg(COLOR_NOTICE_BG)
+                        .add_modifier(Modifier::BOLD),
+                ),
             btn_rect,
         );
     } else {
@@ -1776,6 +1788,17 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     // Transient notice toast, painted above everything (even modals).
     render_notice(f, state);
+}
+
+/// Label for the jump-to-latest pill. `hidden` is the number of messages whose
+/// first row sits below the viewport; zero means the user is only part-way
+/// through the last message, so no count is worth showing.
+fn scroll_pill_label(hidden: usize) -> String {
+    match hidden {
+        0 => " click to scroll down ↓ ".to_string(),
+        1 => " 1 new message · click to scroll down ↓ ".to_string(),
+        n => format!(" {n} new messages · click to scroll down ↓ "),
+    }
 }
 
 /// How long a notice toast stays on screen before it fades out.
@@ -2076,6 +2099,21 @@ mod tests {
         let text = extract_selection(&buf, (0, 0), (12, 0), chat_area, 0);
         assert_eq!(text.trim(), "Grep(spinner)", "first two chars must survive");
         assert!(text.starts_with("Gr"), "got: {text:?}");
+    }
+
+    #[test]
+    fn scroll_pill_label_pluralizes_and_drops_zero_count() {
+        use super::scroll_pill_label;
+
+        assert_eq!(scroll_pill_label(0), " click to scroll down ↓ ");
+        assert_eq!(
+            scroll_pill_label(1),
+            " 1 new message · click to scroll down ↓ "
+        );
+        assert_eq!(
+            scroll_pill_label(4),
+            " 4 new messages · click to scroll down ↓ "
+        );
     }
 
     #[test]
