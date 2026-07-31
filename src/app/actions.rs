@@ -715,6 +715,7 @@ pub async fn handle_enter(
                 } else {
                     let new_title = tokens[1..].join(" ");
                     crate::config::save_session_title(&s.active_session_id, &new_title);
+                    s.invalidate_session_title_cache();
                     s.history.push(ChatMessage::new(
                         "system",
                         format!("Session title renamed to \"{}\"", new_title),));
@@ -891,6 +892,7 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
                 "system",
                 format!("Detected context window for '{}': {} tokens", name, ctx),
             ));
+            s.request_redraw();
         }
     });
 }

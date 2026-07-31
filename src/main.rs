@@ -32,6 +32,22 @@ use tokio::sync::Mutex;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smooth scrolling
 
+/// Frame budget while a response is in flight: 60Hz, so streamed tokens,
+/// spinners, the elapsed-second counter and the rotating status label (which
+/// changes every two seconds) all stay live.
+const STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Whether the next loop iteration should render.
+///
+/// A frame is drawn when something actually changed (`needs_redraw`, set by
+/// input handling and by background tasks via `AppState::request_redraw`), or
+/// on the streaming cadence while a response is active. Nothing animates on a
+/// timer once the app is idle, so an idle app with no input draws nothing at
+/// all instead of re-rendering ten times a second.
+fn should_draw(needs_redraw: bool, response_active: bool, since_last_draw: Duration) -> bool {
+    needs_redraw || (response_active && since_last_draw >= STREAM_FRAME_INTERVAL)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = cli::Cli::parse();
@@ -186,6 +202,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(_) => crate::update::UpdateState::Failed,
         };
+        state.request_redraw();
     });
     let mut current_cancel_token = tokio_util::sync::CancellationToken::new();
 
@@ -211,6 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("background_task: Task {task_id} completed. Output:\n{body}"),
                 ));
                 crate::config::save_session_history(&session_id, &s.history);
+                s.request_redraw();
                 // Only drive a fresh model turn when the agent is actively working
                 // toward a goal. After completion / in plain chat, a late task
                 // finish must NOT wake the model: it would run against the whole
@@ -282,7 +300,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_scroll_time = Instant::now();
 
     loop {
-        let response_active = app_state.lock().await.status != AppStatus::Idle;
+        let (response_active, background_redraw) = {
+            let mut s = app_state.lock().await;
+            (s.status != AppStatus::Idle, s.take_redraw_request())
+        };
+        needs_redraw |= background_redraw;
 
         {
             let mut s = app_state.lock().await;
@@ -314,9 +336,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         was_responding = response_active;
-        let should_draw = needs_redraw
-            || (response_active && last_draw.elapsed() >= std::time::Duration::from_millis(16))
-            || last_draw.elapsed() >= std::time::Duration::from_millis(100);
+        let should_draw = should_draw(needs_redraw, response_active, last_draw.elapsed());
 
         if should_draw {
             let mut guard = app_state.lock().await;
@@ -325,9 +345,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let title_display = if guard.history.is_empty() {
                 "rustcode".to_string()
             } else {
-                // Check for custom title first
-                let session_id = guard.active_session_id.clone();
-                let custom_title = crate::config::load_session_title(&session_id).or_else(|| {
+                // Check for custom title first (cached; disk is only touched
+                // when the active session changes or the title is rewritten)
+                let custom_title = guard.cached_session_title().or_else(|| {
                     guard
                         .history
                         .iter()
@@ -1661,4 +1681,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod draw_loop_tests {
+    use super::{STREAM_FRAME_INTERVAL, should_draw};
+    use std::time::Duration;
+
+    #[test]
+    fn idle_without_input_never_redraws() {
+        for elapsed_ms in [0, 100, 500, 5_000, 60_000] {
+            assert!(
+                !should_draw(false, false, Duration::from_millis(elapsed_ms)),
+                "idle app redrew after {elapsed_ms}ms with no state change"
+            );
+        }
+    }
+
+    #[test]
+    fn state_change_redraws_immediately() {
+        assert!(should_draw(true, false, Duration::ZERO));
+        assert!(should_draw(true, true, Duration::ZERO));
+    }
+
+    #[test]
+    fn active_response_redraws_on_stream_cadence() {
+        assert!(!should_draw(false, true, Duration::from_millis(5)));
+        assert!(should_draw(false, true, STREAM_FRAME_INTERVAL));
+        // The rotating status label advances every two seconds and the elapsed
+        // counter every second; both are well inside this cadence.
+        assert!(should_draw(false, true, Duration::from_secs(1)));
+        assert!(should_draw(false, true, Duration::from_secs(2)));
+    }
 }
