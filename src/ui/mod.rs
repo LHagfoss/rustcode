@@ -1610,8 +1610,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     f.render_widget(conversation_paragraph, inner_area);
 
     // Sticky jump-to-latest pill — rendered AFTER the chat paragraph so it isn't
-    // painted over. Borderless dark pill in the bottom-right corner of the chat
-    // area, labelled with how many messages start below the viewport.
+    // painted over. Borderless dark pill centered along the bottom of the chat
+    // area, one row clear of the input box, labelled with how many messages
+    // start below the viewport.
     // saturating_sub / min guard against narrow viewports.
     if state.scroll_row < state.last_max_scroll {
         let last_visible = scroll_offset + inner_area.height.saturating_sub(1);
@@ -1621,8 +1622,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             .count();
         let label = scroll_pill_label(hidden);
         let btn_width = (label.chars().count() as u16).min(inner_area.width);
-        let btn_x = inner_area.x + inner_area.width.saturating_sub(btn_width);
-        let btn_y = inner_area.y + inner_area.height.saturating_sub(1);
+        let btn_x = inner_area.x + inner_area.width.saturating_sub(btn_width) / 2;
+        // One blank row between the pill and the input box below it.
+        let btn_y = inner_area.y + inner_area.height.saturating_sub(2);
         let btn_rect = ratatui::layout::Rect::new(btn_x, btn_y, btn_width, 1);
         state.scroll_to_bottom_btn = Some(btn_rect);
         let pill_bg = if state.hover == HoverTarget::ScrollPill {
