@@ -11,7 +11,12 @@ use super::{
     highlight_code_line, render_unified_diff, wrap_code_spans,
 };
 
+/// Read, search and generic results are chatty and easy to re-request, so they
+/// stay tightly capped in the transcript.
 const MAX_RENDERED_TOOL_LINES: usize = 5;
+/// Command output is the one result the user usually has to audit themselves
+/// (a build log, a test run), so it gets a much larger budget.
+const MAX_RENDERED_COMMAND_LINES: usize = 24;
 
 fn language_for_path(path: &str) -> &str {
     Path::new(path)
@@ -58,7 +63,7 @@ pub(super) fn render_tool_result<'a>(
     width: usize,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
-    let mut lines = match tool_name {
+    let lines = match tool_name {
         "view_file" => render_read_result(result, width, show_picker),
         "grep" => render_search_result(result, width, show_picker),
         "glob" | "list_directory" => render_directory_result(result, show_picker),
@@ -91,15 +96,65 @@ pub(super) fn render_tool_result<'a>(
             | "move_file"
             | "copy_file"
     ) && result.contains("```diff");
-    if !is_diff_result && lines.len() > MAX_RENDERED_TOOL_LINES {
-        let hidden = lines.len() - MAX_RENDERED_TOOL_LINES;
-        lines.truncate(MAX_RENDERED_TOOL_LINES);
-        lines.push(Line::from(Span::styled(
-            format!("  … {hidden} more lines hidden; use the tool result or rerun a narrower query"),
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
-        )));
+    if is_diff_result {
+        return lines;
     }
-    lines
+
+    if tool_name == "run_command" {
+        // A failed command puts the useful part (the compiler error, the failing
+        // assertion) at the bottom, so keep the tail and pin the status row.
+        let failed = command_exit_code(result).is_some_and(|code| code != 0);
+        let pinned = usize::from(failed && !lines.is_empty());
+        collapse(
+            lines,
+            MAX_RENDERED_COMMAND_LINES,
+            pinned,
+            failed,
+            show_picker,
+        )
+    } else {
+        collapse(lines, MAX_RENDERED_TOOL_LINES, 0, false, show_picker)
+    }
+}
+
+/// Trim `lines` to `cap` rows plus an elision notice. The first `pinned` rows
+/// always survive; `keep_tail` decides whether the surviving remainder is taken
+/// from the start or the end of the body.
+fn collapse<'a>(
+    mut lines: Vec<Line<'a>>,
+    cap: usize,
+    pinned: usize,
+    keep_tail: bool,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
+    if lines.len() <= cap {
+        return lines;
+    }
+    let body_budget = cap.saturating_sub(pinned);
+    let hidden = lines.len() - pinned - body_budget;
+    let notice = Line::from(Span::styled(
+        format!("  … {hidden} more lines"),
+        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+    ));
+
+    if keep_tail {
+        let body = lines.split_off(lines.len() - body_budget);
+        lines.truncate(pinned);
+        lines.push(notice);
+        lines.extend(body);
+        lines
+    } else {
+        lines.truncate(pinned + body_budget);
+        lines.push(notice);
+        lines
+    }
+}
+
+fn command_exit_code(result: &str) -> Option<i32> {
+    result
+        .lines()
+        .find_map(|raw| raw.strip_prefix("exit code: "))
+        .and_then(|code| code.trim().parse::<i32>().ok())
 }
 
 fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
@@ -169,23 +224,47 @@ fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>>
 /// line above already identifies the tool, so the body only needs a muted
 /// gutter and enough error contrast to remain actionable.
 fn render_generic_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
-    result
-        .lines()
-        .filter(|raw| !raw.trim().is_empty())
-        .map(|raw| {
-            let is_error = raw.trim_start().to_ascii_lowercase().starts_with("error")
-                || raw.trim_start().starts_with('✗');
-            let color = if is_error {
-                Color::Rgb(229, 123, 123)
-            } else {
-                COLOR_MUTED
-            };
-            Line::from(Span::styled(
-                format!("  │ {raw}"),
-                get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
-            ))
-        })
-        .collect()
+    // The harness knows nothing about this tool's formatting, so interior blank
+    // lines are the only paragraph structure it has. Keep them, but collapse
+    // long runs so a padded result cannot eat the whole line budget.
+    let body: Vec<&str> = result.lines().collect();
+    let start = body.iter().position(|raw| !raw.trim().is_empty());
+    let Some(start) = start else {
+        return Vec::new();
+    };
+    let end = body
+        .iter()
+        .rposition(|raw| !raw.trim().is_empty())
+        .unwrap_or(start);
+
+    let mut lines = Vec::new();
+    let mut blank_run = 0usize;
+    for raw in &body[start..=end] {
+        if raw.trim().is_empty() {
+            blank_run += 1;
+            if blank_run > 1 {
+                continue;
+            }
+            lines.push(Line::from(Span::styled(
+                "  │".to_string(),
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            )));
+            continue;
+        }
+        blank_run = 0;
+        let is_error = raw.trim_start().to_ascii_lowercase().starts_with("error")
+            || raw.trim_start().starts_with('✗');
+        let color = if is_error {
+            Color::Rgb(229, 123, 123)
+        } else {
+            COLOR_MUTED
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  │ {raw}"),
+            get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+        )));
+    }
+    lines
 }
 
 fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
@@ -235,6 +314,23 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
     lines
 }
 
+/// Turn `[File: path, Lines X to Y of Z, Bytes offset: N]` into a readable
+/// header. The byte offset only exists so the agent can resume a read; it is
+/// harness bookkeeping and means nothing in the human transcript.
+fn format_read_header(raw: &str) -> String {
+    let Some(header) = raw
+        .strip_prefix("[File: ")
+        .and_then(|header| header.strip_suffix(']'))
+    else {
+        return raw.to_string();
+    };
+    header
+        .split(", ")
+        .filter(|segment| !segment.starts_with("Bytes offset:"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let mut language = "text";
@@ -247,9 +343,7 @@ fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<
                 language = language_for_path(path);
             }
             lines.push(Line::from(Span::styled(
-                raw.strip_prefix("[File: ").and_then(|header| header.strip_suffix(']'))
-                    .map(|header| header.replace(", ", " · "))
-                    .unwrap_or_else(|| raw.to_string()),
+                format_read_header(raw),
                 get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
             )));
             continue;
@@ -303,8 +397,18 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{COLOR_MUTED, MAX_RENDERED_TOOL_LINES, render_file_preview, render_tool_result};
+    use super::{
+        COLOR_MUTED, MAX_RENDERED_COMMAND_LINES, MAX_RENDERED_TOOL_LINES, render_file_preview,
+        render_tool_result,
+    };
     use ratatui::style::Color;
+
+    fn text_of(line: &ratatui::text::Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
 
     #[test]
     fn read_results_have_header_and_line_numbered_code() {
@@ -446,11 +550,96 @@ mod tests {
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_tool_result("run_command", &result, 80, false);
+        let lines = render_tool_result("mcp_custom_tool", &result, 80, false);
 
         assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
-        // Successful exit status is no longer rendered as an extra transcript row.
-        assert!(lines.last().unwrap().spans[0].content.contains("345 more lines"));
+        assert!(
+            lines.last().unwrap().spans[0]
+                .content
+                .contains("345 more lines")
+        );
+    }
+
+    #[test]
+    fn command_results_get_a_larger_line_budget_than_read_results() {
+        let result = (0..350)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let command = render_tool_result("run_command", &result, 80, false);
+        let generic = render_tool_result("mcp_custom_tool", &result, 80, false);
+
+        assert_eq!(command.len(), MAX_RENDERED_COMMAND_LINES + 1);
+        assert!(command.len() > generic.len());
+        assert!(
+            command.last().unwrap().spans[0]
+                .content
+                .contains("326 more lines")
+        );
+    }
+
+    #[test]
+    fn failed_commands_keep_the_status_line_and_the_output_tail() {
+        let body = (0..200)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = format!("exit code: 101\nstderr:\n{body}\nerror: build failed");
+        let lines = render_tool_result("run_command", &result, 80, false);
+
+        assert_eq!(lines.len(), MAX_RENDERED_COMMAND_LINES + 1);
+        assert!(text_of(&lines[0]).contains("✗ exit 101"));
+        assert!(text_of(&lines[1]).contains("more lines"));
+        // The tail carries the failure reason; the head is boilerplate.
+        assert!(text_of(lines.last().unwrap()).contains("error: build failed"));
+        assert!(!lines.iter().any(|line| text_of(line).contains("line 0")));
+    }
+
+    #[test]
+    fn truncation_notice_has_no_model_directed_instructions() {
+        let result = (0..40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = render_tool_result("grep", &result, 80, false);
+        let notice = text_of(lines.last().unwrap());
+
+        assert_eq!(notice.trim(), "… 35 more lines");
+        assert!(!notice.contains("rerun"));
+        assert!(!notice.contains("tool result"));
+    }
+
+    #[test]
+    fn generic_results_preserve_interior_blank_lines() {
+        let lines = render_tool_result("mcp_custom_tool", "first\n\nsecond", 80, false);
+
+        assert_eq!(lines.len(), 3);
+        assert!(text_of(&lines[0]).contains("first"));
+        assert_eq!(text_of(&lines[1]).trim_end(), "  │");
+        assert!(text_of(&lines[2]).contains("second"));
+    }
+
+    #[test]
+    fn generic_results_collapse_blank_runs_and_trim_edges() {
+        let lines = render_tool_result("mcp_custom_tool", "\n\nfirst\n\n\n\nsecond\n\n", 80, false);
+
+        assert_eq!(lines.len(), 3);
+        assert!(text_of(&lines[0]).contains("first"));
+        assert!(text_of(&lines[2]).contains("second"));
+    }
+
+    #[test]
+    fn read_headers_hide_the_byte_offset() {
+        let lines = render_tool_result(
+            "view_file",
+            "[File: src/main.rs, Lines 1 to 2 of 9, Bytes offset: 0]\n1: fn main() {}",
+            80,
+            false,
+        );
+        let header = text_of(&lines[0]);
+
+        assert!(!header.contains("Bytes offset"));
+        assert_eq!(header, "src/main.rs · Lines 1 to 2 of 9");
     }
 
     #[test]
@@ -463,10 +652,6 @@ mod tests {
         let lines = render_tool_result("replace_file_content", &result, 80, false);
 
         assert!(lines.len() > MAX_RENDERED_TOOL_LINES);
-        assert!(!lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|span| span.content.contains("more lines hidden"))
-        }));
+        assert!(!lines.iter().any(|line| text_of(line).contains("more lines")));
     }
 }
