@@ -18,10 +18,66 @@ use super::{
     get_themed_style, COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT,
 };
 
-type MarkdownCache = HashMap<(u64, usize, bool), Vec<Line<'static>>>;
+/// Maximum number of rendered documents kept in [`RENDER_CACHE`].
+const RENDER_CACHE_CAP: usize = 256;
+
+type CacheKey = (u64, usize, bool);
+
+/// Bounded render cache with least-recently-used eviction.
+///
+/// Recency is tracked with a monotonic access counter stored next to each
+/// entry; on insert past the cap the entry with the lowest counter is dropped.
+/// The whole map is never cleared, so unrelated hot entries survive.
+struct MarkdownCache {
+    entries: HashMap<CacheKey, (u64, Vec<Line<'static>>)>,
+    cap: usize,
+    tick: u64,
+}
+
+impl MarkdownCache {
+    fn new(cap: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            cap,
+            tick: 0,
+        }
+    }
+
+    fn get(&mut self, key: &CacheKey) -> Option<&Vec<Line<'static>>> {
+        self.tick += 1;
+        let tick = self.tick;
+        let (stamp, lines) = self.entries.get_mut(key)?;
+        *stamp = tick;
+        Some(lines)
+    }
+
+    fn insert(&mut self, key: CacheKey, lines: Vec<Line<'static>>) {
+        self.tick += 1;
+        if !self.entries.contains_key(&key) && self.entries.len() >= self.cap {
+            self.evict_lru();
+        }
+        self.entries.insert(key, (self.tick, lines));
+    }
+
+    fn evict_lru(&mut self) {
+        if let Some(oldest) = self
+            .entries
+            .iter()
+            .min_by_key(|(_, (stamp, _))| *stamp)
+            .map(|(key, _)| *key)
+        {
+            self.entries.remove(&oldest);
+        }
+    }
+}
+
 static RENDER_CACHE: OnceLock<Mutex<MarkdownCache>> = OnceLock::new();
 
-fn cache_key(content: &str, width: usize, show_picker: bool) -> (u64, usize, bool) {
+fn render_cache() -> &'static Mutex<MarkdownCache> {
+    RENDER_CACHE.get_or_init(|| Mutex::new(MarkdownCache::new(RENDER_CACHE_CAP)))
+}
+
+fn cache_key(content: &str, width: usize, show_picker: bool) -> CacheKey {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     content.hash(&mut hasher);
     (hasher.finish(), width, show_picker)
@@ -116,15 +172,26 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
 /// Render CommonMark into ratatui lines. Fenced code blocks are returned as
 /// ordinary tagged lines so the existing code-panel/highlighter path remains
 /// the single owner of code block rendering.
-pub(super) fn render_markdown<'a>(content: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
+///
+/// `use_cache` must be `false` for transient content such as the live
+/// streaming buffer: that text changes on every frame, so caching it would
+/// insert one throwaway entry per redraw and evict genuinely reusable renders.
+pub(super) fn render_markdown<'a>(
+    content: &str,
+    width: usize,
+    show_picker: bool,
+    use_cache: bool,
+) -> Vec<Line<'a>> {
+    if !use_cache {
+        return render_markdown_uncached(content, width, show_picker);
+    }
     let key = cache_key(content, width, show_picker);
-    let cache = RENDER_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = render_cache();
     if let Some(lines) = cache.lock().unwrap().get(&key).cloned() {
         return lines;
     }
     let lines = render_markdown_uncached(content, width, show_picker);
-    let mut cache = cache.lock().unwrap();
-    cache.insert(key, lines.clone());
+    cache.lock().unwrap().insert(key, lines.clone());
     lines
 }
 
@@ -295,12 +362,13 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::render_markdown;
+    use super::{cache_key, render_cache, render_markdown, MarkdownCache};
     use ratatui::style::Modifier;
+    use ratatui::text::Line;
 
     #[test]
     fn parses_nested_inline_markup() {
-        let lines = render_markdown("**bold _italic_** and `code`", 80, false);
+        let lines = render_markdown("**bold _italic_** and `code`", 80, false, false);
         let text: String = lines
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -315,7 +383,7 @@ mod tests {
 
     #[test]
     fn renders_lists_and_headings_without_markdown_tokens() {
-        let lines = render_markdown("# Title\n\n- one\n- two", 80, false);
+        let lines = render_markdown("# Title\n\n- one\n- two", 80, false, false);
         let text: String = lines
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -325,5 +393,59 @@ mod tests {
         assert!(text.contains('•'));
         assert!(text.contains("one"));
         assert!(!text.contains("# "));
+    }
+
+    #[test]
+    fn cache_evicts_least_recently_used_entry_at_cap() {
+        let cap = 8;
+        let mut cache = MarkdownCache::new(cap);
+        for i in 0..cap {
+            cache.insert(cache_key(&format!("doc {i}"), 80, false), vec![Line::from("")]);
+        }
+        assert_eq!(cache.entries.len(), cap);
+
+        // Touch the oldest entry so it becomes the most recently used one.
+        let oldest = cache_key("doc 0", 80, false);
+        assert!(cache.get(&oldest).is_some());
+
+        // Overflow the cap; the cache must stay bounded and drop the entries
+        // that have gone longest without an access ("doc 1" onwards) while the
+        // freshly touched "doc 0" survives.
+        for i in cap..(cap + 3) {
+            cache.insert(cache_key(&format!("doc {i}"), 80, false), vec![Line::from("")]);
+        }
+        assert_eq!(cache.entries.len(), cap);
+        assert!(cache.get(&oldest).is_some());
+        assert!(cache.get(&cache_key("doc 1", 80, false)).is_none());
+    }
+
+    /// Number of globally cached entries rendered at `width`. Other tests share
+    /// the process-wide cache, so the streaming assertion below is scoped to a
+    /// width no other test uses instead of to the total entry count.
+    fn global_entries_at_width(width: usize) -> usize {
+        render_cache()
+            .lock()
+            .unwrap()
+            .entries
+            .keys()
+            .filter(|(_, w, _)| *w == width)
+            .count()
+    }
+
+    #[test]
+    fn uncached_render_does_not_touch_the_global_cache() {
+        let width = 4242;
+        assert_eq!(global_entries_at_width(width), 0);
+        for i in 0..64 {
+            let content = format!("streaming frame {i} of a growing response");
+            let lines = render_markdown(&content, width, false, false);
+            assert!(!lines.is_empty());
+        }
+        assert_eq!(global_entries_at_width(width), 0);
+
+        // Same content through the cached path does populate the cache, so the
+        // assertion above is meaningful rather than vacuous.
+        render_markdown("settled message", width, false, true);
+        assert_eq!(global_entries_at_width(width), 1);
     }
 }
