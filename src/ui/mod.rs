@@ -1,4 +1,5 @@
 mod highlight;
+mod lru;
 mod markdown;
 mod modals;
 mod tool_result;
@@ -1017,9 +1018,24 @@ fn own_line(line: &Line) -> Line<'static> {
     owned
 }
 
+/// Maximum number of rendered tool results kept in [`TOOL_RESULT_CACHE`].
+const TOOL_RESULT_CACHE_CAP: usize = 256;
+
 thread_local! {
-    static TOOL_RESULT_CACHE: std::cell::RefCell<std::collections::HashMap<u64, Vec<Line<'static>>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Rendered tool results keyed by content hash. Bounded with LRU eviction
+    /// so overflowing the cap drops one cold entry instead of flushing every
+    /// still-visible result and forcing a full re-highlight on the next frame.
+    static TOOL_RESULT_CACHE: RefCell<lru::LruCache<u64, Vec<Line<'static>>>> =
+        RefCell::new(lru::LruCache::new(TOOL_RESULT_CACHE_CAP));
+}
+
+fn tool_result_cache_key(tool_name: &str, result: &str, width: usize, show_picker: bool) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    tool_name.hash(&mut hasher);
+    result.hash(&mut hasher);
+    width.hash(&mut hasher);
+    show_picker.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn cached_tool_result(
@@ -1028,26 +1044,19 @@ fn cached_tool_result(
     width: usize,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    tool_name.hash(&mut hasher);
-    result.hash(&mut hasher);
-    width.hash(&mut hasher);
-    show_picker.hash(&mut hasher);
-    let key = hasher.finish();
+    let key = tool_result_cache_key(tool_name, result, width, show_picker);
 
     TOOL_RESULT_CACHE.with(|cache| {
-        if let Some(lines) = cache.borrow().get(&key) {
+        // A hit refreshes recency, so results currently on screen are never the
+        // eviction victim.
+        if let Some(lines) = cache.borrow_mut().get(&key) {
             return lines.clone();
         }
         let lines = render_tool_result(tool_name, result, width, show_picker)
             .iter()
             .map(own_line)
             .collect::<Vec<_>>();
-        let mut cache = cache.borrow_mut();
-        if cache.len() >= 256 {
-            cache.clear();
-        }
-        cache.insert(key, lines.clone());
+        cache.borrow_mut().insert(key, lines.clone());
         lines
     })
 }
@@ -1977,6 +1986,45 @@ pub fn extract_selection(
 #[cfg(test)]
 mod tests {
     use super::{collapse_image_markers, COLOR_ELEMENT};
+
+    // Regression: the tool-result cache used to `clear()` the whole map at the
+    // cap, throwing away every still-visible result and forcing a full
+    // re-render on the next frame. It now drops a single cold entry.
+    #[test]
+    fn tool_result_cache_evicts_one_lru_entry_at_cap() {
+        use super::{
+            cached_tool_result, tool_result_cache_key, TOOL_RESULT_CACHE, TOOL_RESULT_CACHE_CAP,
+        };
+
+        let cap = TOOL_RESULT_CACHE_CAP;
+        for i in 0..cap {
+            cached_tool_result("Bash", &format!("result {i}"), 80, false);
+        }
+        TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), cap));
+
+        // Read the oldest entry so it becomes the most recently used one; a hit
+        // must refresh recency.
+        let oldest = tool_result_cache_key("Bash", "result 0", 80, false);
+        cached_tool_result("Bash", "result 0", 80, false);
+
+        // Exceed the cap by one: exactly one entry is evicted, and it is the
+        // least recently used one rather than the entry just read.
+        cached_tool_result("Bash", "overflow", 80, false);
+        TOOL_RESULT_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert_eq!(cache.entries.len(), cap, "cap must hold after overflow");
+            assert!(
+                cache.entries.contains_key(&oldest),
+                "entry read just before the insert must survive"
+            );
+            assert!(
+                !cache
+                    .entries
+                    .contains_key(&tool_result_cache_key("Bash", "result 1", 80, false)),
+                "the least recently used entry is the eviction victim"
+            );
+        });
+    }
 
     // Regression: selection clamped to chat_area.x + 2, so the first two columns
     // of every left-aligned line (tool calls, assistant text) could not be
