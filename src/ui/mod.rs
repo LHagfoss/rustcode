@@ -20,7 +20,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Clear, Paragraph, Wrap},
 };
 use std::hash::{Hash, Hasher};
 use unicode_width::{UnicodeWidthStr, UnicodeWidthChar};
@@ -45,6 +45,9 @@ const COLOR_SELECTION: Color = Color::Rgb(240, 240, 240);
 const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
 const COLOR_STATUS_BORDER: Color = Color::Rgb(92, 98, 104);
 const COLOR_TURN_SEPARATOR: Color = Color::Rgb(72, 78, 84);
+/// Overlay surface for borderless popups (toast, scroll pill): darker than the
+/// app background so the pill reads as floating without needing a border.
+const COLOR_NOTICE_BG: Color = Color::Rgb(13, 14, 16);
 
 const LOGO: &[&str] = &[
     "                  ▄                   █      ",
@@ -1778,12 +1781,18 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 /// How long a notice toast stays on screen before it fades out.
 const NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Computes the top-right rect for a notice toast holding `text_width` columns
-/// of text, or `None` if the screen is too small. Box = text + side padding +
-/// borders, inset one cell from the top-right corner and clamped to the screen.
+/// Columns of padding around the toast text: accent glyph + spaces on both sides.
+const NOTICE_PADDING: u16 = 5;
+
+/// Computes the top-right rect for a borderless notice toast holding
+/// `text_width` columns of text, or `None` if the screen is too small. The box
+/// is a single row — text plus padding — inset one cell from the corner and
+/// clamped to the screen width.
 fn notice_rect(area: ratatui::layout::Rect, text_width: u16) -> Option<ratatui::layout::Rect> {
-    let box_h = 5u16;
-    let box_w = (text_width + 4).min(area.width.saturating_sub(2)).max(3);
+    let box_h = 1u16;
+    let box_w = (text_width + NOTICE_PADDING)
+        .min(area.width.saturating_sub(2))
+        .max(3);
     if area.width < box_w + 1 || area.height < box_h + 1 {
         return None;
     }
@@ -1794,6 +1803,8 @@ fn notice_rect(area: ratatui::layout::Rect, text_width: u16) -> Option<ratatui::
 
 /// Draws a small auto-expiring toast in the top-right corner. Cleared lazily
 /// once expired; the ≤100ms idle redraw guarantees it disappears on time.
+/// Borderless: a single dark pill sized to its text, with a leading status
+/// glyph carrying the accent color.
 fn render_notice(f: &mut Frame, state: &mut AppState) {
     let Some(notice) = state.notice.as_ref() else {
         return;
@@ -1803,31 +1814,31 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         return;
     }
 
-    let Some(rect) = notice_rect(f.area(), 64) else {
-        return;
-    };
-
     let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
         .iter()
         .any(|word| notice.text.to_ascii_lowercase().contains(word));
-    let (label, accent) = match notice.kind {
-        NoticeKind::Notice if is_warning => ("Warning", COLOR_TIP),
-        NoticeKind::Notice => ("Notice", COLOR_STATUS_BORDER),
+    let (glyph, accent) = match notice.kind {
+        NoticeKind::Notice if is_warning => ("!", COLOR_TIP),
+        NoticeKind::Notice => ("✓", COLOR_GREEN),
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(format!(" {label} "))
-        .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(COLOR_BG));
-    let para = Paragraph::new(Line::from(Span::styled(
-        notice.text.clone(),
-        Style::default().fg(COLOR_TEXT).bg(COLOR_BG),
-    )))
-    .block(block)
-    .alignment(ratatui::layout::Alignment::Left)
-    .wrap(Wrap { trim: true });
+    // Size to the message so short notices ("Copied to clipboard") don't paint a
+    // full-width slab over the conversation.
+    let text_width = notice.text.chars().count().min(56) as u16;
+    let Some(rect) = notice_rect(f.area(), text_width) else {
+        return;
+    };
+
+    let text: String = notice.text.chars().take(56).collect();
+    let para = Paragraph::new(Line::from(vec![
+        Span::styled(
+            format!(" {glyph} "),
+            Style::default().fg(accent).bg(COLOR_NOTICE_BG),
+        ),
+        Span::styled(text, Style::default().fg(COLOR_TEXT).bg(COLOR_NOTICE_BG)),
+        Span::styled(" ", Style::default().bg(COLOR_NOTICE_BG)),
+    ]))
+    .style(Style::default().bg(COLOR_NOTICE_BG));
 
     f.render_widget(Clear, rect);
     f.render_widget(para, rect);
@@ -2074,11 +2085,11 @@ mod tests {
 
         let screen = Rect::new(0, 0, 100, 40);
         let r = notice_rect(screen, 18).unwrap();
-        // 18 text + 4 padding/borders = 22 wide.
-        assert_eq!(r.width, 22);
-        assert_eq!(r.height, 5);
+        // 18 text + 5 padding (glyph + spaces) = 23 wide, borderless single row.
+        assert_eq!(r.width, 23);
+        assert_eq!(r.height, 1);
         // Right-aligned with a one-column gutter, one row down from the top.
-        assert_eq!(r.x, 100 - 22 - 1);
+        assert_eq!(r.x, 100 - 23 - 1);
         assert_eq!(r.y, 1);
         assert!(r.x + r.width < screen.width, "must stay on screen");
 
