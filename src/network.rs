@@ -3329,9 +3329,11 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
             msg.token_usage = usage.clone();
         }
 
-        crate::config::save_history(&s.history);
         let active_id = s.active_session_id.clone();
         crate::config::save_session_history(&active_id, &s.history);
+        // Turn end: force the queued snapshot to disk, on a blocking thread so
+        // the runtime keeps serving the UI.
+        crate::config::flush_history_async();
 
         s.current_response.clear();
         s.status = AppStatus::Idle;
