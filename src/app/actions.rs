@@ -971,9 +971,12 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     // Extract session ID from the loaded path parent
     if let Some(parent) = meta.path.parent()
         && let Some(session_id_str) = parent.file_name().and_then(|n| n.to_str()) {
+            // Flush the outgoing session's queued history before retargeting.
+            crate::config::flush_history();
             s.active_session_id = session_id_str.to_string();
             s.config.last_active_session_id = Some(s.active_session_id.clone());
             crate::config::save_entire_config(&s.config);
+            crate::config::set_active_session_id(&s.active_session_id);
         }
 
     s.history = loaded;
