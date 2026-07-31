@@ -2218,6 +2218,20 @@ fn build_dynamic_context_tail(
     history::render_context_fragments(&fragments)
 }
 
+/// Cheap identity fingerprint for a history message, used to tell whether the
+/// prefix we snapshotted is still the same prefix after a lock has been released
+/// and re-acquired. `ChatMessage` has no `PartialEq`, and hashing role +
+/// timestamp + content is enough to catch a rewritten or replaced entry without
+/// cloning the (potentially large) content.
+fn message_identity(m: &ChatMessage) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    m.role.hash(&mut hasher);
+    m.timestamp.hash(&mut hasher);
+    m.content.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Assemble the full provider request for one agent turn.
 ///
 /// Runs AI compaction if the history is long enough, snapshots the eligible
@@ -2232,64 +2246,137 @@ async fn prepare_turn_request(
     state: &Arc<Mutex<AppState>>,
     tool_rounds: usize,
 ) -> Vec<serde_json::Value> {
-    // Try AI-driven compaction if history is long enough
+    // Try AI-driven compaction if history is long enough.
+    //
+    // The summarizer is a network round-trip, so the AppState mutex must NOT be
+    // held while it runs: the TUI draw loop locks the same mutex every frame and
+    // would freeze for the whole call. Instead we take a snapshot of the history
+    // under a short lock, compact the owned copy with the lock released, then
+    // re-acquire and merge the result back in.
     {
-        let (api_url, model_name) = {
+        let (api_url, model_name, budget, mut working_history) = {
             let s = state.lock().await;
-            (s.api_base_url.clone(), s.model_name.clone())
+            (
+                s.api_base_url.clone(),
+                s.model_name.clone(),
+                s.get_history_token_budget() as usize,
+                s.history.clone(),
+            )
         };
+        let pre_len = working_history.len();
+        let pre_tail = working_history.last().map(message_identity);
+
+        // Lock released here: this await performs I/O.
+        let compacted =
+            compaction::maybe_compact(client, &api_url, &model_name, &mut working_history, budget)
+                .await;
+
+        // Merge policy for history appended while the lock was down (a tool
+        // result or a user message can land mid-compaction):
+        //
+        //  - unchanged history  -> write the compacted copy back wholesale;
+        //  - history grew, and the prefix we compacted is still intact -> keep
+        //    the compacted prefix and re-append the new tail verbatim. Nothing
+        //    that arrived during the call is lost;
+        //  - anything else (history shrank or was rewritten underneath us, e.g.
+        //    /new, /compact, a rollback) -> discard our copy entirely and log
+        //    the miss. Compaction is best-effort and will retry on the next
+        //    turn; clobbering the live history is not an acceptable trade.
+        //
+        // Note that `maybe_compact` also performs local tool-output pruning even
+        // when it returns false, so the write-back is attempted regardless of
+        // the return value; the flag only gates the cache invalidation below.
         let mut s = state.lock().await;
-        // dedup disabled
-        let budget = s.get_history_token_budget() as usize;
-        if compaction::maybe_compact(client, &api_url, &model_name, &mut s.history, budget).await {
-            dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
-            s.recent_read_calls.clear();
-            s.read_file_mtimes.clear();
-            crate::config::save_history(&s.history);
+        let tail_intact = match (pre_len.checked_sub(1), pre_tail) {
+            (Some(idx), Some(id)) => s.history.get(idx).map(message_identity) == Some(id),
+            (None, _) => true,
+            _ => false,
+        };
+        if s.history.len() >= pre_len && tail_intact {
+            if s.history.len() > pre_len {
+                working_history.extend(s.history.drain(pre_len..));
+            }
+            s.history = working_history;
+            if compacted {
+                dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
+                s.recent_read_calls.clear();
+                s.read_file_mtimes.clear();
+                crate::config::save_history(&s.history);
+            }
+        } else {
+            dbg_log!(
+                "Skipping compaction write-back: history changed underneath the summarizer ({} messages before, {} now). Live history kept as-is.",
+                pre_len,
+                s.history.len()
+            );
         }
         drop(s);
     }
 
-    let mut history_snapshot: Vec<ChatMessage> = {
-        let s = state.lock().await;
-        s.history
+    // Everything the request needs from AppState is read in one guarded block so
+    // the lock is taken a couple of times instead of once per field. The
+    // environment snapshot is captured first because it touches the filesystem.
+    let current_snapshot = crate::context::ContextSnapshot::capture();
+    let (
+        mut history_snapshot,
+        budget_token_limit,
+        read_files,
+        todos,
+        volatile_usage,
+        volatile_quota,
+        volatile_window,
+        context_section,
+        system_prompt,
+    ) = {
+        let mut s = state.lock().await;
+        let history_snapshot: Vec<ChatMessage> = s
+            .history
             .iter()
             .filter(|m| {
                 matches!(m.role.as_str(), "user" | "assistant" | "tool")
                     && !m.content.starts_with('/')
             })
             .cloned()
-            .collect()
-    };
-
-    let budget_token_limit = { state.lock().await.get_history_token_budget() };
-    compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
-
-    let (read_files, todos, volatile_usage, volatile_quota, volatile_window) = {
-        let s = state.lock().await;
-        let mut files: Vec<String> = s.read_file_mtimes.keys().cloned().collect();
-        files.sort();
-        (
-            files,
-            s.todos.clone(),
-            s.current_token_usage.clone(),
-            s.model_quota_remaining,
-            s.active_context_window(),
-        )
-    };
-
-    let current_snapshot = crate::context::ContextSnapshot::capture();
-    let context_section = {
-        let s = state.lock().await;
-        match &s.context_snapshot {
+            .collect();
+        let budget_token_limit = s.get_history_token_budget();
+        let mut read_files: Vec<String> = s.read_file_mtimes.keys().cloned().collect();
+        read_files.sort();
+        let todos = s.todos.clone();
+        let volatile_usage = s.current_token_usage.clone();
+        let volatile_quota = s.model_quota_remaining;
+        let volatile_window = s.active_context_window();
+        let context_section = match &s.context_snapshot {
             Some(prev) => prev.diff(&current_snapshot).unwrap_or_else(|| {
                 "# Environment\n(unchanged since session start)".to_string()
             }),
             None => crate::context::environment_context(),
+        };
+        let protocol = s.config.tool_protocol;
+        let agent_mode = s.agent_mode;
+        let delegation_active = s.delegation_active;
+        let system_prompt = s
+            .prompt_cache
+            .system_prompt(delegation_active, protocol, agent_mode)
+            .to_string();
+        // Store the snapshot if this is the first turn.
+        if s.context_snapshot.is_none() {
+            s.context_snapshot = Some(current_snapshot);
         }
+        (
+            history_snapshot,
+            budget_token_limit,
+            read_files,
+            todos,
+            volatile_usage,
+            volatile_quota,
+            volatile_window,
+            context_section,
+            system_prompt,
+        )
     };
-    let protocol = { state.lock().await.config.tool_protocol };
-    let agent_mode = { state.lock().await.agent_mode };
+
+    compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
+
     // The system prompt is kept STATIC across turns (it only depends on the
     // tool protocol and agent mode, which don't change mid-task). A stable
     // prefix lets the provider's automatic prompt cache stay warm — every
@@ -2300,22 +2387,9 @@ async fn prepare_turn_request(
     //
     // The static system prompt is served from AppState's PromptCache: it's only
     // rebuilt (skill scan + MCP schema serialization) when the protocol, agent
-    // mode, or MCP tool set changes, not on every turn.
-    let system_prompt = {
-        let mut s = state.lock().await;
-        let delegation_active = s.delegation_active;
-        s.prompt_cache
-            .system_prompt(delegation_active, protocol, agent_mode)
-            .to_string()
-    };
-    // Store the snapshot if this is the first turn
-    {
-        let mut s = state.lock().await;
-        if s.context_snapshot.is_none() {
-            s.context_snapshot = Some(current_snapshot);
-        }
-    }
-
+    // mode, or MCP tool set changes, not on every turn. It is read in the
+    // grouped state block above along with the rest of the turn inputs.
+    //
     // Build the turn-varying context tail (appended to the last message
     // after the history is assembled, to preserve the cached prefix). The
     // volatile runtime block (clock/cwd/quota) goes last, as the explicit cache
@@ -2337,8 +2411,9 @@ async fn prepare_turn_request(
     // toward the budget.
     append_to_last_message(&mut msgs, &dynamic_context);
 
-    let window = { state.lock().await.active_context_window() };
-    let budget = window.saturating_sub(RESPONSE_RESERVE_TOKENS).max(512);
+    let budget = volatile_window
+        .saturating_sub(RESPONSE_RESERVE_TOKENS)
+        .max(512);
     let dropped = trim_msgs_to_budget(&mut msgs, budget);
     inject_system_reminder(&mut msgs);
     if dropped > 0 {
