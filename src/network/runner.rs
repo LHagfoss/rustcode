@@ -69,8 +69,10 @@ mod tests {
     #[tokio::test]
     async fn collect_response_retries_cut_off_chunks() {
         let mut calls = 0;
-        let result = collect_response(|_previous| {
+        let mut previous_args = Vec::new();
+        let result = collect_response(|previous| {
             calls += 1;
+            previous_args.push(previous);
             let chunk = if calls == 1 { "partial" } else { " finish" };
             let reason = if calls == 1 { Some("length".to_string()) } else { Some("stop".to_string()) };
             async move { Ok((chunk.to_string(), reason)) }
@@ -80,5 +82,6 @@ mod tests {
 
         assert_eq!(result.0, "partial finish");
         assert_eq!(calls, 2);
+        assert_eq!(previous_args, ["", "partial"]);
     }
 }

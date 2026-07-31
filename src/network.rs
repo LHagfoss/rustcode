@@ -2786,7 +2786,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 model_name
             );
             ctx.last_sent_messages = msgs.clone();
-            state.lock().await.current_response.clear();
             let request_client = client.clone();
             let request_state = Arc::clone(&state);
             let request_cancel = cancel_token.clone();
@@ -2813,7 +2812,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 let request_api_url = request_api_url.clone();
                 let request_model = request_model.clone();
                 async move {
-                    request_state.lock().await.current_response.clear();
                     request_buffer.lock().await.content.clear();
                     let finish_reason = stream_request(
                         &request_client,
