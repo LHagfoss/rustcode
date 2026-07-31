@@ -1606,6 +1606,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             s.set_notice("Copied to clipboard");
                                         }
                                     }
+                                    // The text is on the clipboard, so the marks
+                                    // have done their job — drop them instead of
+                                    // leaving the block highlighted.
+                                    s.clear_selection();
                                 } else {
                                     // A plain click: toggle a thought if one sits on this
                                     // row, otherwise just clear any existing selection.

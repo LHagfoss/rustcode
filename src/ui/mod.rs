@@ -1953,9 +1953,10 @@ fn highlight_selection(
         };
 
         let col_from = if row == start_row { screen_start.0.max(min_col).min(max_col) } else { min_col };
-        let is_last_row = row == end_row;
-        let is_single_line = start_row == end_row;
-        let col_to = if is_last_row && is_single_line {
+        // Last row stops at the pointer, every earlier row runs to its end of
+        // content — the same shape `extract_selection` copies, so what is
+        // highlighted and what lands on the clipboard always agree.
+        let col_to = if row == end_row {
             screen_end.0.max(min_col).min(max_col).min(last_col)
         } else {
             last_col
@@ -2053,11 +2054,21 @@ pub fn extract_selection(
             }
         }
 
-        let trimmed = clean.trim();
-        if !trimmed.is_empty() {
-            lines_out.push(trimmed.to_string());
-        }
+        // Keep leading whitespace: copied code has to paste back with its
+        // indentation intact. Only the trailing padding the terminal renders is
+        // dropped (already done by `trim_end` above).
+        lines_out.push(clean.to_string());
     }
+
+    // Blank rows inside the selection are real blank lines, but blank rows at
+    // either end are just the empty space the drag swept over.
+    while lines_out.first().is_some_and(|l| l.trim().is_empty()) {
+        lines_out.remove(0);
+    }
+    while lines_out.last().is_some_and(|l| l.trim().is_empty()) {
+        lines_out.pop();
+    }
+
     let res = lines_out.join("\n");
     dbg_log!("[SELECTION] Extracted {} chars from selection range start={:?} end={:?}: {:?}", res.len(), start, end, res);
     res
@@ -2126,6 +2137,41 @@ mod tests {
         let text = extract_selection(&buf, (0, 0), (12, 0), chat_area, 0);
         assert_eq!(text.trim(), "Grep(spinner)", "first two chars must survive");
         assert!(text.starts_with("Gr"), "got: {text:?}");
+    }
+
+    #[test]
+    fn selection_keeps_indentation_and_interior_blank_lines() {
+        use super::extract_selection;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        let style = ratatui::style::Style::default();
+        buf.set_string(0, 0, "fn main() {", style);
+        buf.set_string(0, 1, "    let x = 1;", style);
+        // Row 2 left blank on purpose — an interior blank line.
+        buf.set_string(0, 3, "    let y = 2;", style);
+
+        let text = extract_selection(&buf, (0, 0), (39, 3), Some(area), 0);
+
+        assert_eq!(text, "fn main() {\n    let x = 1;\n\n    let y = 2;");
+    }
+
+    #[test]
+    fn selection_drops_blank_rows_swept_at_the_edges() {
+        use super::extract_selection;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        buf.set_string(0, 2, "  hello", ratatui::style::Style::default());
+
+        // Drag started two rows above the text and ended two rows below it.
+        let text = extract_selection(&buf, (0, 0), (39, 5), Some(area), 0);
+
+        assert_eq!(text, "  hello");
     }
 
     #[test]
