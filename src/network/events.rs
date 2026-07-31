@@ -72,7 +72,9 @@ pub(crate) enum TurnState {
 pub(crate) enum TurnInput {
     ModelFinished { has_tool_calls: bool },
     ApprovalGranted,
+    ApprovalDenied,
     ToolsFinished,
+    ErrorRecovered,
     Cancelled,
 }
 
@@ -82,15 +84,53 @@ pub(crate) struct InvalidTransition {
     pub input: TurnInput,
 }
 
-pub(crate) fn transition_turn(state: TurnState, input: TurnInput) -> Result<TurnState, InvalidTransition> {
-    match (state, input) {
-        (_, TurnInput::Cancelled) => Ok(TurnState::Cancelled),
-        (TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: true }) => Ok(TurnState::AwaitingApproval),
-        (TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: false }) => Ok(TurnState::Completed),
-        (TurnState::AwaitingApproval, TurnInput::ApprovalGranted) => Ok(TurnState::ExecutingTools),
-        (TurnState::ExecutingTools, TurnInput::ToolsFinished) => Ok(TurnState::AwaitingModel),
-        _ => Err(InvalidTransition { from: state, input }),
+impl std::fmt::Display for InvalidTransition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid turn transition: {:?} cannot accept {:?}",
+            self.from, self.input
+        )
     }
+}
+
+/// The single source of truth for the turn lifecycle. Every state change the
+/// orchestrator makes must go through here, so an illegal hand-off (executing
+/// tools before approval, finishing tools that never started, …) is rejected
+/// instead of silently corrupting the machine.
+///
+/// Legal transitions:
+///   AwaitingModel   --ModelFinished{tools}--> AwaitingApproval
+///   AwaitingModel   --ModelFinished{none}---> Completed
+///   AwaitingModel   --ErrorRecovered-------> AwaitingModel
+///   AwaitingApproval --ApprovalGranted-----> ExecutingTools
+///   AwaitingApproval --ApprovalDenied------> AwaitingModel
+///   AwaitingApproval --ErrorRecovered------> AwaitingModel
+///   ExecutingTools  --ToolsFinished-------> AwaitingModel
+///   ExecutingTools  --ErrorRecovered------> AwaitingModel
+///   <any non-terminal> --Cancelled--------> Cancelled
+pub(crate) fn transition_turn(
+    state: TurnState,
+    input: TurnInput,
+) -> Result<TurnState, InvalidTransition> {
+    use TurnState::{AwaitingApproval, AwaitingModel, Cancelled, Completed, ExecutingTools};
+    let next = match (state, input) {
+        // Terminal states never transition again.
+        (Completed | Cancelled, _) => return Err(InvalidTransition { from: state, input }),
+        (_, TurnInput::Cancelled) => Cancelled,
+        (AwaitingModel, TurnInput::ModelFinished { has_tool_calls: true }) => AwaitingApproval,
+        (AwaitingModel, TurnInput::ModelFinished { has_tool_calls: false }) => Completed,
+        (AwaitingApproval, TurnInput::ApprovalGranted) => ExecutingTools,
+        (AwaitingApproval, TurnInput::ApprovalDenied) => AwaitingModel,
+        (ExecutingTools, TurnInput::ToolsFinished) => AwaitingModel,
+        // A recoverable provider/stream error rewinds any in-flight turn back to
+        // awaiting the model so the loop can retry cleanly.
+        (AwaitingModel | AwaitingApproval | ExecutingTools, TurnInput::ErrorRecovered) => {
+            AwaitingModel
+        }
+        _ => return Err(InvalidTransition { from: state, input }),
+    };
+    Ok(next)
 }
 
 pub(crate) fn response_source(
@@ -210,54 +250,83 @@ impl TurnMachine {
         self.state
     }
 
+    /// Apply one input through the validated transition table. On success the
+    /// state advances and the new state is returned; on an illegal transition
+    /// the state is left untouched, a debug assertion fires (to catch
+    /// orchestrator bugs in tests/dev), and the error is returned so callers
+    /// can degrade gracefully in release builds instead of corrupting state.
+    fn apply(&mut self, input: TurnInput) -> Result<TurnState, InvalidTransition> {
+        match transition_turn(self.state, input) {
+            Ok(next) => {
+                self.state = next;
+                Ok(next)
+            }
+            Err(invalid) => {
+                debug_assert!(false, "{invalid}");
+                Err(invalid)
+            }
+        }
+    }
+
     pub(crate) fn model_finished(
         &mut self,
         cancelled: bool,
         force_final: bool,
         has_tool_calls: bool,
         task_completed: bool,
-    ) -> TurnAction {
+    ) -> Result<TurnAction, InvalidTransition> {
         if cancelled {
-            self.state = TurnState::Cancelled;
-            return TurnAction::Cancel;
+            self.apply(TurnInput::Cancelled)?;
+            return Ok(TurnAction::Cancel);
         }
-        debug_assert_eq!(self.state, TurnState::AwaitingModel);
-        if force_final || task_completed || !has_tool_calls {
-            self.state = TurnState::Completed;
-            return TurnAction::FinishResponse;
-        }
-        self.state = TurnState::AwaitingApproval;
-        TurnAction::ExecuteTools
+        // Forced wrap-up and an already-completed task both finish the turn even
+        // when the model emitted tool calls, so collapse them into the
+        // no-tool-calls input the machine understands.
+        let will_execute = has_tool_calls && !force_final && !task_completed;
+        let next = self.apply(TurnInput::ModelFinished {
+            has_tool_calls: will_execute,
+        })?;
+        Ok(match next {
+            TurnState::AwaitingApproval => TurnAction::ExecuteTools,
+            _ => TurnAction::FinishResponse,
+        })
     }
 
-    pub(crate) fn approval_granted(&mut self) {
-        debug_assert_eq!(self.state, TurnState::AwaitingApproval);
-        if self.state == TurnState::AwaitingApproval {
-            self.state = TurnState::ExecutingTools;
-        }
+    pub(crate) fn approval_granted(&mut self) -> Result<(), InvalidTransition> {
+        self.apply(TurnInput::ApprovalGranted).map(|_| ())
     }
 
-    pub(crate) fn approval_denied(&mut self) {
-        debug_assert_eq!(self.state, TurnState::AwaitingApproval);
-        if self.state == TurnState::AwaitingApproval {
-            self.state = TurnState::AwaitingModel;
-        }
+    pub(crate) fn approval_denied(&mut self) -> Result<(), InvalidTransition> {
+        self.apply(TurnInput::ApprovalDenied).map(|_| ())
     }
 
-    pub(crate) fn tools_finished(&mut self) {
-        debug_assert_eq!(self.state, TurnState::ExecutingTools);
+    pub(crate) fn tools_finished(&mut self) -> Result<(), InvalidTransition> {
+        self.apply(TurnInput::ToolsFinished).map(|_| ())
+    }
+
+    /// Finish the tool phase only when the machine is actually executing tools.
+    /// This is the common "cleanup" case for the many orchestrator exit paths:
+    /// after an approval denial the machine is already back in `AwaitingModel`,
+    /// so there is nothing to finish and calling it is a no-op.
+    pub(crate) fn finish_tools_if_executing(&mut self) {
         if self.state == TurnState::ExecutingTools {
-            self.state = TurnState::AwaitingModel;
+            let _ = self.tools_finished();
         }
     }
 
     pub(crate) fn recover_error(&mut self) -> TurnAction {
-        self.state = TurnState::AwaitingModel;
+        // Recovery must never crash user-facing error handling; if the machine
+        // is already terminal we simply leave it there.
+        let _ = self.apply(TurnInput::ErrorRecovered);
         TurnAction::RecoverError
     }
 
     pub(crate) fn cancel(&mut self) -> TurnAction {
-        self.state = TurnState::Cancelled;
+        // Cancellation is idempotent: a machine already in a terminal state
+        // stays there rather than asserting.
+        if self.state != TurnState::Cancelled && self.state != TurnState::Completed {
+            let _ = self.apply(TurnInput::Cancelled);
+        }
         TurnAction::Cancel
     }
 }
@@ -370,30 +439,190 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_valid_transition_from_every_state_is_accepted() {
+        // AwaitingModel
+        assert_eq!(
+            transition_turn(TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: true }),
+            Ok(TurnState::AwaitingApproval)
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: false }),
+            Ok(TurnState::Completed)
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingModel, TurnInput::ErrorRecovered),
+            Ok(TurnState::AwaitingModel)
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingModel, TurnInput::Cancelled),
+            Ok(TurnState::Cancelled)
+        );
+        // AwaitingApproval
+        assert_eq!(
+            transition_turn(TurnState::AwaitingApproval, TurnInput::ApprovalGranted),
+            Ok(TurnState::ExecutingTools)
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingApproval, TurnInput::ApprovalDenied),
+            Ok(TurnState::AwaitingModel)
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingApproval, TurnInput::ErrorRecovered),
+            Ok(TurnState::AwaitingModel)
+        );
+        assert_eq!(
+            transition_turn(TurnState::AwaitingApproval, TurnInput::Cancelled),
+            Ok(TurnState::Cancelled)
+        );
+        // ExecutingTools
+        assert_eq!(
+            transition_turn(TurnState::ExecutingTools, TurnInput::ToolsFinished),
+            Ok(TurnState::AwaitingModel)
+        );
+        assert_eq!(
+            transition_turn(TurnState::ExecutingTools, TurnInput::ErrorRecovered),
+            Ok(TurnState::AwaitingModel)
+        );
+        assert_eq!(
+            transition_turn(TurnState::ExecutingTools, TurnInput::Cancelled),
+            Ok(TurnState::Cancelled)
+        );
+    }
 
+    #[test]
+    fn invalid_transitions_are_rejected() {
+        let bad = [
+            (TurnState::AwaitingModel, TurnInput::ApprovalGranted),
+            (TurnState::AwaitingModel, TurnInput::ApprovalDenied),
+            (TurnState::AwaitingModel, TurnInput::ToolsFinished),
+            (TurnState::AwaitingApproval, TurnInput::ToolsFinished),
+            (TurnState::AwaitingApproval, TurnInput::ModelFinished { has_tool_calls: true }),
+            (TurnState::ExecutingTools, TurnInput::ApprovalGranted),
+            (TurnState::ExecutingTools, TurnInput::ModelFinished { has_tool_calls: false }),
+        ];
+        for (state, input) in bad {
+            assert_eq!(
+                transition_turn(state, input),
+                Err(InvalidTransition { from: state, input }),
+                "expected {state:?} + {input:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_states_reject_all_inputs_including_cancel() {
+        for terminal in [TurnState::Completed, TurnState::Cancelled] {
+            for input in [
+                TurnInput::ModelFinished { has_tool_calls: true },
+                TurnInput::ApprovalGranted,
+                TurnInput::ToolsFinished,
+                TurnInput::ErrorRecovered,
+                TurnInput::Cancelled,
+            ] {
+                assert!(
+                    transition_turn(terminal, input).is_err(),
+                    "terminal {terminal:?} should reject {input:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn turn_machine_owns_model_approval_execution_lifecycle() {
         let mut machine = TurnMachine::new();
         assert_eq!(machine.state(), TurnState::AwaitingModel);
-        assert_eq!(machine.model_finished(false, false, true, false), TurnAction::ExecuteTools);
+        assert_eq!(machine.model_finished(false, false, true, false), Ok(TurnAction::ExecuteTools));
         assert_eq!(machine.state(), TurnState::AwaitingApproval);
-        machine.approval_granted();
+        machine.approval_granted().unwrap();
         assert_eq!(machine.state(), TurnState::ExecutingTools);
-        machine.tools_finished();
+        machine.tools_finished().unwrap();
         assert_eq!(machine.state(), TurnState::AwaitingModel);
-        assert_eq!(machine.model_finished(false, false, false, false), TurnAction::FinishResponse);
+        assert_eq!(machine.model_finished(false, false, false, false), Ok(TurnAction::FinishResponse));
         assert_eq!(machine.state(), TurnState::Completed);
     }
 
     #[test]
     fn turn_machine_terminal_inputs_override_tool_requests() {
         let mut machine = TurnMachine::new();
-        assert_eq!(machine.model_finished(true, false, true, false), TurnAction::Cancel);
+        assert_eq!(machine.model_finished(true, false, true, false), Ok(TurnAction::Cancel));
         assert_eq!(machine.state(), TurnState::Cancelled);
 
         let mut machine = TurnMachine::new();
-        assert_eq!(machine.model_finished(false, true, true, false), TurnAction::FinishResponse);
+        assert_eq!(machine.model_finished(false, true, true, false), Ok(TurnAction::FinishResponse));
+        assert_eq!(machine.state(), TurnState::Completed);
+
+        // A completed task collapses to a finish even with tool calls present.
+        let mut machine = TurnMachine::new();
+        assert_eq!(machine.model_finished(false, false, true, true), Ok(TurnAction::FinishResponse));
+        assert_eq!(machine.state(), TurnState::Completed);
+    }
+
+    #[test]
+    fn tools_cannot_execute_while_awaiting_approval() {
+        let mut machine = TurnMachine::new();
+        machine.model_finished(false, false, true, false).unwrap();
+        assert_eq!(machine.state(), TurnState::AwaitingApproval);
+        // The orchestrator gates execution on this exact predicate; until
+        // approval is granted it must remain false.
+        assert!(machine.state() != TurnState::ExecutingTools);
+        machine.approval_granted().unwrap();
+        assert_eq!(machine.state(), TurnState::ExecutingTools);
+    }
+
+    #[test]
+    fn approval_denied_returns_to_awaiting_model_without_executing() {
+        let mut machine = TurnMachine::new();
+        machine.model_finished(false, false, true, false).unwrap();
+        machine.approval_denied().unwrap();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+        // finish_tools_if_executing is a no-op here because we never executed.
+        machine.finish_tools_if_executing();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+    }
+
+    #[test]
+    fn finish_tools_if_executing_transitions_only_when_executing() {
+        let mut machine = TurnMachine::new();
+        machine.model_finished(false, false, true, false).unwrap();
+        machine.approval_granted().unwrap();
+        assert_eq!(machine.state(), TurnState::ExecutingTools);
+        machine.finish_tools_if_executing();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+        // Second call is a safe no-op.
+        machine.finish_tools_if_executing();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+    }
+
+    #[test]
+    fn invalid_machine_transition_returns_err_without_changing_state() {
+        // Skip in debug builds where apply() asserts; this guards the release
+        // behavior that state is preserved on an illegal transition.
+        if cfg!(debug_assertions) {
+            return;
+        }
+        let mut machine = TurnMachine::new();
+        let err = machine.tools_finished();
+        assert!(err.is_err());
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+    }
+
+    #[test]
+    fn recover_error_rewinds_to_awaiting_model() {
+        let mut machine = TurnMachine::new();
+        machine.model_finished(false, false, true, false).unwrap();
+        assert_eq!(machine.state(), TurnState::AwaitingApproval);
+        assert_eq!(machine.recover_error(), TurnAction::RecoverError);
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+    }
+
+    #[test]
+    fn cancel_is_idempotent_on_terminal_states() {
+        let mut machine = TurnMachine::new();
+        machine.model_finished(false, false, false, false).unwrap();
+        assert_eq!(machine.state(), TurnState::Completed);
+        // Cancelling an already-completed turn must not panic or corrupt state.
+        assert_eq!(machine.cancel(), TurnAction::Cancel);
         assert_eq!(machine.state(), TurnState::Completed);
     }
 }
