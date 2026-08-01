@@ -52,3 +52,4 @@ overflow-checks = false
 
 [dev-dependencies]
 tempfile = "3.10"
+tokio = { version = "1.52.3", features = ["test-util"] }
