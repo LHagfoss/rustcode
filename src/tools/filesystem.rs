@@ -200,6 +200,48 @@ struct SingleEdit {
     end_line: Option<usize>,
 }
 
+/// Outcome of attempting to apply one edit to file content.
+#[derive(Debug)]
+enum EditOutcome {
+    /// The edit was applied; content differs from the input.
+    Changed(String),
+    /// The file already reflects the intended result; content is untouched.
+    Unchanged,
+}
+
+/// True when `content` already reflects the result of replacing `target` with
+/// `replacement` — i.e. re-applying this exact edit would be a no-op or,
+/// worse, would duplicate content that a prior identical call already
+/// inserted (the target text is frequently a suffix of the replacement, so
+/// it keeps matching after the edit has already landed).
+fn already_applied(content: &str, target: &str, replacement: &str) -> bool {
+    if replacement.is_empty() || !content.contains(replacement) {
+        return false;
+    }
+    if !content.contains(target) {
+        // The replacement is present and the original anchor is gone: this
+        // transformation already happened.
+        return true;
+    }
+    if !replacement.contains(target) {
+        // Target still present and replacement doesn't subsume it — this
+        // isn't the insert-shaped case, so don't guess; let normal matching
+        // decide (it may be a genuine remaining occurrence to edit).
+        return false;
+    }
+    // Every remaining occurrence of `target` must fall entirely inside an
+    // occurrence of `replacement` for this to count as already applied —
+    // otherwise there is a genuine, separate site still needing the edit.
+    let repl_ranges: Vec<(usize, usize)> = content
+        .match_indices(replacement)
+        .map(|(i, _)| (i, i + replacement.len()))
+        .collect();
+    content.match_indices(target).all(|(i, _)| {
+        let end = i + target.len();
+        repl_ranges.iter().any(|&(rs, re)| rs <= i && end <= re)
+    })
+}
+
 fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
     let get_alias = |v: &Value, keys: &[&str]| -> Option<String> {
         for &k in keys {
@@ -239,18 +281,21 @@ fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
     }
 }
 
-fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) -> Result<String, String> {
+fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) -> Result<EditOutcome, String> {
     let had_crlf = content.contains("\r\n");
     let content_norm = content.replace("\r\n", "\n");
     let result = apply_single_edit_to_content_inner(&content_norm, path, edit)?;
-    if had_crlf {
-        Ok(result.replace("\n", "\r\n"))
-    } else {
-        Ok(result)
+    match result {
+        EditOutcome::Unchanged => Ok(EditOutcome::Unchanged),
+        EditOutcome::Changed(new_content) => Ok(EditOutcome::Changed(if had_crlf {
+            new_content.replace("\n", "\r\n")
+        } else {
+            new_content
+        })),
     }
 }
 
-fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEdit) -> Result<String, String> {
+fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEdit) -> Result<EditOutcome, String> {
     if edit.target == edit.replacement {
         return Err("old_string and new_string are identical".to_string());
     }
@@ -267,6 +312,13 @@ fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEd
 
     let target_content = &edit.target;
     let replacement_content = &edit.replacement;
+
+    // Idempotency guard: if the file already reflects this edit's intended
+    // result, applying it again must not modify (and, for insert-shaped
+    // edits where replacement embeds target, must not re-duplicate) content.
+    if already_applied(content, target_content, replacement_content) {
+        return Ok(EditOutcome::Unchanged);
+    }
 
     // 1. Line range matching (with +-15 tolerance window)
     if let (Some(start), Some(end)) = (edit.start_line, edit.end_line) {
@@ -290,7 +342,7 @@ fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEd
                     if has_trailing_newline && !new_content.is_empty() {
                         new_content.push('\n');
                     }
-                    return Ok(new_content);
+                    return Ok(EditOutcome::Changed(new_content));
                 }
             }
 
@@ -306,7 +358,7 @@ fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEd
                     match_start_byte..match_start_byte + target_content.len(),
                     replacement_content,
                 );
-                return Ok(new_content);
+                return Ok(EditOutcome::Changed(new_content));
             }
         }
     }
@@ -317,7 +369,7 @@ fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEd
         let (index, _) = occurrences[0];
         let mut new_content = content.to_string();
         new_content.replace_range(index..index + target_content.len(), replacement_content);
-        return Ok(new_content);
+        return Ok(EditOutcome::Changed(new_content));
     } else if occurrences.len() > 1 {
         return Err(format!(
             "Error: found {} matches for target_content in '{path}'. Either include more surrounding context lines to make it unique, or pass `start_line`/`end_line` to target the specific occurrence you mean (the edit is anchored within that range).",
@@ -334,7 +386,7 @@ fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEd
         let (index, _) = clean_occurrences[0];
         let mut new_content = clean_content.clone();
         new_content.replace_range(index..index + clean_target.len(), replacement_content);
-        return Ok(new_content);
+        return Ok(EditOutcome::Changed(new_content));
     } else if clean_occurrences.len() > 1 {
         return Err(format!(
             "Error: found {} matches for target_content (with normalized newlines) in '{path}'. Include more surrounding context, or pass `start_line`/`end_line` to target a specific occurrence.",
@@ -348,7 +400,7 @@ fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEd
         let end_byte = end_byte.min(new_content.len());
         if start_byte <= end_byte {
             new_content.replace_range(start_byte..end_byte, replacement_content);
-            return Ok(new_content);
+            return Ok(EditOutcome::Changed(new_content));
         }
     }
 
@@ -462,16 +514,37 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         .map_err(|e| format!("cannot read '{path}': {e}"))?;
 
     let mut combined_diffs = String::new();
+    let mut any_changed = false;
+    let mut unchanged_count = 0usize;
     for (idx, edit) in chunks.iter().enumerate() {
-        let diff = generate_unified_diff(&edit.target, &edit.replacement, edit.start_line);
-        if !combined_diffs.is_empty() {
-            combined_diffs.push('\n');
-        }
-        combined_diffs.push_str(&diff);
-
-        let new_content = apply_single_edit_to_content(&current_content, path, edit)
+        let outcome = apply_single_edit_to_content(&current_content, path, edit)
             .map_err(|e| if chunks.len() > 1 { format!("Edit #{}: {}", idx + 1, e) } else { e })?;
-        current_content = new_content;
+
+        match outcome {
+            EditOutcome::Unchanged => {
+                unchanged_count += 1;
+            }
+            EditOutcome::Changed(new_content) => {
+                any_changed = true;
+                let diff = generate_unified_diff(&edit.target, &edit.replacement, edit.start_line);
+                if !combined_diffs.is_empty() {
+                    combined_diffs.push('\n');
+                }
+                combined_diffs.push_str(&diff);
+                current_content = new_content;
+            }
+        }
+    }
+
+    if !any_changed {
+        return Ok(if chunks.len() == 1 {
+            format!("already applied; no changes made to '{path}' (target_content already reflects replacement_content)")
+        } else {
+            format!(
+                "already applied; no changes made to '{path}' ({unchanged_count} of {} edits already reflected)",
+                chunks.len()
+            )
+        });
     }
 
     std::fs::write(&resolved_path, &current_content)
@@ -480,7 +553,15 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     let msg = if chunks.len() == 1 {
         format!("successfully replaced target_content in '{path}'\n\n```diff\n{combined_diffs}\n```")
     } else {
-        format!("successfully applied {} edits in '{path}'\n\n```diff\n{combined_diffs}\n```", chunks.len())
+        let note = if unchanged_count > 0 {
+            format!(" ({unchanged_count} already applied, skipped)")
+        } else {
+            String::new()
+        };
+        format!(
+            "successfully applied {} edits in '{path}'{note}\n\n```diff\n{combined_diffs}\n```",
+            chunks.len() - unchanged_count
+        )
     };
 
     Ok(msg)
@@ -655,7 +736,11 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
         }
     }
 
-    // Validate matching target contents
+    // Validate matching target contents. A chunk whose range already reads
+    // as replacement_content is treated as already applied rather than a
+    // mismatch — re-sending the same multi_replace call must not error or
+    // re-stack content that a prior identical call already landed.
+    let mut needs_apply = vec![true; chunks.len()];
     for (i, chunk) in chunks.iter().enumerate() {
         let total = file_lines.len();
         if chunk.start_line < 1
@@ -678,25 +763,42 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
             ));
         }
         let segment = file_lines[chunk.start_line - 1..chunk.end_line].join("\n");
-        if segment.trim_end() != chunk.target_content.trim_end() {
-            let mut mismatch = format!(
-                "Discrepancy at replacement index {i} (lines {}-{}), target_content does not match file.\n",
-                chunk.start_line, chunk.end_line
-            );
-            mismatch.push_str("=== Expected (target_content) ===\n");
-            mismatch.push_str(&chunk.target_content);
-            mismatch.push_str("\n=== Found in File ===\n");
-            mismatch.push_str(&segment);
-            mismatch.push_str("\n======================\n");
-            return Err(mismatch);
+        if segment.trim_end() == chunk.target_content.trim_end() {
+            continue;
         }
+        if segment.trim_end() == chunk.replacement_content.trim_end() {
+            needs_apply[i] = false;
+            continue;
+        }
+        let mut mismatch = format!(
+            "Discrepancy at replacement index {i} (lines {}-{}), target_content does not match file.\n",
+            chunk.start_line, chunk.end_line
+        );
+        mismatch.push_str("=== Expected (target_content) ===\n");
+        mismatch.push_str(&chunk.target_content);
+        mismatch.push_str("\n=== Found in File ===\n");
+        mismatch.push_str(&segment);
+        mismatch.push_str("\n======================\n");
+        return Err(mismatch);
+    }
+
+    if needs_apply.iter().all(|&needed| !needed) {
+        return Ok(format!(
+            "already applied; no changes made to '{path}' (all {} replacements already reflected)",
+            chunks.len()
+        ));
     }
 
     // Apply descending edits
-    for chunk in chunks {
+    let applied_count = needs_apply.iter().filter(|&&needed| needed).count();
+    for (chunk, needed) in chunks.into_iter().zip(needs_apply) {
         let mut new_lines = Vec::new();
         new_lines.extend_from_slice(&file_lines[..chunk.start_line - 1]);
-        new_lines.push(chunk.replacement_content);
+        if needed {
+            new_lines.push(chunk.replacement_content);
+        } else {
+            new_lines.extend_from_slice(&file_lines[chunk.start_line - 1..chunk.end_line]);
+        }
         new_lines.extend_from_slice(&file_lines[chunk.end_line..]);
         file_lines = new_lines;
     }
@@ -709,9 +811,16 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
     std::fs::write(&resolved_path, &new_content)
         .map_err(|e| format!("cannot write '{path}': {e}"))?;
 
+    let note = if applied_count < replacements_val.len() {
+        format!(
+            " ({} already applied, skipped)",
+            replacements_val.len() - applied_count
+        )
+    } else {
+        String::new()
+    };
     Ok(format!(
-        "successfully applied {} replacements to '{path}'",
-        replacements_val.len()
+        "successfully applied {applied_count} replacements to '{path}'{note}"
     ))
 }
 
@@ -833,8 +942,12 @@ mod tests {
             start_line: None,
             end_line: None,
         };
-        let out = apply_single_edit_to_content(file, "src/ui/mod.rs", &edit)
-            .expect("should resolve via block-anchor fuzzy match");
+        let out = match apply_single_edit_to_content(file, "src/ui/mod.rs", &edit)
+            .expect("should resolve via block-anchor fuzzy match")
+        {
+            EditOutcome::Changed(content) => content,
+            EditOutcome::Unchanged => panic!("expected a change"),
+        };
         assert!(out.contains("REPLACED"), "got: {out}");
         assert!(!out.contains("show_spinner"), "old block should be gone: {out}");
     }
@@ -864,5 +977,169 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(closest_region(&content, &target).is_none());
+    }
+
+    // Regression for the benchmark session: a prepend-shaped edit (old_string
+    // is a suffix of new_string) kept matching after it had already been
+    // applied, so repeating the exact same tool call stacked the inserted
+    // line forever.
+    #[test]
+    fn repeating_the_same_prepend_edit_twice_does_not_duplicate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "    s.discord_rpc.set_activity(\"Idle\", ...);\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let args = serde_json::json!({
+            "path": path,
+            "old_string": "    s.discord_rpc.set_activity(\"Idle\", ...);",
+            "new_string": "    let model_name = ...;\n    s.discord_rpc.set_activity(\"Idle\", ...);",
+        });
+
+        let first = replace_file_content_tool(&args).expect("first apply should succeed");
+        assert!(first.contains("successfully"), "got: {first}");
+        let after_first = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(
+            after_first.matches("let model_name").count(),
+            1,
+            "got: {after_first}"
+        );
+
+        let second = replace_file_content_tool(&args).expect("repeat should not error");
+        assert!(second.contains("already applied"), "got: {second}");
+        let after_second = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(
+            after_second, after_first,
+            "repeating the edit must not change the file further"
+        );
+        assert_eq!(
+            after_second.matches("let model_name").count(),
+            1,
+            "the inserted line must not be duplicated: {after_second}"
+        );
+    }
+
+    // Repeating a plain (non-insert-shaped) replacement after it already
+    // landed must be a reported no-op, not an error and not a second write.
+    #[test]
+    fn repeating_a_plain_replacement_is_a_noop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let status = Idle;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let args = serde_json::json!({
+            "path": path,
+            "old_string": "let status = Idle;",
+            "new_string": "let status = Active;",
+        });
+
+        let first = replace_file_content_tool(&args).expect("first apply should succeed");
+        assert!(first.contains("successfully"), "got: {first}");
+
+        let second = replace_file_content_tool(&args).expect("repeat should be a no-op");
+        assert!(second.contains("already applied"), "got: {second}");
+
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(content, "let status = Active;\n");
+    }
+
+    // A different, still-valid edit must keep working after the file has
+    // already been changed by a prior edit — the idempotency guard must not
+    // block genuine follow-up edits.
+    #[test]
+    fn a_legitimate_second_edit_still_works_after_the_file_changed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let a = 1;\nlet b = 2;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let first = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "let a = 1;",
+            "new_string": "let a = 100;",
+        }))
+        .expect("first edit should succeed");
+        assert!(first.contains("successfully"), "got: {first}");
+
+        let second = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "let b = 2;",
+            "new_string": "let b = 200;",
+        }))
+        .expect("second, distinct edit should succeed");
+        assert!(second.contains("successfully"), "got: {second}");
+
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(content, "let a = 100;\nlet b = 200;\n");
+    }
+
+    // Ambiguous edits must still be rejected — the idempotency guard must
+    // never paper over a genuinely ambiguous target.
+    #[test]
+    fn multiple_matches_remain_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "dup();\ndup();\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let err = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "dup();",
+            "new_string": "single();",
+        }))
+        .expect_err("ambiguous target must be rejected");
+        assert!(err.contains("matches"), "got: {err}");
+
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(content, "dup();\ndup();\n", "file must be untouched");
+    }
+
+    // A failed edit (target genuinely not present) must return Err, never a
+    // success message — success-shaped failures are what let a broken edit
+    // loop pass the harness's "did the tool report success" check.
+    #[test]
+    fn failed_edits_do_not_report_success() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let a = 1;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let err = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "let z = 999;",
+            "new_string": "let z = 1000;",
+        }))
+        .expect_err("target not present must fail");
+        assert!(err.contains("not found"), "got: {err}");
+
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(content, "let a = 1;\n", "file must be untouched on failure");
+    }
+
+    // multi_replace_file_content_tool must share the same idempotency
+    // protection as the single-edit path.
+    #[test]
+    fn multi_replace_repeated_call_is_a_noop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let a = 1;\nlet b = 2;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let args = serde_json::json!({
+            "path": path,
+            "replacements": [
+                { "start_line": 1, "end_line": 1, "target_content": "let a = 1;", "replacement_content": "let a = 100;" },
+            ],
+        });
+
+        let first = multi_replace_file_content_tool(&args).expect("first apply should succeed");
+        assert!(first.contains("successfully"), "got: {first}");
+
+        let second = multi_replace_file_content_tool(&args).expect("repeat should be a no-op");
+        assert!(second.contains("already applied"), "got: {second}");
+
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(content, "let a = 100;\nlet b = 2;\n");
     }
 }
