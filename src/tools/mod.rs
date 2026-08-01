@@ -18,10 +18,18 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
-/// Keep one model response small enough that every tool call can be grounded
-/// in the result of the previous turn. Shell commands may still contain any
-/// normal chaining operators because they are one tool call.
-pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 4;
+/// How many calls that can change the workspace may run from one response.
+///
+/// The limit exists so each edit is grounded in the result of the previous one,
+/// not to ration throughput: a model planning six edits ahead is predicting file
+/// contents it has not read. Shell commands may still chain with any normal
+/// operator because they are one call.
+pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
+
+/// Absolute ceiling on calls from one response, whatever their kind. Reads are
+/// cheap and safe to fan out — searching six paths at once is one thought, not
+/// six — so they are bounded only by this backstop against runaway generation.
+pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 32;
 
 /// Cut an over-eager batch down to the calls that may run this round, returning
 /// the kept prefix and how many were dropped.
@@ -43,10 +51,22 @@ pub fn truncate_tool_batch(mut calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize) {
         1
     } else {
         let limit = calls.len().min(MAX_TOOL_CALLS_PER_RESPONSE);
-        calls[..limit]
-            .iter()
-            .position(is_control)
-            .unwrap_or(limit)
+        let mut mutating = 0;
+        let mut kept = limit;
+        for (index, call) in calls[..limit].iter().enumerate() {
+            if is_control(call) {
+                kept = index;
+                break;
+            }
+            if !supports_parallel_execution(&call.name) {
+                mutating += 1;
+                if mutating > MAX_MUTATING_CALLS_PER_RESPONSE {
+                    kept = index;
+                    break;
+                }
+            }
+        }
+        kept
     };
 
     calls.truncate(keep);
@@ -1710,20 +1730,34 @@ mod tests {
         assert_eq!(kept.len(), 2);
         assert_eq!(dropped, 0);
 
-        // Over the limit: the leading calls survive, in order.
+        // Reads fan out freely: ten searches are one thought, not ten.
+        let reads: Vec<ToolCall> = (0..10).map(|_| call("grep")).collect();
+        let (kept, dropped) = truncate_tool_batch(reads);
+        assert_eq!(kept.len(), 10);
+        assert_eq!(dropped, 0);
+
+        // Calls that can change the workspace are rationed, and the prefix
+        // before the surplus one survives in order.
         let over = vec![
             call("grep"),
-            call("view_file"),
+            call("run_command"),
+            call("write_to_file"),
             call("run_command"),
             call("write_to_file"),
             call("run_command"),
             call("grep"),
         ];
         let (kept, dropped) = truncate_tool_batch(over);
-        assert_eq!(kept.len(), MAX_TOOL_CALLS_PER_RESPONSE);
+        assert_eq!(kept.len(), MAX_MUTATING_CALLS_PER_RESPONSE + 1);
         assert_eq!(dropped, 2);
         assert_eq!(kept[0].name, "grep");
-        assert_eq!(kept[3].name, "write_to_file");
+        assert_eq!(kept[4].name, "write_to_file");
+
+        // The absolute ceiling still applies to a runaway response.
+        let runaway: Vec<ToolCall> = (0..50).map(|_| call("grep")).collect();
+        let (kept, dropped) = truncate_tool_batch(runaway);
+        assert_eq!(kept.len(), MAX_TOOL_CALLS_PER_RESPONSE);
+        assert_eq!(dropped, 50 - MAX_TOOL_CALLS_PER_RESPONSE);
     }
 
     #[test]

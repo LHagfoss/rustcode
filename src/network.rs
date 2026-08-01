@@ -2517,36 +2517,68 @@ async fn execute_tool_batch(
             .collect::<Vec<_>>();
     }
 
-    // Independent reads may run concurrently. The recursive single-call path
-    // keeps all existing repeat detection, cancellation, and result shaping in
-    // one place; `join_all` preserves input order for deterministic history.
-    if !made_edits
-        && tool_calls.len() > 1
-        && tool_calls
-            .iter()
-            .all(|call| crate::tools::supports_parallel_execution(&call.name))
-    {
-        let futures = tool_calls.iter().map(|call| async {
-            let mut read_dirty = false;
-            let mut read_cache = None;
-            execute_tool_batch(
-                client,
-                state,
-                cancel_token,
-                std::slice::from_ref(call),
-                approved,
-                false,
-                &None,
-                &mut read_dirty,
-                &mut read_cache,
-            )
-            .await
-        });
-        return futures_util::future::join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .collect();
+    // Gate concurrency per call rather than per batch. Consecutive
+    // parallel-capable calls (reads) run together; anything that can change the
+    // workspace runs alone, after every earlier call has finished and before any
+    // later one starts. A batch that mixes the two therefore still parallelises
+    // its reads instead of falling back to fully sequential execution, and a
+    // read written after an edit in the same batch still observes that edit.
+    // The recursive single-call path keeps repeat detection, cancellation, and
+    // result shaping in one place; `join_all` preserves input order.
+    if tool_calls.len() > 1 {
+        let mut results = Vec::with_capacity(tool_calls.len());
+        let mut index = 0;
+        while index < tool_calls.len() {
+            let parallel_run_end = tool_calls[index..]
+                .iter()
+                .position(|call| !crate::tools::supports_parallel_execution(&call.name))
+                .map(|offset| index + offset)
+                .unwrap_or(tool_calls.len());
+
+            if parallel_run_end > index + 1 {
+                let futures = tool_calls[index..parallel_run_end].iter().map(|call| async {
+                    let mut read_dirty = false;
+                    let mut read_cache = None;
+                    execute_tool_batch(
+                        client,
+                        state,
+                        cancel_token,
+                        std::slice::from_ref(call),
+                        approved,
+                        false,
+                        &None,
+                        &mut read_dirty,
+                        &mut read_cache,
+                    )
+                    .await
+                });
+                results.extend(
+                    futures_util::future::join_all(futures)
+                        .await
+                        .into_iter()
+                        .flatten(),
+                );
+                index = parallel_run_end;
+                continue;
+            }
+
+            results.extend(
+                Box::pin(execute_tool_batch(
+                    client,
+                    state,
+                    cancel_token,
+                    std::slice::from_ref(&tool_calls[index]),
+                    approved,
+                    made_edits,
+                    edit_root,
+                    compile_dirty,
+                    compile_cache,
+                ))
+                .await,
+            );
+            index += 1;
+        }
+        return results;
     }
 
     dbg_log!("Executing {} tool calls sequentially", tool_calls.len());
@@ -3090,9 +3122,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         ctx.force_final = true;
                     }
                     format!(
-                        " This response contained {requested_calls} separate tool calls; the leading {} were kept and the rest dropped, then the remainder failed validation, so nothing ran and nothing it claimed about their results happened. Start again from the last real tool result and emit at most {} independent tool calls.",
+                        " This response contained {requested_calls} separate tool calls; the leading {} were kept and the rest dropped, then the remainder failed validation, so nothing ran and nothing it claimed about their results happened. Start again from the last real tool result. Reads may be issued together; keep calls that change the workspace to at most {} per response so each one is grounded in the previous result.",
                         parsed_tool_calls.len(),
-                        crate::tools::MAX_TOOL_CALLS_PER_RESPONSE
+                        crate::tools::MAX_MUTATING_CALLS_PER_RESPONSE
                     )
                 } else {
                     ctx.oversized_batch_rejections = 0;
@@ -3218,9 +3250,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
-                                    "[{dropped_calls} of the {requested_calls} tool calls in that response were dropped; only the first {} ran. Their results follow — plan the next step from those, not from what the response predicted, and emit at most {} tool calls at a time.]",
+                                    "[{dropped_calls} of the {requested_calls} tool calls in that response were dropped; only the first {} ran. Their results follow — plan the next step from those, not from what the response predicted. Reads may be issued together; keep calls that change the workspace to at most {} per response.]",
                                     tool_calls.len(),
-                                    crate::tools::MAX_TOOL_CALLS_PER_RESPONSE
+                                    crate::tools::MAX_MUTATING_CALLS_PER_RESPONSE
                                 ),
                             ));
                         }
