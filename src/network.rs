@@ -64,6 +64,27 @@ Do NOT emit any tool calls (no reads, writes, edits, searches). Respond with TEX
 a short statement that you stopped to avoid looping, a summary of what you found or accomplished so far, \
 any remaining tasks, and a recommendation for what to do next. This overrides all other instructions.";
 
+const LOOP_RECOVERY_PROMPT: &str = "The previous tool action repeated without making progress. Tools remain enabled for one recovery attempt. \
+Do not repeat the same tool call or the same exact edit. Re-read the smallest relevant file region, \
+compare it with the current file on disk, then use a different, grounded approach. If the requested change \
+is already present or cannot be applied safely, explain that instead of retrying. This is the final recovery attempt.";
+
+const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
+
+#[derive(Debug, PartialEq, Eq)]
+enum LoopRecoveryAction {
+    Recover,
+    ForceFinal,
+}
+
+fn loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
+    if attempts < MAX_LOOP_RECOVERY_ROUNDS {
+        LoopRecoveryAction::Recover
+    } else {
+        LoopRecoveryAction::ForceFinal
+    }
+}
+
 /// True when a tool result has already been reduced to a stub (nothing left to prune).
 fn is_fully_stubbed(m: &ChatMessage) -> bool {
     let rest = m
@@ -3168,6 +3189,7 @@ pub struct TurnContext {
     pub tool_rounds: usize,
     pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
+    pub loop_recovery_attempts: u8,
     pub force_final: bool,
     /// A mutating tool actually changed something. Distinct from having *tried*:
     /// a failed edit leaves the workspace untouched, and treating an attempt as
@@ -3199,6 +3221,7 @@ impl TurnContext {
             tool_rounds: 0,
             oversized_batch_rejections: 0,
             loop_detector: loop_detect::LoopDetector::new(6),
+            loop_recovery_attempts: 0,
             force_final: false,
             made_edits: false,
             failed_mutations: 0,
@@ -3545,23 +3568,48 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         }
         match loop_status {
             loop_detect::LoopStatus::Abort(n) => {
-                dbg_log!(
-                    "Loop detector: abort after {} repeats — forcing wrap-up turn",
-                    n
-                );
-                // Don't stop silently. Record the looping turn, then inject
-                // a directive that disables tools and demands a prose
-                // summary, and run exactly one more turn (`ctx.force_final`).
-                let mut s = state.lock().await;
-                s.history
-                    .push(ChatMessage::new("assistant", &ctx.final_content));
-                s.history
-                    .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
-                drop(s);
-                ctx.force_final = true;
-                return true;
+                match loop_recovery_action(ctx.loop_recovery_attempts) {
+                    LoopRecoveryAction::Recover => {
+                        ctx.loop_recovery_attempts += 1;
+                        ctx.loop_detector.reset();
+                        dbg_log!(
+                            "Loop detector: abort after {} repeats — allowing bounded recovery turn",
+                            n
+                        );
+                        let mut s = state.lock().await;
+                        s.history
+                            .push(ChatMessage::new("assistant", &ctx.final_content));
+                        s.history
+                            .push(ChatMessage::new("system", LOOP_RECOVERY_PROMPT));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        s.status = AppStatus::Streaming;
+                        s.stream_tracker = Some(StreamTracker::new());
+                        drop(s);
+                        ctx.turn_machine.finish_tools_if_executing();
+                        ctx.tool_rounds += 1;
+                        return true;
+                    }
+                    LoopRecoveryAction::ForceFinal => {
+                        dbg_log!(
+                            "Loop detector: abort after {} repeats — forcing wrap-up turn",
+                            n
+                        );
+                        // Don't stop silently. Record the looping turn, then inject
+                        // a directive that disables tools and demands a prose
+                        // summary, and run exactly one more turn (`ctx.force_final`).
+                        let mut s = state.lock().await;
+                        s.history
+                            .push(ChatMessage::new("assistant", &ctx.final_content));
+                        s.history
+                            .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        drop(s);
+                        ctx.force_final = true;
+                        return true;
+                    }
+                }
             }
             loop_detect::LoopStatus::Warning(n) => {
                 dbg_log!("Loop detector: warning at {} repeats", n);
@@ -4867,6 +4915,14 @@ mod tests {
             "user",
             "[not a system note]"
         )));
+    }
+
+    #[test]
+    fn loop_abort_allows_one_bounded_recovery_before_forced_final() {
+        assert_eq!(loop_recovery_action(0), LoopRecoveryAction::Recover);
+        assert_eq!(loop_recovery_action(1), LoopRecoveryAction::ForceFinal);
+        assert_eq!(loop_recovery_action(u8::MAX), LoopRecoveryAction::ForceFinal);
+        assert!(LOOP_RECOVERY_PROMPT.contains("Tools remain enabled"));
     }
 
     // Regression: hoisting every system message into the prompt filed each loop
