@@ -150,6 +150,34 @@ fn has_interactive_sudo(cmd: &str) -> bool {
         .any(|segment| segment_is_interactive_sudo(segment))
 }
 
+pub(crate) fn reject_broad_git_stage(cmd: &str) -> Option<&'static str> {
+    for segment in split_command_segments(cmd) {
+        let tokens = segment.split_whitespace().collect::<Vec<_>>();
+        if tokens.len() >= 3
+            && tokens[0] == "git"
+            && tokens[1] == "commit"
+            && tokens[2..].iter().any(|token| *token == "-a" || *token == "--all")
+        {
+            return Some(
+                "Refusing `git commit -a/--all`. Stage explicit feature paths first so unrelated user changes cannot enter the commit.",
+            );
+        }
+        if tokens.len() >= 3
+            && tokens[0] == "git"
+            && tokens[1] == "add"
+            && (tokens[2] == "."
+                || tokens[2] == "-A"
+                || tokens[2] == "--all"
+                || (tokens[2] == "--" && tokens.get(3) == Some(&".")))
+        {
+            return Some(
+                "Refusing broad git staging. Stage explicit feature paths (for example, `git add src/network.rs`) so unrelated user changes cannot enter the commit.",
+            );
+        }
+    }
+    None
+}
+
 pub fn run_command(args: &Value) -> Result<String, String> {
     let command_str = args
         .get("command")
@@ -158,6 +186,10 @@ pub fn run_command(args: &Value) -> Result<String, String> {
 
     if is_shell_read_command(command_str) {
         return Err("Do not use run_command with cat, sed, head, tail, or less/more to read files. Use the native 'view_file' tool instead. This keeps token usage low and allows the harness to manage file context correctly.".to_string());
+    }
+
+    if let Some(reason) = reject_broad_git_stage(command_str) {
+        return Err(reason.to_string());
     }
 
     if has_interactive_sudo(command_str.trim()) {
@@ -490,7 +522,24 @@ fn truncate_bytes(bytes: &[u8], max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_interactive_sudo, run_command};
+    use super::{has_interactive_sudo, reject_broad_git_stage, run_command};
+
+    #[test]
+    fn broad_git_staging_is_rejected() {
+        for command in [
+            "git add .",
+            "git add -A",
+            "git add --all",
+            "git add -- .",
+            "git commit -a -m feature",
+        ] {
+            assert!(
+                reject_broad_git_stage(command).is_some(),
+                "expected broad staging to be rejected: {command}"
+            );
+        }
+        assert!(reject_broad_git_stage("git add src/network.rs").is_none());
+    }
 
     #[test]
     fn run_command_executes_chained_shell_commands() {

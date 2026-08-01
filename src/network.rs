@@ -52,6 +52,9 @@ pub(crate) mod runner;
 #[path = "network/policy.rs"]
 pub(crate) mod policy;
 
+#[path = "network/verification.rs"]
+pub(crate) mod verification;
+
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
 /// summary instead of a silently aborted session. Ported from opencode's
@@ -3055,6 +3058,7 @@ const REPLAYABLE_READ_LIMIT: usize = 4096;
 
 /// How many times the completion gate argues before letting a claim through.
 const MAX_COMPLETION_BLOCKS: u8 = 2;
+const MAX_VERIFICATION_BLOCKS: u8 = 2;
 
 /// Whether a `complete_task` claim describes work that never reached disk.
 ///
@@ -3152,6 +3156,8 @@ pub struct TurnContext {
     /// How many times a completion claim has been sent back for having applied
     /// nothing, so the gate cannot argue with the model forever.
     pub completion_blocks: u8,
+    pub verification_blocks: u8,
+    pub verification: verification::VerificationLedger,
     pub edit_root: Option<std::path::PathBuf>,
     pub compile_dirty: bool,
     pub compile_cache: Option<(std::path::PathBuf, Option<String>)>,
@@ -3175,6 +3181,8 @@ impl TurnContext {
             made_edits: false,
             failed_mutations: 0,
             completion_blocks: 0,
+            verification_blocks: 0,
+            verification: verification::VerificationLedger::default(),
             edit_root: None,
             compile_dirty: true,
             compile_cache: None,
@@ -3639,10 +3647,19 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             let mut completed = false;
             let executed = results.len();
             for (position, result) in results.into_iter().enumerate() {
+                let call = tool_calls.get(position);
                 let answered_call = call_refs.get(position).map(|call| call.id.clone());
                 let name = result.tool_name;
                 let metadata = result.metadata.clone();
                 let mut content = result.content;
+                if call.is_some_and(|call| call.name == "run_command")
+                    && let Some(command) = call
+                        .and_then(|call| call.arguments.get("command"))
+                        .and_then(|command| command.as_str())
+                {
+                    ctx.verification
+                        .record_command(command, metadata.exit_code);
+                }
                 if name == "use_skill" && deferred_tool_calls > 0 {
                     content.push_str(&format!(
                                 "\n\n[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
@@ -3670,6 +3687,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         ctx.failed_mutations += 1;
                     } else {
                         ctx.made_edits = true;
+                        if !metadata.changed_paths.is_empty() || name != "run_command" {
+                            ctx.verification.record_edit();
+                        }
                     }
                 }
                 // Progress resets the loop detector: a successful mutating
@@ -3753,6 +3773,35 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             }
 
             if completed {
+                if ctx.made_edits
+                    && !ctx.verification.has_fresh_successful_verification()
+                    && ctx.verification_blocks < MAX_VERIFICATION_BLOCKS
+                {
+                    ctx.verification_blocks += 1;
+                    let reason = ctx
+                        .verification
+                        .last_failure()
+                        .map(|evidence| {
+                            format!(
+                                "The latest verification failed: {} (exit code {:?}).",
+                                evidence.command, evidence.exit_code
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            "No verification command was run after the latest edit.".to_string()
+                        });
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "[Finish blocked — {reason} Run the relevant project verification command after the latest edit, inspect its result, then report completion.]"
+                        ),
+                    ));
+                    crate::config::save_history(&s.history);
+                    s.current_response.clear();
+                    drop(s);
+                    ctx.turn_machine.finish_tools_if_executing();
+                    return true;
+                }
                 let mut build_status = if ctx.made_edits {
                     "pending"
                 } else {
@@ -3827,7 +3876,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         changed_paths.into_iter().collect::<Vec<_>>().join(", ")
                     };
                     summary_text.push_str(&format!(
-                        "\n\n[harness verification: build={build_status}; changed_paths={paths}]"
+                        "\n\n[harness verification: build={build_status}; tool_verification={}; changed_paths={paths}]",
+                        ctx.verification.summary()
                     ));
                     // The gate gives up arguing after two rounds. If it
                     // does, the reader still needs to know the summary
