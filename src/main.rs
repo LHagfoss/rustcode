@@ -1771,6 +1771,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shutdown: nothing queued may be lost, so write it out synchronously.
     crate::config::flush_history();
+    {
+        let mut s = app_state.lock().await;
+        s.discord_rpc.shutdown();
+    }
 
     disable_raw_mode()?;
     {

@@ -5,7 +5,6 @@ pub struct DiscordRpcHandler {
     client: Option<DiscordIpcClient>,
     start_time: u64,
     enabled: bool,
-    reconnect_attempts: u8,
 }
 
 impl DiscordRpcHandler {
@@ -17,7 +16,6 @@ impl DiscordRpcHandler {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             enabled: false,
-            reconnect_attempts: 0,
         }
     }
 
@@ -25,11 +23,12 @@ impl DiscordRpcHandler {
         if self.enabled == enabled {
             return;
         }
-        self.enabled = enabled;
         if enabled {
+            self.enabled = true;
             self.connect();
         } else {
-            self.clear_activity();
+            self.clear_activity_internal();
+            self.enabled = false;
             self.disconnect();
         }
     }
@@ -40,7 +39,6 @@ impl DiscordRpcHandler {
         {
             eprintln!("Failed to close Discord RPC client: {}", e);
         }
-        self.reconnect_attempts = 0;
     }
 
     fn connect(&mut self) {
@@ -60,8 +58,6 @@ impl DiscordRpcHandler {
         match client_instance.connect() {
             Ok(_) => {
                 self.client = Some(client_instance);
-                self.reconnect_attempts = 0;
-                self.set_activity_internal("Idle", "Waiting for input");
             }
             Err(e) => {
                 eprintln!("Failed to connect to Discord RPC: {}", e);
@@ -74,10 +70,10 @@ impl DiscordRpcHandler {
         if !self.enabled {
             return;
         }
-        self.set_activity_internal(state, details);
+        self.set_activity_internal(state, details, true);
     }
 
-    fn set_activity_internal(&mut self, state: &str, details: &str) {
+    fn set_activity_internal(&mut self, state: &str, details: &str, allow_reconnect: bool) {
         if !self.enabled {
             return;
         }
@@ -90,35 +86,61 @@ impl DiscordRpcHandler {
                 .timestamps(activity::Timestamps::new().start(self.start_time as i64));
             if let Err(e) = client.set_activity(activity) {
                 eprintln!("Failed to set Discord RPC activity: {}", e);
-                self.client = None; // Disconnect on error, attempt reconnect on next activity update
-                if self.reconnect_attempts == 0 {
-                    self.reconnect_attempts += 1;
+                self.disconnect();
+                if allow_reconnect {
                     self.connect();
                     if self.client.is_some() {
-                        // Retry setting activity after successful reconnect
-                        self.set_activity_internal(state, details);
+                        self.set_activity_internal(state, details, false);
                     }
                 }
             }
         } else {
-            // Client is not connected, try to connect
             self.connect();
             if self.client.is_some() {
-                // If connected, try setting activity
-                self.set_activity_internal(state, details);
+                self.set_activity_internal(state, details, false);
             }
         }
     }
 
-    pub fn clear_activity(&mut self) {
-        if !self.enabled {
-            return;
-        }
+    fn clear_activity_internal(&mut self) {
         if let Some(client) = &mut self.client
             && let Err(e) = client.clear_activity()
         {
             eprintln!("Failed to clear Discord RPC activity: {}", e);
-            self.client = None; // Disconnect on error
+            self.disconnect();
         }
+    }
+
+    pub fn shutdown(&mut self) {
+        self.clear_activity_internal();
+        self.enabled = false;
+        self.disconnect();
+    }
+}
+
+impl Drop for DiscordRpcHandler {
+    fn drop(&mut self) {
+        self.clear_activity_internal();
+        self.disconnect();
+    }
+}
+
+pub(crate) fn activity_for_tools(running_tools: usize) -> &'static str {
+    if running_tools == 0 {
+        "Thinking"
+    } else {
+        "Running tools"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::activity_for_tools;
+
+    #[test]
+    fn tool_activity_distinguishes_idle_tool_execution() {
+        assert_eq!(activity_for_tools(0), "Thinking");
+        assert_eq!(activity_for_tools(1), "Running tools");
+        assert_eq!(activity_for_tools(3), "Running tools");
     }
 }
