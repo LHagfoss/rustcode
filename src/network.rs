@@ -800,7 +800,46 @@ pub async fn stream_request(
                 .header("Authorization", format!("Bearer {key}"))
                 .header("X-Api-Key", key);
         }
-        match req.send().await {
+        // Race the header wait against cancellation (so a cancel while
+        // headers are in flight interrupts immediately, not once the
+        // request finishes or the provider times out) and against a
+        // bounded first-byte timeout (so a connection that succeeds but
+        // never sends headers can't hang forever). This deliberately does
+        // NOT bound the rest of the response — long legitimate SSE streams
+        // must keep working.
+        let send_result = retry::race_cancellable(
+            tokio::time::timeout(retry::HEADER_TIMEOUT, req.send()),
+            &cancel_token,
+        )
+        .await;
+        let send_result = match send_result {
+            None => return Err("cancelled".to_string()),
+            Some(Err(_elapsed)) => {
+                if attempt < retry::MAX_RETRIES {
+                    let delay = retry::delay_for_attempt(attempt, 0);
+                    dbg_log!(
+                        "stream_request: timed out waiting for response headers (attempt {}/{}), backing off {}ms",
+                        attempt + 1,
+                        retry::MAX_RETRIES,
+                        delay.as_millis()
+                    );
+                    if retry::race_cancellable(tokio::time::sleep(delay), &cancel_token)
+                        .await
+                        .is_none()
+                    {
+                        return Err("cancelled".to_string());
+                    }
+                    attempt += 1;
+                    continue;
+                }
+                return Err(format!(
+                    "timed out waiting for response headers after {}s",
+                    retry::HEADER_TIMEOUT.as_secs()
+                ));
+            }
+            Some(Ok(r)) => r,
+        };
+        match send_result {
             Ok(resp) if resp.status().is_success() => {
                 dbg_log!(
                     "stream_request: Received response status: {}",
@@ -821,7 +860,12 @@ pub async fn stream_request(
                         retry::MAX_RETRIES,
                         delay.as_millis()
                     );
-                    tokio::time::sleep(delay).await;
+                    if retry::race_cancellable(tokio::time::sleep(delay), &cancel_token)
+                        .await
+                        .is_none()
+                    {
+                        return Err("cancelled".to_string());
+                    }
                     attempt += 1;
                     continue;
                 }
@@ -842,7 +886,12 @@ pub async fn stream_request(
                         delay.as_millis(),
                         e
                     );
-                    tokio::time::sleep(delay).await;
+                    if retry::race_cancellable(tokio::time::sleep(delay), &cancel_token)
+                        .await
+                        .is_none()
+                    {
+                        return Err("cancelled".to_string());
+                    }
                     attempt += 1;
                     continue;
                 }
@@ -3515,10 +3564,12 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 ctx.turn_machine.recover_error();
                 dbg_log!("Stream request failed: {}", e);
                 let mut s = state.lock().await;
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!("Error from LLM Provider: {e}"),
-                ));
+                let notice = if e == "cancelled" {
+                    "Request cancelled by user".to_string()
+                } else {
+                    format!("Error from LLM Provider: {e}")
+                };
+                s.history.push(ChatMessage::new("system", notice));
                 crate::config::save_history(&s.history);
                 s.current_response.clear();
                 s.current_token_usage = None;
