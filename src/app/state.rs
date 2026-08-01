@@ -1180,6 +1180,30 @@ impl AppState {
         HoverTarget::None
     }
 
+    /// Tool protocol to use when talking to `url`.
+    ///
+    /// A profile override wins; otherwise a provider known to implement
+    /// function calling gets the structured protocol, because a call returned
+    /// as data cannot be confused with prose about a call. Everything else
+    /// falls back to the configured text protocol, which is what servers
+    /// without function calling need.
+    pub fn tool_protocol_for(&self, url: &str) -> crate::config::ToolProtocol {
+        if let Some(profile) = self.config.models.iter().find(|profile| profile.url == url)
+            && let Some(protocol) = profile.tool_protocol
+        {
+            return protocol;
+        }
+        if crate::config::provider_supports_function_calling(url) {
+            return crate::config::ToolProtocol::ApiNative;
+        }
+        self.config.tool_protocol
+    }
+
+    /// Tool protocol for the model this session is currently talking to.
+    pub fn active_tool_protocol(&self) -> crate::config::ToolProtocol {
+        self.tool_protocol_for(&self.api_base_url)
+    }
+
     pub fn clear_selection(&mut self) {
         self.sel_start = None;
         self.sel_end = None;
@@ -1203,6 +1227,53 @@ impl AppState {
     }
 
 
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::AppState;
+    use crate::config::ToolProtocol;
+
+    #[test]
+    fn known_providers_get_structured_calls_and_local_servers_keep_text() {
+        let mut s = AppState::new();
+        s.config.tool_protocol = ToolProtocol::Json;
+
+        assert_eq!(
+            s.tool_protocol_for("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
+            ToolProtocol::ApiNative
+        );
+        assert_eq!(
+            s.tool_protocol_for("https://api.openai.com/v1/chat/completions"),
+            ToolProtocol::ApiNative
+        );
+        // A local server may not implement function calling, so it keeps the
+        // configured text protocol.
+        assert_eq!(
+            s.tool_protocol_for("http://localhost:11434/v1/chat/completions"),
+            ToolProtocol::Json
+        );
+    }
+
+    #[test]
+    fn a_profile_override_beats_detection() {
+        let mut s = AppState::new();
+        s.config.models.push(crate::config::ModelProfile {
+            name: "local-caller".to_string(),
+            url: "http://localhost:1234/v1/chat/completions".to_string(),
+            model: "qwen".to_string(),
+            context_window: None,
+            engine: None,
+            api_key: None,
+            env_key: None,
+            tool_protocol: Some(ToolProtocol::ApiNative),
+        });
+
+        assert_eq!(
+            s.tool_protocol_for("http://localhost:1234/v1/chat/completions"),
+            ToolProtocol::ApiNative
+        );
+    }
 }
 
 #[cfg(test)]
