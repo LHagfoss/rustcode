@@ -377,17 +377,34 @@ fn align_alternating_messages(raw_msgs: Vec<serde_json::Value>) -> Vec<serde_jso
     let mut msgs = Vec::new();
     let mut system_content = String::new();
 
-    // 1. Extract and merge all system messages
+    // 1. Merge the leading system messages into the prompt, and keep any later
+    //    one where it happened, as a user turn.
+    //
+    //    A harness note earns its meaning from its position: "this action has
+    //    repeated 5 times" answers the call above it. Hoisting it into the
+    //    system prompt files it 12k characters away from the thing it is about,
+    //    behind the skill catalogue, where it reads as a standing instruction
+    //    rather than a response. Providers that demand strict alternation reject
+    //    a mid-conversation system role, so it is carried as user text instead.
+    let mut still_leading = true;
     for msg in raw_msgs {
         if let Some(role) = msg.get("role").and_then(|r| r.as_str()) {
-            if role == "system" {
+            if role == "system" && still_leading {
                 if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
                     if !system_content.is_empty() {
                         system_content.push_str("\n\n");
                     }
                     system_content.push_str(content);
                 }
+            } else if role == "system" {
+                let content = msg
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                msgs.push(serde_json::json!({ "role": "user", "content": content }));
             } else {
+                still_leading = false;
                 msgs.push(msg);
             }
         }
@@ -2441,6 +2458,7 @@ async fn prepare_turn_request(
             .filter(|m| {
                 matches!(m.role.as_str(), "user" | "assistant" | "tool")
                     && !m.content.starts_with('/')
+                    || is_model_directed_note(m)
             })
             .cloned()
             .collect();
@@ -2927,6 +2945,26 @@ that and finish. This is a valid outcome and requires no edit.\n\
 Do NOT edit something else, delete existing content, or reverse the request in order to clear this check. \
 An edit that moves the workspace further from what was asked is worse than writing nothing.]"
     )
+}
+
+/// Whether a `system` history entry is something the model must actually read.
+///
+/// Everything the harness tells the model — loop warnings, rejected tool calls,
+/// blocked completions, compaction summaries — is written into history as a
+/// system message. Those were filtered out of the request, so the harness spent
+/// entire sessions correcting a model that never received a word of it: one
+/// session issued 25 loop warnings while the model repeated the same read 25
+/// times, having been told nothing.
+///
+/// Session chatter that only makes sense in the TUI (command output, model
+/// switches) stays out: it is noise in the prompt and was never meant for the
+/// model. Harness notes are bracketed; compaction summaries carry their marker.
+fn is_model_directed_note(message: &ChatMessage) -> bool {
+    message.role == "system"
+        && (message.content.starts_with('[')
+            || message
+                .content
+                .starts_with(crate::network::compaction::SUMMARY_MARKER))
 }
 
 /// Largest read output kept for replay to an identical repeat call. Small reads
@@ -4586,6 +4624,51 @@ mod tests {
         assert!(root.is_absolute());
         assert!(root.is_dir());
         assert!(root.join("Cargo.toml").exists());
+    }
+
+    // Regression: session 1785600769226. 25 loop warnings were written to
+    // history and none reached the model — the request filter kept only
+    // user/assistant/tool. The harness spent the session correcting a model that
+    // could not hear it.
+    #[test]
+    fn harness_notes_reach_the_model_but_session_chatter_does_not() {
+        let warning = ChatMessage::new(
+            "system",
+            "[Loop warning: this action has repeated 5 times.]",
+        );
+        let summary = ChatMessage::new(
+            "system",
+            format!("{}earlier work", crate::network::compaction::SUMMARY_MARKER),
+        );
+        let chatter = ChatMessage::new("system", "Switched to model profile 'gemini-3.6-flash'");
+
+        assert!(is_model_directed_note(&warning));
+        assert!(is_model_directed_note(&summary));
+        // TUI-only noise stays out of the prompt.
+        assert!(!is_model_directed_note(&chatter));
+        assert!(!is_model_directed_note(&ChatMessage::new("user", "[not a system note]")));
+    }
+
+    // Regression: hoisting every system message into the prompt filed each loop
+    // warning 12k characters away from the call it was about.
+    #[test]
+    fn a_mid_conversation_note_keeps_its_place() {
+        let raw = vec![
+            serde_json::json!({"role": "system", "content": "the prompt"}),
+            serde_json::json!({"role": "user", "content": "do it"}),
+            serde_json::json!({"role": "assistant", "content": "reading"}),
+            serde_json::json!({"role": "system", "content": "[Loop warning: repeated 5 times.]"}),
+        ];
+
+        let aligned = align_alternating_messages(raw);
+
+        assert_eq!(aligned[0]["role"], "system");
+        assert_eq!(aligned[0]["content"], "the prompt");
+        // The note stays after the turn it is about, carried as user text so
+        // providers that demand strict alternation still accept it.
+        let last = aligned.last().expect("note survives");
+        assert_eq!(last["role"], "user");
+        assert!(last["content"].as_str().unwrap().contains("Loop warning"));
     }
 
     #[test]
