@@ -436,39 +436,65 @@ pub async fn handle_enter(
             }
             "/protocol" | "/parser" => {
                 if tokens.len() < 2 {
+                    let active = s.active_tool_protocol();
+                    let url = s.api_base_url.clone();
+                    let source = if s
+                        .config
+                        .models
+                        .iter()
+                        .any(|profile| profile.url == url && profile.tool_protocol.is_some())
+                    {
+                        "set for this model"
+                    } else if crate::config::provider_supports_function_calling(&url) {
+                        "detected: this provider supports function calling"
+                    } else {
+                        "fallback for providers without function calling"
+                    };
                     let msg = format!(
-                        "Current tool protocol: {:?}\nSupported formats: json, native, apinative. Use '/protocol json', '/protocol native', or '/protocol apinative' to switch.\n(apinative = send the tool schema in the request's `tools` field and read structured `tool_calls` back; only works on providers that support OpenAI-style tool calling.)",
-                        s.config.tool_protocol
+                        "Tool protocol for this model: {active:?} ({source})\n\
+Supported formats: json, native, apinative. '/protocol json|native|apinative' sets it for this model.\n\
+(apinative = tool schema in the request's `tools` field, structured `tool_calls` back. Preferred wherever it works: a call returned as data cannot be confused with prose describing a call.)"
                     );
                     s.history.push(ChatMessage::new("system", msg));
                 } else {
-                    let new_proto = tokens[1].to_lowercase();
-                    match new_proto.as_str() {
-                        "json" => {
-                            s.config.tool_protocol = crate::config::ToolProtocol::Json;
-                            crate::config::save_entire_config(&s.config);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                "Switched tool protocol to JSON (```tool).".to_string(),
-                            ));
-                        }
+                    let chosen = match tokens[1].to_lowercase().as_str() {
+                        "json" => Some((crate::config::ToolProtocol::Json, "JSON (```tool)")),
                         "native" => {
-                            s.config.tool_protocol = crate::config::ToolProtocol::Native;
+                            Some((crate::config::ToolProtocol::Native, "Native ([TOOL_CALLS])"))
+                        }
+                        "apinative" | "api" => Some((
+                            crate::config::ToolProtocol::ApiNative,
+                            "ApiNative (schema in request `tools`, structured `tool_calls` back)",
+                        )),
+                        _ => None,
+                    };
+                    match chosen {
+                        Some((protocol, label)) => {
+                            // Recorded against the model being used, so it survives
+                            // model switches and outlives the session.
+                            let url = s.api_base_url.clone();
+                            let scoped = s
+                                .config
+                                .models
+                                .iter_mut()
+                                .find(|profile| profile.url == url)
+                                .map(|profile| {
+                                    profile.tool_protocol = Some(protocol);
+                                    profile.name.clone()
+                                });
+                            if scoped.is_none() {
+                                s.config.tool_protocol = protocol;
+                            }
                             crate::config::save_entire_config(&s.config);
+                            let scope = scoped
+                                .map(|name| format!("for model '{name}'"))
+                                .unwrap_or_else(|| "as the fallback for all models".to_string());
                             s.history.push(ChatMessage::new(
                                 "system",
-                                "Switched tool protocol to Native ([TOOL_CALLS]).".to_string(),
+                                format!("Switched tool protocol to {label} {scope}."),
                             ));
                         }
-                        "apinative" | "api" => {
-                            s.config.tool_protocol = crate::config::ToolProtocol::ApiNative;
-                            crate::config::save_entire_config(&s.config);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                "Switched tool protocol to ApiNative (schema in request `tools`, structured `tool_calls` back). Requires a provider that supports OpenAI-style tool calling.".to_string(),
-                            ));
-                        }
-                        _ => {
+                        None => {
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
@@ -555,6 +581,7 @@ pub async fn handle_enter(
                             engine,
                             api_key: None,
                             env_key: None,
+                            tool_protocol: None,
                         });
                     }
                     s.config.default.set_big(name.clone());
@@ -696,6 +723,7 @@ pub async fn handle_enter(
                             engine: Some("ollama".to_string()),
                             api_key: None,
                             env_key: None,
+                            tool_protocol: None,
                         });
                     }
                     s.config.default.set_big("ollama".to_string());

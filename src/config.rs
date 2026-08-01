@@ -28,6 +28,11 @@ pub struct ModelProfile {
     pub api_key: Option<String>,
     #[serde(default)]
     pub env_key: Option<String>,
+    /// Forces a tool protocol for this profile, overriding provider detection.
+    /// Set it when a self-hosted server implements OpenAI-style function
+    /// calling (or advertises it but gets it wrong).
+    #[serde(default)]
+    pub tool_protocol: Option<ToolProtocol>,
 }
 
 impl ModelProfile {
@@ -73,10 +78,40 @@ pub enum ToolProtocol {
     Native,
     /// True API function-calling: the tool schema is sent in the request's
     /// `tools` field and the model replies with a structured `tool_calls`
-    /// field instead of text. Opt-in — only works when the provider/server
-    /// implements OpenAI-style tool calling. Text protocols stay the default
-    /// for open-weight servers that don't.
+    /// field instead of text.
+    ///
+    /// Used automatically for providers known to implement it, because a call
+    /// the provider returns as data cannot be confused with prose — a model
+    /// writing tool calls as text can just as easily write their results, and
+    /// nothing in the transcript contradicts it. The text protocols remain for
+    /// servers without function calling.
     ApiNative,
+}
+
+/// Hosts whose OpenAI-compatible endpoints implement function calling.
+///
+/// Matched on the endpoint URL rather than the model name: whether structured
+/// calls work is a property of the server, and the same model is served by both
+/// kinds of host.
+const FUNCTION_CALLING_HOSTS: &[&str] = &[
+    "api.openai.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "openrouter.ai",
+    "api.groq.com",
+    "api.mistral.ai",
+    "api.deepseek.com",
+    "api.x.ai",
+    "api.together.xyz",
+    "api.fireworks.ai",
+    "api.cerebras.ai",
+    "openai.azure.com",
+];
+
+/// Whether the provider behind `url` supports OpenAI-style function calling.
+pub fn provider_supports_function_calling(url: &str) -> bool {
+    let url = url.to_ascii_lowercase();
+    FUNCTION_CALLING_HOSTS.iter().any(|host| url.contains(host))
 }
 
 
@@ -216,6 +251,7 @@ impl Default for AppConfig {
                     engine: Some("ollama".to_string()),
                     api_key: None,
                     env_key: None,
+                    tool_protocol: None,
                 },
                 ModelProfile {
                     name: "gemini-3.6-flash".to_string(),
@@ -225,6 +261,7 @@ impl Default for AppConfig {
                     engine: Some("openai".to_string()),
                     api_key: None,
                     env_key: None,
+                    tool_protocol: None,
                 },
                 ModelProfile {
                     name: "gemma4:e2b-it-qat".to_string(),
@@ -234,6 +271,7 @@ impl Default for AppConfig {
                     engine: Some("ollama".to_string()),
                     api_key: None,
                     env_key: None,
+                    tool_protocol: None,
                 },
                 ModelProfile {
                     name: "tinkerer".to_string(),
@@ -243,6 +281,7 @@ impl Default for AppConfig {
                     engine: Some("tinker".to_string()),
                     api_key: None,
                     env_key: Some("TINKER_API_KEY".to_string()),
+                    tool_protocol: None,
                 },
             ],
             tool_protocol: ToolProtocol::default(),

@@ -483,7 +483,7 @@ pub async fn stream_request(
     // structured `tool_calls` (handled by the SSE accumulator below) instead of
     // the model writing tool calls as text. Only sent for this opt-in protocol;
     // text protocols leave the payload untouched.
-    let tool_protocol = { state.lock().await.config.tool_protocol };
+    let tool_protocol = { state.lock().await.active_tool_protocol() };
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         // Served from the same PromptCache as the system prompt (built together
         // under one key), so this is a hit after prepare_turn_request ran.
@@ -1565,7 +1565,7 @@ async fn run_subagent(
         let budget_token_limit = { state.lock().await.get_history_token_budget() };
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
-        let protocol = { state.lock().await.config.tool_protocol };
+        let protocol = { state.lock().await.active_tool_protocol() };
         let agent_mode = { state.lock().await.agent_mode };
         let delegation_contract = {
             let s = state.lock().await;
@@ -1681,7 +1681,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             return "error: subagent returned an empty reply".to_string();
         }
 
-        let protocol = { state.lock().await.config.tool_protocol };
+        let protocol = { state.lock().await.active_tool_protocol() };
         if let Some(tool_call) = crate::tools::parse_tool_call(&content, protocol) {
             let name = &tool_call.name;
             let args = &tool_call.arguments;
@@ -2375,7 +2375,7 @@ async fn prepare_turn_request(
             }),
             None => crate::context::environment_context(),
         };
-        let protocol = s.config.tool_protocol;
+        let protocol = s.active_tool_protocol();
         let agent_mode = s.agent_mode;
         let delegation_active = s.delegation_active;
         let system_prompt = s
@@ -3055,7 +3055,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 return false;
             }
 
-            let protocol = { state.lock().await.config.tool_protocol };
+            let protocol = { state.lock().await.active_tool_protocol() };
             let model_response = events::normalize_response(
                 &ctx.final_content,
                 response_finish_reason.as_deref(),
