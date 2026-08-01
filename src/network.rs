@@ -605,6 +605,11 @@ pub async fn stream_request(
         arguments: String,
     }
     let mut accumulators: Vec<ToolAccumulator> = Vec::new();
+    let mut fences = ToolFenceCounter::default();
+    // A model that plans a whole session ahead keeps emitting tool calls that
+    // can never run. Stop reading once it is past the batch limit instead of
+    // paying for the rest of the response.
+    let runaway_limit = crate::tools::MAX_TOOL_CALLS_PER_RESPONSE;
 
     dbg_log!("stream_request: Starting SSE stream read loop");
     loop {
@@ -675,6 +680,12 @@ pub async fn stream_request(
                                             }
                                             chunk.push_str(c_token);
                                         }
+                                        let runaway = fences.push(&chunk) > runaway_limit
+                                            || accumulators
+                                                .iter()
+                                                .filter(|acc| !acc.name.is_empty())
+                                                .count()
+                                                > runaway_limit;
                                         if !chunk.is_empty() {
                                             let tokens = (chunk.len() as f64 * crate::app::TOKENS_PER_CHAR_APPROX) as u32;
                                             if let Some(ref mut tracker) = state.lock().await.stream_tracker {
@@ -692,6 +703,22 @@ pub async fn stream_request(
                                                     let _ = std::io::stdout().flush();
                                                 }
                                             }
+                                        }
+                                        if runaway {
+                                            dbg_log!(
+                                                "stream_request: past {} tool calls in one response — cutting the stream",
+                                                runaway_limit
+                                            );
+                                            crate::logger::operational_event(
+                                                "stream.runaway_cut",
+                                                serde_json::json!({ "limit": runaway_limit }),
+                                            );
+                                            // The call that tripped the limit is
+                                            // partial — its arguments would fail
+                                            // to parse and cost a whole turn.
+                                            accumulators.truncate(runaway_limit);
+                                            line_buf.clear();
+                                            break;
                                         }
                                     }
                                 if let Some(usage) = val.get("usage").filter(|_| !quiet)
@@ -2712,6 +2739,36 @@ fn truncated_batch_summary(kept: &[crate::tools::ToolCall], dropped: usize) -> S
     )
 }
 
+/// Counts ```` ```tool ```` fences across streamed chunks so a runaway response
+/// can be cut mid-flight. Chunk boundaries split markers, so the tail of each
+/// chunk is carried into the next comparison.
+#[derive(Default)]
+struct ToolFenceCounter {
+    seen: usize,
+    tail: String,
+}
+
+impl ToolFenceCounter {
+    const MARKER: &'static str = "```tool";
+
+    /// Feeds one streamed chunk and returns the running fence count.
+    fn push(&mut self, chunk: &str) -> usize {
+        if chunk.is_empty() {
+            return self.seen;
+        }
+        let mut window = std::mem::take(&mut self.tail);
+        window.push_str(chunk);
+        self.seen += window.matches(Self::MARKER).count();
+        // Keep just enough of the tail that a marker straddling the next chunk
+        // boundary still matches exactly once.
+        let carry = Self::MARKER.len() - 1;
+        let mut kept: Vec<char> = window.chars().rev().take(carry).collect();
+        kept.reverse();
+        self.tail = kept.into_iter().collect();
+        self.seen
+    }
+}
+
 pub struct TurnContext {
     pub tool_rounds: usize,
     pub oversized_batch_rejections: u8,
@@ -3711,6 +3768,22 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fence_counter_survives_chunk_boundaries() {
+        let mut counter = ToolFenceCounter::default();
+
+        // Marker split across three chunks still counts exactly once.
+        assert_eq!(counter.push("some text ``"), 0);
+        assert_eq!(counter.push("`to"), 0);
+        assert_eq!(counter.push("ol\n{\"name\": \"grep\"}"), 1);
+
+        // Two more in a single chunk.
+        assert_eq!(counter.push("```tool\n{}\n```\n```tool\n{}"), 3);
+
+        // Prose without fences leaves the count alone.
+        assert_eq!(counter.push(" and then I will check the results"), 3);
+    }
 
     // Regression: an oversized batch used to be replayed into history verbatim,
     // so the next turn read the model's imagined tool results ("the grep
