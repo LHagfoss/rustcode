@@ -88,11 +88,13 @@ pub enum ToolProtocol {
     ApiNative,
 }
 
-/// Hosts whose OpenAI-compatible endpoints implement function calling.
+/// Hosts whose OpenAI-compatible endpoints are known to implement function
+/// calling, so no probe request is needed before using it.
 ///
-/// Matched on the endpoint URL rather than the model name: whether structured
-/// calls work is a property of the server, and the same model is served by both
-/// kinds of host.
+/// Absence proves nothing: most setups reach these providers through a local
+/// gateway (`localhost:3000`, an ollama port, a tailnet address), where the
+/// hostname says nothing about what the endpoint supports. Anything not listed
+/// here is probed instead of assumed.
 const FUNCTION_CALLING_HOSTS: &[&str] = &[
     "api.openai.com",
     "api.anthropic.com",
@@ -108,7 +110,7 @@ const FUNCTION_CALLING_HOSTS: &[&str] = &[
     "openai.azure.com",
 ];
 
-/// Whether the provider behind `url` supports OpenAI-style function calling.
+/// Whether `url` is a provider already known to implement function calling.
 pub fn provider_supports_function_calling(url: &str) -> bool {
     let url = url.to_ascii_lowercase();
     FUNCTION_CALLING_HOSTS.iter().any(|host| url.contains(host))
