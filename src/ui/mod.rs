@@ -1220,7 +1220,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         } else if msg.role == "tool" {
             let prev_tool_info = if msg_idx > 0 {
                 state.history.get(msg_idx - 1).and_then(|prev| {
-                    crate::tools::parse_tool_call(&prev.content, state.config.tool_protocol)
+                    crate::tools::parse_tool_call(&prev.content, state.active_tool_protocol())
                 })
             } else {
                 None
@@ -1351,7 +1351,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(""));
         } else if msg.role == "assistant" {
             if let Some(tool_call) =
-                crate::tools::parse_tool_call(&msg.content, state.config.tool_protocol)
+                crate::tools::parse_tool_call(&msg.content, state.active_tool_protocol())
             {
                 let has_following_tool_result = state.history.get(msg_idx + 1).is_some_and(|m| m.role == "tool");
                 if !has_following_tool_result {
@@ -1440,7 +1440,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
 
             // Check if current streaming response is a tool call syntax
-            let parsed_tool = crate::tools::parse_tool_call(&state.current_response, state.config.tool_protocol);
+            let parsed_tool = crate::tools::parse_tool_call(&state.current_response, state.active_tool_protocol());
             let is_tool_syntax = crate::tools::is_tool_call_start(&state.current_response);
 
             let should_hide_stream = match parsed_tool {
