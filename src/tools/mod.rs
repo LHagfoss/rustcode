@@ -1658,7 +1658,12 @@ mod tests {
         });
         let res = filesystem::replace_file_content_tool(&args).unwrap();
         assert!(res.contains("successfully replaced"));
-        assert!(res.contains("@@ -1,1 +1,1 @@"));
+        // The diff reflects the real two-line file (changed line 1, unchanged
+        // line 2 as context), not a fabrication derived purely from the
+        // single-line old_string/new_string arguments.
+        assert!(res.contains("@@ -1,2 +1,2 @@"), "got: {res}");
+        assert!(res.contains("-fn foo() {}"), "got: {res}");
+        assert!(res.contains("+fn foo_updated() {}"), "got: {res}");
         let updated = std::fs::read_to_string(&test_file).unwrap();
         assert!(updated.contains("fn foo_updated() {}"));
 

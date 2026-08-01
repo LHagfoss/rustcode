@@ -170,27 +170,21 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
     Ok(out)
 }
 
-pub fn generate_unified_diff(target: &str, replacement: &str, start_line: Option<usize>) -> String {
-    let diff = similar::TextDiff::from_lines(target, replacement);
-    let mut out = String::new();
-    let old_count = target.lines().count();
-    let new_count = replacement.lines().count();
-    let line = start_line.unwrap_or(1);
-    out.push_str(&format!("@@ -{line},{old_count} +{line},{new_count} @@\n"));
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            similar::ChangeTag::Delete => "-",
-            similar::ChangeTag::Insert => "+",
-            similar::ChangeTag::Equal => " ",
-        };
-        let val = change.value();
-        out.push_str(sign);
-        out.push_str(val);
-        if !val.ends_with('\n') {
-            out.push('\n');
-        }
+/// Produces a real unified diff between the actual file content before and
+/// after an edit (or set of edits) — never between the tool call's raw
+/// arguments. Argument text can diverge from what actually changed on disk
+/// (fuzzy/block-anchor matching, CRLF normalization, no-op chunks skipped by
+/// the idempotency guard), so the diff must be computed from the true
+/// before/after full-file content to be truthful, including its hunk line
+/// numbers.
+pub fn generate_unified_diff(before: &str, after: &str) -> String {
+    if before == after {
+        return String::new();
     }
-    out
+    similar::TextDiff::from_lines(before, after)
+        .unified_diff()
+        .context_radius(3)
+        .to_string()
 }
 
 struct SingleEdit {
@@ -510,10 +504,10 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
         let b_line = b.start_line.unwrap_or(0);
         b_line.cmp(&a_line)
     });
-    let mut current_content = std::fs::read_to_string(&resolved_path)
+    let original_content = std::fs::read_to_string(&resolved_path)
         .map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let mut current_content = original_content.clone();
 
-    let mut combined_diffs = String::new();
     let mut any_changed = false;
     let mut unchanged_count = 0usize;
     for (idx, edit) in chunks.iter().enumerate() {
@@ -526,11 +520,6 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
             }
             EditOutcome::Changed(new_content) => {
                 any_changed = true;
-                let diff = generate_unified_diff(&edit.target, &edit.replacement, edit.start_line);
-                if !combined_diffs.is_empty() {
-                    combined_diffs.push('\n');
-                }
-                combined_diffs.push_str(&diff);
                 current_content = new_content;
             }
         }
@@ -549,6 +538,10 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
 
     std::fs::write(&resolved_path, &current_content)
         .map_err(|e| format!("cannot write '{path}': {e}"))?;
+
+    // One real diff from the true before/after full-file content — never
+    // fabricated from the call's target/replacement arguments.
+    let combined_diffs = generate_unified_diff(&original_content, &current_content);
 
     let msg = if chunks.len() == 1 {
         format!("successfully replaced target_content in '{path}'\n\n```diff\n{combined_diffs}\n```")
@@ -819,8 +812,11 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
     } else {
         String::new()
     };
+    // One real diff from the true before/after full-file content — never
+    // fabricated from each replacement's target/replacement arguments.
+    let diff = generate_unified_diff(&content, &new_content);
     Ok(format!(
-        "successfully applied {applied_count} replacements to '{path}'{note}"
+        "successfully applied {applied_count} replacements to '{path}'{note}\n\n```diff\n{diff}\n```"
     ))
 }
 
@@ -1141,5 +1137,244 @@ mod tests {
 
         let content = std::fs::read_to_string(&file).expect("read");
         assert_eq!(content, "let a = 100;\nlet b = 2;\n");
+    }
+
+    fn diff_block_of(result: &str) -> &str {
+        result
+            .split_once("```diff\n")
+            .and_then(|(_, rest)| rest.split_once("\n```"))
+            .map(|(diff, _)| diff)
+            .unwrap_or_else(|| panic!("expected a ```diff block in: {result}"))
+    }
+
+    // Feature 4 regression: the diff shown to the caller must reflect the real
+    // file content before/after the edit, not the tool call's raw arguments.
+    // A one-line replacement must produce a real, correctly numbered diff.
+    #[test]
+    fn one_line_replacement_produces_real_diff_with_correct_line_numbers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let a = 1;\nlet b = 2;\nlet c = 3;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let result = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "let b = 2;",
+            "new_string": "let b = 200;",
+        }))
+        .expect("edit should succeed");
+
+        let diff = diff_block_of(&result);
+        assert!(diff.contains("@@ -1,3 +1,3 @@"), "got: {diff}");
+        assert!(diff.contains("-let b = 2;"), "got: {diff}");
+        assert!(diff.contains("+let b = 200;"), "got: {diff}");
+        // Unrelated lines are untouched context, not fabricated changes.
+        assert!(diff.contains(" let a = 1;"), "got: {diff}");
+        assert!(diff.contains(" let c = 3;"), "got: {diff}");
+    }
+
+    // An insertion (prepend-shaped edit, PR #306's example) must produce a
+    // diff showing only the inserted line as `+`, with the untouched anchor
+    // line shown as context — not as a fabricated replacement of the whole
+    // target block.
+    #[test]
+    fn insertion_produces_real_diff() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "    s.discord_rpc.set_activity(\"Idle\", ...);\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let result = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "    s.discord_rpc.set_activity(\"Idle\", ...);",
+            "new_string": "    let model_name = ...;\n    s.discord_rpc.set_activity(\"Idle\", ...);",
+        }))
+        .expect("insertion should succeed");
+
+        let diff = diff_block_of(&result);
+        assert!(diff.contains("+    let model_name = ...;"), "got: {diff}");
+        assert!(
+            diff.contains(" ") && diff.contains("s.discord_rpc.set_activity"),
+            "unchanged anchor line should appear as context, not a fabricated change: {diff}"
+        );
+        assert!(
+            !diff.contains("-    s.discord_rpc.set_activity"),
+            "the anchor line was never removed, so it must not appear as deleted: {diff}"
+        );
+    }
+
+    // A deletion must produce a diff with only `-` lines for the removed
+    // content, reflecting the real file, not argument text.
+    #[test]
+    fn deletion_produces_real_diff() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let a = 1;\nlet b = 2;\nlet c = 3;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let result = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "let b = 2;\n",
+            "new_string": "",
+        }))
+        .expect("deletion should succeed");
+
+        let diff = diff_block_of(&result);
+        assert!(diff.contains("-let b = 2;"), "got: {diff}");
+        assert!(!diff.contains("+let b"), "got: {diff}");
+
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(content, "let a = 1;\nlet c = 3;\n");
+    }
+
+    // Multiple edits in one call must produce ONE diff reflecting the
+    // combined real before/after content, with correct line numbers for
+    // each hunk — not a per-edit fabrication stitched from arguments.
+    #[test]
+    fn multiple_edits_produce_one_combined_diff_with_correct_hunks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        let lines: Vec<String> = (1..=20).map(|i| format!("line {i}")).collect();
+        std::fs::write(&file, lines.join("\n") + "\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let result = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "edits": [
+                { "target_content": "line 2\n", "replacement_content": "LINE TWO\n" },
+                { "target_content": "line 18", "replacement_content": "LINE EIGHTEEN" },
+            ],
+        }))
+        .expect("multi-edit should succeed");
+
+        let diff = diff_block_of(&result);
+        // Two separate hunks, far enough apart that they don't share context.
+        let hunk_count = diff.matches("@@").count() / 2;
+        assert_eq!(hunk_count, 2, "expected two separate hunks, got: {diff}");
+        assert!(diff.contains("-line 2"), "got: {diff}");
+        assert!(diff.contains("+LINE TWO"), "got: {diff}");
+        assert!(diff.contains("-line 18"), "got: {diff}");
+        assert!(diff.contains("+LINE EIGHTEEN"), "got: {diff}");
+        // The second hunk's line numbers must reflect its real position near
+        // line 18, not line 1 or an argument-derived number.
+        assert!(
+            diff.contains("@@ -16,") || diff.contains("@@ -15,"),
+            "second hunk should be anchored near line 18, got: {diff}"
+        );
+    }
+
+    // A repeated no-op edit (PR #306's idempotency case) must produce NO
+    // diff at all in the response, not a fake one derived from arguments.
+    #[test]
+    fn repeated_noop_edit_produces_no_diff() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let status = Idle;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let args = serde_json::json!({
+            "path": path,
+            "old_string": "let status = Idle;",
+            "new_string": "let status = Active;",
+        });
+
+        let first = replace_file_content_tool(&args).expect("first apply should succeed");
+        assert!(
+            first.contains("```diff"),
+            "first real edit should carry a diff: {first}"
+        );
+
+        let second = replace_file_content_tool(&args).expect("repeat should be a no-op");
+        assert!(second.contains("already applied"), "got: {second}");
+        assert!(
+            !second.contains("```diff"),
+            "a no-op edit must not fabricate a diff: {second}"
+        );
+    }
+
+    // Core regression: an edit far from the start of the file must report
+    // truthful line numbers in the diff hunk header — not numbers derived
+    // from the argument text (which would always start at line 1).
+    #[test]
+    fn diff_line_numbers_reflect_real_position_in_file_not_arguments() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("big.rs");
+        let lines: Vec<String> = (1..=100).map(|i| format!("line {i}")).collect();
+        std::fs::write(&file, lines.join("\n") + "\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let result = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "old_string": "line 50",
+            "new_string": "line fifty",
+        }))
+        .expect("edit should succeed");
+
+        let diff = diff_block_of(&result);
+        // Context radius is 3, so the hunk should start around line 47, and
+        // must NOT claim to start at line 1 as argument-derived numbering
+        // would (target text "line 50" alone has no line context).
+        assert!(
+            diff.contains("@@ -47,"),
+            "expected a hunk anchored near line 50, got: {diff}"
+        );
+        assert!(
+            !diff.contains("@@ -1,"),
+            "must not fabricate line 1 from arguments: {diff}"
+        );
+    }
+
+    // multi_replace_file_content_tool must also produce a real diff from the
+    // true before/after file content, not per-replacement argument text.
+    #[test]
+    fn multi_replace_produces_real_diff() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        let lines: Vec<String> = (1..=20).map(|i| format!("line {i}")).collect();
+        std::fs::write(&file, lines.join("\n") + "\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let result = multi_replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "replacements": [
+                { "start_line": 18, "end_line": 18, "target_content": "line 18", "replacement_content": "LINE EIGHTEEN" },
+            ],
+        }))
+        .expect("replacement should succeed");
+
+        let diff = diff_block_of(&result);
+        assert!(diff.contains("-line 18"), "got: {diff}");
+        assert!(diff.contains("+LINE EIGHTEEN"), "got: {diff}");
+        assert!(
+            !diff.contains("@@ -1,"),
+            "must reflect real position, not line 1: {diff}"
+        );
+    }
+
+    // A no-op multi_replace call (all chunks already applied) must not
+    // fabricate a diff either.
+    #[test]
+    fn multi_replace_repeated_noop_produces_no_diff() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let a = 1;\nlet b = 2;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let args = serde_json::json!({
+            "path": path,
+            "replacements": [
+                { "start_line": 1, "end_line": 1, "target_content": "let a = 1;", "replacement_content": "let a = 100;" },
+            ],
+        });
+
+        let first = multi_replace_file_content_tool(&args).expect("first apply should succeed");
+        assert!(first.contains("```diff"), "got: {first}");
+
+        let second = multi_replace_file_content_tool(&args).expect("repeat should be a no-op");
+        assert!(second.contains("already applied"), "got: {second}");
+        assert!(
+            !second.contains("```diff"),
+            "a no-op must not fabricate a diff: {second}"
+        );
     }
 }
