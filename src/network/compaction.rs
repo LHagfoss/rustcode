@@ -173,6 +173,17 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) {
     }
 }
 
+/// Share of the budget that must be in use before old tool output is collapsed.
+///
+/// Below this the window has room to spare, and keeping what the model actually
+/// read is worth more than the tokens reclaimed.
+const PRUNE_PRESSURE_RATIO: f64 = 0.5;
+
+/// Token count at which pruning starts for a given budget.
+fn prune_floor(budget: usize) -> usize {
+    (budget as f64 * PRUNE_PRESSURE_RATIO) as usize
+}
+
 /// Check if history needs compaction and compact if so.
 /// Returns true if compaction was performed.
 pub async fn maybe_compact(
@@ -182,15 +193,26 @@ pub async fn maybe_compact(
     history: &mut Vec<ChatMessage>,
     budget: usize,
 ) -> bool {
-    // 1. First run local, zero-cost tool output pruning: collapse large tool
-    //    outputs that have aged past the recent window, then apply the hard
-    //    rolling token cap as a safety net.
+    // 1. Local, zero-cost tool output pruning: collapse large tool outputs that
+    //    have aged past the recent window, then apply the hard rolling token cap
+    //    as a safety net.
+    //
+    //    Only under real pressure. Collapsing a file the model read three
+    //    round-trips ago while most of the window sits unused buys nothing and
+    //    costs the model its memory of what it just looked at — it re-reads,
+    //    which is both slower and how repeat-loops start. Below the threshold
+    //    the history is left exactly as it happened.
     //
     //    These two passes each rewrite the messages they collapse, so their
     //    counts are deliberately not shared: a collapsed message is a different
     //    string and must be counted as such. The memo in `estimate_tokens` is
     //    what keeps the passes cheap — every message the passes leave alone is
     //    encoded once and looked up thereafter.
+    let raw_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    if raw_tokens < prune_floor(budget) {
+        return false;
+    }
+
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
 
@@ -462,6 +484,39 @@ mod tests {
         drop(guard);
 
         assert_eq!(estimate_tokens(hot), hot_expected);
+    }
+
+    // Regression: session 1785593632937. A 6677-token read of src/main.rs was
+    // collapsed to a one-line summary three round-trips later, while the window
+    // was barely used, so the model could no longer answer from what it had just
+    // read.
+    #[tokio::test]
+    async fn a_roomy_window_keeps_every_tool_output_intact() {
+        let big_read = format!("view_file: {}", "line of source\n".repeat(4000));
+        let mut history = vec![
+            ChatMessage::new("user", "what is the binary name"),
+            ChatMessage::new("assistant", "reading"),
+            ChatMessage::new("tool", big_read.clone()),
+        ];
+        for _ in 0..8 {
+            history.push(ChatMessage::new("assistant", "thinking"));
+            history.push(ChatMessage::new("tool", "grep: one match"));
+        }
+
+        let client = reqwest::Client::new();
+        // Budget far larger than the history: nothing should be touched.
+        let compacted =
+            maybe_compact(&client, "http://unused", "model", &mut history, 1_000_000).await;
+
+        assert!(!compacted);
+        assert_eq!(history[2].content, big_read, "the read must survive");
+        assert!(!history[2].content.contains("Truncated"));
+    }
+
+    #[test]
+    fn prune_floor_scales_with_the_budget() {
+        assert_eq!(prune_floor(100_000), 50_000);
+        assert_eq!(prune_floor(8_000), 4_000);
     }
 
     #[test]
