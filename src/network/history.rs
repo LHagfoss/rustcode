@@ -222,9 +222,21 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
                     })
                 })
                 .collect();
+            // Keep whatever the model said alongside the call. The call itself is
+            // carried structurally, so its text form is redundant — but the
+            // reasoning around it is the only record of why this step was taken,
+            // and replaying a turn as a bare call leaves the model re-deciding
+            // the same step from scratch every round.
+            let prose = super::text::strip_tool_call_syntax(&message.content);
+            let prose = prose.trim();
+            let content = if prose.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(prose.to_string())
+            };
             Some(serde_json::json!({
                 "role": "assistant",
-                "content": serde_json::Value::Null,
+                "content": content,
                 "tool_calls": calls,
             }))
         }
@@ -287,6 +299,35 @@ mod tests {
 
     // A turn can end between announcing a call and running it (user interrupt,
     // dropped stream). An unanswered id makes the whole request invalid.
+    // Regression: session 1785600769226. Every assistant turn was replayed as a
+    // bare tool call with null content, so the model lost its own reasoning
+    // between rounds and re-derived the same step — it issued the identical
+    // one-line read 25 times before the loop detector killed the turn.
+    #[test]
+    fn the_models_own_words_survive_alongside_its_calls() {
+        let history = vec![
+            ChatMessage::new("user", "add the comment"),
+            ChatMessage::new(
+                "assistant",
+                "The comment is already on line 1, so nothing needs adding.\n\n```tool\n{\"name\": \"view_file\"}\n```",
+            )
+            .with_tool_calls(vec![crate::app::ToolCallRef {
+                id: "call_1".to_string(),
+                name: "view_file".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+            ChatMessage::new("tool", "view_file: 1: // scratch").answering(Some("call_1".to_string())),
+        ];
+
+        let msgs = to_messages(&history, "sys");
+
+        let content = msgs[2]["content"].as_str().expect("prose is kept");
+        assert!(content.contains("already on line 1"), "got: {content}");
+        // The call travels structurally, so its text form is not repeated.
+        assert!(!content.contains("```tool"), "got: {content}");
+        assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_1");
+    }
+
     #[test]
     fn calls_the_turn_never_ran_are_answered_in_the_request() {
         let history = vec![
