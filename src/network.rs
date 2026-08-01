@@ -2575,7 +2575,6 @@ async fn execute_tool_batch(
     cancel_token: &tokio_util::sync::CancellationToken,
     tool_calls: &[crate::tools::ToolCall],
     approved: bool,
-    made_edits: bool,
     edit_root: &Option<std::path::PathBuf>,
     compile_dirty: &mut bool,
     compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
@@ -2626,7 +2625,6 @@ async fn execute_tool_batch(
                         cancel_token,
                         std::slice::from_ref(call),
                         approved,
-                        false,
                         &None,
                         &mut read_dirty,
                         &mut read_cache,
@@ -2650,7 +2648,6 @@ async fn execute_tool_batch(
                     cancel_token,
                     std::slice::from_ref(&tool_calls[index]),
                     approved,
-                    made_edits,
                     edit_root,
                     compile_dirty,
                     compile_cache,
@@ -2825,7 +2822,16 @@ async fn execute_tool_batch(
             break;
         }
     }
-    if made_edits {
+    // Whether THIS batch changed anything, which is not the same as the task
+    // having changed something earlier. Clearing the read cache on the sticky
+    // task flag disabled repeat detection for every batch after the first edit,
+    // so identical full-file reads sailed through back to back.
+    let batch_changed_files = results.iter().any(|result| {
+        is_mutating_tool(&result.tool_name)
+            && result.metadata.success
+            && !result.content.trim_start().to_ascii_lowercase().starts_with("error")
+    });
+    if batch_changed_files {
         {
             let mut s = state.lock().await;
             s.recent_read_calls.clear();
@@ -3412,7 +3418,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         cancel_token,
                         &tool_calls,
                         ctx.turn_machine.state() == events::TurnState::ExecutingTools,
-                        ctx.made_edits,
                         &ctx.edit_root,
                         &mut ctx.compile_dirty,
                         &mut ctx.compile_cache,
@@ -4087,6 +4092,48 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: session 1785595170460, msgs 5-8. Two identical full-file reads
+    // ran back to back because the read-dedupe cache was cleared on a sticky
+    // task-level "made edits" flag, which stays true for the rest of the task —
+    // so after the first edit no read was ever recognised as a repeat.
+    #[test]
+    fn only_a_batch_that_changed_files_invalidates_the_read_cache() {
+        let applied = ToolResult {
+            tool_name: "replace_file_content".to_string(),
+            content: "successfully replaced target_content in 'src/lib.rs'".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata { success: true, ..Default::default() },
+        };
+        let failed = ToolResult {
+            tool_name: "replace_file_content".to_string(),
+            content: "error: target_content does not match".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata { success: false, ..Default::default() },
+        };
+        let read = ToolResult {
+            tool_name: "view_file".to_string(),
+            content: "1: fn main() {}".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata { success: true, ..Default::default() },
+        };
+
+        let changed = |results: &[ToolResult]| {
+            results.iter().any(|result| {
+                is_mutating_tool(&result.tool_name)
+                    && result.metadata.success
+                    && !result.content.trim_start().to_ascii_lowercase().starts_with("error")
+            })
+        };
+
+        assert!(changed(&[applied]));
+        // A failed edit leaves the files exactly as the earlier reads saw them.
+        assert!(!changed(&[failed]));
+        assert!(!changed(&[read]));
+    }
 
     // Regression: session 1785595170460. The one edit the model attempted failed,
     // it then read the file, found the line it wanted already present from an
