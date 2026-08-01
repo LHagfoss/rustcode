@@ -2745,6 +2745,43 @@ async fn execute_tool_batch(
     results
 }
 
+/// One result message per call that will never run, so no call is left
+/// unanswered.
+///
+/// A structured transcript replays an assistant message together with the calls
+/// it made; a call with no matching result is a protocol violation the provider
+/// rejects, and — worse — leaves the model free to assume whatever it likes
+/// about what happened. Answering with the failure keeps the record honest.
+/// Pair calls with the ids the provider assigned them, by position. Yields
+/// nothing under the text protocols, where calls are prose without identity.
+fn call_refs_for(
+    calls: &[crate::tools::ToolCall],
+    ids: &[String],
+) -> Vec<crate::app::ToolCallRef> {
+    calls
+        .iter()
+        .zip(ids.iter())
+        .map(|(call, id)| crate::app::ToolCallRef {
+            id: id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.to_string(),
+        })
+        .collect()
+}
+
+fn unanswered_call_results(
+    calls: &[crate::app::ToolCallRef],
+    reason: &str,
+) -> Vec<ChatMessage> {
+    calls
+        .iter()
+        .map(|call| {
+            ChatMessage::new("tool", format!("{}: error: {reason}", call.name))
+                .answering(Some(call.id.clone()))
+        })
+        .collect()
+}
+
 /// Replacement transcript text for a response whose tool batch was truncated.
 /// Records only which tools survived, never the model's prose: a response that
 /// plans a whole session ahead also narrates results for calls that never ran,
@@ -3037,8 +3074,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 // `ctx.final_content` was already replaced with a shape-only
                 // summary when the batch was truncated, so a rejection here can
                 // never replay the fabricated prose that came with it.
-                s.history
-                    .push(ChatMessage::new("assistant", ctx.final_content.clone()));
+                let rejected_refs = call_refs_for(&parsed_tool_calls, &ctx.streamed_call_ids);
+                s.history.push(
+                    ChatMessage::new("assistant", ctx.final_content.clone())
+                        .with_tool_calls(rejected_refs.clone()),
+                );
+                // The model learns which call was rejected from the call's own
+                // result, not just from a system note it may skim past.
+                for message in unanswered_call_results(&rejected_refs, &reason) {
+                    s.history.push(message);
+                }
                 let guidance = if oversized_batch {
                     ctx.oversized_batch_rejections = ctx.oversized_batch_rejections.saturating_add(1);
                     if ctx.oversized_batch_rejections >= 2 {
@@ -3073,15 +3118,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             // truncation and control-plane isolation keep a prefix of the parsed
             // order, so ids line up by position; the text protocols supply no
             // ids and produce no refs.
-            let call_refs: Vec<crate::app::ToolCallRef> = tool_calls
-                .iter()
-                .zip(ctx.streamed_call_ids.iter())
-                .map(|(call, id)| crate::app::ToolCallRef {
-                    id: id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.to_string(),
-                })
-                .collect();
+            let call_refs = call_refs_for(&tool_calls, &ctx.streamed_call_ids);
             let turn_action = match ctx.turn_machine.model_finished(
                 cancel_token.is_cancelled(),
                 ctx.force_final,
@@ -3237,6 +3274,15 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     if cancel_token.is_cancelled() {
                         dbg_log!("Orchestrator: Cancelled during tool execution");
                         let mut s = state.lock().await;
+                        // The assistant message announcing these calls is already
+                        // in history; leaving them unanswered would break the next
+                        // request and strand the model without knowing they were
+                        // interrupted.
+                        for message in unanswered_call_results(&call_refs, "interrupted by the user")
+                        {
+                            s.history.push(message);
+                        }
+                        crate::config::save_history(&s.history);
                         s.status = AppStatus::Idle;
                         ctx.turn_machine.finish_tools_if_executing();
                         return false;
@@ -3245,6 +3291,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     let mut s = state.lock().await;
                     s.status = AppStatus::Streaming;
                     let mut completed = false;
+                    let executed = results.len();
                     for (position, result) in results.into_iter().enumerate() {
                         let answered_call = call_refs.get(position).map(|call| call.id.clone());
                         let name = result.tool_name;
@@ -3298,6 +3345,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                                 }),
                         );
                     }
+                    // Safety net: an executor that returns fewer results than
+                    // calls would leave ids unanswered in the replayed transcript.
+                    if executed < call_refs.len() {
+                        for message in
+                            unanswered_call_results(&call_refs[executed..], "no result was produced")
+                        {
+                            s.history.push(message);
+                        }
+                    }
+
                     if completed {
                         let mut build_status = if ctx.made_edits {
                             "pending"
@@ -3815,6 +3872,48 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Every id a replayed assistant message announces must have a matching
+    // result, or the provider rejects the request and the model is left to
+    // assume what happened to the call.
+    #[test]
+    fn rejected_and_interrupted_calls_still_get_results() {
+        let refs = vec![
+            crate::app::ToolCallRef {
+                id: "call_1".to_string(),
+                name: "grep".to_string(),
+                arguments: "{}".to_string(),
+            },
+            crate::app::ToolCallRef {
+                id: "call_2".to_string(),
+                name: "run_command".to_string(),
+                arguments: "{}".to_string(),
+            },
+        ];
+
+        let answers = unanswered_call_results(&refs, "interrupted by the user");
+
+        assert_eq!(answers.len(), 2);
+        assert_eq!(answers[0].role, "tool");
+        assert_eq!(answers[0].tool_call_id.as_deref(), Some("call_1"));
+        assert!(answers[0].content.contains("grep: error: interrupted by the user"));
+        assert_eq!(answers[1].tool_call_id.as_deref(), Some("call_2"));
+    }
+
+    #[test]
+    fn call_refs_are_empty_without_provider_ids() {
+        let calls = vec![crate::tools::ToolCall {
+            name: "grep".to_string(),
+            arguments: serde_json::json!({"pattern": "x"}),
+        }];
+
+        // Text protocols supply no ids, so nothing structured is recorded.
+        assert!(call_refs_for(&calls, &[]).is_empty());
+
+        let refs = call_refs_for(&calls, &["call_9".to_string()]);
+        assert_eq!(refs[0].id, "call_9");
+        assert_eq!(refs[0].name, "grep");
+    }
 
     #[test]
     fn fence_counter_survives_chunk_boundaries() {
