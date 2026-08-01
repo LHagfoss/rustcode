@@ -23,6 +23,36 @@ pub struct ToolCall {
 /// normal chaining operators because they are one tool call.
 pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 4;
 
+/// Cut an over-eager batch down to the calls that may run this round, returning
+/// the kept prefix and how many were dropped.
+///
+/// Rejecting the whole response teaches the model nothing: with no tool output
+/// it re-plans from the same context and emits the same oversized batch again.
+/// Running the leading calls puts real results in front of it instead, which is
+/// the only thing that reliably corrects a model that has started inventing
+/// tool output. Order is preserved because later calls were written expecting
+/// the earlier ones to have run.
+///
+/// A control-plane call (`use_skill`) must execute alone, so it is either the
+/// entire kept batch — when it leads — or the boundary the prefix stops at.
+pub fn truncate_tool_batch(mut calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize) {
+    let total = calls.len();
+    let is_control = |call: &ToolCall| matches!(tool_safety(&call.name), ToolSafety::ControlPlane);
+
+    let keep = if calls.first().is_some_and(is_control) {
+        1
+    } else {
+        let limit = calls.len().min(MAX_TOOL_CALLS_PER_RESPONSE);
+        calls[..limit]
+            .iter()
+            .position(is_control)
+            .unwrap_or(limit)
+    };
+
+    calls.truncate(keep);
+    (calls, total - keep)
+}
+
 /// Validate parsed calls before they reach an executor. Text protocols are
 /// intentionally permissive while parsing, but execution must be strict and
 /// fail closed when the model emits an unknown tool or malformed arguments.
@@ -1666,6 +1696,57 @@ mod tests {
         assert_eq!(isolated.len(), 1);
         assert_eq!(isolated[0].name, "use_skill");
         assert_eq!(deferred, 1);
+    }
+
+    #[test]
+    fn truncate_keeps_leading_calls_and_reports_the_drop() {
+        let call = |name: &str| ToolCall {
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+        };
+
+        // Under the limit: nothing is touched.
+        let (kept, dropped) = truncate_tool_batch(vec![call("grep"), call("view_file")]);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(dropped, 0);
+
+        // Over the limit: the leading calls survive, in order.
+        let over = vec![
+            call("grep"),
+            call("view_file"),
+            call("run_command"),
+            call("write_to_file"),
+            call("run_command"),
+            call("grep"),
+        ];
+        let (kept, dropped) = truncate_tool_batch(over);
+        assert_eq!(kept.len(), MAX_TOOL_CALLS_PER_RESPONSE);
+        assert_eq!(dropped, 2);
+        assert_eq!(kept[0].name, "grep");
+        assert_eq!(kept[3].name, "write_to_file");
+    }
+
+    #[test]
+    fn truncate_isolates_control_plane_calls() {
+        let call = |name: &str| ToolCall {
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+        };
+
+        // Leading control-plane call runs alone.
+        let (kept, dropped) =
+            truncate_tool_batch(vec![call("use_skill"), call("grep"), call("run_command")]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name, "use_skill");
+        assert_eq!(dropped, 2);
+
+        // A control-plane call later in the batch is the boundary: the prefix
+        // before it is kept so the remainder can be re-emitted next turn.
+        let (kept, dropped) =
+            truncate_tool_batch(vec![call("grep"), call("use_skill"), call("run_command")]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name, "grep");
+        assert_eq!(dropped, 2);
     }
 
     #[test]

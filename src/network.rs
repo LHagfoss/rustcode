@@ -2695,19 +2695,20 @@ async fn execute_tool_batch(
     results
 }
 
-/// Stand-in for an oversized tool batch in the transcript. Records only which
-/// tools were requested, never the model's prose: a response that plans a whole
-/// session ahead also narrates results for calls that never ran, and replaying
-/// that text lets the next turn treat its own fiction as observed fact.
-fn withheld_batch_summary(calls: &[crate::tools::ToolCall]) -> String {
-    let names = calls
+/// Replacement transcript text for a response whose tool batch was truncated.
+/// Records only which tools survived, never the model's prose: a response that
+/// plans a whole session ahead also narrates results for calls that never ran,
+/// and replaying that text lets the next turn treat its own fiction as
+/// observed fact.
+fn truncated_batch_summary(kept: &[crate::tools::ToolCall], dropped: usize) -> String {
+    let names = kept
         .iter()
         .map(|call| call.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "[Response withheld: {} tool calls emitted at once ({names}). None ran, so any results described in that response were imagined.]",
-        calls.len()
+        "[Oversized response: only the first {} tool calls were kept ({names}); {dropped} more were dropped. Anything the response claimed about their results was imagined — continue from the real results below.]",
+        kept.len()
     )
 }
 
@@ -2915,30 +2916,47 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let oversized_batch = parsed_tool_calls.len() > crate::tools::MAX_TOOL_CALLS_PER_RESPONSE;
+            // Keep the leading calls and drop the rest rather than rejecting the
+            // whole response: real tool output is what pulls a model back to the
+            // actual repo state, and a rejection gives it none.
+            let requested_calls = parsed_tool_calls.len();
+            let (parsed_tool_calls, dropped_calls) =
+                crate::tools::truncate_tool_batch(parsed_tool_calls);
+            if dropped_calls > 0 {
+                dbg_log!(
+                    "Oversized batch: running {} of {} requested tool calls",
+                    parsed_tool_calls.len(),
+                    requested_calls
+                );
+                crate::logger::operational_event(
+                    "tools.batch_truncated",
+                    serde_json::json!({
+                        "requested": requested_calls,
+                        "executed": parsed_tool_calls.len(),
+                        "dropped": dropped_calls,
+                    }),
+                );
+                // The dropped calls came with prose describing results they never
+                // produced. Replace the response text so none of that reaches the
+                // next turn as if it had been observed.
+                ctx.final_content = truncated_batch_summary(&parsed_tool_calls, dropped_calls);
+            }
+            let oversized_batch = dropped_calls > 0;
             if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls) {
                 dbg_log!("Tool-call validation rejected response: {}", reason);
                 let mut s = state.lock().await;
-                // A response big enough to be rejected is one where the model
-                // planned a whole session ahead — and such responses narrate the
-                // results of calls that never ran ("the grep confirms...").
-                // Replaying that text into history would let the next turn read
-                // its own fiction as observed fact, so only the shape of the
-                // response survives. Smaller validation failures keep their text:
-                // it is short, grounded, and useful for the correction.
-                let recorded = if oversized_batch {
-                    withheld_batch_summary(&parsed_tool_calls)
-                } else {
-                    ctx.final_content.clone()
-                };
-                s.history.push(ChatMessage::new("assistant", recorded));
+                // `ctx.final_content` was already replaced with a shape-only
+                // summary when the batch was truncated, so a rejection here can
+                // never replay the fabricated prose that came with it.
+                s.history
+                    .push(ChatMessage::new("assistant", ctx.final_content.clone()));
                 let guidance = if oversized_batch {
                     ctx.oversized_batch_rejections = ctx.oversized_batch_rejections.saturating_add(1);
                     if ctx.oversized_batch_rejections >= 2 {
                         ctx.force_final = true;
                     }
                     format!(
-                        " This response contained {} separate tool calls; no tools ran, and nothing it claimed about their results happened. Start again from the last real tool result. Chain related shell operations inside one run_command, and emit at most {} independent tool calls after receiving results.",
+                        " This response contained {requested_calls} separate tool calls; the leading {} were kept and the rest dropped, then the remainder failed validation, so nothing ran and nothing it claimed about their results happened. Start again from the last real tool result and emit at most {} independent tool calls.",
                         parsed_tool_calls.len(),
                         crate::tools::MAX_TOOL_CALLS_PER_RESPONSE
                     )
@@ -3055,6 +3073,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.stream_tracker = Some(StreamTracker::new());
                         s.history
                             .push(ChatMessage::new("assistant", &ctx.final_content));
+                        if dropped_calls > 0 {
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                format!(
+                                    "[{dropped_calls} of the {requested_calls} tool calls in that response were dropped; only the first {} ran. Their results follow — plan the next step from those, not from what the response predicted, and emit at most {} tool calls at a time.]",
+                                    tool_calls.len(),
+                                    crate::tools::MAX_TOOL_CALLS_PER_RESPONSE
+                                ),
+                            ));
+                        }
                         crate::config::save_history(&s.history);
                     }
 
@@ -3684,12 +3712,12 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 mod tests {
     use super::*;
 
-    // Regression: a rejected oversized batch used to be replayed into history
-    // verbatim, so the next turn read the model's imagined tool results
-    // ("the grep confirms...") as if they had actually happened.
+    // Regression: an oversized batch used to be replayed into history verbatim,
+    // so the next turn read the model's imagined tool results ("the grep
+    // confirms...") as if they had actually happened.
     #[test]
-    fn withheld_batch_summary_keeps_shape_and_drops_prose() {
-        let calls = vec![
+    fn truncated_batch_summary_keeps_shape_and_drops_prose() {
+        let kept = vec![
             crate::tools::ToolCall {
                 name: "grep".to_string(),
                 arguments: serde_json::json!({"pattern": "duct::cmd"}),
@@ -3700,10 +3728,11 @@ mod tests {
             },
         ];
 
-        let summary = withheld_batch_summary(&calls);
+        let summary = truncated_batch_summary(&kept, 14);
 
-        assert!(summary.contains("2 tool calls"), "got: {summary}");
+        assert!(summary.contains("first 2 tool calls"), "got: {summary}");
         assert!(summary.contains("grep, run_command"), "got: {summary}");
+        assert!(summary.contains("14 more were dropped"), "got: {summary}");
         assert!(summary.contains("imagined"), "got: {summary}");
         // Nothing from the arguments or the surrounding narration survives.
         assert!(!summary.contains("cargo check"), "got: {summary}");
