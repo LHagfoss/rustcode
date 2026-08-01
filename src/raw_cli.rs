@@ -61,9 +61,7 @@ pub async fn run_round_loop(
     state_arc: Arc<Mutex<AppState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel_token = tokio_util::sync::CancellationToken::new();
-    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer {
-        content: String::new(),
-    }));
+    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
 
     let policy = Arc::new(HeadlessPolicy);
 

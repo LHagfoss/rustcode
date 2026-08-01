@@ -114,7 +114,19 @@ pub(crate) fn to_messages(
     })];
     let mut first_user = true;
 
-    messages.extend(normalize_history(history).into_iter().map(|entry| match entry {
+    // A message the provider gave call ids for is replayed as the structured
+    // call it actually was, and its result as the answer to that call id.
+    // Rendering those back as prose would teach the model that tool calls are
+    // text it writes — which is what lets a model narrate results for calls that
+    // never ran. Messages without ids keep the text form.
+    let entries = normalize_history(history);
+    debug_assert_eq!(entries.len(), history.len());
+
+    messages.extend(history.iter().zip(entries).map(|(message, entry)| {
+        if let Some(structured) = structured_message(message) {
+            return structured;
+        }
+        match entry {
         HistoryEntry::ToolResult { tool_name, content, metadata } => {
             let metadata_line = metadata
                 .as_ref()
@@ -149,14 +161,109 @@ pub(crate) fn to_messages(
             "role": "system",
             "content": content,
         }),
+        }
     }));
 
     messages
 }
 
+/// Provider message for one history entry when the transcript carries call ids,
+/// or `None` when this history has none and the text rendering applies.
+fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
+    match message.role.as_str() {
+        "assistant" if !message.tool_calls.is_empty() => {
+            let calls: Vec<serde_json::Value> = message
+                .tool_calls
+                .iter()
+                .map(|call| {
+                    serde_json::json!({
+                        "id": call.id,
+                        "type": "function",
+                        "function": { "name": call.name, "arguments": call.arguments },
+                    })
+                })
+                .collect();
+            Some(serde_json::json!({
+                "role": "assistant",
+                "content": serde_json::Value::Null,
+                "tool_calls": calls,
+            }))
+        }
+        "tool" => {
+            let call_id = message.tool_call_id.as_ref()?;
+            let content = message
+                .content
+                .split_once(": ")
+                .map(|(_, rest)| rest.to_string())
+                .unwrap_or_else(|| message.content.clone());
+            Some(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": content,
+            }))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: replaying a structured call as ```tool prose taught the model
+    // that tool calls are text it writes, which is what let it emit a whole
+    // session of calls with narrated results for calls that never ran.
+    #[test]
+    fn calls_with_ids_replay_as_structured_messages() {
+        let history = vec![
+            ChatMessage::new("user", "find the config"),
+            ChatMessage::new("assistant", "```tool\n{\"name\": \"grep\"}\n```").with_tool_calls(
+                vec![crate::app::ToolCallRef {
+                    id: "call_abc".to_string(),
+                    name: "grep".to_string(),
+                    arguments: "{\"pattern\":\"config\"}".to_string(),
+                }],
+            ),
+            ChatMessage::new("tool", "grep: src/config.rs:1")
+                .answering(Some("call_abc".to_string())),
+        ];
+
+        let msgs = to_messages(&history, "sys");
+
+        assert_eq!(msgs[1]["role"], "user");
+        // The assistant message carries the call itself, not prose about it.
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert!(msgs[2]["content"].is_null());
+        assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_abc");
+        assert_eq!(msgs[2]["tool_calls"][0]["function"]["name"], "grep");
+        assert_eq!(
+            msgs[2]["tool_calls"][0]["function"]["arguments"],
+            "{\"pattern\":\"config\"}"
+        );
+        // The result names the call it answers.
+        assert_eq!(msgs[3]["role"], "tool");
+        assert_eq!(msgs[3]["tool_call_id"], "call_abc");
+        assert_eq!(msgs[3]["content"], "src/config.rs:1");
+    }
+
+    #[test]
+    fn history_without_ids_keeps_the_text_rendering() {
+        let history = vec![
+            ChatMessage::new("user", "hi"),
+            ChatMessage::new("assistant", "```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```"),
+            ChatMessage::new("tool", "grep: no matches"),
+        ];
+
+        let msgs = to_messages(&history, "sys");
+
+        assert_eq!(msgs.len(), history.len() + 1);
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert!(msgs[2]["tool_calls"].is_null());
+        // Text-protocol results stay user-context messages.
+        assert_eq!(msgs[3]["role"], "user");
+        assert!(msgs[3]["content"].as_str().unwrap().contains("<tool_result>"));
+    }
+
 
     #[test]
     fn preserves_system_user_and_tool_message_contracts() {

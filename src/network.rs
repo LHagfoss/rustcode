@@ -419,9 +419,14 @@ fn align_alternating_messages(raw_msgs: Vec<serde_json::Value>) -> Vec<serde_jso
         let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
         let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
 
+        // A message carrying structured tool calls can never be merged: the
+        // merge keeps only text, so folding it into a neighbour would silently
+        // drop the calls and leave the following tool results answering nothing.
+        let carries_calls = msg.get("tool_calls").is_some();
         if let Some(last) = final_msgs.last_mut() {
             let last_role = last.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-            if last_role == role && role != "tool" {
+            let last_carries_calls = last.get("tool_calls").is_some();
+            if last_role == role && role != "tool" && !carries_calls && !last_carries_calls {
                 if let Some(last_content) = last.get_mut("content") {
                     let mut new_content = last_content.as_str().unwrap_or("").to_string();
                     new_content.push_str("\n\n");
@@ -601,6 +606,9 @@ pub async fn stream_request(
 
     #[derive(Debug)]
     struct ToolAccumulator {
+        /// Provider-assigned call id. Results must be sent back naming this id,
+        /// so it is carried out of the stream rather than dropped.
+        id: String,
         name: String,
         arguments: String,
     }
@@ -652,11 +660,15 @@ pub async fn stream_request(
                                                  }
                                                  while accumulators.len() <= idx {
                                                      accumulators.push(ToolAccumulator {
+                                                         id: String::new(),
                                                          name: String::new(),
                                                          arguments: String::new(),
                                                      });
                                                  }
                                                  let acc = &mut accumulators[idx];
+                                                 if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
+                                                     acc.id.push_str(id);
+                                                 }
                                                  if let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) {
                                                      acc.name.push_str(name);
                                                  }
@@ -773,7 +785,8 @@ pub async fn stream_request(
     }
 
     let mut translation = String::new();
-    for acc in &accumulators {
+    let mut streamed_call_ids: Vec<String> = Vec::new();
+    for (position, acc) in accumulators.iter().enumerate() {
         if acc.name.is_empty() {
             continue;
         }
@@ -783,6 +796,14 @@ pub async fn stream_request(
         let tool_call_obj = serde_json::json!({
             "name": acc.name,
             "arguments": args_json
+        });
+
+        // Providers that omit the id still need one to pair results with calls;
+        // position within the response is stable enough to stand in.
+        streamed_call_ids.push(if acc.id.is_empty() {
+            format!("call_{position}")
+        } else {
+            acc.id.clone()
         });
 
         translation.push_str("\n\n```tool\n");
@@ -795,7 +816,11 @@ pub async fn stream_request(
             "stream_request: Translating and appending native tool call: {}",
             translation
         );
-        buffer.lock().await.content.push_str(&translation);
+        {
+            let mut buf = buffer.lock().await;
+            buf.content.push_str(&translation);
+            buf.tool_call_ids = streamed_call_ids;
+        }
         if !quiet {
             let mut s = state.lock().await;
             s.current_response.push_str(&translation);
@@ -1514,9 +1539,7 @@ async fn run_subagent(
         "subagent.start",
         serde_json::json!({"agent_id": agent_id}),
     );
-    let stream_buffer = Arc::new(Mutex::new(StreamBuffer {
-        content: String::new(),
-    }));
+    let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
     let mut rounds = 0usize;
     let mut loop_detector = loop_detect::LoopDetector::new(6);
     loop {
@@ -1584,7 +1607,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         trim_msgs_to_budget(&mut msgs, budget);
         inject_system_reminder(&mut msgs);
 
-        stream_buffer.lock().await.content.clear();
+        stream_buffer.lock().await.reset();
         let (api_base_url, model_name) = {
             let s = state.lock().await;
             let subagent = s
@@ -1631,7 +1654,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             let request_api_url = request_api_url.clone();
             let request_model = request_model.clone();
             async move {
-                request_buffer.lock().await.content.clear();
+                request_buffer.lock().await.reset();
                 let finish_reason = stream_request(
                     &request_client,
                     request_state,
@@ -2782,6 +2805,9 @@ pub struct TurnContext {
     pub turn_machine: events::TurnMachine,
     pub last_sent_messages: Vec<serde_json::Value>,
     pub final_content: String,
+    /// Provider-assigned ids for the tool calls in the response just streamed,
+    /// in parse order. Empty under the text protocols.
+    pub streamed_call_ids: Vec<String>,
     pub task_completed: bool,
 }
 
@@ -2800,6 +2826,7 @@ impl TurnContext {
             turn_machine: events::TurnMachine::new(),
             last_sent_messages: Vec::new(),
             final_content: String::new(),
+            streamed_call_ids: Vec::new(),
             task_completed: false,
         }
     }
@@ -2819,7 +2846,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             let msgs = prepare_turn_request(client, state, ctx.tool_rounds).await;
 
             state.lock().await.current_response.clear();
-            stream_buffer.lock().await.content.clear();
+            stream_buffer.lock().await.reset();
 
             let (api_base_url, model_name) = {
                 let s = state.lock().await;
@@ -2858,7 +2885,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 let request_api_url = request_api_url.clone();
                 let request_model = request_model.clone();
                 async move {
-                    request_buffer.lock().await.content.clear();
+                    request_buffer.lock().await.reset();
                     let finish_reason = stream_request(
                         &request_client,
                         request_state.clone(),
@@ -2913,6 +2940,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             }
 
             ctx.final_content = accumulated_content;
+            ctx.streamed_call_ids = stream_buffer.lock().await.tool_call_ids.clone();
             dbg_log!(
                 "Stream completed successfully. Content length: {} chars",
                 ctx.final_content.len()
@@ -3041,6 +3069,19 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             ctx.oversized_batch_rejections = 0;
             let (tool_calls, deferred_tool_calls) =
                 crate::tools::isolate_control_plane_call(parsed_tool_calls);
+            // Pair each executable call with the id the provider gave it. Both
+            // truncation and control-plane isolation keep a prefix of the parsed
+            // order, so ids line up by position; the text protocols supply no
+            // ids and produce no refs.
+            let call_refs: Vec<crate::app::ToolCallRef> = tool_calls
+                .iter()
+                .zip(ctx.streamed_call_ids.iter())
+                .map(|(call, id)| crate::app::ToolCallRef {
+                    id: id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.to_string(),
+                })
+                .collect();
             let turn_action = match ctx.turn_machine.model_finished(
                 cancel_token.is_cancelled(),
                 ctx.force_final,
@@ -3132,8 +3173,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.pending_tool_confirmation = None;
                         s.status = AppStatus::Streaming;
                         s.stream_tracker = Some(StreamTracker::new());
-                        s.history
-                            .push(ChatMessage::new("assistant", &ctx.final_content));
+                        s.history.push(
+                            ChatMessage::new("assistant", &ctx.final_content)
+                                .with_tool_calls(call_refs.clone()),
+                        );
                         if dropped_calls > 0 {
                             s.history.push(ChatMessage::new(
                                 "system",
@@ -3202,7 +3245,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     let mut s = state.lock().await;
                     s.status = AppStatus::Streaming;
                     let mut completed = false;
-                    for result in results {
+                    for (position, result) in results.into_iter().enumerate() {
+                        let answered_call = call_refs.get(position).map(|call| call.id.clone());
                         let name = result.tool_name;
                         let metadata = result.metadata.clone();
                         let mut content = result.content;
@@ -3240,6 +3284,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         let truncated_result = truncate_tool_output(&name, content);
                         s.history.push(
                             ChatMessage::new("tool", format!("{name}: {truncated_result}"))
+                                .answering(answered_call)
                                 .with_diff(diff_opt)
                                 .with_file_preview(result.file_preview)
                                 .with_tool_result(crate::app::ToolResultRecord {
@@ -3583,9 +3628,7 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
             prompt
         };
 
-        let stream_buffer = Arc::new(Mutex::new(StreamBuffer {
-            content: String::new(),
-        }));
+        let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
         let is_wakeup = next_prompt.starts_with("__task_wakeup__:");
 
         let mut is_first_prompt = false;
@@ -4066,6 +4109,26 @@ mod tests {
         assert!(root.is_absolute());
         assert!(root.is_dir());
         assert!(root.join("Cargo.toml").exists());
+    }
+
+    #[test]
+    fn structured_tool_calls_survive_alignment() {
+        let raw = vec![
+            serde_json::json!({"role": "user", "content": "find it"}),
+            serde_json::json!({
+                "role": "assistant",
+                "content": serde_json::Value::Null,
+                "tool_calls": [{"id": "call_1", "type": "function",
+                                "function": {"name": "grep", "arguments": "{}"}}],
+            }),
+            serde_json::json!({"role": "assistant", "content": "on it"}),
+        ];
+
+        let aligned = align_alternating_messages(raw);
+
+        // The call-carrying message is never folded into its neighbour.
+        assert_eq!(aligned[1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(aligned[2]["content"], "on it");
     }
 
     #[test]
