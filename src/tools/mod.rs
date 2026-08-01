@@ -1350,6 +1350,20 @@ pub fn parse_tool_call(
     parse_tool_calls(text, protocol).into_iter().next()
 }
 
+/// Present a handler failure as the model-facing `error:` line.
+///
+/// Handlers are inconsistent about whether their message already opens with
+/// `error:`, and prefixing unconditionally produced `error: error: ...`, which
+/// reads like the harness lost track of its own output.
+fn as_error_message(message: &str) -> String {
+    let trimmed = message.trim_start();
+    if trimmed.to_ascii_lowercase().starts_with("error:") {
+        trimmed.to_string()
+    } else {
+        format!("error: {trimmed}")
+    }
+}
+
 pub fn execute(name: &str, args: &Value) -> String {
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
         for client in reg.values() {
@@ -1402,7 +1416,7 @@ pub fn execute(name: &str, args: &Value) -> String {
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
             Ok(out) => out,
-            Err(e) => format!("error: {e}"),
+            Err(e) => as_error_message(&e),
         },
         None => format!(
             "error: unknown tool '{name}'. Available: {}",
@@ -1726,6 +1740,25 @@ mod tests {
     // future step and hedged over whether the project uses clap or structopt —
     // both answerable from a Cargo.toml it was allowed to read. It made zero
     // tool calls.
+    // Regression: session 1785595170460 msg 4 read
+    // "replace_file_content: error: error: target_content (old_string) is empty".
+    #[test]
+    fn error_messages_are_prefixed_once() {
+        assert_eq!(
+            as_error_message("target_content is empty"),
+            "error: target_content is empty"
+        );
+        // A handler that already framed its message keeps it as written.
+        assert_eq!(
+            as_error_message("error: target_content is empty"),
+            "error: target_content is empty"
+        );
+        assert_eq!(
+            as_error_message("  Error: file not found"),
+            "Error: file not found"
+        );
+    }
+
     #[test]
     fn plan_mode_prompt_demands_investigation_not_a_plan_to_investigate() {
         let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Plan);
