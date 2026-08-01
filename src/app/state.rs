@@ -180,6 +180,25 @@ pub struct ChatMessage {
     pub file_preview: Option<(String, String)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<ToolResultRecord>,
+    /// Structured tool calls this assistant message made, in order. Present only
+    /// when the provider returned real function calls; the text protocols write
+    /// calls as prose, which has no identity to record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCallRef>,
+    /// For a `tool` message: the id of the call this result answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+/// Identity of one structured tool call, kept so a result can name the call it
+/// answers when the transcript is replayed to the provider.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCallRef {
+    pub id: String,
+    pub name: String,
+    /// Arguments exactly as the provider sent them, so the replayed call is
+    /// byte-identical to the one the model made.
+    pub arguments: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -204,7 +223,21 @@ impl ChatMessage {
             diff: None,
             file_preview: None,
             tool_result: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         }
+    }
+
+    /// Attach the structured calls this assistant message made.
+    pub fn with_tool_calls(mut self, calls: Vec<ToolCallRef>) -> Self {
+        self.tool_calls = calls;
+        self
+    }
+
+    /// Mark this tool result as the answer to `call_id`.
+    pub fn answering(mut self, call_id: Option<String>) -> Self {
+        self.tool_call_id = call_id;
+        self
     }
 
     pub fn with_diff(mut self, diff: Option<String>) -> Self {

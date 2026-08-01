@@ -1129,9 +1129,7 @@ pub async fn summarize_session(
         serde_json::json!({ "role": "user", "content": format!("Summarize this session transcript:\n\n{transcript}") }),
     ];
 
-    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer {
-        content: String::new(),
-    }));
+    let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
     let stream_result = crate::network::stream_request(
