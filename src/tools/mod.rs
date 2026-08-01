@@ -961,6 +961,8 @@ pub fn tool_system_prompt(
 - DO NOT add code comments (such as `// ...` or `/* ... */`) to code files unless explicitly requested by the user.\n\
 - After edits, inspect the result and run the most relevant check when safe and useful; then report what changed and what was verified.\n\
 - When the `git-feature-workflow` skill is available and the task changes files, load and follow it: inspect branch/status first, preserve unrelated work, create a feature branch, stage only this feature, verify, push, create/merge the PR, then return to `main` and pull. Never use `git add .` when unrelated changes may exist.\n\
+- Treat tool results as the source of truth for verification: never claim a check, test, formatter, or lint command passed unless its observed exit code is 0. If the harness blocks completion for stale or failed verification, run a fresh relevant check after the latest edit and report the actual result.\n\
+- Stage only explicit feature paths in Git. Broad staging commands such as `git add .`, `git add -A`, and `git add --all` are rejected so unrelated user changes remain untouched.\n\
 - Choose verification from the project structure: first locate the nearest `Cargo.toml`, `package.json`, `pyproject.toml`, or equivalent manifest. Run project checks from that project root. Do NOT run `cargo check` on a standalone `.rs` file outside a Cargo project; use an appropriate standalone checker such as `rustc` only when practical, or clearly report that project verification is not applicable.\n\
 - Tool results are authoritative evidence. If a tool or compiler check reports an error, fix it before giving a final answer. Never replace a concrete tool result with a claim that tools were unavailable.\n\
 - A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
@@ -1957,5 +1959,7 @@ mod tests {
         assert!(prompt.contains("Prefer the smallest effective tool sequence"));
         assert!(prompt.contains("git-feature-workflow"));
         assert!(prompt.contains("Chaining shell commands is different from speculative tool batching"));
+        assert!(prompt.contains("never claim a check, test, formatter, or lint command passed"));
+        assert!(prompt.contains("Stage only explicit feature paths in Git"));
     }
 }
