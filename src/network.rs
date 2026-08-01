@@ -2865,6 +2865,20 @@ async fn execute_tool_batch(
 /// it made; a call with no matching result is a protocol violation the provider
 /// rejects, and — worse — leaves the model free to assume whatever it likes
 /// about what happened. Answering with the failure keeps the record honest.
+/// How many times the completion gate argues before letting a claim through.
+const MAX_COMPLETION_BLOCKS: u8 = 2;
+
+/// Whether a `complete_task` claim describes work that never reached disk.
+///
+/// True when every mutating call in the task failed: the workspace is untouched,
+/// yet the model is reporting the job done — usually because it read the file,
+/// found the state it wanted already there for some unrelated reason, and took
+/// that as proof of its own edit. Capped so the gate cannot argue forever with a
+/// model that insists.
+fn completion_claims_unapplied_work(made_edits: bool, failed: usize, blocks: u8) -> bool {
+    !made_edits && failed > 0 && blocks < MAX_COMPLETION_BLOCKS
+}
+
 /// Pair calls with the ids the provider assigned them, by position. Yields
 /// nothing under the text protocols, where calls are prose without identity.
 fn call_refs_for(
@@ -2947,7 +2961,15 @@ pub struct TurnContext {
     pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
     pub force_final: bool,
+    /// A mutating tool actually changed something. Distinct from having *tried*:
+    /// a failed edit leaves the workspace untouched, and treating an attempt as
+    /// a change lets a task finish on work that never landed.
     pub made_edits: bool,
+    /// Mutating calls that failed since the task began.
+    pub failed_mutations: usize,
+    /// How many times a completion claim has been sent back for having applied
+    /// nothing, so the gate cannot argue with the model forever.
+    pub completion_blocks: u8,
     pub edit_root: Option<std::path::PathBuf>,
     pub compile_dirty: bool,
     pub compile_cache: Option<(std::path::PathBuf, Option<String>)>,
@@ -2969,6 +2991,8 @@ impl TurnContext {
             loop_detector: loop_detect::LoopDetector::new(6),
             force_final: false,
             made_edits: false,
+            failed_mutations: 0,
+            completion_blocks: 0,
             edit_root: None,
             compile_dirty: true,
             compile_cache: None,
@@ -3291,10 +3315,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     if s.rank() > loop_status.rank() {
                         loop_status = s;
                     }
-                    // Remember that code was touched, and where, so the finish
-                    // gate can compile-check before accepting a "done".
+                    // Remember where code is being touched, so the finish gate can
+                    // compile-check before accepting a "done". Whether anything
+                    // actually changed is decided from the results, not from the
+                    // attempt.
                     if is_mutating_tool(&call.name) {
-                        ctx.made_edits = true;
                         ctx.edit_root = Some(get_tool_project_root(&call.name, &call.arguments));
                         // A mutating tool will run this round — invalidate the
                         // cached compiler result so the next check recompiles.
@@ -3444,6 +3469,18 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         if name == "complete_task" {
                             completed = true;
                         }
+                        // An edit counts once the tool reports it applied. A tool
+                        // that returned an error changed nothing, however much the
+                        // model's prose says otherwise.
+                        if is_mutating_tool(&name) {
+                            let failed = !metadata.success
+                                || content.trim_start().to_ascii_lowercase().starts_with("error");
+                            if failed {
+                                ctx.failed_mutations += 1;
+                            } else {
+                                ctx.made_edits = true;
+                            }
+                        }
                         // Progress resets the loop detector: a successful mutating
                         // tool means the agent moved the work forward, so any
                         // re-reads that follow (to verify or find the next anchor)
@@ -3486,6 +3523,41 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         {
                             s.history.push(message);
                         }
+                    }
+
+                    // Completion gate: every edit this task attempted failed, so
+                    // nothing reached disk. A model in that position tends to read
+                    // the file, find the state it wanted already there for some
+                    // other reason, and report the work as done — which is how a
+                    // task finishes with the workspace untouched.
+                    if completed
+                        && completion_claims_unapplied_work(
+                            ctx.made_edits,
+                            ctx.failed_mutations,
+                            ctx.completion_blocks,
+                        )
+                    {
+                        ctx.completion_blocks += 1;
+                        dbg_log!(
+                            "Completion blocked: {} failed edits, none applied",
+                            ctx.failed_mutations
+                        );
+                        crate::logger::operational_event(
+                            "turn.completion_blocked",
+                            serde_json::json!({ "failed_mutations": ctx.failed_mutations }),
+                        );
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "[Finish blocked — {} edit(s) were attempted in this task and every one failed, so nothing was written. Do not report work that did not happen: either make the change and verify it from a fresh read, or finish by stating plainly that it could not be made and why.]",
+                                ctx.failed_mutations
+                            ),
+                        ));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        drop(s);
+                        ctx.turn_machine.finish_tools_if_executing();
+                        return true;
                     }
 
                     if completed {
@@ -3558,6 +3630,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                                 summary_text.push_str(&format!(
                                     "\n\n[harness verification: build={build_status}; changed_paths={paths}]"
                                 ));
+                                // The gate gives up arguing after two rounds. If it
+                                // does, the reader still needs to know the summary
+                                // describes work that never landed.
+                                if !ctx.made_edits && ctx.failed_mutations > 0 {
+                                    summary_text.push_str(&format!(
+                                        "\n[harness warning: {} edit(s) failed and none were applied — \
+nothing in this summary was written to disk by this task]",
+                                        ctx.failed_mutations
+                                    ));
+                                }
                                 s.history.push(ChatMessage::new("assistant", summary_text));
                             }
                         crate::config::save_history(&s.history);
@@ -4005,6 +4087,29 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: session 1785595170460. The one edit the model attempted failed,
+    // it then read the file, found the line it wanted already present from an
+    // earlier run, and reported "I've added the comment" before calling
+    // complete_task — which the harness accepted.
+    #[test]
+    fn completion_is_blocked_only_when_nothing_was_applied() {
+        // Every edit failed: the workspace is untouched.
+        assert!(completion_claims_unapplied_work(false, 1, 0));
+
+        // An edit landed, so a later failure does not invalidate the work.
+        assert!(!completion_claims_unapplied_work(true, 3, 0));
+
+        // A task with no edits at all — a question — finishes freely.
+        assert!(!completion_claims_unapplied_work(false, 0, 0));
+
+        // The gate stops arguing once it has said its piece twice.
+        assert!(!completion_claims_unapplied_work(
+            false,
+            1,
+            MAX_COMPLETION_BLOCKS
+        ));
+    }
 
     // Every id a replayed assistant message announces must have a matching
     // result, or the provider rejects the request and the model is left to
