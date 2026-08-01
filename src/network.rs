@@ -2871,6 +2871,28 @@ async fn execute_tool_batch(
 /// it made; a call with no matching result is a protocol violation the provider
 /// rejects, and — worse — leaves the model free to assume whatever it likes
 /// about what happened. Answering with the failure keeps the record honest.
+/// What to tell a model whose completion claim wrote nothing.
+///
+/// The branch that matters is the second one. A model whose edits all failed is
+/// often looking at a workspace that already holds the requested state — left
+/// from an earlier run — and if the only sanctioned ways out are "make the
+/// change" or "it cannot be made", neither fits, so it manufactures a mutation
+/// to satisfy the check. In one session the cheapest mutation available was
+/// deleting the very line it had been asked to add, which it then reported as
+/// having added and removed.
+fn completion_block_message(failed: usize) -> String {
+    format!(
+        "[Finish blocked — {failed} edit(s) were attempted in this task and every one failed, so this task \
+wrote nothing. Exactly one of these is true; establish which from a fresh read, then act.\n\
+ 1. The change still needs making — make it, verify it, then finish.\n\
+ 2. The workspace is already in the requested state, possibly from before this task began — say exactly \
+that and finish. This is a valid outcome and requires no edit.\n\
+ 3. The change cannot be made — finish by stating why.\n\
+Do NOT edit something else, delete existing content, or reverse the request in order to clear this check. \
+An edit that moves the workspace further from what was asked is worse than writing nothing.]"
+    )
+}
+
 /// How many times the completion gate argues before letting a claim through.
 const MAX_COMPLETION_BLOCKS: u8 = 2;
 
@@ -3553,10 +3575,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         );
                         s.history.push(ChatMessage::new(
                             "system",
-                            format!(
-                                "[Finish blocked — {} edit(s) were attempted in this task and every one failed, so nothing was written. Do not report work that did not happen: either make the change and verify it from a fresh read, or finish by stating plainly that it could not be made and why.]",
-                                ctx.failed_mutations
-                            ),
+                            completion_block_message(ctx.failed_mutations),
                         ));
                         crate::config::save_history(&s.history);
                         s.current_response.clear();
@@ -4139,6 +4158,23 @@ mod tests {
     // it then read the file, found the line it wanted already present from an
     // earlier run, and reported "I've added the comment" before calling
     // complete_task — which the harness accepted.
+    // Regression: session 1785597279144. Blocked with only "make the change" or
+    // "say it could not be made" on offer, and looking at a file that already
+    // held the requested line, the model cleared the gate by deleting that line
+    // — then reported having added and removed it.
+    #[test]
+    fn the_block_message_sanctions_finishing_without_an_edit() {
+        let message = completion_block_message(1);
+
+        // The branch that fits "it is already how you asked".
+        assert!(message.contains("already in the requested state"), "got: {message}");
+        assert!(message.contains("requires no edit"), "got: {message}");
+        // And an explicit bar on satisfying the check with any other write.
+        assert!(message.contains("delete existing content"), "got: {message}");
+        assert!(message.contains("reverse the request"), "got: {message}");
+        assert!(message.contains("1 edit(s)"), "got: {message}");
+    }
+
     #[test]
     fn completion_is_blocked_only_when_nothing_was_applied() {
         // Every edit failed: the workspace is untouched.
