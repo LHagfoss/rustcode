@@ -943,6 +943,9 @@ pub fn tool_system_prompt(
             "CRITICAL: You are operating in PLAN MODE (Read-only / Design mode).\n\
              - File writing, deletion, shell commands, delegation, and unknown tools are disabled.\n\
              - You can read, search, ask questions, and design solutions, but you CANNOT modify files or execute commands.\n\
+             - Investigate before planning. `grep`, `glob`, and `view_file` are available and you are expected to use them: read the manifest, find the real call sites, and confirm which crates and patterns the project already uses.\n\
+             - The plan must be specific to THIS repository. Name the files to change, the functions and structs involved, and the line ranges you inspected. A step that says to go find out where something lives is not a plan — resolve it now, while you have the tools.\n\
+             - Never guess at dependencies, argument-parsing libraries, or module layout: those are in the repository, so read them. State what you verified and what remains uncertain.\n\
              - Explain the plan and tell the user to switch to Build Mode (press Tab) to implement it.\n\n"
         );
     }
@@ -1716,6 +1719,25 @@ mod tests {
         assert_eq!(isolated.len(), 1);
         assert_eq!(isolated[0].name, "use_skill");
         assert_eq!(deferred, 1);
+    }
+
+    // Regression: session 1785595713111. Asked to plan a --json flag, the model
+    // produced a plan containing "use grep to find the argument parsing" as a
+    // future step and hedged over whether the project uses clap or structopt —
+    // both answerable from a Cargo.toml it was allowed to read. It made zero
+    // tool calls.
+    #[test]
+    fn plan_mode_prompt_demands_investigation_not_a_plan_to_investigate() {
+        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Plan);
+
+        assert!(prompt.contains("PLAN MODE"));
+        assert!(prompt.contains("Investigate before planning"), "got: {prompt}");
+        assert!(prompt.contains("specific to THIS repository"), "got: {prompt}");
+        assert!(prompt.contains("is not a plan"), "got: {prompt}");
+
+        // Build mode must not carry the plan-mode restrictions.
+        let build = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+        assert!(!build.contains("PLAN MODE"));
     }
 
     #[test]
