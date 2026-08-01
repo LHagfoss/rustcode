@@ -6,6 +6,12 @@ pub(crate) use super::coerce_array;
 pub(crate) use super::parse_json_number;
 pub(crate) use super::resolve_tool_path;
 
+/// Default number of lines returned by `view_file` when the caller does not
+/// pass an explicit `end_line`. Reads that hit this window are genuinely
+/// truncated (see `view_file_tool`'s truncation message) — as opposed to a
+/// read that stopped exactly where the caller's own `end_line` asked it to.
+const DEFAULT_READ_WINDOW_LINES: usize = 2000;
+
 struct ReplacementChunk {
     start_line: usize,
     end_line: usize,
@@ -103,7 +109,7 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         .map(|v| v as usize)
         .unwrap_or(1);
     let requested_end = args.get("end_line").and_then(parse_json_number).map(|v| v as usize);
-    let end_line = requested_end.unwrap_or(start_line + 2000);
+    let end_line = requested_end.unwrap_or(start_line + DEFAULT_READ_WINDOW_LINES);
 
     let content_bytes =
         std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
@@ -161,9 +167,21 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
                 "... end of requested range; the file continues to line {total} ...\n"
             ));
         } else {
-            out.push_str(
-                "... content truncated (use end_line or content_offset to read more) ...\n",
-            );
+            // Genuine truncation: the caller asked to read from `start_line` with
+            // no explicit `end_line`, so this tool applied its own default
+            // window and stopped short of the file's actual end. Say exactly
+            // which lines were left out and exactly how to get them, so the
+            // model can't mistake this for a complete read (requirement: an
+            // exact-match edit against text the model never actually saw is
+            // the failure mode this message exists to prevent).
+            let next_start = actual_end + 1;
+            let omitted = total - actual_end;
+            out.push_str(&format!(
+                "[Truncated: lines {next_start}-{total} of {total} ({omitted} lines) were NOT shown \
+(default read window is {DEFAULT_READ_WINDOW_LINES} lines). This is not the complete file — do not \
+treat it as such. To read the rest, call view_file again with start_line={next_start} and \
+end_line={total} (or a smaller end_line to read it in chunks).]\n"
+            ));
         }
     }
 
@@ -884,6 +902,166 @@ mod tests {
         let whole = view_file_tool(&serde_json::json!({ "path": path })).expect("read");
         assert!(!whole.contains("truncated"), "got: {whole}");
         assert!(!whole.contains("continues"), "got: {whole}");
+    }
+
+    // Feature 5 (lossless reads): a read genuinely cut short by view_file's own
+    // default window must say so unambiguously, name exactly which lines were
+    // omitted, and tell the model exactly how to fetch them.
+    #[test]
+    fn a_read_cut_short_by_the_default_window_names_the_omitted_range() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("big.txt");
+        let total_lines = DEFAULT_READ_WINDOW_LINES + 500;
+        let content: String = (1..=total_lines).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(&file, &content).expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        // No end_line given: the tool applies its default window and must
+        // clearly flag the read as incomplete. start_line=1, so the window's
+        // last shown line is 1 + DEFAULT_READ_WINDOW_LINES (inclusive).
+        let out =
+            view_file_tool(&serde_json::json!({ "path": path, "start_line": 1 })).expect("read");
+        assert!(out.contains("[Truncated:"), "got: {out}");
+        let window_end = 1 + DEFAULT_READ_WINDOW_LINES;
+        let expected_next = window_end + 1;
+        assert!(
+            out.contains(&format!(
+                "lines {expected_next}-{total_lines} of {total_lines}"
+            )),
+            "expected omitted range {expected_next}-{total_lines} named, got: {out}"
+        );
+        assert!(
+            out.contains(&format!("start_line={expected_next}")),
+            "expected follow-up start_line hint, got: {out}"
+        );
+        assert!(
+            out.contains(&format!("end_line={total_lines}")),
+            "expected follow-up end_line hint, got: {out}"
+        );
+        // Last line actually shown is the last line of the default window, not
+        // the true end of the file.
+        assert!(out.contains(&format!("{window_end}: line {window_end}")));
+        assert!(!out.contains(&format!("{total_lines}: line {total_lines}")));
+    }
+
+    // Feature 5: after a truncated read, following the tool's own recovery
+    // instructions (start_line/end_line for exactly the omitted range) must
+    // return exactly that content — not a repeat of the first chunk, not a
+    // different range.
+    #[test]
+    fn targeted_follow_up_read_recovers_exactly_the_omitted_range() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("big.txt");
+        let total_lines = DEFAULT_READ_WINDOW_LINES + 500;
+        let content: String = (1..=total_lines).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(&file, &content).expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let first =
+            view_file_tool(&serde_json::json!({ "path": path, "start_line": 1 })).expect("read");
+        // start_line=1, so the default window's last shown line is
+        // 1 + DEFAULT_READ_WINDOW_LINES (inclusive).
+        let next_start = 1 + DEFAULT_READ_WINDOW_LINES + 1;
+
+        let second = view_file_tool(&serde_json::json!({
+            "path": path,
+            "start_line": next_start,
+            "end_line": total_lines,
+        }))
+        .expect("read");
+
+        // Second chunk contains exactly the lines the first chunk said were
+        // missing, and none of the content the first chunk already showed.
+        assert!(
+            second.contains(&format!("{next_start}: line {next_start}")),
+            "got: {second}"
+        );
+        assert!(
+            second.contains(&format!("{total_lines}: line {total_lines}")),
+            "got: {second}"
+        );
+        assert!(!second.contains("1: line 1\n"), "got: {second}");
+        // It's a real different read, not a repeat of the first chunk.
+        assert_ne!(first, second);
+        // It ended exactly where asked, so it is not itself reported truncated.
+        assert!(!second.contains("Truncated"), "got: {second}");
+    }
+
+    // Feature 5: reading a file in two truncated-window chunks must not lose
+    // content that spans the boundary between them — a target string sitting
+    // right at the seam must be fully recoverable from a follow-up read, so an
+    // exact-match edit downstream has a real chance of matching what the
+    // second chunk actually shows.
+    #[test]
+    fn two_chunk_read_does_not_drop_content_at_the_seam() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("seam.txt");
+        // Put a distinctive marker just after the default window boundary so
+        // it would NOT be visible in a first, window-limited read. start_line=1,
+        // so the default window's last shown line is
+        // 1 + DEFAULT_READ_WINDOW_LINES (inclusive).
+        let marker_line = 1 + DEFAULT_READ_WINDOW_LINES + 1;
+        let total_lines = DEFAULT_READ_WINDOW_LINES + 12;
+        let mut content = String::new();
+        for n in 1..=total_lines {
+            if n == marker_line {
+                content.push_str("UNIQUE_TARGET_MARKER\n");
+            } else {
+                content.push_str(&format!("line {n}\n"));
+            }
+        }
+        std::fs::write(&file, &content).expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let first =
+            view_file_tool(&serde_json::json!({ "path": path, "start_line": 1 })).expect("read");
+        assert!(
+            !first.contains("UNIQUE_TARGET_MARKER"),
+            "marker should be past the default window, got: {first}"
+        );
+
+        // Follow the tool's own recovery instructions for the omitted range.
+        let next_start = 1 + DEFAULT_READ_WINDOW_LINES + 1;
+        let second = view_file_tool(&serde_json::json!({
+            "path": path,
+            "start_line": next_start,
+            "end_line": total_lines,
+        }))
+        .expect("read");
+        assert!(
+            second.contains("UNIQUE_TARGET_MARKER"),
+            "the seam-adjacent line must be recoverable via a targeted follow-up read, got: {second}"
+        );
+    }
+
+    // Feature 5: two different range requests on the same file must return
+    // genuinely different output — repeated reads are not silently collapsed
+    // into the same content regardless of the requested range.
+    #[test]
+    fn varying_range_arguments_change_the_returned_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("small.txt");
+        std::fs::write(&file, "a\nb\nc\nd\ne\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let first = view_file_tool(&serde_json::json!({
+            "path": path, "start_line": 1, "end_line": 2,
+        }))
+        .expect("read");
+        let second = view_file_tool(&serde_json::json!({
+            "path": path, "start_line": 3, "end_line": 4,
+        }))
+        .expect("read");
+        assert_ne!(first, second);
+        assert!(first.contains("1: a") && first.contains("2: b"));
+        assert!(second.contains("3: c") && second.contains("4: d"));
+
+        let via_offset = view_file_tool(&serde_json::json!({
+            "path": path, "content_offset": 4, // byte offset into "a\nb\nc\nd\ne\n"
+        }))
+        .expect("read");
+        assert!(via_offset.contains("c") || via_offset.contains("d") || via_offset.contains("e"));
+        assert_ne!(via_offset, first);
     }
 
     // Regression: session 1785594233488. The model tried to prepend a line by
