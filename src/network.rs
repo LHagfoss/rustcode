@@ -71,6 +71,118 @@ is already present or cannot be applied safely, explain that instead of retrying
 
 const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
 
+/// Safety budgets for a single agent turn. These are deliberately generous —
+/// the goal is to catch a runaway session (the benchmark that motivated this
+/// hit 106 rounds with no hard stop), not to cut off healthy long-running
+/// work. Any one signal firing is enough: a session that is genuinely
+/// healthy on every other axis but has spent 500k tokens, or ten minutes, or
+/// 40 rounds, has stopped being worth running unattended.
+const MAX_TOOL_ROUNDS: usize = 40;
+const MAX_TURN_WALL_CLOCK: std::time::Duration = std::time::Duration::from_secs(600);
+const MAX_TURN_TOKEN_BUDGET: u64 = 500_000;
+/// A tool that reports success without changing anything (already-applied
+/// edits, no-op runs) does not count as progress, so this escalates much
+/// faster than the round budget when the agent is just spinning.
+const MAX_CONSECUTIVE_NO_PROGRESS: usize = 8;
+const MAX_CONSECUTIVE_FAILED_MUTATIONS: usize = 5;
+const MAX_CONSECUTIVE_COMPILER_ERROR_GATES: usize = 5;
+
+/// Which safety budget stopped the turn, with enough detail for the final
+/// summary to name the exact limit that was hit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TurnBudgetLimit {
+    ToolRounds(usize),
+    WallClock(u64),
+    Tokens(u64),
+    NoProgress(usize),
+    FailedMutations(usize),
+    CompilerErrorGates(usize),
+}
+
+impl std::fmt::Display for TurnBudgetLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TurnBudgetLimit::ToolRounds(n) => write!(f, "maximum tool rounds reached ({n})"),
+            TurnBudgetLimit::WallClock(secs) => {
+                write!(f, "maximum turn wall-clock time reached ({secs}s)")
+            }
+            TurnBudgetLimit::Tokens(n) => write!(f, "maximum token budget reached (~{n} tokens)"),
+            TurnBudgetLimit::NoProgress(n) => write!(
+                f,
+                "{n} consecutive tool results with no meaningful progress (no-op or unchanged edits)"
+            ),
+            TurnBudgetLimit::FailedMutations(n) => {
+                write!(f, "{n} consecutive failed edits")
+            }
+            TurnBudgetLimit::CompilerErrorGates(n) => {
+                write!(f, "{n} consecutive completion attempts with the build still broken")
+            }
+        }
+    }
+}
+
+/// Checks every budget signal and returns the first one that has been
+/// exceeded, if any. Order matters only for which reason is reported when
+/// several trip on the same round — all are equally terminal.
+fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
+    if ctx.tool_rounds >= MAX_TOOL_ROUNDS {
+        return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
+    }
+    let elapsed = ctx.turn_started_at.elapsed();
+    if elapsed >= MAX_TURN_WALL_CLOCK {
+        return Some(TurnBudgetLimit::WallClock(elapsed.as_secs()));
+    }
+    if ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET {
+        return Some(TurnBudgetLimit::Tokens(ctx.tokens_used));
+    }
+    if ctx.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS {
+        return Some(TurnBudgetLimit::NoProgress(ctx.consecutive_no_progress));
+    }
+    if ctx.consecutive_failed_mutations >= MAX_CONSECUTIVE_FAILED_MUTATIONS {
+        return Some(TurnBudgetLimit::FailedMutations(ctx.consecutive_failed_mutations));
+    }
+    if ctx.consecutive_compiler_error_gates >= MAX_CONSECUTIVE_COMPILER_ERROR_GATES {
+        return Some(TurnBudgetLimit::CompilerErrorGates(
+            ctx.consecutive_compiler_error_gates,
+        ));
+    }
+    None
+}
+
+/// Stop the turn safely when a budget has been exceeded: never claim
+/// completion, leave the transcript intact, and explain exactly which limit
+/// was hit so the user can decide whether to resume.
+async fn stop_turn_for_budget(
+    state: &Arc<Mutex<AppState>>,
+    ctx: &mut TurnContext,
+    limit: TurnBudgetLimit,
+) -> bool {
+    dbg_log!("Turn budget exceeded: {}", limit);
+    crate::logger::operational_event(
+        "turn.budget_exceeded",
+        serde_json::json!({
+            "limit": limit.to_string(),
+            "tool_rounds": ctx.tool_rounds,
+            "elapsed_secs": ctx.turn_started_at.elapsed().as_secs(),
+            "tokens_used": ctx.tokens_used,
+            "failed_mutations": ctx.failed_mutations,
+        }),
+    );
+    let summary = format!(
+        "[harness: stopped after {} tool round(s) — {limit}. The task is NOT complete. \
+         Review the transcript above; if the remaining work is still valid, resume it in a new turn.]",
+        ctx.tool_rounds
+    );
+    ctx.final_content = summary;
+    ctx.task_completed = false;
+    ctx.budget_stopped = Some(limit.to_string());
+    let mut s = state.lock().await;
+    s.continuous_mode = false;
+    s.status = AppStatus::Idle;
+    drop(s);
+    false
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum LoopRecoveryAction {
     Recover,
@@ -3213,6 +3325,22 @@ pub struct TurnContext {
     /// in parse order. Empty under the text protocols.
     pub streamed_call_ids: Vec<String>,
     pub task_completed: bool,
+    /// When this turn started, for the wall-clock safety budget.
+    pub turn_started_at: std::time::Instant,
+    /// Best-effort running total of prompt+completion tokens spent this turn.
+    pub tokens_used: u64,
+    /// Consecutive mutating-tool results (across rounds) that reported
+    /// success but changed nothing — an already-applied edit, a no-op run.
+    /// Reset by any mutating tool that actually changes something.
+    pub consecutive_no_progress: usize,
+    /// Consecutive mutating-tool failures. Reset by any mutating success.
+    pub consecutive_failed_mutations: usize,
+    /// Consecutive complete_task attempts blocked by the build still not
+    /// compiling. Reset whenever the build passes.
+    pub consecutive_compiler_error_gates: usize,
+    /// Set once a safety budget stops the turn, so the caller can tell a
+    /// budget stop apart from a normal finish or a detected loop.
+    pub budget_stopped: Option<String>,
 }
 
 impl TurnContext {
@@ -3237,6 +3365,12 @@ impl TurnContext {
             final_content: String::new(),
             streamed_call_ids: Vec::new(),
             task_completed: false,
+            turn_started_at: std::time::Instant::now(),
+            tokens_used: 0,
+            consecutive_no_progress: 0,
+            consecutive_failed_mutations: 0,
+            consecutive_compiler_error_gates: 0,
+            budget_stopped: None,
         }
     }
 }
@@ -3251,6 +3385,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 ) -> bool {
     const MAX_FINISH_GATE_RETRIES: u32 = 2;
     dbg_log!("Starting agent loop round {}", ctx.tool_rounds);
+
+    // Cancellation takes priority over the safety budgets: if the user
+    // already asked to stop, don't spend a budget-exceeded round explaining
+    // why we're also stopping — the existing cancellation handling further
+    // down (and in the request layer) owns that path.
+    if !cancel_token.is_cancelled()
+        && let Some(limit) = turn_budget_exceeded(ctx)
+    {
+        return stop_turn_for_budget(state, ctx, limit).await;
+    }
 
     // Resolve tool-call support before the prompt is built: the two
     // protocols need different system prompts, so this cannot be
@@ -3363,6 +3507,15 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     {
         let mut s = state.lock().await;
         s.current_response = accumulated_content.clone();
+        // Best-effort accounting for the token budget: prefer the
+        // provider-reported usage for this round, falling back to a
+        // character-based estimate when the provider didn't report one.
+        ctx.tokens_used = ctx.tokens_used.saturating_add(
+            s.current_token_usage
+                .as_ref()
+                .map(|u| u.total_tokens as u64)
+                .unwrap_or_else(|| count_tokens(&accumulated_content) as u64),
+        );
     }
 
     if cancel_token.is_cancelled() {
@@ -3753,13 +3906,27 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             .trim_start()
                             .to_ascii_lowercase()
                             .starts_with("error");
+                    // A tool that reports success without changing anything
+                    // (an edit that was already applied, a no-op run) is not
+                    // progress — it must keep the no-progress budget
+                    // climbing exactly like a failed edit would, or a
+                    // duplicate-stacking edit that always reports success
+                    // could spin forever without ever tripping a budget.
+                    let no_progress = !failed && content.to_ascii_lowercase().contains("already applied");
                     if failed {
                         ctx.failed_mutations += 1;
+                        ctx.consecutive_failed_mutations += 1;
                     } else {
                         ctx.made_edits = true;
+                        ctx.consecutive_failed_mutations = 0;
                         if !metadata.changed_paths.is_empty() || name != "run_command" {
                             ctx.verification.record_edit();
                         }
+                    }
+                    if failed || no_progress {
+                        ctx.consecutive_no_progress += 1;
+                    } else {
+                        ctx.consecutive_no_progress = 0;
                     }
                 }
                 // Progress resets the loop detector: a successful mutating
@@ -3900,6 +4067,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             ));
                         } else {
                             dbg_log!("complete_task finish gate failed with compiler errors");
+                            ctx.consecutive_compiler_error_gates += 1;
                             s.history.push(ChatMessage::new(
                                         "system",
                                         format!(
@@ -3916,6 +4084,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         }
                     } else {
                         build_status = "passed";
+                        ctx.consecutive_compiler_error_gates = 0;
                     }
                 }
 
@@ -5023,5 +5192,135 @@ mod tests {
         assert!(with_todos.contains("1. [x] done thing (high)"));
         assert!(with_todos.contains("2. [~] active thing (high)"));
         assert!(with_todos.contains("3. [ ] later thing (high)"));
+    }
+
+    // Regression: the benchmark session ran 106 tool rounds with no hard
+    // stop because the only guard was the loop detector, and a mutation that
+    // reports success while duplicating content resets it every round. These
+    // tests exercise the safety budgets directly against a constructed
+    // TurnContext so they run without a mock server.
+
+    #[test]
+    fn healthy_progress_does_not_trigger_the_budget() {
+        let mut ctx = TurnContext::new();
+        ctx.tool_rounds = 12;
+        ctx.tokens_used = 40_000;
+        ctx.consecutive_no_progress = 0;
+        ctx.consecutive_failed_mutations = 0;
+        ctx.consecutive_compiler_error_gates = 0;
+        assert!(turn_budget_exceeded(&ctx).is_none());
+    }
+
+    #[test]
+    fn max_tool_rounds_triggers_the_budget() {
+        let mut ctx = TurnContext::new();
+        ctx.tool_rounds = MAX_TOOL_ROUNDS;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, MAX_TOOL_ROUNDS),
+            other => panic!("expected ToolRounds limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timeout_triggers_the_budget_safely() {
+        let mut ctx = TurnContext::new();
+        // Simulate elapsed wall-clock time without an actual 10-minute sleep.
+        ctx.turn_started_at =
+            std::time::Instant::now() - (MAX_TURN_WALL_CLOCK + std::time::Duration::from_secs(1));
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::WallClock(secs)) => {
+                assert!(secs >= MAX_TURN_WALL_CLOCK.as_secs())
+            }
+            other => panic!("expected WallClock limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn token_budget_triggers_the_budget() {
+        let mut ctx = TurnContext::new();
+        ctx.tokens_used = MAX_TURN_TOKEN_BUDGET;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::Tokens(n)) => assert_eq!(n, MAX_TURN_TOKEN_BUDGET),
+            other => panic!("expected Tokens limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn repeated_failed_edits_trigger_the_budget() {
+        let mut ctx = TurnContext::new();
+        ctx.consecutive_failed_mutations = MAX_CONSECUTIVE_FAILED_MUTATIONS;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::FailedMutations(n)) => {
+                assert_eq!(n, MAX_CONSECUTIVE_FAILED_MUTATIONS)
+            }
+            other => panic!("expected FailedMutations limit, got {other:?}"),
+        }
+    }
+
+    // The exact benchmark shape: a mutation reports success but changed
+    // nothing (already applied), round after round.
+    #[test]
+    fn repeated_noop_edits_trigger_the_budget() {
+        let mut ctx = TurnContext::new();
+        ctx.consecutive_no_progress = MAX_CONSECUTIVE_NO_PROGRESS;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::NoProgress(n)) => assert_eq!(n, MAX_CONSECUTIVE_NO_PROGRESS),
+            other => panic!("expected NoProgress limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn repeated_compiler_error_gates_trigger_the_budget() {
+        let mut ctx = TurnContext::new();
+        ctx.consecutive_compiler_error_gates = MAX_CONSECUTIVE_COMPILER_ERROR_GATES;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::CompilerErrorGates(n)) => {
+                assert_eq!(n, MAX_CONSECUTIVE_COMPILER_ERROR_GATES)
+            }
+            other => panic!("expected CompilerErrorGates limit, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stopping_for_budget_never_falsely_reports_completion() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let mut ctx = TurnContext::new();
+        ctx.tool_rounds = MAX_TOOL_ROUNDS;
+        ctx.task_completed = false;
+
+        let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
+        let should_continue = stop_turn_for_budget(&state, &mut ctx, limit).await;
+
+        assert!(!should_continue, "a budget stop must end the loop");
+        assert!(!ctx.task_completed, "a budget stop must never claim completion");
+        assert!(ctx.budget_stopped.is_some(), "the exact limit reached must be recorded");
+        assert!(
+            ctx.final_content.contains("stopped"),
+            "the summary must explain the stop: {}",
+            ctx.final_content
+        );
+        assert!(
+            ctx.final_content.to_ascii_lowercase().contains("not complete"),
+            "the summary must be explicit that the task is unfinished: {}",
+            ctx.final_content
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_is_checked_before_the_budget_at_round_start() {
+        // A cancelled turn must not be intercepted by the budget-stop
+        // summary; the request layer's own cancellation handling owns that
+        // path. This only exercises the ordering guard used at the top of
+        // run_single_turn, not the full network round.
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        cancel_token.cancel();
+        let mut ctx = TurnContext::new();
+        ctx.tool_rounds = MAX_TOOL_ROUNDS;
+
+        let budget_should_fire = !cancel_token.is_cancelled() && turn_budget_exceeded(&ctx).is_some();
+        assert!(
+            !budget_should_fire,
+            "cancellation must suppress the budget-stop path"
+        );
     }
 }
