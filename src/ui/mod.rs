@@ -977,6 +977,18 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
     (action_label, target_arg)
 }
 
+fn resolve_tool_result_name(
+    preceding_call_name: Option<&str>,
+    persisted_name: Option<&str>,
+    content: &str,
+) -> Option<String> {
+    preceding_call_name
+        .or(persisted_name)
+        .or_else(|| content.split_once(": ").map(|(name, _)| name))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
 /// Memoized conversation render. Building every message's spans and wrapping
 /// them several times per frame is O(history) and dominates scroll latency on
 /// long sessions. The rendered lines only change when the history, viewport
@@ -1267,10 +1279,18 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             } else if let Some(ref diff) = msg.diff {
                 let code_content_width = inner_area.width as usize;
                 lines.extend(render_unified_diff(diff, code_content_width, show_picker));
-            } else if let Some(tool_call) = prev_tool_info {
-                let result = msg.content.split_once(": ").map(|(_, result)| result).unwrap_or(&msg.content);
+            } else if let Some(tool_name) = resolve_tool_result_name(
+                prev_tool_info.as_ref().map(|call| call.name.as_str()),
+                msg.tool_result.as_ref().map(|result| result.tool_name.as_str()),
+                &msg.content,
+            ) {
+                let result = msg
+                    .content
+                    .split_once(": ")
+                    .map(|(_, result)| result)
+                    .unwrap_or(&msg.content);
                 lines.extend(cached_tool_result(
-                    &tool_call.name,
+                    &tool_name,
                     result,
                     inner_area.width as usize,
                     show_picker,
@@ -2239,6 +2259,28 @@ mod tests {
         let (label, _) =
             format_pi_tool_action("run_command", &serde_json::json!({"command": "ls"}));
         assert_eq!(label, "Bash");
+    }
+
+    #[test]
+    fn persisted_edit_result_resolves_tool_name_without_previous_call() {
+        let result = "replace_file_content: successfully replaced target_content\n\n```diff\n@@ -1 +1 @@\n-old\n+new\n```";
+        let tool_name = super::resolve_tool_result_name(
+            None,
+            Some("replace_file_content"),
+            result,
+        );
+
+        assert_eq!(tool_name.as_deref(), Some("replace_file_content"));
+        assert!(
+            super::render_tool_result(
+                tool_name.as_deref().unwrap(),
+                result.strip_prefix("replace_file_content: ").unwrap(),
+                80,
+                false,
+            )
+            .iter()
+            .any(|line| line.spans.iter().any(|span| span.content.contains("new")))
+        );
     }
 
     // The input box reuses extract_selection with its own rect and scroll 0.
