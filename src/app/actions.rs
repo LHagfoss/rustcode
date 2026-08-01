@@ -23,7 +23,11 @@ pub fn build_latest_changelog() -> String {
     }
 
     if out.trim().is_empty() {
-        CHANGELOG_CONTENT.lines().take(30).collect::<Vec<_>>().join("\n")
+        CHANGELOG_CONTENT
+            .lines()
+            .take(30)
+            .collect::<Vec<_>>()
+            .join("\n")
     } else {
         out.trim().to_string()
     }
@@ -44,7 +48,9 @@ pub async fn handle_escape(
     if s.status == AppStatus::Streaming {
         s.status = AppStatus::Idle;
         if s.config.discord_rpc_enabled {
-            s.discord_rpc.clear_activity();
+            let model_name = s.model_name.clone();
+            s.discord_rpc
+                .set_activity("Idle", &format!("Using model: {}", model_name));
         }
         s.pending_queue.clear();
     } else if !s.pending_queue.is_empty() {
@@ -52,7 +58,9 @@ pub async fn handle_escape(
         if s.pending_queue.is_empty() {
             s.status = AppStatus::Idle;
             if s.config.discord_rpc_enabled {
-                s.discord_rpc.clear_activity();
+                let model_name = s.model_name.clone();
+                s.discord_rpc
+                    .set_activity("Idle", &format!("Using model: {}", model_name));
             }
         }
     }
@@ -127,7 +135,10 @@ pub async fn handle_enter(
                     let mut s = state_clone.lock().await;
                     let history_len = s.history.len();
                     if history_len < 2 {
-                        s.history.push(ChatMessage::new("system", "Not enough messages to compact."));
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            "Not enough messages to compact.",
+                        ));
                         return;
                     }
                     let mut history_to_compact = s.history.drain(..).collect::<Vec<ChatMessage>>();
@@ -146,13 +157,19 @@ pub async fn handle_enter(
                             s.history.extend(history_to_compact);
                             s.history.push(ChatMessage::new(
                                 "system",
-                                format!("🧹 History compacted: reduced context from {} to {} tokens.", before, after),
+                                format!(
+                                    "🧹 History compacted: reduced context from {} to {} tokens.",
+                                    before, after
+                                ),
                             ));
                         }
                         Err(e) => {
                             let mut s = state_clone.lock().await;
                             s.history.extend(history_to_compact);
-                            s.history.push(ChatMessage::new("system", format!("History compaction failed: {}", e)));
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                format!("History compaction failed: {}", e),
+                            ));
                         }
                     }
                 });
@@ -187,7 +204,8 @@ pub async fn handle_enter(
                 if tokens.get(1).is_some_and(|mode| *mode == "off") {
                     s.delegation_armed = false;
                     s.delegation_active = false;
-                    s.history.push(ChatMessage::new("system", "Subagents disabled."));
+                    s.history
+                        .push(ChatMessage::new("system", "Subagents disabled."));
                 } else {
                     s.delegation_armed = true;
                     s.history.push(ChatMessage::new(
@@ -213,22 +231,29 @@ pub async fn handle_enter(
                     ),
                 ));
                 if is_enabled {
-                    s.discord_rpc.connect();
+                    s.discord_rpc.set_enabled(true);
                     let model_name = s.model_name.clone();
-                    s.discord_rpc.set_activity("Idle", &format!("Using model: {}", model_name));
+                    s.discord_rpc
+                        .set_activity("Idle", &format!("Using model: {}", model_name));
                 } else {
-                    s.discord_rpc.clear_activity();
+                    s.discord_rpc.set_enabled(false);
                 }
             }
             "/goal" => {
                 let goal_text = tokens[1..].join(" ");
                 if goal_text.trim().is_empty() {
-                    s.history.push(ChatMessage::new("system", "Usage: /goal <task description>"));
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Usage: /goal <task description>",
+                    ));
                 } else {
                     s.delegation_active = s.delegation_armed;
                     s.delegation_armed = false;
                     s.continuous_mode = true;
-                    let goal_msg = format!("Goal: {}\n\nContinuous autoloop mode is active. You must execute tools in a loop to complete the goal, and call the 'complete_task' tool when you are fully finished.", goal_text);
+                    let goal_msg = format!(
+                        "Goal: {}\n\nContinuous autoloop mode is active. You must execute tools in a loop to complete the goal, and call the 'complete_task' tool when you are fully finished.",
+                        goal_text
+                    );
                     s.history.push(ChatMessage::new("user", goal_msg));
                     crate::config::save_history(&s.history);
                     s.input_buffer.clear();
@@ -429,8 +454,7 @@ pub async fn handle_enter(
             "/session" => {
                 let session_info = format!(
                     "Session ID: {}\nActive model: {}",
-                    s.active_session_id,
-                    s.model_name
+                    s.active_session_id, s.model_name
                 );
                 s.history.push(ChatMessage::new("system", session_info));
             }
@@ -538,7 +562,8 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
                         ));
                         if s.config.discord_rpc_enabled {
                             let model_name = s.model_name.clone();
-                            s.discord_rpc.set_activity("Idle", &format!("Using model: {}", model_name));
+                            s.discord_rpc
+                                .set_activity("Idle", &format!("Using model: {}", model_name));
                         }
                     } else {
                         s.model_name = name.clone();
@@ -742,15 +767,18 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
             }
             "/change_title" => {
                 if tokens.len() < 2 {
-                    s.history.push(ChatMessage::new("system",
-                        "Usage:\n  /change_title <title> - Rename the current session",));
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Usage:\n  /change_title <title> - Rename the current session",
+                    ));
                 } else {
                     let new_title = tokens[1..].join(" ");
                     crate::config::save_session_title(&s.active_session_id, &new_title);
                     s.invalidate_session_title_cache();
                     s.history.push(ChatMessage::new(
                         "system",
-                        format!("Session title renamed to \"{}\"", new_title),));
+                        format!("Session title renamed to \"{}\"", new_title),
+                    ));
                 }
             }
             _ => {
@@ -824,10 +852,15 @@ pub fn apply_autocomplete(s: &mut AppState) {
             s.cursor_position = s.input_buffer.len();
         }
         s.active_suggestion_index = None;
-    } else if let Some((at_idx, at_query)) = crate::app::get_at_word_query(&s.input_buffer, s.cursor_position) {
+    } else if let Some((at_idx, at_query)) =
+        crate::app::get_at_word_query(&s.input_buffer, s.cursor_position)
+    {
         let files = crate::app::list_project_file_paths(&at_query);
         if !files.is_empty() {
-            let idx = s.active_suggestion_index.unwrap_or(0).min(files.len().saturating_sub(1));
+            let idx = s
+                .active_suggestion_index
+                .unwrap_or(0)
+                .min(files.len().saturating_sub(1));
             let selected_file = &files[idx];
             let mut new_buf = String::new();
             new_buf.push_str(&s.input_buffer[..at_idx]);
@@ -1004,14 +1037,15 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
 
     // Extract session ID from the loaded path parent
     if let Some(parent) = meta.path.parent()
-        && let Some(session_id_str) = parent.file_name().and_then(|n| n.to_str()) {
-            // Flush the outgoing session's queued history before retargeting.
-            crate::config::flush_history();
-            s.active_session_id = session_id_str.to_string();
-            s.config.last_active_session_id = Some(s.active_session_id.clone());
-            crate::config::save_entire_config(&s.config);
-            crate::config::set_active_session_id(&s.active_session_id);
-        }
+        && let Some(session_id_str) = parent.file_name().and_then(|n| n.to_str())
+    {
+        // Flush the outgoing session's queued history before retargeting.
+        crate::config::flush_history();
+        s.active_session_id = session_id_str.to_string();
+        s.config.last_active_session_id = Some(s.active_session_id.clone());
+        crate::config::save_entire_config(&s.config);
+        crate::config::set_active_session_id(&s.active_session_id);
+    }
 
     s.history = loaded;
     s.pending_queue.clear();
@@ -1084,10 +1118,7 @@ const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 16_000;
 /// keep only a head of each so the transcript stays small and fast.
 const MAX_SUMMARY_TOOL_CHARS: usize = 300;
 
-pub async fn summarize_session(
-    state_arc: &Arc<Mutex<AppState>>,
-    client: &reqwest::Client,
-) {
+pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
     let started = std::time::Instant::now();
     let (api_base_url, model_name, transcript) = {
         let mut s = state_arc.lock().await;
@@ -1110,12 +1141,13 @@ pub async fn summarize_session(
             };
             // Trim verbose tool outputs — they dominate the byte count but add
             // little the summary needs.
-            let body: String = if m.role == "tool" && m.content.chars().count() > MAX_SUMMARY_TOOL_CHARS {
-                let head: String = m.content.chars().take(MAX_SUMMARY_TOOL_CHARS).collect();
-                format!("{head}… (truncated)")
-            } else {
-                m.content.clone()
-            };
+            let body: String =
+                if m.role == "tool" && m.content.chars().count() > MAX_SUMMARY_TOOL_CHARS {
+                    let head: String = m.content.chars().take(MAX_SUMMARY_TOOL_CHARS).collect();
+                    format!("{head}… (truncated)")
+                } else {
+                    m.content.clone()
+                };
             transcript.push_str(&format!("{who}: {body}\n\n"));
         }
         // Keep the most recent slice if oversized (char-boundary safe).
@@ -1125,7 +1157,10 @@ pub async fn summarize_session(
             while idx < transcript.len() && !transcript.is_char_boundary(idx) {
                 idx += 1;
             }
-            transcript = format!("...(earlier conversation truncated)...\n\n{}", &transcript[idx..]);
+            transcript = format!(
+                "...(earlier conversation truncated)...\n\n{}",
+                &transcript[idx..]
+            );
         }
 
         // Drive the existing status-bar spinner + elapsed timer.
@@ -1355,11 +1390,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
     });
 }
 
-pub fn trigger_quota_fetch(
-    s: &AppState,
-    state: &Arc<Mutex<AppState>>,
-    client: &reqwest::Client,
-) {
+pub fn trigger_quota_fetch(s: &AppState, state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
     let (url, key_opt) = {
         let active_url = s.api_base_url.clone();
         let key = s
@@ -1399,16 +1430,21 @@ pub fn trigger_quota_fetch(
                                 b.get("remainingFraction").and_then(|x| x.as_f64()),
                             ) {
                                 let display_name = match m {
-                                    "gemini-2.5-flash" => "gemini-2.5-flash / gemini-3.6-flash / 3.5-flash",
+                                    "gemini-2.5-flash" => {
+                                        "gemini-2.5-flash / gemini-3.6-flash / 3.5-flash"
+                                    }
                                     "gemini-2.5-pro" => "gemini-2.5-pro",
                                     _ => m,
                                 };
-                                text.push_str(&format!("\n  • {}: {:.1}% remaining", display_name, f * 100.0));
+                                text.push_str(&format!(
+                                    "\n  • {}: {:.1}% remaining",
+                                    display_name,
+                                    f * 100.0
+                                ));
                             }
                         }
-                    } else if let Some(rate_limits) = json
-                        .get("rate_limits")
-                        .or_else(|| json.get("rate_limit"))
+                    } else if let Some(rate_limits) =
+                        json.get("rate_limits").or_else(|| json.get("rate_limit"))
                     {
                         append_codex_rate_limits(&mut text, rate_limits);
                     } else {
@@ -1469,11 +1505,17 @@ fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) 
         } else {
             format!(" ({window_label})")
         };
-        text.push_str(&format!("\n  • ChatGPT {label}{suffix}: {remaining:.1}% remaining"));
+        text.push_str(&format!(
+            "\n  • ChatGPT {label}{suffix}: {remaining:.1}% remaining"
+        ));
         if let Some(reset) = window.get("resets_at").and_then(|v| v.as_i64())
-            && let Some(dt) = chrono::DateTime::from_timestamp(reset, 0) {
-                text.push_str(&format!("; resets {}", dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")));
-            }
+            && let Some(dt) = chrono::DateTime::from_timestamp(reset, 0)
+        {
+            text.push_str(&format!(
+                "; resets {}",
+                dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
+            ));
+        }
     }
 }
 
@@ -1518,7 +1560,10 @@ mod tests {
         );
 
         assert_eq!(history.len(), 2);
-        assert_eq!(history.last().unwrap().content, "Resumed session \"demo\" (2 messages)");
+        assert_eq!(
+            history.last().unwrap().content,
+            "Resumed session \"demo\" (2 messages)"
+        );
     }
 
     #[test]
@@ -1568,8 +1613,20 @@ mod tests {
         {
             let s = state.lock().await;
             assert!(s.continuous_mode);
-            assert!(s.history.last().unwrap().content.contains("Goal: fix build issues"));
-            assert!(s.history.last().unwrap().content.contains("Continuous autoloop mode is active"));
+            assert!(
+                s.history
+                    .last()
+                    .unwrap()
+                    .content
+                    .contains("Goal: fix build issues")
+            );
+            assert!(
+                s.history
+                    .last()
+                    .unwrap()
+                    .content
+                    .contains("Continuous autoloop mode is active")
+            );
             assert!(s.input_buffer.is_empty());
         }
     }

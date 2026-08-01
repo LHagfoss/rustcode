@@ -5,6 +5,7 @@ mod cli;
 mod clipboard;
 mod config;
 mod context;
+mod discord_rpc;
 mod mcp;
 mod network;
 mod notifications;
@@ -12,9 +13,8 @@ mod raw_cli;
 mod skills;
 mod symbols;
 mod tools;
-mod update;
 mod ui;
-mod discord_rpc;
+mod update;
 
 use crate::app::{AppState, AppStatus, ChatMessage};
 use clap::Parser;
@@ -76,7 +76,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Error initializing sync repo: {e}");
                     std::process::exit(1);
                 }
-                println!("Sync repository setup complete! You can now run `rustcode sync` anytime.");
+                println!(
+                    "Sync repository setup complete! You can now run `rustcode sync` anytime."
+                );
             }
             None => {
                 // Default behavior for `rustcode sync` (pull then push)
@@ -169,19 +171,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .models
             .iter()
             .find(|m| m.name == *m_name)
-        {
-            app_state_struct.api_base_url = profile.url.clone();
-            app_state_struct.model_name = profile.model.clone();
-        }
+    {
+        app_state_struct.api_base_url = profile.url.clone();
+        app_state_struct.model_name = profile.model.clone();
+    }
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
     // Initialize Discord RPC if enabled
     {
         let mut s = app_state.lock().await;
         if s.config.discord_rpc_enabled {
-            s.discord_rpc.connect();
+            s.discord_rpc.set_enabled(true);
             let model_name = s.model_name.clone();
-            s.discord_rpc.set_activity("Idle", &format!("Using model: {}", model_name));
+            s.discord_rpc
+                .set_activity("Idle", &format!("Using model: {}", model_name));
         }
     }
 
@@ -248,7 +251,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.status = AppStatus::Queued;
                         if s.config.discord_rpc_enabled {
                             let model_name = s.model_name.clone();
-                            s.discord_rpc.set_activity("Queued", &format!("Using model: {}", model_name));
+                            s.discord_rpc
+                                .set_activity("Queued", &format!("Using model: {}", model_name));
                         }
                         drop(s);
                         crate::network::process_queue_orchestrator(
@@ -437,7 +441,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .and_then(|c| c.first())
                                         .map(|c| c.content_preview.lines().count())
                                         .unwrap_or(0);
-                                    if total_lines > 0 && (s.modal_scroll_row as usize) + 1 < total_lines {
+                                    if total_lines > 0
+                                        && (s.modal_scroll_row as usize) + 1 < total_lines
+                                    {
                                         s.modal_scroll_row += 1;
                                     }
                                 }
@@ -465,8 +471,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // instead; this covers terminals that forward the key.)
                                     KeyCode::Char('v') | KeyCode::Char('V')
                                         if key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                            || key.modifiers.contains(event::KeyModifiers::SUPER)
-                                            || key.modifiers.contains(event::KeyModifiers::META) =>
+                                            || key
+                                                .modifiers
+                                                .contains(event::KeyModifiers::SUPER)
+                                            || key
+                                                .modifiers
+                                                .contains(event::KeyModifiers::META) =>
                                     {
                                         if let Some(text) =
                                             crate::clipboard::read_text_from_clipboard()
@@ -598,7 +608,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 .map(|(o, _)| o.clone())
                                                 .collect();
                                             if picked.is_empty() {
-                                                q.options.get(q.selected).cloned().unwrap_or_default()
+                                                q.options
+                                                    .get(q.selected)
+                                                    .cloned()
+                                                    .unwrap_or_default()
                                             } else {
                                                 picked.join(", ")
                                             }
@@ -614,7 +627,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::Esc => {
                                     // Dismiss question and cancel active generation stream
                                     current_cancel_token.cancel();
-                                    current_cancel_token = tokio_util::sync::CancellationToken::new();
+                                    current_cancel_token =
+                                        tokio_util::sync::CancellationToken::new();
                                     let mut s = app_state.lock().await;
                                     s.question_response = None;
                                     s.pending_question = None;
@@ -625,16 +639,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
-
                     let mut s = app_state.lock().await;
                     if s.show_history_picker {
                         // Ctrl+D triggers delete confirmation overlay
                         if key.modifiers.contains(event::KeyModifiers::CONTROL)
                             && key.code == KeyCode::Char('d')
                         {
-                            let idx = s.history_picker_index.min(
-                                s.history_picker_sessions.len().saturating_sub(1),
-                            );
+                            let idx = s
+                                .history_picker_index
+                                .min(s.history_picker_sessions.len().saturating_sub(1));
                             s.pending_delete_session_idx = Some(idx);
                             drop(s);
                             continue;
@@ -651,9 +664,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     s.history_picker_sessions.remove(del_idx);
                                     if !s.history_picker_sessions.is_empty()
-                                        && del_idx >= s.history_picker_sessions.len().saturating_sub(1)
+                                        && del_idx
+                                            >= s.history_picker_sessions.len().saturating_sub(1)
                                     {
-                                        s.history_picker_index = (del_idx as i64 - 1).max(0) as usize;
+                                        s.history_picker_index =
+                                            (del_idx as i64 - 1).max(0) as usize;
                                     }
                                     s.pending_delete_session_idx = None;
                                     if s.history_picker_sessions.is_empty() {
@@ -729,7 +744,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     s.mcp_edit_state = None;
                                 }
                                 KeyCode::Up => {
-                                    let prev = if edit_state.active_field == 0 { 2 } else { edit_state.active_field - 1 };
+                                    let prev = if edit_state.active_field == 0 {
+                                        2
+                                    } else {
+                                        edit_state.active_field - 1
+                                    };
                                     edit_state.set_active_field(prev);
                                 }
                                 KeyCode::Down | KeyCode::Tab => {
@@ -798,14 +817,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         if edit_state.is_add {
                                             s.config.mcp_servers.push(new_srv);
                                         } else if let Some(idx) = edit_state.edit_index
-                                            && idx < s.config.mcp_servers.len() {
-                                                let old_name =
-                                                    s.config.mcp_servers[idx].name.clone();
-                                                s.config.mcp_servers[idx] = new_srv;
-                                                if old_name != name {
-                                                    crate::mcp::shutdown_server(&old_name).await;
-                                                }
+                                            && idx < s.config.mcp_servers.len()
+                                        {
+                                            let old_name = s.config.mcp_servers[idx].name.clone();
+                                            s.config.mcp_servers[idx] = new_srv;
+                                            if old_name != name {
+                                                crate::mcp::shutdown_server(&old_name).await;
                                             }
+                                        }
 
                                         crate::config::save_entire_config(&s.config);
 
@@ -1027,11 +1046,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     "No skills discovered.\nPlace SKILL.md files in .rustcode/skills/ or ~/.config/rustcode/skills/",
                                                 ));
                                             } else {
-                                                let mut out = format!("📦 Discovered Skills ({}):\n\n", skills.len());
+                                                let mut out = format!(
+                                                    "📦 Discovered Skills ({}):\n\n",
+                                                    skills.len()
+                                                );
                                                 for skill in &skills {
                                                     out.push_str(&format!("  • {}\n", skill.name));
-                                                    out.push_str(&format!("    Description: {}\n", skill.description));
-                                                    out.push_str(&format!("    Path: {}\n\n", skill.path.display()));
+                                                    out.push_str(&format!(
+                                                        "    Description: {}\n",
+                                                        skill.description
+                                                    ));
+                                                    out.push_str(&format!(
+                                                        "    Path: {}\n\n",
+                                                        skill.path.display()
+                                                    ));
                                                 }
                                                 s.history.push(ChatMessage::new("system", out));
                                             }
@@ -1041,20 +1069,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             s.history.push(ChatMessage::new("system", info));
                                         }
                                         "/changelog" => {
-                                            let log_text = crate::app::actions::build_latest_changelog();
+                                            let log_text =
+                                                crate::app::actions::build_latest_changelog();
                                             s.history.push(ChatMessage::new("assistant", log_text));
                                         }
                                         "/quota" => {
                                             crate::app::actions::trigger_quota_fetch(
-                                                &s,
-                                                &app_state,
-                                                &client,
+                                                &s, &app_state, &client,
                                             );
                                         }
                                         "/update" => {
                                             crate::app::actions::trigger_update(
-                                                &app_state,
-                                                &client,
+                                                &app_state, &client,
                                             );
                                         }
                                         "/copy" => {
@@ -1151,7 +1177,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     drop(s);
-                    dbg_log!("[KEY_EVENT] code={:?} modifiers={:?}", key.code, key.modifiers);
+                    dbg_log!(
+                        "[KEY_EVENT] code={:?} modifiers={:?}",
+                        key.code,
+                        key.modifiers
+                    );
 
                     match key.code {
                         KeyCode::BackTab => {
@@ -1161,13 +1191,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Esc => {
                             let now = std::time::Instant::now();
                             let mut s = app_state.lock().await;
-                            
+
                             // Check if this is a double-esc (within 500ms)
                             match s.last_escape_time {
-                                Some(last_time) if now.duration_since(last_time).as_millis() < 500 => {
+                                Some(last_time)
+                                    if now.duration_since(last_time).as_millis() < 500 =>
+                                {
                                     drop(s);
-                                    crate::app::handle_escape(&app_state, &mut current_cancel_token)
-                                        .await;
+                                    crate::app::handle_escape(
+                                        &app_state,
+                                        &mut current_cancel_token,
+                                    )
+                                    .await;
                                     needs_redraw = true;
                                 }
                                 _ => {
@@ -1178,7 +1213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         s.input_buffer.clear();
                                         s.cursor_position = 0;
                                     }
-                                    
+
                                     // Update last escape time for double-esc detection
                                     s.last_escape_time = Some(now);
                                 }
@@ -1235,23 +1270,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
-                            let has_at = crate::app::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
+                            let has_at =
+                                crate::app::get_at_word_query(&s.input_buffer, s.cursor_position)
+                                    .is_some();
                             if s.active_suggestion_index.is_some() || has_at {
                                 crate::app::apply_autocomplete(&mut s);
-                            } else if s.input_buffer.starts_with('/') && !s.input_buffer.contains(' ') {
+                            } else if s.input_buffer.starts_with('/')
+                                && !s.input_buffer.contains(' ')
+                            {
                                 s.cycle_suggestion();
                             } else {
                                 // Toggle Agent Mode (Build vs Plan)
                                 s.agent_mode = match s.agent_mode {
-                                    crate::config::AgentMode::Build => crate::config::AgentMode::Plan,
-                                    crate::config::AgentMode::Plan => crate::config::AgentMode::Build,
+                                    crate::config::AgentMode::Build => {
+                                        crate::config::AgentMode::Plan
+                                    }
+                                    crate::config::AgentMode::Plan => {
+                                        crate::config::AgentMode::Build
+                                    }
                                 };
                                 s.config.agent_mode = s.agent_mode;
                                 crate::config::save_entire_config(&s.config);
 
                                 let notice = match s.agent_mode {
-                                    crate::config::AgentMode::Build => "Switched to Build Mode (Full Code Editing)",
-                                    crate::config::AgentMode::Plan => "Switched to Plan Mode (Read-only / Design only)",
+                                    crate::config::AgentMode::Build => {
+                                        "Switched to Build Mode (Full Code Editing)"
+                                    }
+                                    crate::config::AgentMode::Plan => {
+                                        "Switched to Plan Mode (Read-only / Design only)"
+                                    }
                                 };
                                 s.set_notice(notice);
                             }
@@ -1341,14 +1388,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         // Ctrl+Y, Cmd+C, or Ctrl+C copies the current app selection.
-                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('c') | KeyCode::Char('C')
+                        KeyCode::Char('y')
+                        | KeyCode::Char('Y')
+                        | KeyCode::Char('c')
+                        | KeyCode::Char('C')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL)
                                 || key.modifiers.contains(event::KeyModifiers::SUPER)
                                 || key.modifiers.contains(event::KeyModifiers::META) =>
                         {
                             let mut s = app_state.lock().await;
                             if let Some(text) = s.selected_text.clone() {
-                                dbg_log!("[MAIN] KeyCopy copying selected text ({} chars): {:?}", text.len(), text);
+                                dbg_log!(
+                                    "[MAIN] KeyCopy copying selected text ({} chars): {:?}",
+                                    text.len(),
+                                    text
+                                );
                                 if crate::clipboard::copy_to_clipboard(&text) {
                                     s.set_notice("Copied to clipboard");
                                 }
@@ -1532,38 +1586,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.scroll_to_bottom();
                                 needs_redraw = true;
                             } else {
-                            let inside_chat = if let Some(ca) = s.chat_area {
-                                mouse.row >= ca.y && mouse.row < ca.y + ca.height &&
-                                mouse.column >= ca.x && mouse.column < ca.x + ca.width
-                            } else {
-                                true
-                            };
-                            let inside_input = s.input_text_area.map(|ia| {
-                                mouse.row >= ia.y && mouse.row < ia.y + ia.height &&
-                                mouse.column >= ia.x && mouse.column < ia.x + ia.width
-                            }).unwrap_or(false);
-                            if inside_chat {
-                                s.sel_in_input = false;
-                                s.sel_start = Some((mouse.column, mouse.row + s.scroll_row));
-                                s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
-                                s.selecting = true;
-                            } else if inside_input {
-                                // Input box has no scroll offset: store raw screen rows.
-                                s.sel_in_input = true;
-                                s.sel_start = Some((mouse.column, mouse.row));
-                                s.sel_end = Some((mouse.column, mouse.row));
-                                s.selecting = true;
-                            } else {
-                                s.clear_selection();
-                            }
-                            needs_redraw = true;
+                                let inside_chat = if let Some(ca) = s.chat_area {
+                                    mouse.row >= ca.y
+                                        && mouse.row < ca.y + ca.height
+                                        && mouse.column >= ca.x
+                                        && mouse.column < ca.x + ca.width
+                                } else {
+                                    true
+                                };
+                                let inside_input = s
+                                    .input_text_area
+                                    .map(|ia| {
+                                        mouse.row >= ia.y
+                                            && mouse.row < ia.y + ia.height
+                                            && mouse.column >= ia.x
+                                            && mouse.column < ia.x + ia.width
+                                    })
+                                    .unwrap_or(false);
+                                if inside_chat {
+                                    s.sel_in_input = false;
+                                    s.sel_start = Some((mouse.column, mouse.row + s.scroll_row));
+                                    s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
+                                    s.selecting = true;
+                                } else if inside_input {
+                                    // Input box has no scroll offset: store raw screen rows.
+                                    s.sel_in_input = true;
+                                    s.sel_start = Some((mouse.column, mouse.row));
+                                    s.sel_end = Some((mouse.column, mouse.row));
+                                    s.selecting = true;
+                                } else {
+                                    s.clear_selection();
+                                }
+                                needs_redraw = true;
                             }
                         }
                         MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
                             let target_row = if s.sel_in_input {
                                 // Clamp to the input rect; no scroll in the input box.
                                 match s.input_text_area {
-                                    Some(ia) => mouse.row.max(ia.y).min((ia.y + ia.height).saturating_sub(1)),
+                                    Some(ia) => mouse
+                                        .row
+                                        .max(ia.y)
+                                        .min((ia.y + ia.height).saturating_sub(1)),
                                     None => mouse.row,
                                 }
                             } else {
@@ -1585,13 +1649,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         MouseEventKind::Up(MouseButton::Left) if s.selecting => {
                             let target_row = if s.sel_in_input {
                                 match s.input_text_area {
-                                    Some(ia) => mouse.row.max(ia.y).min((ia.y + ia.height).saturating_sub(1)),
+                                    Some(ia) => mouse
+                                        .row
+                                        .max(ia.y)
+                                        .min((ia.y + ia.height).saturating_sub(1)),
                                     None => mouse.row,
                                 }
                             } else {
                                 let mut tr = mouse.row + s.scroll_row;
                                 if let Some(ca) = s.chat_area {
-                                    tr = tr.max(ca.y + s.scroll_row).min((ca.y + ca.height).saturating_sub(1) + s.scroll_row);
+                                    tr = tr
+                                        .max(ca.y + s.scroll_row)
+                                        .min((ca.y + ca.height).saturating_sub(1) + s.scroll_row);
                                 }
                                 tr
                             };
@@ -1601,7 +1670,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if a != b {
                                     // Dragged: copy on release, like selecting on a web page.
                                     if let Some(text) = s.selected_text.take() {
-                                        dbg_log!("[MAIN] MouseUp copying selected text ({} chars): {:?}", text.len(), text);
+                                        dbg_log!(
+                                            "[MAIN] MouseUp copying selected text ({} chars): {:?}",
+                                            text.len(),
+                                            text
+                                        );
                                         if crate::clipboard::copy_to_clipboard(&text) {
                                             s.set_notice("Copied to clipboard");
                                         }
@@ -1615,8 +1688,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // row, otherwise just clear any existing selection.
                                     s.clear_selection();
                                     let click_screen_row = b.1.saturating_sub(s.scroll_row);
-                                    if let Some(&(_, idx)) =
-                                        s.thought_toggle_rows.iter().find(|(row, _)| *row == click_screen_row)
+                                    if let Some(&(_, idx)) = s
+                                        .thought_toggle_rows
+                                        .iter()
+                                        .find(|(row, _)| *row == click_screen_row)
                                     {
                                         s.toggle_thought(idx);
                                     } else if let Some((_, code)) = s
