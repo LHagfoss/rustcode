@@ -1,6 +1,9 @@
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const DISCORD_CLIENT_ID: &str = "1533154312622964970";
+const DISCORD_LARGE_IMAGE: &str = "rustcode_logo";
+
 pub struct DiscordRpcHandler {
     client: Option<DiscordIpcClient>,
     start_time: u64,
@@ -46,8 +49,7 @@ impl DiscordRpcHandler {
             return;
         }
 
-        let client_id = "1533154312622964970";
-        let mut client_instance = match DiscordIpcClient::new(client_id) {
+        let mut client_instance = match DiscordIpcClient::new(DISCORD_CLIENT_ID) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Failed to create Discord RPC client: {}", e);
@@ -70,36 +72,32 @@ impl DiscordRpcHandler {
         if !self.enabled {
             return;
         }
-        self.set_activity_internal(state, details, true);
-    }
-
-    fn set_activity_internal(&mut self, state: &str, details: &str, allow_reconnect: bool) {
-        if !self.enabled {
+        self.connect();
+        if self.set_activity_once(state, details) {
             return;
         }
 
-        if let Some(client) = &mut self.client {
-            let activity = activity::Activity::new()
-                .state(state)
-                .details(details)
-                .assets(activity::Assets::new().large_image("rustcode_logo"))
-                .timestamps(activity::Timestamps::new().start(self.start_time as i64));
-            if let Err(e) = client.set_activity(activity) {
-                eprintln!("Failed to set Discord RPC activity: {}", e);
-                self.disconnect();
-                if allow_reconnect {
-                    self.connect();
-                    if self.client.is_some() {
-                        self.set_activity_internal(state, details, false);
-                    }
-                }
-            }
-        } else {
-            self.connect();
-            if self.client.is_some() {
-                self.set_activity_internal(state, details, false);
-            }
+        self.disconnect();
+        self.connect();
+        self.set_activity_once(state, details);
+    }
+
+    fn set_activity_once(&mut self, state: &str, details: &str) -> bool {
+        let Some(client) = &mut self.client else {
+            return false;
+        };
+
+        let activity = activity::Activity::new()
+            .state(state)
+            .details(details)
+            .assets(activity::Assets::new().large_image(DISCORD_LARGE_IMAGE))
+            .timestamps(activity::Timestamps::new().start(self.start_time as i64));
+        if let Err(e) = client.set_activity(activity) {
+            eprintln!("Failed to set Discord RPC activity: {}", e);
+            return false;
         }
+
+        true
     }
 
     fn clear_activity_internal(&mut self) {
