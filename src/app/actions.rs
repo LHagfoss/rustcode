@@ -446,9 +446,13 @@ pub async fn handle_enter(
                     {
                         "set for this model"
                     } else if crate::config::provider_supports_function_calling(&url) {
-                        "detected: this provider supports function calling"
+                        "known provider with function calling"
                     } else {
-                        "fallback for providers without function calling"
+                        match s.function_calling_support.get(&url) {
+                            Some(true) => "probed: this endpoint accepts tool schemas",
+                            Some(false) => "probed: this endpoint rejects tool schemas",
+                            None => "not probed yet — send a message first",
+                        }
                     };
                     let msg = format!(
                         "Tool protocol for this model: {active:?} ({source})\n\
