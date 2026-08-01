@@ -122,11 +122,50 @@ pub(crate) fn to_messages(
     let entries = normalize_history(history);
     debug_assert_eq!(entries.len(), history.len());
 
-    messages.extend(history.iter().zip(entries).map(|(message, entry)| {
-        if let Some(structured) = structured_message(message) {
-            return structured;
+    // Ids that some later message answers. A turn can end between announcing a
+    // call and running it — the user interrupts, the provider drops the stream —
+    // and an unanswered id makes the whole request invalid. Rather than trusting
+    // every path that records a call to also record its outcome, the gap is
+    // closed here, where the request is actually built.
+    let answered: std::collections::HashSet<&str> = history
+        .iter()
+        .filter_map(|message| message.tool_call_id.as_deref())
+        .collect();
+    // Compaction can drop the assistant message that announced a call while
+    // keeping its result. An answer to a call the request never mentions is just
+    // as invalid as an unanswered call, so those fall back to the text form.
+    let announced: std::collections::HashSet<&str> = history
+        .iter()
+        .flat_map(|message| message.tool_calls.iter())
+        .map(|call| call.id.as_str())
+        .collect();
+
+    for (message, entry) in history.iter().zip(entries) {
+        let orphan_result = message
+            .tool_call_id
+            .as_deref()
+            .is_some_and(|id| !announced.contains(id));
+        if let Some(structured) = (!orphan_result)
+            .then(|| structured_message(message))
+            .flatten()
+        {
+            messages.push(structured);
+            // Speak for the calls nothing else answered, in the order they were
+            // made, so the model sees which of them never ran.
+            for call in message
+                .tool_calls
+                .iter()
+                .filter(|call| !answered.contains(call.id.as_str()))
+            {
+                messages.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": "error: this call did not run — the turn ended before it could",
+                }));
+            }
+            continue;
         }
-        match entry {
+        messages.push(match entry {
         HistoryEntry::ToolResult { tool_name, content, metadata } => {
             let metadata_line = metadata
                 .as_ref()
@@ -161,8 +200,8 @@ pub(crate) fn to_messages(
             "role": "system",
             "content": content,
         }),
-        }
-    }));
+        });
+    }
 
     messages
 }
@@ -244,6 +283,46 @@ mod tests {
         assert_eq!(msgs[3]["role"], "tool");
         assert_eq!(msgs[3]["tool_call_id"], "call_abc");
         assert_eq!(msgs[3]["content"], "src/config.rs:1");
+    }
+
+    // A turn can end between announcing a call and running it (user interrupt,
+    // dropped stream). An unanswered id makes the whole request invalid.
+    #[test]
+    fn calls_the_turn_never_ran_are_answered_in_the_request() {
+        let history = vec![
+            ChatMessage::new("user", "go"),
+            ChatMessage::new("assistant", "```tool\n{}\n```").with_tool_calls(vec![
+                crate::app::ToolCallRef {
+                    id: "call_dead".to_string(),
+                    name: "run_command".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            ]),
+            ChatMessage::new("user", "what happened"),
+        ];
+
+        let msgs = to_messages(&history, "sys");
+
+        assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_dead");
+        assert_eq!(msgs[3]["role"], "tool");
+        assert_eq!(msgs[3]["tool_call_id"], "call_dead");
+        assert!(msgs[3]["content"].as_str().unwrap().contains("did not run"));
+        assert_eq!(msgs[4]["content"], "what happened");
+    }
+
+    // Compaction can drop the announcing message while keeping the result.
+    #[test]
+    fn results_for_forgotten_calls_fall_back_to_text() {
+        let history = vec![
+            ChatMessage::new("user", "go"),
+            ChatMessage::new("tool", "grep: found it").answering(Some("call_gone".to_string())),
+        ];
+
+        let msgs = to_messages(&history, "sys");
+
+        assert_eq!(msgs[2]["role"], "user");
+        assert!(msgs[2]["tool_call_id"].is_null());
+        assert!(msgs[2]["content"].as_str().unwrap().contains("<tool_result>"));
     }
 
     #[test]
