@@ -102,11 +102,8 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         .and_then(parse_json_number)
         .map(|v| v as usize)
         .unwrap_or(1);
-    let end_line = args
-        .get("end_line")
-        .and_then(parse_json_number)
-        .map(|v| v as usize)
-        .unwrap_or(start_line + 2000);
+    let requested_end = args.get("end_line").and_then(parse_json_number).map(|v| v as usize);
+    let end_line = requested_end.unwrap_or(start_line + 2000);
 
     let content_bytes =
         std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
@@ -154,7 +151,20 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
     }
 
     if actual_end < total {
-        out.push_str("... content truncated (use end_line or content_offset to read more) ...\n");
+        // A read that stopped where the caller asked it to is not truncated.
+        // Calling it truncated tells the model it is missing something, and a
+        // model that thinks it is missing something reads the file again — which
+        // is exactly the loop this produced when a one-line read reported itself
+        // as cut short.
+        if requested_end.is_some() {
+            out.push_str(&format!(
+                "... end of requested range; the file continues to line {total} ...\n"
+            ));
+        } else {
+            out.push_str(
+                "... content truncated (use end_line or content_offset to read more) ...\n",
+            );
+        }
     }
 
     Ok(out)
@@ -743,6 +753,33 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: session 1785594233488. A read of exactly lines 1-1 ended with
+    // "content truncated (use end_line or content_offset to read more)", so the
+    // model believed it had missed something and re-read the same file four
+    // times, tripping the loop detector.
+    #[test]
+    fn a_read_that_ends_where_asked_is_not_reported_as_truncated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("symbols.rs");
+        std::fs::write(&file, "// scratch\nuse std::fs;\nfn main() {}\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let ranged = view_file_tool(&serde_json::json!({
+            "path": path,
+            "start_line": 1,
+            "end_line": 1,
+        }))
+        .expect("read");
+        assert!(ranged.contains("1: // scratch"), "got: {ranged}");
+        assert!(!ranged.contains("truncated"), "got: {ranged}");
+        assert!(ranged.contains("the file continues to line 3"), "got: {ranged}");
+
+        // A read the tool itself cut short still says so.
+        let whole = view_file_tool(&serde_json::json!({ "path": path })).expect("read");
+        assert!(!whole.contains("truncated"), "got: {whole}");
+        assert!(!whole.contains("continues"), "got: {whole}");
+    }
 
     // Regression: session 1785594233488. The model tried to prepend a line by
     // sending an empty old_string; it matched at every offset and came back as
