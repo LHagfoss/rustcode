@@ -620,6 +620,12 @@ pub struct AppState {
     /// to short-circuit identical re-reads (e.g. viewing the same file twice).
     pub recent_read_calls: std::collections::VecDeque<String>,
 
+    /// Output of recent small reads, keyed by the same signature. A repeat read
+    /// of an unchanged file is answered from here, so the model gets what it
+    /// asked for instead of a notice telling it to look further up the context —
+    /// which it answers by asking again.
+    pub recent_read_outputs: std::collections::HashMap<String, String>,
+
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
     pub last_max_scroll: u16,
@@ -801,6 +807,7 @@ impl AppState {
             todos: Vec::new(),
             read_file_mtimes: std::collections::HashMap::new(),
             recent_read_calls: std::collections::VecDeque::new(),
+            recent_read_outputs: std::collections::HashMap::new(),
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             current_terminal_title: None,

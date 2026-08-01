@@ -2405,6 +2405,7 @@ async fn prepare_turn_request(
             if compacted {
                 dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
                 s.recent_read_calls.clear();
+                s.recent_read_outputs.clear();
                 s.read_file_mtimes.clear();
                 crate::config::save_history(&s.history);
             }
@@ -2714,13 +2715,33 @@ async fn execute_tool_batch(
             }
 
             let (result, diff_opt) = if is_repeat {
-                (
-                    "[Notice: This exact read tool call was previously executed with identical arguments. \
-                     The previous output is available in the context above. If you need updated lines or \
-                     fresh content, use different range arguments or make edits first.]"
-                        .to_string(),
-                    None,
-                )
+                // Serve the content again when it is small enough to be worth
+                // repeating. A notice that points at earlier context is not an
+                // answer: a model that wanted those lines simply asks a third
+                // time, which is how an identical read repeats four times in a
+                // row while the guard keeps declining it.
+                let cached = {
+                    let s = state_clone.lock().await;
+                    s.recent_read_outputs
+                        .get(&tool_signature(&name_clone, &args_clone))
+                        .cloned()
+                };
+                match cached {
+                    Some(previous) => (
+                        format!(
+                            "[Unchanged since the last read of this exact range — repeating that output. \
+Re-reading will not produce anything new; act on this content.]\n{previous}"
+                        ),
+                        None,
+                    ),
+                    None => (
+                        "[Notice: This exact read tool call was previously executed with identical arguments, \
+and the file has not changed since. Its output is above in the context — use it. To see something \
+different, read another range or make an edit first; repeating this call returns this same notice.]"
+                            .to_string(),
+                        None,
+                    ),
+                }
             } else if name_clone == "ask_question" {
                 (
                     ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await,
@@ -2772,10 +2793,24 @@ async fn execute_tool_batch(
                 }
                 if is_read_only && !is_repeat {
                     let sig = tool_signature(&name_clone, &args_clone);
+                    // Keep the output of small reads so an identical re-read can
+                    // be answered with the content rather than a redirection.
+                    if result.len() <= REPLAYABLE_READ_LIMIT {
+                        s.recent_read_outputs.insert(sig.clone(), result.clone());
+                    }
                     if !s.recent_read_calls.contains(&sig) {
                         s.recent_read_calls.push_back(sig);
                         while s.recent_read_calls.len() > 8 {
                             s.recent_read_calls.pop_front();
+                        }
+                        while s.recent_read_outputs.len() > 8
+                            && let Some(oldest) = s
+                                .recent_read_outputs
+                                .keys()
+                                .find(|key| !s.recent_read_calls.contains(key))
+                                .cloned()
+                        {
+                            s.recent_read_outputs.remove(&oldest);
                         }
                     }
                 }
@@ -2835,6 +2870,7 @@ async fn execute_tool_batch(
         {
             let mut s = state.lock().await;
             s.recent_read_calls.clear();
+            s.recent_read_outputs.clear();
             s.read_file_mtimes.clear();
         }
         let root = edit_root
@@ -2892,6 +2928,11 @@ Do NOT edit something else, delete existing content, or reverse the request in o
 An edit that moves the workspace further from what was asked is worse than writing nothing.]"
     )
 }
+
+/// Largest read output kept for replay to an identical repeat call. Small reads
+/// are cheaper to repeat than to argue about; large ones stay behind a notice so
+/// a loop cannot re-send a whole file every turn.
+const REPLAYABLE_READ_LIMIT: usize = 4096;
 
 /// How many times the completion gate argues before letting a claim through.
 const MAX_COMPLETION_BLOCKS: u8 = 2;
@@ -3918,6 +3959,7 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
             s.generation_start_time = Some(std::time::Instant::now());
             s.stream_tracker = Some(StreamTracker::new());
             s.recent_read_calls.clear();
+            s.recent_read_outputs.clear();
             s.read_file_mtimes.clear();
             let prompt = s.pending_queue.remove(0);
             dbg_log!("Popped prompt from queue: '{}'", prompt);
@@ -4111,6 +4153,21 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: session 1785600273324, msgs 7-18. The repeat guard correctly
+    // declined four identical `view_file lines 1-1` calls, but answered each with
+    // a notice pointing at earlier context. The model wanted those lines, so it
+    // asked again — six turns and four loop warnings before it moved on.
+    #[test]
+    fn small_reads_are_worth_repeating_verbatim() {
+        let one_line = "[File: src/symbols.rs, Lines 1 to 1 of 408]\n1: use rusqlite::{Connection, params};";
+        assert!(one_line.len() <= REPLAYABLE_READ_LIMIT);
+
+        // A whole file stays behind the notice: repeating it every turn would
+        // cost more than the loop it prevents.
+        let whole_file = "x".repeat(15_567);
+        assert!(whole_file.len() > REPLAYABLE_READ_LIMIT);
+    }
 
     // Regression: session 1785595170460, msgs 5-8. Two identical full-file reads
     // ran back to back because the read-dedupe cache was cleared on a sticky
