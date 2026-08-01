@@ -51,6 +51,58 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     false
 }
 
+/// Wrap bare `thought` markers in `<think>` spans.
+///
+/// Some providers return their reasoning in the ordinary content channel with a
+/// literal `thought` marker in front of it instead of in a `reasoning` delta.
+/// Nothing downstream recognises that, so the reasoning was stored and shown as
+/// the model's answer — transcripts read `thoughtThe grep command confirms...`
+/// where a reply should be. Promoting the markers puts that text back under the
+/// same `<think>` handling every other provider's reasoning goes through.
+///
+/// A span runs from its marker to the next marker, the next fenced block, or
+/// the end of the text. Content that already carries `<think>` is left alone.
+pub(crate) fn promote_bare_thought_markers(content: &str) -> String {
+    const MARKER: &str = "thought";
+
+    if content.contains("<think>") || !content.contains(MARKER) {
+        return content.to_string();
+    }
+
+    // Only a marker that opens a line and is glued to the start of a sentence
+    // counts. Ordinary prose about a "thought" sits mid-sentence, is followed by
+    // a space, or continues the word in lower case ("thoughtful").
+    let starts_span = |line: &str| {
+        line.strip_prefix(MARKER)
+            .is_some_and(|rest| rest.chars().next().is_some_and(char::is_uppercase))
+    };
+
+    let mut out = String::with_capacity(content.len() + 32);
+    let mut open = false;
+    for line in content.lines() {
+        if starts_span(line) {
+            if open {
+                out.push_str("</think>\n");
+            }
+            out.push_str("<think>\n");
+            open = true;
+            out.push_str(&line[MARKER.len()..]);
+            out.push('\n');
+            continue;
+        }
+        if open && line.trim_start().starts_with("```") {
+            out.push_str("</think>\n");
+            open = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if open {
+        out.push_str("</think>\n");
+    }
+    out
+}
+
 /// Remove every `<think>...</think>` span so we can inspect the model's actual
 /// answer/tool output.
 pub(crate) fn strip_think_blocks(content: &str) -> String {
@@ -168,6 +220,38 @@ pub(crate) fn strip_leading_think(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: Gemini-family models return reasoning in the content channel
+    // behind a bare `thought` marker, which used to be stored and displayed as
+    // the model's answer ("thoughtThe grep command confirms...").
+    #[test]
+    fn bare_thought_markers_become_think_spans() {
+        let raw = "thoughtThe grep confirms duct is used.\n```tool\n{\"name\": \"grep\"}\n```\nthoughtNow I will check Cargo.toml.";
+
+        let promoted = promote_bare_thought_markers(raw);
+
+        assert!(promoted.starts_with("<think>\nThe grep confirms"), "got: {promoted}");
+        // The fence closes the span so the tool call stays outside it.
+        assert!(promoted.contains("</think>\n```tool"), "got: {promoted}");
+        // The trailing span is closed at the end of the text.
+        assert!(promoted.trim_end().ends_with("</think>"), "got: {promoted}");
+        assert!(!strip_think_blocks(&promoted).contains("grep confirms"));
+    }
+
+    #[test]
+    fn thought_promotion_leaves_ordinary_text_alone() {
+        // Mid-sentence use of the word, and a marker followed by a space, are prose.
+        let prose = "I had a thought about this.\nthought about the design";
+        assert_eq!(promote_bare_thought_markers(prose), prose.to_string() + "\n");
+
+        // A word that merely starts with the marker is not a marker.
+        let word = "thoughtful answers only";
+        assert_eq!(promote_bare_thought_markers(word), word.to_string() + "\n");
+
+        // Providers that already delimit reasoning are untouched.
+        let delimited = "<think>plan</think>\n\nthoughtful answer here";
+        assert_eq!(promote_bare_thought_markers(delimited), delimited);
+    }
 
     #[test]
     fn test_strip_leading_think() {

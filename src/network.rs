@@ -2932,7 +2932,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             // risk re-entering the loop we just broke out of.
             if ctx.force_final {
                 dbg_log!("Loop wrap-up: recording forced text answer and finishing");
-                let prose = strip_tool_call_syntax(&ctx.final_content);
+                // Promote bare `thought` markers first, then drop the reasoning
+                // outright: this is the answer the user reads, and a wrap-up
+                // that opens with paragraphs of planning is not an answer.
+                let promoted = text::promote_bare_thought_markers(&ctx.final_content);
+                let prose = strip_tool_call_syntax(&text::strip_think_blocks(&promoted));
                 // Filter out any system prompt leak or empty content
                 let clean_prose = prose
                     .lines()

@@ -154,6 +154,10 @@ pub(crate) fn normalize_response(
     provider_finish_reason: Option<&str>,
     protocol: crate::config::ToolProtocol,
 ) -> ModelResponse {
+    // Reasoning that arrived in the content channel behind a bare `thought`
+    // marker becomes a normal `<think>` span first, so it is classified and
+    // stored as reasoning rather than as the model's answer.
+    let content = &super::text::promote_bare_thought_markers(content);
     let events = classify_response(content, provider_finish_reason, protocol);
     let has_tool_calls = events
         .iter()
