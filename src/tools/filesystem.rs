@@ -245,6 +245,16 @@ fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEd
         return Err("old_string and new_string are identical".to_string());
     }
 
+    // An empty target matches at every byte offset, so it is never the anchor the
+    // model meant — it is what a model reaches for when it wants to insert rather
+    // than replace. Saying so beats reporting thousands of matches, which reads
+    // like the file is the problem.
+    if edit.target.is_empty() {
+        return Err(format!(
+            "error: target_content (old_string) is empty, which matches everywhere in '{path}' and cannot anchor an edit. To insert text, set target_content to the line the new text goes next to and include that line in replacement_content — e.g. to prepend, target the current first line and replace it with the new text followed by that same line."
+        ));
+    }
+
     let target_content = &edit.target;
     let replacement_content = &edit.replacement;
 
@@ -648,6 +658,15 @@ pub fn multi_replace_file_content_tool(args: &Value) -> Result<String, String> {
                 chunk.start_line, chunk.end_line, total
             ));
         }
+        // Same insert-shaped mistake as the single-edit path: an empty target
+        // reported as "does not match" against a blank expectation reads like a
+        // file problem rather than a malformed edit.
+        if chunk.target_content.is_empty() {
+            return Err(format!(
+                "replacement index {i} has an empty target_content, which cannot anchor an edit. Set target_content to the lines currently at {}-{} and include them in replacement_content to insert around them.",
+                chunk.start_line, chunk.end_line
+            ));
+        }
         let segment = file_lines[chunk.start_line - 1..chunk.end_line].join("\n");
         if segment.trim_end() != chunk.target_content.trim_end() {
             let mut mismatch = format!(
@@ -724,6 +743,29 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: session 1785594233488. The model tried to prepend a line by
+    // sending an empty old_string; it matched at every offset and came back as
+    // "found 13573 matches", which reads like the file is at fault. The model
+    // then retried the same shape through multi_replace and gave up on editing.
+    #[test]
+    fn empty_edit_anchor_is_rejected_with_insert_guidance() {
+        let edit = SingleEdit {
+            target: String::new(),
+            replacement: "// scratch\n".to_string(),
+            start_line: None,
+            end_line: None,
+        };
+
+        let error = apply_single_edit_to_content("line one\nline two\n", "src/symbols.rs", &edit)
+            .expect_err("an empty anchor cannot identify an edit site");
+
+        assert!(error.contains("empty"), "got: {error}");
+        assert!(error.contains("matches everywhere"), "got: {error}");
+        // Points at what to do instead, since the model wanted to insert.
+        assert!(error.contains("prepend"), "got: {error}");
+        assert!(!error.contains("found 2 matches"), "got: {error}");
+    }
 
     // Regression: session 1785315367588 looped because the model's target
     // block had a single backslash in the char literal (`'\'`) where the file
