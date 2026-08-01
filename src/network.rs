@@ -197,6 +197,23 @@ fn loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
     }
 }
 
+/// True when a mutating tool's result reflects real forward progress —
+/// not merely a reported success. A failed edit changed nothing, and
+/// neither did an idempotent no-op (PR #306's "already applied" signal
+/// for an edit that was already applied). Both cases must be treated the
+/// same by every consumer that gates on "did this round move the task
+/// forward": the no-progress safety budget, and the loop detector's
+/// reset-on-progress rule. Otherwise a model that keeps re-submitting an
+/// already-applied edit gets a "success" every round that resets the loop
+/// detector, so it never trips — defeating the detector entirely.
+fn mutation_made_progress(success: bool, content: &str) -> bool {
+    if !success {
+        return false;
+    }
+    let lower = content.trim_start().to_ascii_lowercase();
+    !lower.starts_with("error") && !lower.contains("already applied")
+}
+
 /// True when a tool result has already been reduced to a stub (nothing left to prune).
 fn is_fully_stubbed(m: &ChatMessage) -> bool {
     let rest = m
@@ -3906,13 +3923,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             .trim_start()
                             .to_ascii_lowercase()
                             .starts_with("error");
-                    // A tool that reports success without changing anything
-                    // (an edit that was already applied, a no-op run) is not
-                    // progress — it must keep the no-progress budget
-                    // climbing exactly like a failed edit would, or a
-                    // duplicate-stacking edit that always reports success
-                    // could spin forever without ever tripping a budget.
-                    let no_progress = !failed && content.to_ascii_lowercase().contains("already applied");
+                    let made_progress = mutation_made_progress(metadata.success, &content);
                     if failed {
                         ctx.failed_mutations += 1;
                         ctx.consecutive_failed_mutations += 1;
@@ -3923,25 +3934,29 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             ctx.verification.record_edit();
                         }
                     }
-                    if failed || no_progress {
-                        ctx.consecutive_no_progress += 1;
-                    } else {
+                    // A tool that reports success without changing anything
+                    // (an edit that was already applied, a no-op run) is not
+                    // progress — it must keep the no-progress budget
+                    // climbing exactly like a failed edit would, or a
+                    // duplicate-stacking edit that always reports success
+                    // could spin forever without ever tripping a budget.
+                    if made_progress {
                         ctx.consecutive_no_progress = 0;
+                    } else {
+                        ctx.consecutive_no_progress += 1;
                     }
-                }
-                // Progress resets the loop detector: a successful mutating
-                // tool means the agent moved the work forward, so any
-                // re-reads that follow (to verify or find the next anchor)
-                // shouldn't inherit the pre-edit read history and trip the
-                // frequency signal. Failed edits (result starts with
-                // "error") are not progress and must keep accumulating.
-                if is_mutating_tool(&name)
-                    && !content
-                        .trim_start()
-                        .to_ascii_lowercase()
-                        .starts_with("error")
-                {
-                    ctx.loop_detector.reset();
+                    // Progress resets the loop detector: a successful,
+                    // change-making mutating tool means the agent moved the
+                    // work forward, so any re-reads that follow (to verify
+                    // or find the next anchor) shouldn't inherit the
+                    // pre-edit read history and trip the frequency signal.
+                    // Failed edits and no-op successes (e.g. an
+                    // already-applied edit) are not progress and must keep
+                    // accumulating toward the detector's own abort
+                    // threshold instead of getting a free reset every round.
+                    if made_progress {
+                        ctx.loop_detector.reset();
+                    }
                 }
                 // Output-stagnation signal: repeated identical results
                 // (e.g. "No matches found") despite varied commands.
@@ -4999,6 +5014,193 @@ mod tests {
         assert!(is_mutating_tool("spawn_agent"));
         assert!(is_mutating_tool("send_agent"));
         assert!(!is_mutating_tool("todo_write"));
+    }
+
+    // --- Feature 3: loop-detector reset only on real mutation progress ---
+
+    #[test]
+    fn mutation_made_progress_true_for_real_change() {
+        // A genuine successful edit is progress: content doesn't start with
+        // "error" and doesn't report a no-op.
+        assert!(mutation_made_progress(true, "Applied edit to src/main.rs"));
+    }
+
+    #[test]
+    fn mutation_made_progress_false_for_failure() {
+        assert!(!mutation_made_progress(
+            false,
+            "Applied edit to src/main.rs"
+        ));
+        assert!(!mutation_made_progress(
+            true,
+            "Error: no match found for old_string"
+        ));
+    }
+
+    #[test]
+    fn mutation_made_progress_false_for_already_applied_noop() {
+        // PR #306: replace_file_content is idempotent and reports success
+        // with "already applied" when nothing changed. That must NOT count
+        // as progress, or a repeated no-op edit could reset every budget
+        // and the loop detector forever.
+        assert!(!mutation_made_progress(
+            true,
+            "Edit already applied — no changes made"
+        ));
+        // Case-insensitive, per PR #306's contract.
+        assert!(!mutation_made_progress(
+            true,
+            "ALREADY APPLIED: no-op, file unchanged"
+        ));
+    }
+
+    #[test]
+    fn real_edit_resets_loop_detector() {
+        // Regression guard for existing behavior: a genuine successful edit
+        // must still be able to reset the detector so post-edit re-reads
+        // start with a clean slate (test 1 + test 4 from the task spec).
+        let mut d = loop_detect::LoopDetector::new(4);
+        for start in [250, 260, 250] {
+            let (e, c) = loop_detect::signatures(
+                "view_file",
+                &serde_json::json!({"path": "src/big.rs", "start_line": start, "end_line": start + 50}),
+            );
+            d.check(&e, &c);
+        }
+        assert!(mutation_made_progress(true, "Applied edit to src/big.rs"));
+        d.reset();
+        // A follow-up read cycle (read/edit/read) starts clean, not carrying
+        // over the pre-edit repeat history.
+        let (e, c) = loop_detect::signatures(
+            "view_file",
+            &serde_json::json!({"path": "src/big.rs", "start_line": 255, "end_line": 305}),
+        );
+        assert_eq!(
+            d.check(&e, &c),
+            loop_detect::LoopStatus::Ok,
+            "genuine progress must still reset the detector"
+        );
+    }
+
+    #[test]
+    fn noop_edit_does_not_reset_loop_detector() {
+        // Core regression test: a successful but no-op edit (already
+        // applied) must NOT reset the detector, matching how a failed edit
+        // is treated — otherwise a model resubmitting the same already-
+        // applied edit forever would never trip the detector.
+        assert!(!mutation_made_progress(
+            true,
+            "already applied: no changes made"
+        ));
+
+        let mut d = loop_detect::LoopDetector::new(4);
+        for start in [250, 260, 250] {
+            let (e, c) = loop_detect::signatures(
+                "view_file",
+                &serde_json::json!({"path": "src/big.rs", "start_line": start, "end_line": start + 50}),
+            );
+            d.check(&e, &c);
+        }
+        // A no-op "success" must not clear the accumulated repeat state.
+        // (mutation_made_progress being false is exactly what gates the
+        // reset call in run_single_turn.)
+        let (e, c) = loop_detect::signatures(
+            "view_file",
+            &serde_json::json!({"path": "src/big.rs", "start_line": 255, "end_line": 305}),
+        );
+        // Without a reset, this repeat continues to accumulate toward abort
+        // rather than starting over at Ok.
+        assert_ne!(
+            d.check(&e, &c),
+            loop_detect::LoopStatus::Ok,
+            "no-op edit must not have cleared prior repeat state"
+        );
+    }
+
+    #[test]
+    fn repeated_noop_edits_accumulate_toward_abort_instead_of_resetting() {
+        // Core regression test for the bug: a model that keeps re-sending
+        // the identical edit request, which now no-ops via PR #306's
+        // idempotency, must still trip the loop detector because
+        // mutation_made_progress gates the reset — no-op "successes" are
+        // never allowed to reset it.
+        let mut d = loop_detect::LoopDetector::new(4); // warn at 2, abort at 4
+        let mut last = loop_detect::LoopStatus::Ok;
+        for _ in 0..4 {
+            let (e, c) = loop_detect::signatures(
+                "replace_file_content",
+                &serde_json::json!({"path": "src/main.rs", "old_string": "foo", "new_string": "bar"}),
+            );
+            last = d.check(&e, &c);
+            // Simulate the harness: each round reports success with
+            // "already applied", so mutation_made_progress is false and the
+            // detector is never reset between iterations of this loop.
+            assert!(!mutation_made_progress(
+                true,
+                "already applied: no changes made"
+            ));
+        }
+        assert_eq!(
+            last,
+            loop_detect::LoopStatus::Abort(4),
+            "identical no-op edits must accumulate to abort, not reset every round"
+        );
+    }
+
+    #[test]
+    fn alternating_failed_and_noop_edits_never_reset_and_eventually_abort() {
+        // Neither a failed edit nor a no-op edit is progress, so alternating
+        // between two distinct edit attempts (one that fails, one that
+        // no-ops as already-applied) must still accumulate toward the
+        // detector's abort threshold via the frequency signal — since
+        // neither outcome ever calls reset(), unlike a real change would.
+        let mut d = loop_detect::LoopDetector::new(4); // frequency window = 8
+        let mut last = loop_detect::LoopStatus::Ok;
+        let outcomes = [
+            (
+                false,
+                "Error: no match found for old_string",
+                "old_string_a",
+            ),
+            (true, "already applied: no changes made", "old_string_b"),
+            (
+                false,
+                "Error: no match found for old_string",
+                "old_string_a",
+            ),
+            (true, "already applied: no changes made", "old_string_b"),
+            (
+                false,
+                "Error: no match found for old_string",
+                "old_string_a",
+            ),
+            (true, "already applied: no changes made", "old_string_b"),
+            (
+                false,
+                "Error: no match found for old_string",
+                "old_string_a",
+            ),
+            (true, "already applied: no changes made", "old_string_b"),
+        ];
+        for (success, content, old_string) in outcomes {
+            assert!(
+                !mutation_made_progress(success, content),
+                "neither failure nor no-op should count as progress"
+            );
+            let (e, c) = loop_detect::signatures(
+                "replace_file_content",
+                &serde_json::json!({"path": "src/main.rs", "old_string": old_string, "new_string": "bar"}),
+            );
+            last = d.check(&e, &c);
+            // The harness only calls reset() when mutation_made_progress is
+            // true; since it never is here, the detector state must survive
+            // every round instead of restarting from Ok.
+        }
+        assert_eq!(
+            last,
+            loop_detect::LoopStatus::Abort(4),
+            "alternating failure/no-op must eventually abort since neither resets"
+        );
     }
 
     #[test]
