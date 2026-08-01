@@ -2828,6 +2828,20 @@ fn stable_arguments_hash(arguments: &serde_json::Value) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// Whether the content the model actually saw was cut short by either of the
+/// two independent truncation layers: this module's own byte/line cap on
+/// tool output ("[Output truncated: ...]", see `truncate_tool_output`), or
+/// `view_file`'s own default read-window cap ("[Truncated: lines X-Y of Z
+/// ...]", see `view_file_tool` in `src/tools/filesystem.rs`). Either one
+/// means the model did not see the complete output, so both must flip
+/// `ToolResultMetadata::truncated` — a read that stopped exactly where the
+/// caller's own `end_line` asked it to is deliberately excluded (see
+/// `view_file_tool`'s "end of requested range" message, which is not a
+/// truncation).
+fn output_marks_truncation(content: &str) -> bool {
+    content.contains("[Output truncated:") || content.contains("[Truncated: lines")
+}
+
 fn extract_exit_code(content: &str) -> Option<i32> {
     let marker = "exit code";
     let start = content.find(marker)? + marker.len();
@@ -3103,7 +3117,7 @@ different, read another range or make an edit first; repeating this call returns
             .find_map(|line| line.trim().strip_prefix("Full output saved to: "))
             .map(str::to_string);
         let exit_code = extract_exit_code(&content);
-        let truncated = content.contains("[Output truncated:");
+        let truncated = output_marks_truncation(&content);
         let success = !content
             .trim_start()
             .to_ascii_lowercase()
@@ -4810,6 +4824,31 @@ mod tests {
         assert!(summary.contains("imagined"), "got: {summary}");
         // Nothing from the arguments or the surrounding narration survives.
         assert!(!summary.contains("cargo check"), "got: {summary}");
+    }
+
+    // Feature 5 (lossless reads): ToolResultMetadata::truncated must go true
+    // for either truncation layer — this module's own byte/line cap on tool
+    // output, and view_file's own default read-window cap — and must stay
+    // false for the legitimate "read ended exactly where asked" case, so
+    // downstream code can rely on the flag rather than re-parsing text.
+    #[test]
+    fn output_marks_truncation_detects_both_layers_and_not_a_clean_read() {
+        let output_layer_truncated = "some output\n\n[Output truncated: 90000 bytes total, 2000 lines. Full output saved to: /tmp/x.txt]";
+        assert!(output_marks_truncation(output_layer_truncated));
+
+        let read_layer_truncated = "[File: big.rs, Lines 1 to 2000 of 2500, Bytes offset: 0]\n1: foo\n\n\
+[Truncated: lines 2001-2500 of 2500 (500 lines) were NOT shown (default read window is 2000 lines). \
+This is not the complete file — do not treat it as such. To read the rest, call view_file again with \
+start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]\n";
+        assert!(output_marks_truncation(read_layer_truncated));
+
+        let clean_bounded_read = "[File: small.rs, Lines 1 to 1 of 3, Bytes offset: 0]\n1: foo\n\
+... end of requested range; the file continues to line 3 ...\n";
+        assert!(!output_marks_truncation(clean_bounded_read));
+
+        let clean_full_read =
+            "[File: small.rs, Lines 1 to 3 of 3, Bytes offset: 0]\n1: foo\n2: bar\n3: baz\n";
+        assert!(!output_marks_truncation(clean_full_read));
     }
 
     #[test]
