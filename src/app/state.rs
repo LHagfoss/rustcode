@@ -550,6 +550,10 @@ pub struct AppState {
 
     pub api_base_url: String,
     pub model_name: String,
+    /// Probed function-calling support, keyed by endpoint URL. Populated once
+    /// per endpoint per run; a negative result is also written back to the
+    /// profile so later runs skip the probe.
+    pub function_calling_support: std::collections::HashMap<String, bool>,
     pub config: crate::config::AppConfig,
 
     pub cwd_and_branch: String,
@@ -759,6 +763,7 @@ impl AppState {
             history_index: None,
             temp_input: String::new(),
             api_base_url,
+            function_calling_support: std::collections::HashMap::new(),
             model_name,
             config,
             cwd_and_branch,
@@ -1193,10 +1198,37 @@ impl AppState {
         {
             return protocol;
         }
-        if crate::config::provider_supports_function_calling(url) {
+        if crate::config::provider_supports_function_calling(url)
+            || self.function_calling_support.get(url).copied() == Some(true)
+        {
             return crate::config::ToolProtocol::ApiNative;
         }
         self.config.tool_protocol
+    }
+
+    /// True when this endpoint's function-calling support is still unknown, so
+    /// the caller should probe before building a turn.
+    pub fn function_calling_unknown(&self, url: &str) -> bool {
+        let overridden = self
+            .config
+            .models
+            .iter()
+            .any(|profile| profile.url == url && profile.tool_protocol.is_some());
+        !overridden
+            && !crate::config::provider_supports_function_calling(url)
+            && !self.function_calling_support.contains_key(url)
+    }
+
+    /// Record what a probe found, for this run only.
+    ///
+    /// Deliberately not written to the config file: the answer can change when
+    /// a gateway is reconfigured, and silently editing settings the user did not
+    /// write would make that change impossible to notice. One tiny request per
+    /// endpoint per run is cheaper than a wrong answer cached forever. Use
+    /// `/protocol` to pin a choice.
+    pub fn record_function_calling_support(&mut self, url: &str, supported: bool) {
+        self.function_calling_support
+            .insert(url.to_string(), supported);
     }
 
     /// Tool protocol for the model this session is currently talking to.
@@ -1253,6 +1285,27 @@ mod protocol_tests {
             s.tool_protocol_for("http://localhost:11434/v1/chat/completions"),
             ToolProtocol::Json
         );
+    }
+
+    #[test]
+    fn probe_result_decides_for_gateways_and_is_remembered() {
+        let mut s = AppState::new();
+        s.config.tool_protocol = ToolProtocol::Json;
+        let gateway = "http://localhost:3000/v1/chat/completions";
+
+        // A gateway says nothing by its hostname, so it must be probed.
+        assert!(s.function_calling_unknown(gateway));
+        assert_eq!(s.tool_protocol_for(gateway), ToolProtocol::Json);
+
+        s.record_function_calling_support(gateway, true);
+        assert!(!s.function_calling_unknown(gateway));
+        assert_eq!(s.tool_protocol_for(gateway), ToolProtocol::ApiNative);
+    }
+
+    #[test]
+    fn known_hosts_skip_the_probe() {
+        let s = AppState::new();
+        assert!(!s.function_calling_unknown("https://api.openai.com/v1/chat/completions"));
     }
 
     #[test]

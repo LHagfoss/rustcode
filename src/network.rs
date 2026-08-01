@@ -442,6 +442,87 @@ fn align_alternating_messages(raw_msgs: Vec<serde_json::Value>) -> Vec<serde_jso
     final_msgs
 }
 
+/// Ask an endpoint whether it implements OpenAI-style function calling.
+///
+/// Hostnames cannot answer this: a gateway on `localhost:3000` may front a
+/// model with full tool support, and an endpoint at a well-known provider's
+/// address may be a proxy that strips the field. So the endpoint is asked
+/// directly, once, with the smallest request that still carries a tool schema.
+/// Anything other than a clean acceptance counts as unsupported — staying on
+/// the text protocol costs quality, while wrongly assuming tool support breaks
+/// every turn.
+pub async fn probe_function_calling(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    url: &str,
+    model: &str,
+) -> bool {
+    let resolved_url = {
+        let trimmed = url.trim_end_matches('/');
+        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}/chat/completions")
+        }
+    };
+    let api_key = {
+        let s = state.lock().await;
+        s.config
+            .models
+            .iter()
+            .find(|m| m.url == url || m.endpoint_url() == resolved_url)
+            .and_then(|m| m.resolved_api_key())
+    };
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": false,
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "probe",
+                "description": "capability probe",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }],
+        "tool_choice": "none",
+    });
+
+    let mut req = client
+        .post(&resolved_url)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(20));
+    if let Some(ref key) = api_key {
+        req = req
+            .header("Authorization", format!("Bearer {key}"))
+            .header("X-Api-Key", key);
+    }
+
+    match req.send().await {
+        Ok(response) if response.status().is_success() => {
+            dbg_log!("probe_function_calling: {} accepts tool schemas", resolved_url);
+            true
+        }
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            dbg_log!(
+                "probe_function_calling: {} rejected tool schema ({}): {}",
+                resolved_url,
+                status,
+                body
+            );
+            false
+        }
+        Err(error) => {
+            dbg_log!("probe_function_calling: {} probe failed: {}", resolved_url, error);
+            false
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn stream_request(
     client: &reqwest::Client,
@@ -2911,6 +2992,26 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 ) -> bool {
     const MAX_FINISH_GATE_RETRIES: u32 = 2;
     dbg_log!("Starting agent loop round {}", ctx.tool_rounds);
+
+            // Resolve tool-call support before the prompt is built: the two
+            // protocols need different system prompts, so this cannot be
+            // discovered from a failure partway through the turn.
+            let unprobed = {
+                let s = state.lock().await;
+                let url = s.api_base_url.clone();
+                s.function_calling_unknown(&url).then_some((url, s.model_name.clone()))
+            };
+            if let Some((url, model)) = unprobed {
+                let supported = probe_function_calling(client, state, &url, &model).await;
+                let mut s = state.lock().await;
+                s.record_function_calling_support(&url, supported);
+                dbg_log!(
+                    "Tool protocol for {}: {:?} (probe said supported={})",
+                    url,
+                    s.tool_protocol_for(&url),
+                    supported
+                );
+            }
 
             let msgs = prepare_turn_request(client, state, ctx.tool_rounds).await;
 
