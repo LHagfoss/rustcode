@@ -966,7 +966,8 @@ pub fn tool_system_prompt(
 - A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
 - Editing an existing file: use `replace_file_content` (pass an `edits` array to batch several changes in one call). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
-- EXECUTE TOOL CALLS SEQUENTIALLY: Emit at most 1 or 2 tool calls at a time. Never output speculative multi-step batches of 5+ tool calls (such as predicting edits, builds, git commits, and PR creations all in a single turn). Execute tools step-by-step and inspect results.\n\
+- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, and `search_web` run in parallel when emitted in the same response, so when you need several facts at once, ask for them at once — searching four paths is one thought, not four turns. Reads whose arguments depend on an earlier result must of course wait for it.\n\
+- ONE CHANGE AT A TIME: anything that writes, runs a command, or delegates (`replace_file_content`, `write_to_file`, `run_command`, `spawn_agent`, …) executes alone and must be grounded in results you already have. Emit at most 4 such calls in a response, and prefer one. Never output a speculative chain that predicts its own results — edits, builds, commits, and a PR in a single turn is a story about what might happen, not work.\n\
 - Chaining shell commands is different from speculative tool batching: it is encouraged for small, related, inspectable command sequences, especially status/log/diff checks and the verified publish sequence. Inspect output before deciding the next mutation.\n\
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
 - Match project code style.\n\
@@ -1745,6 +1746,37 @@ mod tests {
     // Every test session opened its edit with old_string: "" — the model's
     // instinct for "add a line at the top" — costing a turn before the error
     // taught it otherwise. The spec the model reads before calling now says it.
+    // The prompt used to cap every response at "1 or 2 tool calls", so the model
+    // never issued a batch and the parallel read path was never exercised — the
+    // harness runs independent reads concurrently and only rations the calls
+    // that change things.
+    #[test]
+    fn the_prompt_matches_what_the_executor_actually_does() {
+        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+
+        assert!(prompt.contains("ISSUE INDEPENDENT READS TOGETHER"), "got: {prompt}");
+        assert!(prompt.contains("run in parallel"), "got: {prompt}");
+        assert!(!prompt.contains("at most 1 or 2 tool calls"), "the old cap is gone");
+
+        // Every tool the prompt names as parallel must actually be one.
+        for name in [
+            "view_file",
+            "grep",
+            "glob",
+            "list_directory",
+            "find_symbol",
+            "get_project_map",
+            "search_web",
+        ] {
+            assert!(supports_parallel_execution(name), "{name} is not parallel-capable");
+        }
+        // And the stated limit on changes must be the one the executor enforces.
+        assert!(
+            prompt.contains(&format!("at most {MAX_MUTATING_CALLS_PER_RESPONSE} such calls")),
+            "got: {prompt}"
+        );
+    }
+
     #[test]
     fn the_edit_tool_spec_explains_how_to_insert() {
         let spec = TOOLS
