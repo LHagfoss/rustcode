@@ -529,8 +529,8 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "replace_file_content",
-        description: "Surgically edit code in an existing file. Supports single replacement (target_content/replacement_content or old_string/new_string) or array of batch edits (edits: [{old_string, new_string}]). Line numbers are optional.",
-        arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (or old_string)", "replacement_content": "complete replacement text (or new_string)", "edits": "optional array of [{old_string, new_string}] for multiple edits in 1 call"}"#,
+        description: "Surgically edit code in an existing file. Supports single replacement (target_content/replacement_content or old_string/new_string) or array of batch edits (edits: [{old_string, new_string}]). Line numbers are optional. This tool only replaces: to INSERT text, target an existing neighbouring line and repeat it in the replacement — to prepend, target the current first line and replace it with the new text followed by that line. An empty target is rejected, since it matches everywhere.",
+        arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (or old_string) — never empty; to insert, anchor on an adjacent line and repeat it in the replacement", "replacement_content": "complete replacement text (or new_string)", "edits": "optional array of [{old_string, new_string}] for multiple edits in 1 call"}"#,
         handler: filesystem::replace_file_content_tool,
         requires_confirmation: true,
     },
@@ -1742,6 +1742,22 @@ mod tests {
     // tool calls.
     // Regression: session 1785595170460 msg 4 read
     // "replace_file_content: error: error: target_content (old_string) is empty".
+    // Every test session opened its edit with old_string: "" — the model's
+    // instinct for "add a line at the top" — costing a turn before the error
+    // taught it otherwise. The spec the model reads before calling now says it.
+    #[test]
+    fn the_edit_tool_spec_explains_how_to_insert() {
+        let spec = TOOLS
+            .iter()
+            .find(|tool| tool.name == "replace_file_content")
+            .expect("tool exists");
+
+        assert!(spec.description.contains("to INSERT text"), "got: {}", spec.description);
+        assert!(spec.description.contains("prepend"), "got: {}", spec.description);
+        assert!(spec.description.contains("An empty target is rejected"), "got: {}", spec.description);
+        assert!(spec.arguments.contains("never empty"), "got: {}", spec.arguments);
+    }
+
     #[test]
     fn error_messages_are_prefixed_once() {
         assert_eq!(
