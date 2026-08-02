@@ -473,6 +473,7 @@ fn parse_summary_response(body: &serde_json::Value) -> Option<String> {
         .get("content")?
         .as_str()?
         .trim();
+    let content = truncate_utf8(content, SUMMARY_OUTPUT_MAX_BYTES).trim_end();
     if content.is_empty()
         || !content
             .chars()
@@ -481,11 +482,7 @@ fn parse_summary_response(body: &serde_json::Value) -> Option<String> {
         return None;
     }
 
-    Some(
-        truncate_utf8(content, SUMMARY_OUTPUT_MAX_BYTES)
-            .trim_end()
-            .to_string(),
-    )
+    Some(content.to_string())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -818,6 +815,19 @@ mod tests {
         assert!(summary.len() <= SUMMARY_OUTPUT_MAX_BYTES, "{} bytes", summary.len());
         assert!(summary.starts_with("useful facts"));
         assert!(std::str::from_utf8(summary.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn summary_response_rejects_output_invalidated_by_truncation() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": format!("{}visible", "\u{0007}".repeat(SUMMARY_OUTPUT_MAX_BYTES))
+                }
+            }]
+        });
+
+        assert!(parse_summary_response(&body).is_none());
     }
 
     #[tokio::test(start_paused = true)]

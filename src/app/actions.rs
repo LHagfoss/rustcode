@@ -126,24 +126,22 @@ pub async fn handle_enter(
             "/compact" => {
                 s.input_buffer.clear();
                 s.cursor_position = 0;
+                if s.history.len() < 2 {
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Not enough messages to compact.",
+                    ));
+                    return false;
+                }
                 let api_base_url = s.api_base_url.clone();
                 let model_name = s.model_name.clone();
+                let active_session_id = s.active_session_id.clone();
+                let original_identity = history_identity(&s.history);
+                let mut history_to_compact = s.history.clone();
                 drop(s);
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
                 tokio::spawn(async move {
-                    let mut s = state_clone.lock().await;
-                    let history_len = s.history.len();
-                    if history_len < 2 {
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            "Not enough messages to compact.",
-                        ));
-                        return;
-                    }
-                    let mut history_to_compact = s.history.drain(..).collect::<Vec<ChatMessage>>();
-                    drop(s);
-
                     match crate::network::compaction::force_compact(
                         &client_clone,
                         &api_base_url,
@@ -154,22 +152,40 @@ pub async fn handle_enter(
                     {
                         Ok((before, after)) => {
                             let mut s = state_clone.lock().await;
-                            s.history.extend(history_to_compact);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                format!(
-                                    "🧹 History compacted: reduced context from {} to {} tokens.",
-                                    before, after
-                                ),
-                            ));
+                            let live_session_id = s.active_session_id.clone();
+                            if try_merge_compacted_history(
+                                &live_session_id,
+                                &mut s.history,
+                                &active_session_id,
+                                &original_identity,
+                                history_to_compact,
+                            ) {
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!(
+                                        "🧹 History compacted: reduced context from {} to {} tokens.",
+                                        before, after
+                                    ),
+                                ));
+                            } else {
+                                report_stale_compaction(&mut s.history);
+                            }
                         }
                         Err(e) => {
                             let mut s = state_clone.lock().await;
-                            s.history.extend(history_to_compact);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                format!("History compaction failed: {}", e),
-                            ));
+                            if history_matches_snapshot(
+                                &s.active_session_id,
+                                &s.history,
+                                &active_session_id,
+                                &original_identity,
+                            ) {
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!("History compaction failed: {}", e),
+                                ));
+                            } else {
+                                report_stale_compaction(&mut s.history);
+                            }
                         }
                     }
                 });
@@ -823,6 +839,63 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
         });
     }
     false
+}
+
+fn message_identity(message: &ChatMessage) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    message.role.hash(&mut hasher);
+    message.timestamp.hash(&mut hasher);
+    message.content.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn history_identity(history: &[ChatMessage]) -> Vec<u64> {
+    history.iter().map(message_identity).collect()
+}
+
+fn history_matches_snapshot(
+    live_session_id: &str,
+    live_history: &[ChatMessage],
+    captured_session_id: &str,
+    captured_identity: &[u64],
+) -> bool {
+    live_session_id == captured_session_id
+        && live_history.len() >= captured_identity.len()
+        && live_history
+            .iter()
+            .take(captured_identity.len())
+            .map(message_identity)
+            .eq(captured_identity.iter().copied())
+}
+
+fn try_merge_compacted_history(
+    live_session_id: &str,
+    live_history: &mut Vec<ChatMessage>,
+    captured_session_id: &str,
+    captured_identity: &[u64],
+    mut compacted_history: Vec<ChatMessage>,
+) -> bool {
+    if !history_matches_snapshot(
+        live_session_id,
+        live_history,
+        captured_session_id,
+        captured_identity,
+    ) {
+        return false;
+    }
+
+    compacted_history.extend(live_history.drain(captured_identity.len()..));
+    *live_history = compacted_history;
+    true
+}
+
+fn report_stale_compaction(history: &mut Vec<ChatMessage>) {
+    history.push(ChatMessage::new(
+        "system",
+        "History compaction discarded as stale: the active session or history changed while compaction was running.",
+    ));
 }
 
 pub fn get_filtered_cmds_len(input_buffer: &str) -> usize {
@@ -1576,6 +1649,67 @@ mod tests {
         );
 
         assert_eq!(history.len(), 2);
+    }
+
+    #[test]
+    fn manual_compaction_discards_result_after_session_change() {
+        let original = vec![
+            crate::app::ChatMessage::new("user", "original task"),
+            crate::app::ChatMessage::new("assistant", "original response"),
+        ];
+        let original_identity = super::history_identity(&original);
+        let mut live_history = vec![crate::app::ChatMessage::new("user", "new session task")];
+        let expected: Vec<(String, String)> = live_history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        let compacted = vec![crate::app::ChatMessage::new("system", "compacted old session")];
+
+        let applied = super::try_merge_compacted_history(
+            "new-session",
+            &mut live_history,
+            "old-session",
+            &original_identity,
+            compacted,
+        );
+
+        let actual: Vec<(String, String)> = live_history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        assert!(!applied);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn manual_compaction_preserves_messages_appended_to_original_prefix() {
+        let original = vec![
+            crate::app::ChatMessage::new("user", "original task"),
+            crate::app::ChatMessage::new("assistant", "original response"),
+        ];
+        let original_identity = super::history_identity(&original);
+        let mut live_history = original;
+        live_history.push(crate::app::ChatMessage::new(
+            "user",
+            "message appended during compaction",
+        ));
+        let compacted = vec![crate::app::ChatMessage::new("system", "compacted history")];
+
+        let applied = super::try_merge_compacted_history(
+            "active-session",
+            &mut live_history,
+            "active-session",
+            &original_identity,
+            compacted,
+        );
+
+        assert!(applied);
+        assert_eq!(live_history.len(), 2);
+        assert_eq!(live_history[0].content, "compacted history");
+        assert_eq!(
+            live_history[1].content,
+            "message appended during compaction"
+        );
     }
 
     #[tokio::test]
