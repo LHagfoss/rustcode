@@ -6,11 +6,17 @@ pub(crate) use super::coerce_array;
 pub(crate) use super::parse_json_number;
 pub(crate) use super::resolve_tool_path;
 
-/// Default number of lines returned by `view_file` when the caller does not
-/// pass an explicit `end_line`. Reads that hit this window are genuinely
-/// truncated (see `view_file_tool`'s truncation message) — as opposed to a
-/// read that stopped exactly where the caller's own `end_line` asked it to.
-const DEFAULT_READ_WINDOW_LINES: usize = 2000;
+/// Hard cap on the number of lines a single `view_file` call can return,
+/// applied both as the default window (when the caller omits `end_line`) and
+/// as a ceiling on any explicit `end_line` the caller requests. Without this
+/// cap a model asking for a huge explicit range (or relying on a large
+/// default) could pull thousands of lines / tens of KB into one tool result,
+/// which blows up the transcript across many rounds long before any
+/// downstream byte truncation kicks in. Reads that hit this window are
+/// genuinely truncated (see `view_file_tool`'s truncation message) — as
+/// opposed to a read that stopped exactly where the caller's own `end_line`
+/// asked it to.
+const DEFAULT_READ_WINDOW_LINES: usize = 250;
 
 struct ReplacementChunk {
     start_line: usize,
@@ -109,7 +115,12 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         .map(|v| v as usize)
         .unwrap_or(1);
     let requested_end = args.get("end_line").and_then(parse_json_number).map(|v| v as usize);
-    let end_line = requested_end.unwrap_or(start_line + DEFAULT_READ_WINDOW_LINES);
+    let max_end = start_line + DEFAULT_READ_WINDOW_LINES;
+    // A caller-supplied end_line beyond the hard cap is bounded, not honored —
+    // otherwise a single explicit huge range (e.g. end_line: 999999999) would
+    // bypass the safety window entirely.
+    let cap_applied = requested_end.is_some_and(|e| e > max_end);
+    let end_line = requested_end.map(|e| e.min(max_end)).unwrap_or(max_end);
 
     let content_bytes =
         std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
@@ -162,7 +173,22 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         // model that thinks it is missing something reads the file again — which
         // is exactly the loop this produced when a one-line read reported itself
         // as cut short.
-        if requested_end.is_some() {
+        if cap_applied {
+            // The caller asked for an explicit end_line beyond the hard cap.
+            // Bounding it silently — and still calling the result "end of
+            // requested range" — would hand back a partial read while
+            // implying it was complete, exactly the mismatch that produces
+            // exact-match edits against text the model never saw.
+            let next_start = actual_end + 1;
+            let omitted = total - actual_end;
+            out.push_str(&format!(
+                "[Truncated: lines {next_start}-{total} of {total} ({omitted} lines) were NOT shown \
+(a single view_file call is capped at {DEFAULT_READ_WINDOW_LINES} lines for safety, and the requested \
+end_line exceeded that cap). This is not the complete file — do not treat it as such. To read the rest, \
+call view_file again with start_line={next_start} and end_line={total} (or a smaller end_line to read it \
+in chunks).]\n"
+            ));
+        } else if requested_end.is_some() {
             out.push_str(&format!(
                 "... end of requested range; the file continues to line {total} ...\n"
             ));
@@ -999,6 +1025,52 @@ mod tests {
         assert!(!out.contains(&format!("{total_lines}: line {total_lines}")));
     }
 
+    // An explicit end_line far beyond the hard cap must be bounded, not
+    // honored — otherwise a single huge requested range (e.g. a model asking
+    // for the whole file at once) bypasses the safety window entirely and
+    // returns thousands of lines in one tool result.
+    #[test]
+    fn an_oversized_explicit_range_is_bounded_and_reported_as_capped_not_complete() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("huge.txt");
+        let total_lines = DEFAULT_READ_WINDOW_LINES * 4;
+        let content: String = (1..=total_lines).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(&file, &content).expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let out = view_file_tool(&serde_json::json!({
+            "path": path,
+            "start_line": 1,
+            "end_line": total_lines,
+        }))
+        .expect("read");
+
+        let window_end = 1 + DEFAULT_READ_WINDOW_LINES;
+        // Bounded to the cap, not the requested end_line.
+        assert!(
+            out.contains(&format!("{window_end}: line {window_end}")),
+            "got: {out}"
+        );
+        assert!(
+            !out.contains(&format!("{total_lines}: line {total_lines}")),
+            "got: {out}"
+        );
+        // Reported as a genuine, capped truncation — not as "end of requested
+        // range", which would falsely imply the read is complete.
+        assert!(out.contains("[Truncated:"), "got: {out}");
+        assert!(out.contains("capped at"), "got: {out}");
+        assert!(!out.contains("end of requested range"), "got: {out}");
+        let next_start = window_end + 1;
+        assert!(
+            out.contains(&format!("start_line={next_start}")),
+            "got: {out}"
+        );
+        assert!(
+            out.contains(&format!("end_line={total_lines}")),
+            "got: {out}"
+        );
+    }
+
     // Feature 5: after a truncated read, following the tool's own recovery
     // instructions (start_line/end_line for exactly the omitted range) must
     // return exactly that content — not a repeat of the first chunk, not a
@@ -1007,7 +1079,11 @@ mod tests {
     fn targeted_follow_up_read_recovers_exactly_the_omitted_range() {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("big.txt");
-        let total_lines = DEFAULT_READ_WINDOW_LINES + 500;
+        // Kept within the hard cap for the second, targeted read too — a
+        // recovery range larger than the cap would itself be bounded, which
+        // is covered separately by
+        // `an_oversized_explicit_range_is_bounded_and_reported_as_capped_not_complete`.
+        let total_lines = DEFAULT_READ_WINDOW_LINES + 100;
         let content: String = (1..=total_lines).map(|n| format!("line {n}\n")).collect();
         std::fs::write(&file, &content).expect("write");
         let path = file.to_string_lossy().to_string();

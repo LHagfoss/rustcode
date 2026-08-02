@@ -86,6 +86,12 @@ const MAX_TURN_TOKEN_BUDGET: u64 = 500_000;
 const MAX_CONSECUTIVE_NO_PROGRESS: usize = 8;
 const MAX_CONSECUTIVE_FAILED_MUTATIONS: usize = 5;
 const MAX_CONSECUTIVE_COMPILER_ERROR_GATES: usize = 5;
+/// A malformed tool-call block is a protocol error, not a failed mutation —
+/// the model tried to call a tool and produced text the harness couldn't
+/// parse at all. Retrying blindly forever wastes rounds and tokens on a
+/// model that isn't going to self-correct, so this budget trips much faster
+/// than the general round cap.
+const MAX_CONSECUTIVE_MALFORMED_CALLS: usize = 4;
 
 /// Which safety budget stopped the turn, with enough detail for the final
 /// summary to name the exact limit that was hit.
@@ -97,6 +103,7 @@ enum TurnBudgetLimit {
     NoProgress(usize),
     FailedMutations(usize),
     CompilerErrorGates(usize),
+    MalformedCalls(usize),
 }
 
 impl std::fmt::Display for TurnBudgetLimit {
@@ -117,8 +124,25 @@ impl std::fmt::Display for TurnBudgetLimit {
             TurnBudgetLimit::CompilerErrorGates(n) => {
                 write!(f, "{n} consecutive completion attempts with the build still broken")
             }
+            TurnBudgetLimit::MalformedCalls(n) => {
+                write!(
+                    f,
+                    "{n} consecutive malformed tool-call blocks the harness could not parse"
+                )
+            }
         }
     }
+}
+
+/// Adds this round's token usage onto the turn's running total. The
+/// provider's `usage` field is per-response (this round's full prompt +
+/// completion), not a cumulative conversation total, so it is correct to sum
+/// it round over round rather than overwrite — overwriting would let a
+/// 30-round turn look like it spent only what the last round used, silently
+/// defeating the token safety budget. Falls back to a character-based
+/// estimate for providers that don't report usage.
+fn accumulate_tokens_used(current: u64, reported_this_round: Option<u64>, content: &str) -> u64 {
+    current.saturating_add(reported_this_round.unwrap_or_else(|| count_tokens(content) as u64))
 }
 
 /// Checks every budget signal and returns the first one that has been
@@ -144,6 +168,11 @@ fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
     if ctx.consecutive_compiler_error_gates >= MAX_CONSECUTIVE_COMPILER_ERROR_GATES {
         return Some(TurnBudgetLimit::CompilerErrorGates(
             ctx.consecutive_compiler_error_gates,
+        ));
+    }
+    if ctx.consecutive_malformed_calls >= MAX_CONSECUTIVE_MALFORMED_CALLS {
+        return Some(TurnBudgetLimit::MalformedCalls(
+            ctx.consecutive_malformed_calls,
         ));
     }
     None
@@ -3545,6 +3574,10 @@ pub struct TurnContext {
     /// Consecutive complete_task attempts blocked by the build still not
     /// compiling. Reset whenever the build passes.
     pub consecutive_compiler_error_gates: usize,
+    /// Consecutive tool-call blocks the harness could not parse at all
+    /// (distinct from a parsed call that executed and failed). Reset the
+    /// moment a well-formed batch reaches execution.
+    pub consecutive_malformed_calls: usize,
     /// Set once a safety budget stops the turn, so the caller can tell a
     /// budget stop apart from a normal finish or a detected loop.
     pub budget_stopped: Option<String>,
@@ -3577,6 +3610,7 @@ impl TurnContext {
             consecutive_no_progress: 0,
             consecutive_failed_mutations: 0,
             consecutive_compiler_error_gates: 0,
+            consecutive_malformed_calls: 0,
             budget_stopped: None,
         }
     }
@@ -3716,15 +3750,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     {
         let mut s = state.lock().await;
         s.current_response = accumulated_content.clone();
-        // Best-effort accounting for the token budget: prefer the
-        // provider-reported usage for this round, falling back to a
-        // character-based estimate when the provider didn't report one.
-        ctx.tokens_used = ctx.tokens_used.saturating_add(
-            s.current_token_usage
-                .as_ref()
-                .map(|u| u.total_tokens as u64)
-                .unwrap_or_else(|| count_tokens(&accumulated_content) as u64),
-        );
+        let reported = s
+            .current_token_usage
+            .as_ref()
+            .map(|u| u.total_tokens as u64);
+        ctx.tokens_used = accumulate_tokens_used(ctx.tokens_used, reported, &accumulated_content);
     }
 
     if cancel_token.is_cancelled() {
@@ -3905,6 +3935,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         return false;
     }
     if matches!(turn_action, events::TurnAction::ExecuteTools) {
+        // A well-formed batch reached execution — the parse-failure streak
+        // (if any) is over regardless of whether the calls themselves
+        // succeed or fail once run.
+        ctx.consecutive_malformed_calls = 0;
         dbg_log!("Parsed {} tool call requests", tool_calls.len());
 
         // Loop detection: feed each requested call to the detector and
@@ -4358,6 +4392,7 @@ nothing in this summary was written to disk by this task]",
     } else if has_intended_tool_call(&ctx.final_content) {
         dbg_log!("Orchestrator: Detected malformed tool call, auto-correcting and retrying...");
         ctx.tool_rounds += 1;
+        ctx.consecutive_malformed_calls += 1;
         let mut s = state.lock().await;
         s.history
             .push(ChatMessage::new("assistant", &ctx.final_content));
@@ -5655,6 +5690,65 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
     }
 
     #[test]
+    fn per_round_usage_sums_across_rounds_instead_of_being_overwritten() {
+        // Simulates three rounds each reporting the provider's per-response
+        // usage. If usage were cumulative-not-per-response, or accidentally
+        // overwritten instead of summed, this would land on the last round's
+        // figure (30_000) instead of the true total (90_000).
+        let mut tokens_used = 0u64;
+        for reported in [40_000u64, 30_000, 20_000] {
+            tokens_used = accumulate_tokens_used(tokens_used, Some(reported), "");
+        }
+        assert_eq!(tokens_used, 90_000);
+    }
+
+    #[test]
+    fn missing_provider_usage_falls_back_to_a_content_estimate_without_double_counting() {
+        let after_first = accumulate_tokens_used(0, None, "hello world");
+        assert!(
+            after_first > 0,
+            "fallback estimate must contribute something"
+        );
+        let after_second = accumulate_tokens_used(after_first, Some(500), "ignored");
+        assert_eq!(
+            after_second,
+            after_first + 500,
+            "second round must add, not replace"
+        );
+    }
+
+    #[test]
+    fn a_genuinely_oversized_turn_trips_the_token_budget() {
+        let mut ctx = TurnContext::new();
+        for _ in 0..20 {
+            ctx.tokens_used = accumulate_tokens_used(ctx.tokens_used, Some(30_000), "");
+        }
+        assert!(
+            ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET,
+            "20 rounds of 30k tokens each must exceed the {MAX_TURN_TOKEN_BUDGET} budget"
+        );
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::Tokens(_)) => {}
+            other => panic!("expected the token budget to trip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normal_multi_round_work_is_not_stopped_prematurely() {
+        // A healthy session doing real work across many rounds, well under
+        // every budget, must not trip any safety limit.
+        let mut ctx = TurnContext::new();
+        for _ in 0..10 {
+            ctx.tokens_used = accumulate_tokens_used(ctx.tokens_used, Some(5_000), "");
+            ctx.tool_rounds += 1;
+        }
+        assert!(
+            turn_budget_exceeded(&ctx).is_none(),
+            "10 rounds of light, real work must not trip a safety budget"
+        );
+    }
+
+    #[test]
     fn token_budget_triggers_the_budget() {
         let mut ctx = TurnContext::new();
         ctx.tokens_used = MAX_TURN_TOKEN_BUDGET;
@@ -5662,6 +5756,25 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
             Some(TurnBudgetLimit::Tokens(n)) => assert_eq!(n, MAX_TURN_TOKEN_BUDGET),
             other => panic!("expected Tokens limit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn repeated_malformed_tool_calls_trigger_the_budget_and_leave_it_idle() {
+        let mut ctx = TurnContext::new();
+        ctx.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::MalformedCalls(n)) => {
+                assert_eq!(n, MAX_CONSECUTIVE_MALFORMED_CALLS)
+            }
+            other => panic!("expected MalformedCalls limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn below_the_malformed_call_budget_does_not_trip() {
+        let mut ctx = TurnContext::new();
+        ctx.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS - 1;
+        assert!(turn_budget_exceeded(&ctx).is_none());
     }
 
     #[test]
@@ -5722,6 +5835,39 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
             ctx.final_content.to_ascii_lowercase().contains("not complete"),
             "the summary must be explicit that the task is unfinished: {}",
             ctx.final_content
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_for_a_malformed_call_streak_leaves_the_app_idle_and_preserves_history() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        {
+            let mut s = state.lock().await;
+            s.status = AppStatus::Streaming;
+            s.history.push(ChatMessage::new("user", "do the thing"));
+        }
+        let mut ctx = TurnContext::new();
+        ctx.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
+
+        let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
+        assert!(matches!(limit, TurnBudgetLimit::MalformedCalls(_)));
+        let should_continue = stop_turn_for_budget(&state, &mut ctx, limit).await;
+
+        assert!(!should_continue, "a budget stop must end the loop");
+        assert!(
+            !ctx.task_completed,
+            "must never claim completion after a parse-failure streak"
+        );
+        let s = state.lock().await;
+        assert_eq!(
+            s.status,
+            AppStatus::Idle,
+            "must leave the app in Idle, not stuck streaming"
+        );
+        assert_eq!(
+            s.history.len(),
+            1,
+            "the transcript must be preserved, not cleared"
         );
     }
 
