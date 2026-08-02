@@ -138,6 +138,7 @@ pub async fn handle_enter(
                 let active_session_id = s.active_session_id.clone();
                 let original_history = s.history.clone();
                 let mut history_to_compact = original_history.clone();
+                let compaction_cancel_token = cancel_token.clone();
                 drop(s);
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
@@ -147,6 +148,7 @@ pub async fn handle_enter(
                         &api_base_url,
                         &model_name,
                         &mut history_to_compact,
+                        Some(&compaction_cancel_token),
                     )
                     .await
                     {
@@ -168,13 +170,18 @@ pub async fn handle_enter(
                                     ),
                                 ));
                             } else {
-                                report_stale_compaction(&mut s.history);
+                                report_stale_compaction(
+                                    &live_session_id,
+                                    &active_session_id,
+                                    &mut s.history,
+                                );
                             }
                         }
                         Err(e) => {
                             let mut s = state_clone.lock().await;
+                            let live_session_id = s.active_session_id.clone();
                             if history_matches_snapshot(
-                                &s.active_session_id,
+                                &live_session_id,
                                 &s.history,
                                 &active_session_id,
                                 &original_history,
@@ -184,7 +191,11 @@ pub async fn handle_enter(
                                     format!("History compaction failed: {}", e),
                                 ));
                             } else {
-                                report_stale_compaction(&mut s.history);
+                                report_stale_compaction(
+                                    &live_session_id,
+                                    &active_session_id,
+                                    &mut s.history,
+                                );
                             }
                         }
                     }
@@ -871,7 +882,20 @@ fn try_merge_compacted_history(
     true
 }
 
-fn report_stale_compaction(history: &mut Vec<ChatMessage>) {
+fn report_stale_compaction(
+    live_session_id: &str,
+    captured_session_id: &str,
+    history: &mut Vec<ChatMessage>,
+) {
+    if live_session_id != captured_session_id {
+        dbg_log!(
+            "Skipping stale compaction notice: active session changed from '{}' to '{}'.",
+            captured_session_id,
+            live_session_id
+        );
+        return;
+    }
+
     history.push(ChatMessage::new(
         "system",
         "History compaction discarded as stale: the active session or history changed while compaction was running.",
@@ -1576,6 +1600,21 @@ fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) 
 mod tests {
     use super::parse_token_count;
 
+    async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept request");
+            accepted_tx.send(()).ok();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        (format!("http://{address}"), accepted_rx)
+    }
+
     #[test]
     fn parse_token_count_plain_and_k_suffix() {
         assert_eq!(parse_token_count("262144"), Some(262144));
@@ -1687,7 +1726,17 @@ mod tests {
     }
 
     #[test]
-    fn manual_compaction_stale_report_preserves_live_history() {
+    fn manual_compaction_stale_report_skips_new_session_history() {
+        let mut live_history = vec![crate::app::ChatMessage::new("user", "new session task")];
+        let expected = live_history.clone();
+
+        super::report_stale_compaction("new-session", "old-session", &mut live_history);
+
+        assert!(live_history == expected);
+    }
+
+    #[test]
+    fn manual_compaction_stale_report_preserves_same_session_history() {
         let mut live_history = vec![crate::app::ChatMessage::new(
             "assistant",
             "response completed while compaction ran",
@@ -1695,7 +1744,7 @@ mod tests {
         live_history[0].response_time_ms = Some(250);
         let expected = live_history.clone();
 
-        super::report_stale_compaction(&mut live_history);
+        super::report_stale_compaction("active-session", "active-session", &mut live_history);
 
         assert!(live_history[..expected.len()] == expected);
         assert_eq!(live_history.len(), expected.len() + 1);
@@ -1731,6 +1780,59 @@ mod tests {
 
         assert!(applied);
         assert!(live_history == expected);
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_cancellation_interrupts_detached_request() {
+        use crate::app::state::AppState;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let (url, request_accepted) = pending_response_server().await;
+        let mut app = AppState::new();
+        app.api_base_url = url;
+        app.model_name = "model".to_string();
+        app.history = (0..8)
+            .map(|index| crate::app::ChatMessage::new("user", format!("message {index}")))
+            .collect();
+        app.input_buffer = "/compact".to_string();
+        let state = Arc::new(Mutex::new(app));
+        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+        let compact_token = cancel_token.clone();
+
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        tokio::time::timeout(Duration::from_secs(10), request_accepted)
+            .await
+            .expect("manual compaction request must start")
+            .expect("manual compaction server must signal acceptance");
+
+        {
+            let mut app = state.lock().await;
+            app.input_buffer = "/cancel".to_string();
+        }
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        assert!(compact_token.is_cancelled());
+        assert!(!cancel_token.is_cancelled());
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state
+                    .lock()
+                    .await
+                    .history
+                    .iter()
+                    .any(|message| message.content.starts_with("History compaction failed:"))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelling the active token must stop manual compaction");
     }
 
     #[tokio::test]

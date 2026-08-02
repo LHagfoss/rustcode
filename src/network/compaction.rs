@@ -293,6 +293,7 @@ pub async fn force_compact(
     url: &str,
     model: &str,
     history: &mut Vec<ChatMessage>,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
@@ -304,7 +305,8 @@ pub async fn force_compact(
         return Err("Not enough messages to compact.".to_string());
     }
 
-    let result = force_compact_internal(client, url, model, history, summarize_count, None).await;
+    let result =
+        force_compact_internal(client, url, model, history, summarize_count, cancel_token).await;
     let after_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
     result.map(|_| (before_tokens, after_tokens))
 }
@@ -614,6 +616,21 @@ mod tests {
         format!("http://{address}")
     }
 
+    async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept request");
+            accepted_tx.send(()).ok();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        (format!("http://{address}"), accepted_rx)
+    }
+
     /// The memo must be a pure cache: whatever it returns, on a cold miss or a
     /// warm hit, has to equal what a direct encode of the same string produces.
     #[test]
@@ -867,6 +884,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_compaction_cancellation_interrupts_pending_summary_request() {
+        let (url, request_accepted) = pending_response_server().await;
+        let mut history = vec![ChatMessage::new("user", "original task")];
+        for index in 0..7 {
+            history.push(ChatMessage::new("assistant", format!("fact {index}")));
+        }
+        let expected: Vec<(String, String)> = history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let task_token = cancel_token.clone();
+        let mut task = tokio::spawn(async move {
+            let result = force_compact(
+                &reqwest::Client::new(),
+                &url,
+                "model",
+                &mut history,
+                Some(&task_token),
+            )
+            .await;
+            (result, history)
+        });
+        tokio::select! {
+            accepted = request_accepted => {
+                accepted.expect("manual compaction server must signal acceptance");
+            }
+            result = &mut task => {
+                let (result, _) = result.expect("manual compaction task must not panic");
+                panic!("manual compaction ended before making its request: {result:?}");
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                panic!("manual compaction request must start");
+            }
+        }
+
+        cancel_token.cancel();
+
+        let (result, history) = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("cancellation must interrupt manual compaction")
+            .expect("manual compaction task must not panic");
+        let actual: Vec<(String, String)> = history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        assert_eq!(result, Err("Failed to generate summary.".to_string()));
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
     async fn cancelled_automatic_compaction_keeps_history_with_local_pruning_only() {
         let mut history = vec![ChatMessage::new("user", "keep the original task")];
         history.push(tool_msg(&format!("view_file: {}", "source ".repeat(3_000))));
@@ -920,7 +988,14 @@ mod tests {
             .map(|message| (message.role.clone(), message.content.clone()))
             .collect();
 
-        let result = force_compact(&reqwest::Client::new(), &url, "model", &mut history).await;
+        let result = force_compact(
+            &reqwest::Client::new(),
+            &url,
+            "model",
+            &mut history,
+            None,
+        )
+        .await;
 
         let actual: Vec<(String, String)> = history
             .iter()
