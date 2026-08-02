@@ -55,3 +55,56 @@ fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
         Err(_) => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_output_passes_through_unchanged() {
+        let small = "line one\nline two\n".to_string();
+        assert_eq!(truncate_tool_output("view_file", small.clone()), small);
+    }
+
+    #[test]
+    fn oversized_line_count_is_truncated_with_head_and_tail_kept() {
+        let content: String = (1..=2000).map(|n| format!("line {n}\n")).collect();
+        let out = truncate_tool_output("grep", content);
+
+        assert!(out.contains("line 1\n"), "head must survive, got head missing");
+        assert!(out.contains("line 2000"), "tail must survive, got tail missing");
+        assert!(out.contains("[Output truncated:"), "must carry an explicit marker");
+        assert!(out.len() < 2000 * 8, "result must actually be smaller than the input");
+    }
+
+    #[test]
+    fn oversized_byte_count_is_truncated_even_with_few_lines() {
+        // A handful of very long lines can exceed the byte cap without
+        // exceeding the line cap — must still be bounded.
+        let content = format!("{}\n{}\n", "a".repeat(40_000), "b".repeat(40_000));
+        let out = truncate_tool_output("run_command", content);
+        assert!(out.contains("[Output truncated:"));
+        assert!(out.len() < 80_000);
+    }
+
+    #[test]
+    fn truncated_output_carries_a_recovery_instruction() {
+        let content: String = (1..=2000).map(|n| format!("line {n}\n")).collect();
+        let out = truncate_tool_output("grep", content);
+        assert!(
+            out.contains("Full output saved to:") || out.contains("Use grep"),
+            "must tell the model how to recover the omitted content, got: {out}"
+        );
+    }
+
+    #[test]
+    fn exact_follow_up_read_recovers_the_full_content() {
+        let content: String = (1..=2000).map(|n| format!("line {n}\n")).collect();
+        let out = truncate_tool_output("grep", content.clone());
+        let marker = "Full output saved to: ";
+        let start = out.find(marker).expect("truncation marker names the saved path") + marker.len();
+        let path = out[start..].lines().next().expect("path on its own line");
+        let recovered = std::fs::read_to_string(path).expect("saved file readable");
+        assert_eq!(recovered, content, "saved artifact must be byte-identical to the original");
+    }
+}
