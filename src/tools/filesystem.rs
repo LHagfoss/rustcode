@@ -254,42 +254,97 @@ fn already_applied(content: &str, target: &str, replacement: &str) -> bool {
     })
 }
 
-fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
-    let get_alias = |v: &Value, keys: &[&str]| -> Option<String> {
-        for &k in keys {
-            if let Some(s) = v.get(k).and_then(|x| x.as_str()) {
-                return Some(s.to_string());
-            }
+/// Every key an edit tool call may use for its old/new text, in priority
+/// order. A model (or a legacy caller) may send any of these shapes for the
+/// same intent; every consumer of an edit call's arguments must recognize
+/// them identically.
+const EDIT_TARGET_ALIASES: &[&str] = &[
+    "target_content",
+    "target",
+    "old_string",
+    "old_text",
+    "oldString",
+    "oldText",
+];
+const EDIT_REPLACEMENT_ALIASES: &[&str] = &[
+    "replacement_content",
+    "replacement",
+    "new_string",
+    "new_text",
+    "newString",
+    "newText",
+];
+
+fn read_edit_alias(v: &Value, keys: &[&str]) -> Option<String> {
+    for &k in keys {
+        if let Some(s) = v.get(k).and_then(|x| x.as_str()) {
+            return Some(s.to_string());
         }
-        None
-    };
+    }
+    None
+}
 
-    let target_keys = &["target_content", "target", "old_string", "old_text", "oldString", "oldText"];
-    let replacement_keys = &["replacement_content", "replacement", "new_string", "new_text", "newString", "newText"];
+/// Read an edit call's old/new text under any supported alias
+/// (`target_content`/`replacement_content`, `target`/`replacement`,
+/// `old_string`/`new_string`, `old_text`/`new_text`, `oldString`/
+/// `newString`, `oldText`/`newText`). Used by the actual edit tools
+/// (`extract_edit_chunks`) and by the confirmation-modal preview
+/// (`get_diff_preview` in `network.rs`) so both recognize a call shaped with
+/// any of these keys the same way.
+pub(crate) fn edit_target_and_replacement(args: &Value) -> (Option<String>, Option<String>) {
+    (
+        read_edit_alias(args, EDIT_TARGET_ALIASES),
+        read_edit_alias(args, EDIT_REPLACEMENT_ALIASES),
+    )
+}
 
+fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
     if let Some(edits_arr) = args.get("edits").and_then(coerce_array) {
         if edits_arr.is_empty() {
             return Err("edits array cannot be empty".to_string());
         }
         let mut chunks = Vec::new();
         for (i, item) in edits_arr.iter().enumerate() {
-            let target = get_alias(item, target_keys)
-                .ok_or_else(|| format!("edits[{i}] is missing target_content/old_string"))?;
-            let replacement = get_alias(item, replacement_keys)
+            let (target, replacement) = edit_target_and_replacement(item);
+            let target =
+                target.ok_or_else(|| format!("edits[{i}] is missing target_content/old_string"))?;
+            let replacement = replacement
                 .ok_or_else(|| format!("edits[{i}] is missing replacement_content/new_string"))?;
-            let start_line = item.get("start_line").and_then(parse_json_number).map(|v| v as usize);
-            let end_line = item.get("end_line").and_then(parse_json_number).map(|v| v as usize);
-            chunks.push(SingleEdit { target, replacement, start_line, end_line });
+            let start_line = item
+                .get("start_line")
+                .and_then(parse_json_number)
+                .map(|v| v as usize);
+            let end_line = item
+                .get("end_line")
+                .and_then(parse_json_number)
+                .map(|v| v as usize);
+            chunks.push(SingleEdit {
+                target,
+                replacement,
+                start_line,
+                end_line,
+            });
         }
         Ok(chunks)
     } else {
-        let target = get_alias(args, target_keys)
-            .ok_or("missing 'target_content' (or 'old_string') argument")?;
-        let replacement = get_alias(args, replacement_keys)
-            .ok_or("missing 'replacement_content' (or 'new_string') argument")?;
-        let start_line = args.get("start_line").and_then(parse_json_number).map(|v| v as usize);
-        let end_line = args.get("end_line").and_then(parse_json_number).map(|v| v as usize);
-        Ok(vec![SingleEdit { target, replacement, start_line, end_line }])
+        let (target, replacement) = edit_target_and_replacement(args);
+        let target = target.ok_or("missing 'target_content' (or 'old_string') argument")?;
+        let replacement =
+            replacement.ok_or("missing 'replacement_content' (or 'new_string') argument")?;
+        let start_line = args
+            .get("start_line")
+            .and_then(parse_json_number)
+            .map(|v| v as usize);
+        let end_line = args
+            .get("end_line")
+            .and_then(parse_json_number)
+            .map(|v| v as usize);
+        Ok(vec![SingleEdit {
+            target,
+            replacement,
+            start_line,
+            end_line,
+        }])
     }
 }
 
@@ -1554,5 +1609,126 @@ mod tests {
             !second.contains("```diff"),
             "a no-op must not fabricate a diff: {second}"
         );
+    }
+
+    // --- edit_target_and_replacement: every supported alias pair ---
+    //
+    // This is the shared helper behind both extract_edit_chunks (the actual
+    // edit tools) and get_diff_preview (the confirmation-modal preview, in
+    // network.rs) — every alias pair a model or legacy caller might use
+    // must be recognized here, since both consumers rely on this one
+    // implementation to agree.
+
+    #[test]
+    fn edit_target_and_replacement_supports_target_content_replacement_content() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({
+            "target_content": "old",
+            "replacement_content": "new",
+        }));
+        assert_eq!(t.as_deref(), Some("old"));
+        assert_eq!(r.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn edit_target_and_replacement_supports_target_replacement() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({
+            "target": "old",
+            "replacement": "new",
+        }));
+        assert_eq!(t.as_deref(), Some("old"));
+        assert_eq!(r.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn edit_target_and_replacement_supports_old_string_new_string() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({
+            "old_string": "old",
+            "new_string": "new",
+        }));
+        assert_eq!(t.as_deref(), Some("old"));
+        assert_eq!(r.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn edit_target_and_replacement_supports_old_text_new_text() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({
+            "old_text": "old",
+            "new_text": "new",
+        }));
+        assert_eq!(t.as_deref(), Some("old"));
+        assert_eq!(r.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn edit_target_and_replacement_supports_camel_case_old_string() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({
+            "oldString": "old",
+            "newString": "new",
+        }));
+        assert_eq!(t.as_deref(), Some("old"));
+        assert_eq!(r.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn edit_target_and_replacement_supports_camel_case_old_text() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({
+            "oldText": "old",
+            "newText": "new",
+        }));
+        assert_eq!(t.as_deref(), Some("old"));
+        assert_eq!(r.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn edit_target_and_replacement_returns_none_when_no_alias_present() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({ "path": "x.rs" }));
+        assert_eq!(t, None);
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn edit_target_and_replacement_prefers_canonical_keys_over_aliases() {
+        let (t, r) = edit_target_and_replacement(&serde_json::json!({
+            "target_content": "canonical old",
+            "replacement_content": "canonical new",
+            "old_string": "alias old",
+            "new_string": "alias new",
+        }));
+        assert_eq!(t.as_deref(), Some("canonical old"));
+        assert_eq!(r.as_deref(), Some("canonical new"));
+    }
+
+    // Regression guard: refactoring extract_edit_chunks to share
+    // edit_target_and_replacement must not change extract_edit_chunks's own
+    // behavior for any alias — including inside an `edits` array, which
+    // uses the same helper per-item.
+    #[test]
+    fn replace_file_content_still_works_with_every_alias_after_the_shared_helper_refactor() {
+        for (target_key, replacement_key) in [
+            ("target_content", "replacement_content"),
+            ("target", "replacement"),
+            ("old_string", "new_string"),
+            ("old_text", "new_text"),
+            ("oldString", "newString"),
+            ("oldText", "newText"),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let file = dir.path().join("state.rs");
+            std::fs::write(&file, "let a = 1;\n").expect("write");
+            let path = file.to_string_lossy().to_string();
+
+            let mut args = serde_json::json!({ "path": path });
+            args[target_key] = serde_json::json!("let a = 1;");
+            args[replacement_key] = serde_json::json!("let a = 100;");
+
+            let result = replace_file_content_tool(&args)
+                .unwrap_or_else(|e| panic!("alias {target_key}/{replacement_key} failed: {e}"));
+            assert!(result.contains("successfully"), "got: {result}");
+            let content = std::fs::read_to_string(&file).expect("read");
+            assert_eq!(
+                content, "let a = 100;\n",
+                "alias {target_key}/{replacement_key}"
+            );
+        }
     }
 }

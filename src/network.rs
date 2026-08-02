@@ -1231,14 +1231,13 @@ fn parse_native_tool_arguments(raw: &str) -> serde_json::Value {
 
 pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
     if name == "replace_file_content" {
-        let search_block = args
-            .get("target_content")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
-        let replace_block = args
-            .get("replacement_content")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
+        // Recognize every alias the edit tools themselves accept
+        // (target_content/target/old_string/old_text/oldString/oldText and
+        // their replacement counterparts) — a call shaped with any of them
+        // must not fall through to an empty, misleading preview.
+        let (target, replacement) = crate::tools::edit_target_and_replacement(args);
+        let search_block = target.as_deref().unwrap_or("");
+        let replace_block = replacement.as_deref().unwrap_or("");
 
         let diff = similar::TextDiff::from_lines(search_block, replace_block);
         let old_slices: Vec<&str> = diff.iter_old_slices().collect();
@@ -1411,6 +1410,21 @@ fn extract_diff_block(content: &str) -> Option<String> {
 /// must never let through.
 fn final_tool_diff(result: &str, preview_fallback: Option<String>) -> Option<String> {
     extract_diff_block(result).or_else(|| preview_fallback.filter(|d| !d.trim().is_empty()))
+}
+
+/// True when a tool result means "nothing changed" — a no-op ("already
+/// applied", PR #306) or a failed edit. `get_diff_preview` computes its
+/// preview purely from the call's arguments, before execution, so a
+/// non-empty preview says nothing about whether the edit actually landed.
+/// The preview must never be handed to `final_tool_diff` as a fallback for
+/// either of these outcomes, or a no-op/failed call could show a diff for a
+/// change that never happened — final filesystem diffs must stay
+/// authoritative. Call sites use this to decide what to pass as
+/// `final_tool_diff`'s `preview_fallback`, so `final_tool_diff` itself never
+/// has to change.
+fn tool_result_precludes_preview_fallback(content: &str) -> bool {
+    let lower = content.trim_start().to_ascii_lowercase();
+    lower.starts_with("error") || lower.contains("already applied")
 }
 
 fn get_file_preview(name: &str, args: &serde_json::Value) -> Option<(String, String)> {
@@ -2238,8 +2252,14 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             };
             // Same rule as the main tool-execution path: the real diff
             // embedded in the tool's own result always wins over the
-            // pre-execution, argument-only preview.
-            let final_diff = final_tool_diff(&result, diff_opt);
+            // pre-execution, argument-only preview — and a no-op or failed
+            // edit gets no fallback preview at all.
+            let preview_fallback = if tool_result_precludes_preview_fallback(&result) {
+                None
+            } else {
+                diff_opt
+            };
+            let final_diff = final_tool_diff(&result, preview_fallback);
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
@@ -3251,8 +3271,14 @@ different, read another range or make an edit first; repeating this call returns
         // never stand in for what the transcript/UI shows as the final
         // result. It's kept only as a fallback for the rare case where a
         // tool has no embedded diff of its own (e.g. a legacy write_to_file
-        // preview) but a preview was still computed.
-        let final_diff = final_tool_diff(&result, diff_opt);
+        // preview) but a preview was still computed — never for a no-op or
+        // failed edit, which must show no diff at all.
+        let preview_fallback = if tool_result_precludes_preview_fallback(&result) {
+            None
+        } else {
+            diff_opt
+        };
+        let final_diff = final_tool_diff(&result, preview_fallback);
         let content = truncate_tool_output(&executed_name, result);
         let changed_paths = if is_mutating_tool(&executed_name) {
             args.get("path")
@@ -6021,13 +6047,169 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
         assert!(preview.contains('\0'), "got: {preview:?}");
     }
 
-    // Regression found while writing the tests above: `get_diff_preview`
-    // only reads the `target_content`/`replacement_content` keys, so a call
-    // built with the (equally valid, alias-supported) `old_string`/
-    // `new_string` keys gets an empty preview — `Some("")`, not `None`.
-    // `final_tool_diff` must not let that empty `Some` stand in for "no
-    // diff to show" on a no-op result; that's exactly the misleading,
-    // non-representative diff this feature exists to prevent.
+    // get_diff_preview must recognize every alias the edit tools themselves
+    // accept (see `crate::tools::filesystem::EDIT_TARGET_ALIASES` /
+    // `EDIT_REPLACEMENT_ALIASES`), not just target_content/replacement_content
+    // — a legacy or differently-shaped call must still get a real,
+    // non-empty provisional preview instead of silently falling through to
+    // an empty one.
+    #[test]
+    fn confirmation_preview_supports_old_string_new_string_alias() {
+        let preview = get_diff_preview(
+            "replace_file_content",
+            &serde_json::json!({
+                "old_string": "old line",
+                "new_string": "new line",
+            }),
+        )
+        .expect("a preview should be computed from old_string/new_string");
+        assert!(preview.contains("old line"));
+        assert!(preview.contains("new line"));
+    }
+
+    #[test]
+    fn confirmation_preview_supports_old_text_new_text_alias() {
+        let preview = get_diff_preview(
+            "replace_file_content",
+            &serde_json::json!({
+                "old_text": "old line",
+                "new_text": "new line",
+            }),
+        )
+        .expect("a preview should be computed from old_text/new_text");
+        assert!(preview.contains("old line"));
+        assert!(preview.contains("new line"));
+    }
+
+    #[test]
+    fn confirmation_preview_supports_camel_case_old_string_alias() {
+        let preview = get_diff_preview(
+            "replace_file_content",
+            &serde_json::json!({
+                "oldString": "old line",
+                "newString": "new line",
+            }),
+        )
+        .expect("a preview should be computed from oldString/newString");
+        assert!(preview.contains("old line"));
+        assert!(preview.contains("new line"));
+    }
+
+    #[test]
+    fn confirmation_preview_supports_camel_case_old_text_alias() {
+        let preview = get_diff_preview(
+            "replace_file_content",
+            &serde_json::json!({
+                "oldText": "old line",
+                "newText": "new line",
+            }),
+        )
+        .expect("a preview should be computed from oldText/newText");
+        assert!(preview.contains("old line"));
+        assert!(preview.contains("new line"));
+    }
+
+    #[test]
+    fn confirmation_preview_supports_target_replacement_alias() {
+        let preview = get_diff_preview(
+            "replace_file_content",
+            &serde_json::json!({
+                "target": "old line",
+                "replacement": "new line",
+            }),
+        )
+        .expect("a preview should be computed from target/replacement");
+        assert!(preview.contains("old line"));
+        assert!(preview.contains("new line"));
+    }
+
+    #[test]
+    fn confirmation_preview_prefers_target_content_when_multiple_aliases_present() {
+        // target_content/replacement_content are first in priority order —
+        // a call that (unusually) carries both the canonical keys and an
+        // alias must use the canonical ones, matching extract_edit_chunks's
+        // own priority order exactly.
+        let preview = get_diff_preview(
+            "replace_file_content",
+            &serde_json::json!({
+                "target_content": "canonical old",
+                "replacement_content": "canonical new",
+                "old_string": "alias old",
+                "new_string": "alias new",
+            }),
+        )
+        .expect("a preview should be computed");
+        assert!(preview.contains("canonical old"));
+        assert!(preview.contains("canonical new"));
+        assert!(!preview.contains("alias old"));
+        assert!(!preview.contains("alias new"));
+    }
+
+    // Regression uncovered by fixing get_diff_preview's alias support: once
+    // it correctly computes a real, non-empty preview for old_string/
+    // new_string calls (not just target_content/replacement_content), that
+    // preview must still never leak through as a fallback for a no-op or
+    // failed edit — only extract_diff_block's real, post-execution diff (or
+    // no diff at all) may represent those outcomes.
+    #[test]
+    fn tool_result_precludes_preview_fallback_for_noop_and_failure() {
+        assert!(tool_result_precludes_preview_fallback(
+            "already applied; no changes made to 'x.rs'"
+        ));
+        assert!(tool_result_precludes_preview_fallback(
+            "Error: target_content not found in 'x.rs'."
+        ));
+        assert!(!tool_result_precludes_preview_fallback(
+            "wrote 'x.rs' (3 lines, 20 bytes)"
+        ));
+    }
+
+    #[tokio::test]
+    async fn repeated_noop_edit_with_old_string_alias_still_shows_no_diff() {
+        // The exact end-to-end shape of the regression: old_string/new_string
+        // args (not target_content/replacement_content), repeated after the
+        // edit already landed. Before this fix's tool_result_precludes_
+        // preview_fallback guard, get_diff_preview's now-correct alias
+        // support would have handed the pre-execution preview to
+        // final_tool_diff as a non-empty fallback, showing a diff for a
+        // no-op that changed nothing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let status = Idle;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+        let args = serde_json::json!({
+            "path": path,
+            "old_string": "let status = Idle;",
+            "new_string": "let status = Active;",
+        });
+
+        let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+        assert!(
+            first.diff.is_some(),
+            "the first, real change must have a diff"
+        );
+
+        let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+        assert!(
+            second
+                .content
+                .to_ascii_lowercase()
+                .contains("already applied"),
+            "got: {}",
+            second.content
+        );
+        assert!(
+            second.diff.is_none(),
+            "a no-op repeat must not carry a stale diff, even with a now-working alias preview: {:?}",
+            second.diff
+        );
+    }
+
+    // Regression this feature fixes: `get_diff_preview` previously only read
+    // the `target_content`/`replacement_content` keys, so a call built with
+    // the (equally valid, alias-supported) `old_string`/`new_string` keys
+    // got an empty preview — `Some("")`, not `None`. `final_tool_diff` must
+    // still guard against an empty fallback regardless (defense in depth):
     #[test]
     fn final_tool_diff_ignores_an_empty_fallback_preview() {
         assert_eq!(
