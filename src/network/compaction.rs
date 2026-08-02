@@ -1,7 +1,9 @@
 use crate::app::ChatMessage;
 use std::collections::HashMap;
+use std::future::Future;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use tiktoken_rs::{cl100k_base, CoreBPE};
 
 
@@ -88,6 +90,29 @@ pub const DEFAULT_PRUNE_TOKEN_THRESHOLD: usize = 90_000;
 /// Older tool outputs are eligible for message-count-based pruning and, on
 /// structured compaction, everything before this suffix is folded into a summary.
 pub const KEEP_RECENT_TURNS: usize = 6;
+
+/// Hard byte ceiling for the complete user prompt sent to the summarizer.
+/// 64 KiB is deliberately conservative: it leaves ample room for the pinned
+/// task, a prior summary, and several recent messages without allowing history
+/// length to grow the request without bound.
+const SUMMARY_INPUT_MAX_BYTES: usize = 64 * 1024;
+
+/// A prior summary is high-value context, but must leave room for the original
+/// task and recent facts inside [`SUMMARY_INPUT_MAX_BYTES`].
+const SUMMARY_PRIOR_MAX_BYTES: usize = 24 * 1024;
+
+/// Provider output is requested at 1024 tokens; 16 KiB is a generous defensive
+/// byte ceiling for providers that ignore that limit.
+const SUMMARY_OUTPUT_MAX_BYTES: usize = 16 * 1024;
+
+/// Total wall-clock budget for a non-streaming summary request, including
+/// connection, response headers, body transfer, and JSON decoding. Sixty
+/// seconds is conservative for a 1024-token summary while remaining finite.
+const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Preserve the existing per-message limit while additionally enforcing the
+/// whole-input byte ceiling above.
+const SUMMARY_MESSAGE_MAX_CHARS: usize = 2_000;
 
 /// Tool outputs above this token size are collapsed once they age out of the
 /// recent window.
@@ -192,6 +217,7 @@ pub async fn maybe_compact(
     model: &str,
     history: &mut Vec<ChatMessage>,
     budget: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
 ) -> bool {
     // 1. Local, zero-cost tool output pruning: collapse large tool outputs that
     //    have aged past the recent window, then apply the hard rolling token cap
@@ -246,8 +272,20 @@ pub async fn maybe_compact(
     if summarize_count < 4 {
         return false;
     }
+    if cancel_token.is_cancelled() {
+        return false;
+    }
 
-    force_compact_internal(client, url, model, history, summarize_count).await.is_ok()
+    force_compact_internal(
+        client,
+        url,
+        model,
+        history,
+        summarize_count,
+        Some(cancel_token),
+    )
+    .await
+    .is_ok()
 }
 
 pub async fn force_compact(
@@ -255,6 +293,7 @@ pub async fn force_compact(
     url: &str,
     model: &str,
     history: &mut Vec<ChatMessage>,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
@@ -266,7 +305,8 @@ pub async fn force_compact(
         return Err("Not enough messages to compact.".to_string());
     }
 
-    let result = force_compact_internal(client, url, model, history, summarize_count).await;
+    let result =
+        force_compact_internal(client, url, model, history, summarize_count, cancel_token).await;
     let after_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
     result.map(|_| (before_tokens, after_tokens))
 }
@@ -277,6 +317,7 @@ async fn force_compact_internal(
     model: &str,
     history: &mut Vec<ChatMessage>,
     summarize_count: usize,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(), String> {
     // Incremental compaction: if a prior summary already sits at the front of the
     // range, preserve its facts and only summarize the messages that came after.
@@ -311,6 +352,7 @@ async fn force_compact_internal(
         model,
         prior_summary.as_deref(),
         &to_summarize,
+        cancel_token,
     )
     .await
     {
@@ -348,43 +390,142 @@ async fn force_compact_internal(
 /// prior summaries during incremental compaction.
 pub(crate) const SUMMARY_MARKER: &str = "[Session History Summary]";
 
+fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn render_summary_message(message: &ChatMessage) -> String {
+    let role_label = match message.role.as_str() {
+        "user" => "User",
+        "assistant" => "Assistant",
+        "tool" => "Tool Result",
+        "system" => "System",
+        _ => "Unknown",
+    };
+    let mut chars = message.content.chars();
+    let mut content: String = chars.by_ref().take(SUMMARY_MESSAGE_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        content.push_str("... [truncated]");
+    }
+    format!("{role_label}:\n{content}\n\n")
+}
+
+/// Build a bounded prompt that pins the original task and prior summary, then
+/// spends the remaining space on the newest messages in chronological order.
+fn build_summary_input(prior_summary: Option<&str>, messages: &[&ChatMessage]) -> String {
+    let first_user_index = messages.iter().position(|message| message.role == "user");
+    let mut input = String::with_capacity(SUMMARY_INPUT_MAX_BYTES);
+    input.push_str("Summarize this coding conversation.\n\n");
+
+    if let Some(index) = first_user_index {
+        input.push_str("Original user task (preserve this objective):\n");
+        let rendered = render_summary_message(messages[index]);
+        let remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
+        input.push_str(truncate_utf8(&rendered, remaining));
+    }
+
+    if let Some(previous) = prior_summary {
+        input.push_str("Existing summary of earlier context (preserve every fact):\n");
+        let previous = truncate_utf8(previous, SUMMARY_PRIOR_MAX_BYTES);
+        let remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
+        input.push_str(truncate_utf8(previous, remaining));
+        input.push_str("\n\n");
+    }
+
+    input.push_str("Newest messages to fold into the summary:\n\n");
+    let mut recent = Vec::new();
+    let mut remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
+    for (index, message) in messages.iter().enumerate().rev() {
+        if Some(index) == first_user_index {
+            continue;
+        }
+        let rendered = render_summary_message(message);
+        if rendered.len() <= remaining {
+            remaining -= rendered.len();
+            recent.push(rendered);
+            continue;
+        }
+        if remaining > 0 {
+            recent.push(truncate_utf8(&rendered, remaining).to_string());
+        }
+        break;
+    }
+    for rendered in recent.into_iter().rev() {
+        input.push_str(&rendered);
+    }
+
+    debug_assert!(input.len() <= SUMMARY_INPUT_MAX_BYTES);
+    input
+}
+
+fn parse_summary_response(body: &serde_json::Value) -> Option<String> {
+    let content = body
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?
+        .get("content")?
+        .as_str()?
+        .trim();
+    let content = truncate_utf8(content, SUMMARY_OUTPUT_MAX_BYTES).trim_end();
+    if content.is_empty()
+        || !content
+            .chars()
+            .any(|character| !character.is_control() && !character.is_whitespace())
+    {
+        return None;
+    }
+
+    Some(content.to_string())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SummaryRequestError {
+    Cancelled,
+    TimedOut,
+}
+
+/// Apply one deadline to the complete summary exchange. The supplied future
+/// includes both `send()` and response decoding, unlike a client-level connect
+/// timeout which only covers establishing the connection.
+async fn await_summary_request<F>(
+    future: F,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<F::Output, SummaryRequestError>
+where
+    F: Future,
+{
+    let timed = tokio::time::timeout(SUMMARY_REQUEST_TIMEOUT, future);
+    tokio::pin!(timed);
+
+    if let Some(cancel_token) = cancel_token {
+        tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => Err(SummaryRequestError::Cancelled),
+            result = &mut timed => result.map_err(|_| SummaryRequestError::TimedOut),
+        }
+    } else {
+        timed.await.map_err(|_| SummaryRequestError::TimedOut)
+    }
+}
+
 async fn generate_summary(
     client: &reqwest::Client,
     url: &str,
     model: &str,
     prior_summary: Option<&str>,
     messages: &[&ChatMessage],
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Option<String> {
-    let mut conversation_text = String::new();
-    for m in messages {
-        let role_label = match m.role.as_str() {
-            "user" => "User",
-            "assistant" => "Assistant",
-            "tool" => "Tool Result",
-            "system" => "System",
-            _ => "Unknown",
-        };
-        // Limit each message to ~2000 chars to keep the prompt bounded. Use a
-        // char boundary (not a byte slice) — byte slicing panics when the cut
-        // lands inside a multi-byte UTF-8 sequence.
-        let content = if m.content.chars().count() > 2000 {
-            let head: String = m.content.chars().take(2000).collect();
-            format!("{head}... [truncated]")
-        } else {
-            m.content.clone()
-        };
-        conversation_text.push_str(&format!("{}:\n{}\n\n", role_label, content));
-    }
-
-    // Incremental: hand the model the prior summary to fold in, so earlier facts
-    // survive instead of being re-compressed away.
-    let user_content = match prior_summary {
-        Some(prev) => format!(
-            "Existing summary of earlier context (preserve every fact, do NOT drop details):\n{prev}\n\n\
-             New messages since then to fold into the summary:\n\n{conversation_text}"
-        ),
-        None => format!("Summarize this conversation:\n\n{conversation_text}"),
-    };
+    let user_content = build_summary_input(prior_summary, messages);
 
     let payload = serde_json::json!({
         "model": model,
@@ -403,18 +544,19 @@ async fn generate_summary(
         "max_tokens": 1024,
     });
 
-    let resp = client.post(url).json(&payload).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let body: serde_json::Value = resp.json().await.ok()?;
-    body.get("choices")?
-        .as_array()?
-        .first()?
-        .get("message")?
-        .get("content")?
-        .as_str()
-        .map(|s| s.trim().to_string())
+    let request = async {
+        let resp = client.post(url).json(&payload).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body: serde_json::Value = resp.json().await.ok()?;
+        parse_summary_response(&body)
+    };
+
+    await_summary_request(request, cancel_token)
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
@@ -423,6 +565,70 @@ mod tests {
 
     fn tool_msg(content: &str) -> ChatMessage {
         ChatMessage::new("tool", content)
+    }
+
+    async fn one_shot_json_server(body: serde_json::Value) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                let read = socket.read(&mut buffer).await.expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+        format!("http://{address}")
+    }
+
+    async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept request");
+            accepted_tx.send(()).ok();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        (format!("http://{address}"), accepted_rx)
     }
 
     /// The memo must be a pure cache: whatever it returns, on a cold miss or a
@@ -504,9 +710,17 @@ mod tests {
         }
 
         let client = reqwest::Client::new();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
         // Budget far larger than the history: nothing should be touched.
-        let compacted =
-            maybe_compact(&client, "http://unused", "model", &mut history, 1_000_000).await;
+        let compacted = maybe_compact(
+            &client,
+            "http://unused",
+            "model",
+            &mut history,
+            1_000_000,
+            &cancel_token,
+        )
+        .await;
 
         assert!(!compacted);
         assert_eq!(history[2].content, big_read, "the read must survive");
@@ -558,5 +772,237 @@ mod tests {
         }
         prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
         assert_eq!(history[0].content, "grep: match at line 4");
+    }
+
+    #[test]
+    fn summary_input_is_globally_bounded_and_keeps_task_and_recent_facts() {
+        let mut history = vec![ChatMessage::new(
+            "user",
+            "ORIGINAL-TASK: preserve this exact objective",
+        )];
+        for i in 0..200 {
+            history.push(ChatMessage::new(
+                "tool",
+                format!("OLD-FACT-{i}: {}", "x".repeat(2_000)),
+            ));
+        }
+        history.push(ChatMessage::new(
+            "assistant",
+            "NEWEST-FACT: src/network/compaction.rs is the active file",
+        ));
+        let refs: Vec<&ChatMessage> = history.iter().collect();
+        let prior = format!("PRIOR-SUMMARY: {}", "é".repeat(SUMMARY_INPUT_MAX_BYTES));
+
+        let input = build_summary_input(Some(&prior), &refs);
+
+        assert!(input.len() <= SUMMARY_INPUT_MAX_BYTES, "{} bytes", input.len());
+        assert!(input.contains("ORIGINAL-TASK: preserve this exact objective"));
+        assert!(input.contains("NEWEST-FACT: src/network/compaction.rs is the active file"));
+        assert!(input.contains("PRIOR-SUMMARY:"));
+        assert!(!input.contains("OLD-FACT-0:"), "oldest bulk should be dropped first");
+    }
+
+    #[test]
+    fn summary_response_rejects_empty_or_invalid_provider_content() {
+        let empty = serde_json::json!({
+            "choices": [{"message": {"content": "  \n\t "}}]
+        });
+        let control_only = serde_json::json!({
+            "choices": [{"message": {"content": "\u{0000}\u{0007}"}}]
+        });
+        let missing_content = serde_json::json!({
+            "choices": [{"message": {}}]
+        });
+
+        assert!(parse_summary_response(&empty).is_none());
+        assert!(parse_summary_response(&control_only).is_none());
+        assert!(parse_summary_response(&missing_content).is_none());
+    }
+
+    #[test]
+    fn summary_response_caps_multibyte_utf8_safely() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {"content": format!("useful facts {}", "é".repeat(SUMMARY_OUTPUT_MAX_BYTES))}
+            }]
+        });
+
+        let summary = parse_summary_response(&body).expect("valid summary");
+
+        assert!(summary.len() <= SUMMARY_OUTPUT_MAX_BYTES, "{} bytes", summary.len());
+        assert!(summary.starts_with("useful facts"));
+        assert!(std::str::from_utf8(summary.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn summary_response_rejects_output_invalidated_by_truncation() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": format!("{}visible", "\u{0007}".repeat(SUMMARY_OUTPUT_MAX_BYTES))
+                }
+            }]
+        });
+
+        assert!(parse_summary_response(&body).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn summary_request_total_timeout_bounds_body_decoding() {
+        let task = tokio::spawn(async {
+            await_summary_request(std::future::pending::<()>(), None).await
+        });
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(SUMMARY_REQUEST_TIMEOUT + std::time::Duration::from_millis(1)).await;
+
+        assert_eq!(
+            task.await.expect("timeout task must not panic"),
+            Err(SummaryRequestError::TimedOut)
+        );
+    }
+
+    #[tokio::test]
+    async fn summary_request_cancellation_interrupts_pending_io() {
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let request_cancel = cancel_token.clone();
+        let task = tokio::spawn(async move {
+            await_summary_request(
+                std::future::pending::<()>(),
+                Some(&request_cancel),
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+
+        cancel_token.cancel();
+
+        assert_eq!(
+            task.await.expect("cancellation task must not panic"),
+            Err(SummaryRequestError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_cancellation_interrupts_pending_summary_request() {
+        let (url, request_accepted) = pending_response_server().await;
+        let mut history = vec![ChatMessage::new("user", "original task")];
+        for index in 0..7 {
+            history.push(ChatMessage::new("assistant", format!("fact {index}")));
+        }
+        let expected: Vec<(String, String)> = history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let task_token = cancel_token.clone();
+        let mut task = tokio::spawn(async move {
+            let result = force_compact(
+                &reqwest::Client::new(),
+                &url,
+                "model",
+                &mut history,
+                Some(&task_token),
+            )
+            .await;
+            (result, history)
+        });
+        tokio::select! {
+            accepted = request_accepted => {
+                accepted.expect("manual compaction server must signal acceptance");
+            }
+            result = &mut task => {
+                let (result, _) = result.expect("manual compaction task must not panic");
+                panic!("manual compaction ended before making its request: {result:?}");
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                panic!("manual compaction request must start");
+            }
+        }
+
+        cancel_token.cancel();
+
+        let (result, history) = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("cancellation must interrupt manual compaction")
+            .expect("manual compaction task must not panic");
+        let actual: Vec<(String, String)> = history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        assert_eq!(result, Err("Failed to generate summary.".to_string()));
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn cancelled_automatic_compaction_keeps_history_with_local_pruning_only() {
+        let mut history = vec![ChatMessage::new("user", "keep the original task")];
+        history.push(tool_msg(&format!("view_file: {}", "source ".repeat(3_000))));
+        for i in 0..12 {
+            history.push(ChatMessage::new(
+                "assistant",
+                format!("FACT-{i}: {}", "progress ".repeat(30)),
+            ));
+        }
+        let expected_non_tool: Vec<(String, String)> = history
+            .iter()
+            .filter(|message| message.role != "tool")
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        cancel_token.cancel();
+
+        let compacted = maybe_compact(
+            &reqwest::Client::new(),
+            "http://unused",
+            "model",
+            &mut history,
+            200,
+            &cancel_token,
+        )
+        .await;
+
+        let actual_non_tool: Vec<(String, String)> = history
+            .iter()
+            .filter(|message| message.role != "tool")
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        assert!(!compacted);
+        assert_eq!(actual_non_tool, expected_non_tool);
+        assert!(history[1].content.contains("Tool Output Truncated"));
+        assert!(!history.iter().any(|message| message.content.starts_with(SUMMARY_MARKER)));
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_failure_keeps_history_and_returns_error() {
+        let url = one_shot_json_server(serde_json::json!({
+            "choices": [{"message": {"content": "  "}}]
+        }))
+        .await;
+        let mut history = vec![ChatMessage::new("user", "original task")];
+        for i in 0..7 {
+            history.push(ChatMessage::new("assistant", format!("fact {i}")));
+        }
+        let expected: Vec<(String, String)> = history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+
+        let result = force_compact(
+            &reqwest::Client::new(),
+            &url,
+            "model",
+            &mut history,
+            None,
+        )
+        .await;
+
+        let actual: Vec<(String, String)> = history
+            .iter()
+            .map(|message| (message.role.clone(), message.content.clone()))
+            .collect();
+        assert_eq!(result, Err("Failed to generate summary.".to_string()));
+        assert_eq!(actual, expected);
+        assert!(!history.iter().any(|message| message.content.starts_with(SUMMARY_MARKER)));
     }
 }

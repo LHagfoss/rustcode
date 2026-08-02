@@ -126,50 +126,77 @@ pub async fn handle_enter(
             "/compact" => {
                 s.input_buffer.clear();
                 s.cursor_position = 0;
+                if s.history.len() < 2 {
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Not enough messages to compact.",
+                    ));
+                    return false;
+                }
                 let api_base_url = s.api_base_url.clone();
                 let model_name = s.model_name.clone();
+                let active_session_id = s.active_session_id.clone();
+                let original_history = s.history.clone();
+                let mut history_to_compact = original_history.clone();
+                let compaction_cancel_token = cancel_token.clone();
                 drop(s);
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
                 tokio::spawn(async move {
-                    let mut s = state_clone.lock().await;
-                    let history_len = s.history.len();
-                    if history_len < 2 {
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            "Not enough messages to compact.",
-                        ));
-                        return;
-                    }
-                    let mut history_to_compact = s.history.drain(..).collect::<Vec<ChatMessage>>();
-                    drop(s);
-
                     match crate::network::compaction::force_compact(
                         &client_clone,
                         &api_base_url,
                         &model_name,
                         &mut history_to_compact,
+                        Some(&compaction_cancel_token),
                     )
                     .await
                     {
                         Ok((before, after)) => {
                             let mut s = state_clone.lock().await;
-                            s.history.extend(history_to_compact);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                format!(
-                                    "🧹 History compacted: reduced context from {} to {} tokens.",
-                                    before, after
-                                ),
-                            ));
+                            let live_session_id = s.active_session_id.clone();
+                            if try_merge_compacted_history(
+                                &live_session_id,
+                                &mut s.history,
+                                &active_session_id,
+                                &original_history,
+                                history_to_compact,
+                            ) {
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!(
+                                        "🧹 History compacted: reduced context from {} to {} tokens.",
+                                        before, after
+                                    ),
+                                ));
+                            } else {
+                                report_stale_compaction(
+                                    &live_session_id,
+                                    &active_session_id,
+                                    &mut s.history,
+                                );
+                            }
                         }
                         Err(e) => {
                             let mut s = state_clone.lock().await;
-                            s.history.extend(history_to_compact);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                format!("History compaction failed: {}", e),
-                            ));
+                            let live_session_id = s.active_session_id.clone();
+                            if history_matches_snapshot(
+                                &live_session_id,
+                                &s.history,
+                                &active_session_id,
+                                &original_history,
+                            ) {
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!("History compaction failed: {}", e),
+                                ));
+                            } else {
+                                report_stale_compaction(
+                                    &live_session_id,
+                                    &active_session_id,
+                                    &mut s.history,
+                                );
+                            }
                         }
                     }
                 });
@@ -823,6 +850,56 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
         });
     }
     false
+}
+
+fn history_matches_snapshot(
+    live_session_id: &str,
+    live_history: &[ChatMessage],
+    captured_session_id: &str,
+    captured_history: &[ChatMessage],
+) -> bool {
+    live_session_id == captured_session_id && live_history.starts_with(captured_history)
+}
+
+fn try_merge_compacted_history(
+    live_session_id: &str,
+    live_history: &mut Vec<ChatMessage>,
+    captured_session_id: &str,
+    captured_history: &[ChatMessage],
+    mut compacted_history: Vec<ChatMessage>,
+) -> bool {
+    if !history_matches_snapshot(
+        live_session_id,
+        live_history,
+        captured_session_id,
+        captured_history,
+    ) {
+        return false;
+    }
+
+    compacted_history.extend(live_history.drain(captured_history.len()..));
+    *live_history = compacted_history;
+    true
+}
+
+fn report_stale_compaction(
+    live_session_id: &str,
+    captured_session_id: &str,
+    history: &mut Vec<ChatMessage>,
+) {
+    if live_session_id != captured_session_id {
+        dbg_log!(
+            "Skipping stale compaction notice: active session changed from '{}' to '{}'.",
+            captured_session_id,
+            live_session_id
+        );
+        return;
+    }
+
+    history.push(ChatMessage::new(
+        "system",
+        "History compaction discarded as stale: the active session or history changed while compaction was running.",
+    ));
 }
 
 pub fn get_filtered_cmds_len(input_buffer: &str) -> usize {
@@ -1523,6 +1600,21 @@ fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) 
 mod tests {
     use super::parse_token_count;
 
+    async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept request");
+            accepted_tx.send(()).ok();
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+        (format!("http://{address}"), accepted_rx)
+    }
+
     #[test]
     fn parse_token_count_plain_and_k_suffix() {
         assert_eq!(parse_token_count("262144"), Some(262144));
@@ -1576,6 +1668,171 @@ mod tests {
         );
 
         assert_eq!(history.len(), 2);
+    }
+
+    #[test]
+    fn manual_compaction_discards_result_after_session_only_change() {
+        let original = vec![
+            crate::app::ChatMessage::new("user", "original task"),
+            crate::app::ChatMessage::new("assistant", "original response"),
+        ];
+        let captured_history = original.clone();
+        let mut live_history = original;
+        let expected = live_history.clone();
+        let compacted = vec![crate::app::ChatMessage::new(
+            "system",
+            "compacted old session",
+        )];
+
+        let applied = super::try_merge_compacted_history(
+            "new-session",
+            &mut live_history,
+            "old-session",
+            &captured_history,
+            compacted,
+        );
+
+        assert!(!applied);
+        assert!(live_history == expected);
+    }
+
+    #[test]
+    fn manual_compaction_discards_result_after_token_usage_change() {
+        let original = vec![
+            crate::app::ChatMessage::new("user", "original task"),
+            crate::app::ChatMessage::new("assistant", "original response"),
+        ];
+        let captured_history = original.clone();
+        let mut live_history = original;
+        live_history[1].token_usage = Some(crate::app::TokenUsage {
+            prompt_tokens: 12,
+            completion_tokens: 8,
+            total_tokens: 20,
+            cached_tokens: Some(4),
+        });
+        let expected = live_history.clone();
+        let compacted = vec![crate::app::ChatMessage::new("system", "compacted history")];
+
+        let applied = super::try_merge_compacted_history(
+            "active-session",
+            &mut live_history,
+            "active-session",
+            &captured_history,
+            compacted,
+        );
+
+        assert!(!applied);
+        assert!(live_history == expected);
+    }
+
+    #[test]
+    fn manual_compaction_stale_report_skips_new_session_history() {
+        let mut live_history = vec![crate::app::ChatMessage::new("user", "new session task")];
+        let expected = live_history.clone();
+
+        super::report_stale_compaction("new-session", "old-session", &mut live_history);
+
+        assert!(live_history == expected);
+    }
+
+    #[test]
+    fn manual_compaction_stale_report_preserves_same_session_history() {
+        let mut live_history = vec![crate::app::ChatMessage::new(
+            "assistant",
+            "response completed while compaction ran",
+        )];
+        live_history[0].response_time_ms = Some(250);
+        let expected = live_history.clone();
+
+        super::report_stale_compaction("active-session", "active-session", &mut live_history);
+
+        assert!(live_history[..expected.len()] == expected);
+        assert_eq!(live_history.len(), expected.len() + 1);
+        assert!(
+            live_history
+                .last()
+                .unwrap()
+                .content
+                .contains("discarded as stale")
+        );
+    }
+
+    #[test]
+    fn manual_compaction_preserves_messages_appended_to_original_prefix() {
+        let original = vec![
+            crate::app::ChatMessage::new("user", "original task"),
+            crate::app::ChatMessage::new("assistant", "original response"),
+        ];
+        let captured_history = original.clone();
+        let mut live_history = original;
+        let appended = crate::app::ChatMessage::new("user", "message appended during compaction");
+        live_history.push(appended.clone());
+        let compacted = vec![crate::app::ChatMessage::new("system", "compacted history")];
+        let expected = vec![compacted[0].clone(), appended];
+
+        let applied = super::try_merge_compacted_history(
+            "active-session",
+            &mut live_history,
+            "active-session",
+            &captured_history,
+            compacted,
+        );
+
+        assert!(applied);
+        assert!(live_history == expected);
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_cancellation_interrupts_detached_request() {
+        use crate::app::state::AppState;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let (url, request_accepted) = pending_response_server().await;
+        let mut app = AppState::new();
+        app.api_base_url = url;
+        app.model_name = "model".to_string();
+        app.history = (0..8)
+            .map(|index| crate::app::ChatMessage::new("user", format!("message {index}")))
+            .collect();
+        app.input_buffer = "/compact".to_string();
+        let state = Arc::new(Mutex::new(app));
+        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+        let compact_token = cancel_token.clone();
+
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        tokio::time::timeout(Duration::from_secs(10), request_accepted)
+            .await
+            .expect("manual compaction request must start")
+            .expect("manual compaction server must signal acceptance");
+
+        {
+            let mut app = state.lock().await;
+            app.input_buffer = "/cancel".to_string();
+        }
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        assert!(compact_token.is_cancelled());
+        assert!(!cancel_token.is_cancelled());
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state
+                    .lock()
+                    .await
+                    .history
+                    .iter()
+                    .any(|message| message.content.starts_with("History compaction failed:"))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelling the active token must stop manual compaction");
     }
 
     #[tokio::test]
