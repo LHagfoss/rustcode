@@ -3044,16 +3044,25 @@ fn extract_exit_code(content: &str) -> Option<i32> {
     digits.parse().ok()
 }
 
-fn finalize_tool_result_content(
-    name: &str,
-    result: String,
-    deferred_notice: Option<&str>,
-) -> String {
-    let result = match deferred_notice {
-        Some(notice) => format!("{result}\n\n{notice}"),
-        None => result,
-    };
-    truncate_tool_output(name, result)
+fn finalize_tool_result(mut result: ToolResult, deferred_notice: Option<&str>) -> ToolResult {
+    if let Some(notice) = deferred_notice {
+        result.content.push_str("\n\n");
+        result.content.push_str(notice);
+    }
+    result.content = truncate_tool_output(&result.tool_name, result.content);
+    result.metadata.full_output_artifact = result
+        .content
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Full output saved to: "))
+        .map(str::to_string);
+    result.metadata.exit_code = extract_exit_code(&result.content);
+    result.metadata.truncated = output_marks_truncation(&result.content);
+    result.metadata.success = !result
+        .content
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("error");
+    result
 }
 
 fn tool_result_history_message(
@@ -3349,13 +3358,7 @@ different, read another range or make an edit first; repeating this call returns
             diff_opt
         };
         let final_diff = final_tool_diff(&result, preview_fallback);
-        let content = finalize_tool_result_content(
-            &executed_name,
-            result,
-            (executed_name == "use_skill")
-                .then_some(deferred_notice.as_deref())
-                .flatten(),
-        );
+        let content = result;
         let changed_paths = if is_mutating_tool(&executed_name) {
             args.get("path")
                 .and_then(|value| value.as_str())
@@ -3364,10 +3367,6 @@ different, read another range or make an edit first; repeating this call returns
         } else {
             Vec::new()
         };
-        let full_output_artifact = content
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("Full output saved to: "))
-            .map(str::to_string);
         let exit_code = extract_exit_code(&content);
         let truncated = output_marks_truncation(&content);
         let success = !content
@@ -3386,7 +3385,7 @@ different, read another range or make an edit first; repeating this call returns
                 exit_code,
                 changed_paths,
                 truncated,
-                full_output_artifact,
+                full_output_artifact: None,
             },
         });
         if cancel_token.is_cancelled() {
@@ -3436,6 +3435,13 @@ different, read another range or make an edit first; repeating this call returns
                 result.content.push_str(&snippet);
             }
         }
+    }
+    for result in &mut results {
+        let notice = (result.tool_name == "use_skill")
+            .then_some(deferred_notice.as_deref())
+            .flatten();
+        let finalized = finalize_tool_result(result.clone(), notice);
+        *result = finalized;
     }
     results
 }
@@ -5113,44 +5119,78 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
             .collect::<Vec<_>>()
             .join("\n");
         let deferred_notice = "[harness: deferred 2 additional tool call(s) until the next model turn after skill loading]";
-        let content = finalize_tool_result_content("use_skill", raw, Some(deferred_notice));
-        let result = ToolResult {
-            tool_name: "use_skill".to_string(),
-            metadata: ToolResultMetadata {
-                truncated: output_marks_truncation(&content),
-                ..Default::default()
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "use_skill".to_string(),
+                content: raw,
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata::default(),
             },
-            content: content.clone(),
-            diff: None,
-            file_preview: None,
-        };
+            Some(deferred_notice),
+        );
+        let content = result.content.clone();
         let message = tool_result_history_message(result, None);
 
         assert!(content.contains(deferred_notice));
         assert_eq!(content.matches("[Output truncated:").count(), 1);
+        assert!(content.len() <= 50 * 1024);
+        assert!(message
+            .tool_result
+            .as_ref()
+            .is_some_and(|metadata| metadata.truncated));
+        let metadata = message.tool_result.as_ref().expect("tool metadata");
+        assert_eq!(metadata.truncated, output_marks_truncation(&content));
+        if let Some(path) = metadata.full_output_artifact.as_ref() {
+            assert!(std::fs::metadata(path).is_ok(), "artifact path must exist");
+        }
         assert_eq!(message.content, format!("use_skill: {content}"));
         assert_eq!(message.content.matches("[Output truncated:").count(), 1);
     }
 
     #[test]
-    fn history_uses_the_bounded_tool_result_without_retruncating_it() {
-        let bounded = truncate_tool_output(
-            "grep",
-            (1..=2000)
-                .map(|line| format!("match {line}"))
+    fn compiler_diagnostics_are_finalized_with_the_tool_result() {
+        let mut result = ToolResult {
+            tool_name: "replace_file_content".to_string(),
+            content: (1..=2000)
+                .map(|line| format!("edit output {line}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
-        );
-        let result = ToolResult {
-            tool_name: "grep".to_string(),
-            content: bounded.clone(),
             diff: None,
             file_preview: None,
-            metadata: ToolResultMetadata {
-                truncated: true,
-                ..Default::default()
-            },
+            metadata: ToolResultMetadata::default(),
         };
+        result.content.push_str(
+            "\n\nLSP/Compiler errors detected in workspace, please fix:\nerror[E0425]: missing_symbol",
+        );
+
+        let result = finalize_tool_result(result, None);
+
+        assert!(result.content.contains("error[E0425]: missing_symbol"));
+        assert!(result.content.len() <= 50 * 1024);
+        assert!(result.metadata.truncated);
+        assert_eq!(result.content.matches("[Output truncated:").count(), 1);
+        if let Some(path) = result.metadata.full_output_artifact.as_ref() {
+            assert!(std::fs::metadata(path).is_ok(), "artifact path must exist");
+        }
+    }
+
+    #[test]
+    fn history_uses_the_bounded_tool_result_without_retruncating_it() {
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "grep".to_string(),
+                content: (1..=2000)
+                    .map(|line| format!("match {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata::default(),
+            },
+            None,
+        );
+        let bounded = result.content.clone();
 
         let message = tool_result_history_message(result, None);
 

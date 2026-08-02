@@ -18,8 +18,8 @@ pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
 
     let saved_path = save_full_tool_output(name, &result);
     let max_lines = MAX_TOOL_OUTPUT_LINES.min(line_count);
-    let mut head_count = (max_lines * 3) / 10;
-    let mut tail_count = (max_lines * 3) / 10;
+    let mut head_count = ((max_lines * 3) / 10).max(1).min(line_count);
+    let mut tail_count = ((max_lines * 3) / 10).max(1).min(line_count);
     let path_note = match saved_path {
         Some(path) => format!(
             " Full output saved to: {path}\nUse grep to search the full content or view_file with line offsets to read specific sections."
@@ -29,7 +29,10 @@ pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
 
     loop {
         let head: String = lines[..head_count.min(line_count)].join("\n");
-        let tail: String = if tail_count > 0 && line_count > head_count + tail_count {
+        let tail: String = if tail_count > 0
+            && line_count > 1
+            && line_count >= head_count + tail_count
+        {
             lines[line_count - tail_count..].join("\n")
         } else {
             String::new()
@@ -115,6 +118,23 @@ mod tests {
         let out = truncate_tool_output("run_command", content);
         assert!(out.contains("[Output truncated:"));
         assert!(out.len() <= MAX_TOOL_OUTPUT_BYTES, "bounded output was {} bytes", out.len());
+    }
+
+    #[test]
+    fn oversized_byte_only_output_preserves_a_trailing_notice() {
+        let content = format!(
+            "{}\n{}\n[harness: deferred additional tool calls]",
+            "a".repeat(60_000),
+            "b".repeat(60_000)
+        );
+        let out = truncate_tool_output("use_skill", content);
+
+        assert!(
+            out.contains("[harness: deferred additional tool calls]"),
+            "bounded output must preserve the trailing notice"
+        );
+        assert!(out.len() <= MAX_TOOL_OUTPUT_BYTES);
+        assert_eq!(out.matches("[Output truncated:").count(), 1);
     }
 
     #[test]
