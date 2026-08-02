@@ -20,6 +20,36 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// Authoritative facts returned by a tool invocation alongside its display
+/// text. Consumers must not reconstruct these fields from `content`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolExecutionOutput {
+    pub(crate) content: String,
+    pub(crate) success: bool,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) truncated: bool,
+}
+
+impl ToolExecutionOutput {
+    pub(crate) fn success(content: String) -> Self {
+        Self {
+            content,
+            success: true,
+            exit_code: None,
+            truncated: false,
+        }
+    }
+
+    pub(crate) fn failure(content: String) -> Self {
+        Self {
+            content,
+            success: false,
+            exit_code: None,
+            truncated: false,
+        }
+    }
+}
+
 /// How many calls that can change the workspace may run from one response.
 ///
 /// The limit exists so each edit is grounded in the result of the previous one,
@@ -205,13 +235,13 @@ pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTas
     TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-type WakeupCallback = Box<dyn Fn(String, String, String) + Send + Sync + 'static>;
+type WakeupCallback = Box<dyn Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static>;
 
 pub(crate) static WAKEUP_CALLBACK: OnceLock<WakeupCallback> = OnceLock::new();
 
 pub fn register_wakeup_callback<F>(cb: F)
 where
-    F: Fn(String, String, String) + Send + Sync + 'static,
+    F: Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static,
 {
     let _ = WAKEUP_CALLBACK.set(Box::new(cb));
 }
@@ -524,8 +554,8 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "view_file",
-        description: "View the contents of a file or directory. Supports line ranges (1-indexed) and optional byte offset if content is truncated.",
-        arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (default start_line + 2000)", "content_offset": "optional byte offset into content"}"#,
+        description: "View the contents of a file or directory. Each call has a 250-line hard cap; request targeted follow-up ranges with start_line/end_line for more content. Supports 1-indexed line ranges and an optional byte offset.",
+        arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (each call is capped at 250 lines; request targeted follow-up ranges for more content)", "content_offset": "optional byte offset into content"}"#,
         handler: filesystem::view_file_tool,
         requires_confirmation: false,
     },
@@ -855,7 +885,8 @@ fn schema_for_tool(name: &str) -> Value {
         "view_file" => serde_json::json!({
             "type": "object", "properties": {
                 "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 1 }, "content_offset": { "type": "integer", "minimum": 0 }
+                "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive end line; each call is capped at 250 lines. Request targeted follow-up ranges for more content." },
+                "content_offset": { "type": "integer", "minimum": 0 }
             }, "required": ["path"]
         }),
         "replace_file_content" => serde_json::json!({
@@ -1370,7 +1401,7 @@ fn as_error_message(message: &str) -> String {
     }
 }
 
-pub fn execute(name: &str, args: &Value) -> String {
+pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOutput {
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
         for client in reg.values() {
             if let Ok(tools) = client.get_tools()
@@ -1397,6 +1428,11 @@ pub fn execute(name: &str, args: &Value) -> String {
 
                 return match res {
                     Ok(val) => {
+                        let success = !val
+                            .get("result")
+                            .and_then(|result| result.get("isError"))
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
                         if let Some(content_arr) = val
                             .get("result")
                             .and_then(|r| r.get("content"))
@@ -1408,27 +1444,62 @@ pub fn execute(name: &str, args: &Value) -> String {
                                     text_parts.push(text.to_string());
                                 }
                             }
-                            text_parts.join("\n")
+                            ToolExecutionOutput {
+                                content: text_parts.join("\n"),
+                                success,
+                                exit_code: None,
+                                truncated: false,
+                            }
                         } else {
-                            serde_json::to_string_pretty(&val).unwrap_or_default()
+                            ToolExecutionOutput {
+                                content: serde_json::to_string_pretty(&val).unwrap_or_default(),
+                                success,
+                                exit_code: None,
+                                truncated: false,
+                            }
                         }
                     }
-                    Err(e) => format!("error: MCP tool call failed: {e}"),
+                    Err(e) => ToolExecutionOutput::failure(format!(
+                        "error: MCP tool call failed: {e}"
+                    )),
                 };
             }
         }
     }
 
+    if name == "run_command" {
+        return match exec::run_command_output(args) {
+            Ok(output) => output,
+            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+        };
+    }
+    if name == "view_file" {
+        return match filesystem::view_file_output(args) {
+            Ok(output) => ToolExecutionOutput {
+                content: output.content,
+                success: true,
+                exit_code: None,
+                truncated: output.truncated,
+            },
+            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+        };
+    }
+
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
-            Ok(out) => out,
-            Err(e) => as_error_message(&e),
+            Ok(out) => ToolExecutionOutput::success(out),
+            Err(e) => ToolExecutionOutput::failure(as_error_message(&e)),
         },
-        None => format!(
+        None => ToolExecutionOutput::failure(format!(
             "error: unknown tool '{name}'. Available: {}",
             TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
-        ),
+        )),
     }
+}
+
+#[allow(dead_code, reason = "preserved display-only interface for direct callers")]
+pub fn execute(name: &str, args: &Value) -> String {
+    execute_with_metadata(name, args).content
 }
 
 pub fn needs_confirmation(name: &str) -> bool {
@@ -1868,6 +1939,26 @@ mod tests {
         assert!(spec.description.contains("prepend"), "got: {}", spec.description);
         assert!(spec.description.contains("An empty target is rejected"), "got: {}", spec.description);
         assert!(spec.arguments.contains("never empty"), "got: {}", spec.arguments);
+    }
+
+    #[test]
+    fn the_view_file_spec_describes_the_hard_read_window() {
+        let spec = TOOLS
+            .iter()
+            .find(|tool| tool.name == "view_file")
+            .expect("tool exists");
+
+        assert!(spec.description.contains("250-line hard cap"), "got: {}", spec.description);
+        assert!(spec.description.contains("targeted follow-up ranges"), "got: {}", spec.description);
+        assert!(spec.arguments.contains("250 lines"), "got: {}", spec.arguments);
+        assert!(spec.arguments.contains("targeted follow-up"), "got: {}", spec.arguments);
+        assert!(!spec.arguments.contains("start_line + 2000"), "got: {}", spec.arguments);
+
+        let schema = schema_for_tool("view_file");
+        assert_eq!(
+            schema["properties"]["end_line"]["description"],
+            "Inclusive end line; each call is capped at 250 lines. Request targeted follow-up ranges for more content."
+        );
     }
 
     #[test]
