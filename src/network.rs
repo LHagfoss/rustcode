@@ -1384,6 +1384,35 @@ pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<S
     }
 }
 
+/// Pull the real ```diff fence out of a tool's own result content. Since
+/// PR #309, `replace_file_content_tool`/`multi_replace_file_content_tool`
+/// embed a unified diff generated from the actual before/after file content
+/// directly in the string they return — this is the one true diff for what
+/// actually landed on disk, as opposed to `get_diff_preview`'s best-effort,
+/// argument-only preview computed *before* the edit runs (used only for the
+/// confirmation modal). Returns `None` when the result has no such fence —
+/// a no-op ("already applied") edit, a failed edit, or a tool that doesn't
+/// embed a diff at all.
+fn extract_diff_block(content: &str) -> Option<String> {
+    let after_fence = content.split_once("```diff\n")?.1;
+    let (body, _) = after_fence.split_once("\n```")?;
+    if body.trim().is_empty() {
+        None
+    } else {
+        Some(body.to_string())
+    }
+}
+
+/// The real diff for a tool result, or `None` if there's nothing real to
+/// show. Falls back to the pre-execution argument-only preview only when it
+/// carries actual content — an empty fallback (e.g. `get_diff_preview` was
+/// never given `target_content`/`replacement_content` under those exact
+/// keys) is exactly the kind of misleading, non-representative diff this
+/// must never let through.
+fn final_tool_diff(result: &str, preview_fallback: Option<String>) -> Option<String> {
+    extract_diff_block(result).or_else(|| preview_fallback.filter(|d| !d.trim().is_empty()))
+}
+
 fn get_file_preview(name: &str, args: &serde_json::Value) -> Option<(String, String)> {
     if name != "write_to_file" {
         return None;
@@ -2207,13 +2236,17 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 )
                 .await
             };
+            // Same rule as the main tool-execution path: the real diff
+            // embedded in the tool's own result always wins over the
+            // pre-execution, argument-only preview.
+            let final_diff = final_tool_diff(&result, diff_opt);
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
                 let truncated_result = truncate_tool_output(name, result);
                 a.history.push(
                     ChatMessage::new("tool", format!("{name}: {truncated_result}"))
-                        .with_diff(diff_opt),
+                        .with_diff(final_diff),
                 );
             }
             continue;
@@ -3212,6 +3245,14 @@ different, read another range or make an edit first; repeating this call returns
             (name_clone, result, diff_opt)
         }
         .await;
+        // The real diff (from actual before/after file content, embedded by
+        // the edit tools themselves) always wins over the pre-execution,
+        // argument-only preview — that preview is provisional and must
+        // never stand in for what the transcript/UI shows as the final
+        // result. It's kept only as a fallback for the rare case where a
+        // tool has no embedded diff of its own (e.g. a legacy write_to_file
+        // preview) but a preview was still computed.
+        let final_diff = final_tool_diff(&result, diff_opt);
         let content = truncate_tool_output(&executed_name, result);
         let changed_paths = if is_mutating_tool(&executed_name) {
             args.get("path")
@@ -3234,7 +3275,7 @@ different, read another range or make an edit first; repeating this call returns
         results.push(ToolResult {
             tool_name: executed_name.clone(),
             content,
-            diff: diff_opt,
+            diff: final_diff,
             file_preview: get_file_preview(&executed_name, args),
             metadata: ToolResultMetadata {
                 call_id: None,
@@ -5741,5 +5782,290 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
         // (and the debug.log growth it causes) stays opt-in.
         let config = crate::config::AppConfig::default();
         assert!(!config.debug_verbose_network_logging);
+    }
+
+    // --- extract_diff_block: pull the real diff out of a tool result ---
+
+    #[test]
+    fn extract_diff_block_finds_a_normal_replacement_diff() {
+        let content = "successfully replaced target_content in 'src/lib.rs'\n\n\
+```diff\n@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO\n line three\n```\n";
+        let diff = extract_diff_block(content).expect("diff fence should be found");
+        assert!(diff.contains("@@ -1,3 +1,3 @@"), "got: {diff}");
+        assert!(diff.contains("-line two"), "got: {diff}");
+        assert!(diff.contains("+line TWO"), "got: {diff}");
+    }
+
+    #[test]
+    fn extract_diff_block_finds_a_multi_replace_diff() {
+        let content = "successfully applied 2 replacements to 'src/lib.rs'\n\n\
+```diff\n@@ -1,4 +1,4 @@\n a\n-b\n+B\n c\n-d\n+D\n```\n";
+        let diff = extract_diff_block(content).expect("diff fence should be found");
+        assert!(diff.contains("-b"), "got: {diff}");
+        assert!(diff.contains("+D"), "got: {diff}");
+    }
+
+    #[test]
+    fn extract_diff_block_returns_none_for_a_noop_already_applied_result() {
+        // PR #306: a repeated edit that's already applied reports success
+        // with no diff fence at all. There must be nothing to show — a
+        // stale argument-only preview must not fill this gap.
+        let content = "already applied; no changes made to 'src/lib.rs' \
+(target_content already reflects replacement_content)";
+        assert!(extract_diff_block(content).is_none());
+    }
+
+    #[test]
+    fn extract_diff_block_returns_none_for_a_failed_edit() {
+        let content = "Error: target_content not found in 'src/lib.rs'.";
+        assert!(extract_diff_block(content).is_none());
+    }
+
+    #[test]
+    fn extract_diff_block_returns_none_for_content_with_no_fence() {
+        let content = "wrote 'src/new.rs' (10 lines, 120 bytes)";
+        assert!(extract_diff_block(content).is_none());
+    }
+
+    // --- Feature 2 integration: ToolResult.diff must be the real diff ---
+
+    fn test_tool_call(name: &str, args: serde_json::Value) -> crate::tools::ToolCall {
+        crate::tools::ToolCall {
+            name: name.to_string(),
+            arguments: args,
+        }
+    }
+
+    async fn run_one_tool(call: crate::tools::ToolCall) -> ToolResult {
+        let client = reqwest::Client::new();
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let mut compile_dirty = false;
+        let mut compile_cache = None;
+        let mut results = execute_tool_batch(
+            &client,
+            &state,
+            &cancel_token,
+            &[call],
+            true,
+            &None,
+            &mut compile_dirty,
+            &mut compile_cache,
+        )
+        .await;
+        results.remove(0)
+    }
+
+    #[tokio::test]
+    async fn normal_replacement_final_diff_is_real_and_has_correct_line_numbers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        // The edit lands at line 50, not line 1 — the old argument-only
+        // preview always reported line 1 because it had no idea where in
+        // the file the match actually was.
+        let mut lines: Vec<String> = (1..=100).map(|n| format!("line {n}")).collect();
+        lines[49] = "let target = 1;".to_string();
+        std::fs::write(&file, lines.join("\n") + "\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let call = test_tool_call(
+            "replace_file_content",
+            serde_json::json!({
+                "path": path,
+                "old_string": "let target = 1;",
+                "new_string": "let target = 100;",
+            }),
+        );
+        let result = run_one_tool(call).await;
+
+        assert!(result.metadata.success, "got: {}", result.content);
+        let diff = result.diff.expect("a real edit must produce a diff");
+        assert!(
+            diff.contains("@@ -47,"),
+            "expected the real line number (~50), got: {diff}"
+        );
+        assert!(diff.contains("-let target = 1;"), "got: {diff}");
+        assert!(diff.contains("+let target = 100;"), "got: {diff}");
+    }
+
+    #[tokio::test]
+    async fn insert_shaped_replacement_final_diff_is_real_not_argument_derived() {
+        // The classic insert shape: replacement_content contains the full
+        // target_content as a suffix. The old argument-only preview and the
+        // real file-content diff would look identical here in isolation,
+        // but this proves the diff still comes from the actual file (one
+        // inserted line as `+`, the anchor line as unchanged context) —
+        // not a side-by-side line-for-line replacement of the whole block.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "    s.discord_rpc.set_activity(\"Idle\", ...);\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let call = test_tool_call(
+            "replace_file_content",
+            serde_json::json!({
+                "path": path,
+                "old_string": "    s.discord_rpc.set_activity(\"Idle\", ...);",
+                "new_string": "    let model_name = ...;\n    s.discord_rpc.set_activity(\"Idle\", ...);",
+            }),
+        );
+        let result = run_one_tool(call).await;
+
+        let diff = result.diff.expect("an insertion must still produce a diff");
+        assert!(diff.contains("+    let model_name = ...;"), "got: {diff}");
+        assert!(
+            !diff.contains("-    s.discord_rpc.set_activity"),
+            "the untouched anchor line must be context, not a fabricated deletion: {diff}"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_idempotent_edit_produces_no_diff_on_the_second_call() {
+        // Core regression for the bug this feature fixes: before this fix,
+        // ToolResult.diff came from get_diff_preview(name, args), which is
+        // computed purely from the call's arguments and therefore looked
+        // identical on every call — including a second, no-op call after
+        // PR #306 made the edit itself idempotent. A stale diff on a no-op
+        // result would tell the user something changed when nothing did.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let status = Idle;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+        let args = serde_json::json!({
+            "path": path,
+            "old_string": "let status = Idle;",
+            "new_string": "let status = Active;",
+        });
+
+        let first = run_one_tool(test_tool_call("replace_file_content", args.clone())).await;
+        assert!(
+            first.diff.is_some(),
+            "the first, real change must have a diff"
+        );
+
+        let second = run_one_tool(test_tool_call("replace_file_content", args)).await;
+        assert!(
+            second
+                .content
+                .to_ascii_lowercase()
+                .contains("already applied"),
+            "got: {}",
+            second.content
+        );
+        assert!(
+            second.diff.is_none(),
+            "a no-op repeat must not carry a stale diff: {:?}",
+            second.diff
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_replacement_final_diff_is_real() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.rs");
+        std::fs::write(&file, "let a = 1;\nlet b = 2;\nlet c = 3;\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let call = test_tool_call(
+            "multi_replace_file_content",
+            serde_json::json!({
+                "path": path,
+                "replacements": [
+                    { "start_line": 1, "end_line": 1, "target_content": "let a = 1;", "replacement_content": "let a = 100;" },
+                    { "start_line": 3, "end_line": 3, "target_content": "let c = 3;", "replacement_content": "let c = 300;" },
+                ],
+            }),
+        );
+        let result = run_one_tool(call).await;
+
+        assert!(result.metadata.success, "got: {}", result.content);
+        let diff = result
+            .diff
+            .expect("a multi-replace edit must produce a diff");
+        assert!(
+            diff.contains("-let a = 1;") && diff.contains("+let a = 100;"),
+            "got: {diff}"
+        );
+        assert!(
+            diff.contains("-let c = 3;") && diff.contains("+let c = 300;"),
+            "got: {diff}"
+        );
+        // Unrelated middle line stays as untouched context, not a
+        // fabricated change.
+        assert!(diff.contains(" let b = 2;"), "got: {diff}");
+    }
+
+    // --- Confirmation preview: unchanged, provisional, and separate ---
+
+    #[test]
+    fn confirmation_preview_is_unaffected_and_stays_provisional() {
+        // get_diff_preview is the confirmation-modal preview path — it must
+        // keep working exactly as before (best-effort, argument-only,
+        // computed before the edit runs). This is deliberately NOT what
+        // ends up in ToolResult.diff for the final transcript entry
+        // (see the tests above); it's a distinct, provisional artifact.
+        let preview = get_diff_preview(
+            "replace_file_content",
+            &serde_json::json!({
+                "target_content": "old line",
+                "replacement_content": "new line",
+            }),
+        )
+        .expect("a preview should be computed from the arguments alone");
+        assert!(preview.contains("old line"));
+        assert!(preview.contains("new line"));
+        // The confirmation preview format is the side-by-side \0-delimited
+        // one, not a unified diff — asserting that pins the distinction
+        // between the two mechanisms so a future change can't quietly
+        // merge them back together.
+        assert!(preview.contains('\0'), "got: {preview:?}");
+    }
+
+    // Regression found while writing the tests above: `get_diff_preview`
+    // only reads the `target_content`/`replacement_content` keys, so a call
+    // built with the (equally valid, alias-supported) `old_string`/
+    // `new_string` keys gets an empty preview — `Some("")`, not `None`.
+    // `final_tool_diff` must not let that empty `Some` stand in for "no
+    // diff to show" on a no-op result; that's exactly the misleading,
+    // non-representative diff this feature exists to prevent.
+    #[test]
+    fn final_tool_diff_ignores_an_empty_fallback_preview() {
+        assert_eq!(
+            final_tool_diff("already applied; no changes made", None),
+            None
+        );
+        assert_eq!(
+            final_tool_diff("already applied; no changes made", Some(String::new())),
+            None,
+            "an empty fallback preview must not surface as a diff"
+        );
+        assert_eq!(
+            final_tool_diff(
+                "already applied; no changes made",
+                Some("   \n".to_string())
+            ),
+            None,
+            "a whitespace-only fallback preview must not surface as a diff"
+        );
+    }
+
+    #[test]
+    fn final_tool_diff_prefers_the_real_diff_over_a_nonempty_fallback() {
+        let result = "successfully replaced target_content in 'x.rs'\n\n```diff\n@@ -1,1 +1,1 @@\n-a\n+b\n```\n";
+        let stale_fallback = Some("-old\x00+new\n".to_string());
+        let diff = final_tool_diff(result, stale_fallback).expect("real diff must win");
+        assert!(diff.contains("-a") && diff.contains("+b"), "got: {diff}");
+        assert!(
+            !diff.contains("old") && !diff.contains("new"),
+            "got: {diff}"
+        );
+    }
+
+    #[test]
+    fn final_tool_diff_uses_the_fallback_only_when_it_has_real_content() {
+        let result = "wrote 'x.rs' (3 lines, 20 bytes)"; // no ```diff fence
+        let legacy_preview = Some("-old line\x00+new line\n".to_string());
+        let diff = final_tool_diff(result, legacy_preview).expect("fallback should be used");
+        assert!(diff.contains("old line") && diff.contains("new line"));
     }
 }
