@@ -171,6 +171,44 @@ mod tests {
         assert!(result.is_none());
     }
 
+    // Simulates: `stream_request` got a non-success HTTP response and is
+    // reading the error body via `resp.text()` when the user cancels. A
+    // `reqwest::Response::text()` future can't be constructed without a real
+    // response, so this stands in with an equivalent shape — a future that
+    // resolves to `Result<String, _>` and would otherwise hang until it
+    // finishes — proving `race_cancellable` interrupts a slow body read
+    // exactly the way it interrupts the header wait and backoff sleep.
+    #[tokio::test]
+    async fn race_cancellable_interrupts_an_in_flight_error_body_read() {
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let cancel_token_clone = cancel_token.clone();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            cancel_token_clone.cancel();
+        });
+        // A body read that never completes on its own — if the cancel
+        // branch didn't win, this future would await forever.
+        let slow_body_read = std::future::pending::<Result<String, std::io::Error>>();
+        let result = race_cancellable(slow_body_read, &cancel_token).await;
+        assert!(
+            result.is_none(),
+            "cancellation must interrupt an in-flight error-body read"
+        );
+    }
+
+    // Preserves the non-cancelled path for the same shape: a completed body
+    // read still returns its content normally through the race.
+    #[tokio::test]
+    async fn race_cancellable_preserves_error_body_when_not_cancelled() {
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let body_read = async { Ok::<String, std::io::Error>("rate limited".to_string()) };
+        let result = race_cancellable(body_read, &cancel_token).await;
+        match result {
+            Some(Ok(body)) => assert_eq!(body, "rate limited"),
+            other => panic!("expected the body read to complete normally, got {other:?}"),
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn header_timeout_fires_without_cancellation() {
         // Simulates: connection succeeds but the provider never sends

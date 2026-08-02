@@ -900,7 +900,17 @@ pub async fn stream_request(
             Ok(resp) => {
                 let status = resp.status();
                 let code = status.as_u16();
-                let err_body = resp.text().await.unwrap_or_default();
+                // Reading the error body is itself an in-flight I/O wait
+                // (the response was accepted but the body may still be
+                // streaming in), so it must race cancellation just like the
+                // header wait and the retry backoff above — otherwise a
+                // cancel that lands while we're pulling a slow error body
+                // has to wait for that read to finish before it takes
+                // effect.
+                let err_body = match retry::race_cancellable(resp.text(), &cancel_token).await {
+                    None => return Err("cancelled".to_string()),
+                    Some(body) => body.unwrap_or_default(),
+                };
                 if retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, code);
                     dbg_log!(
