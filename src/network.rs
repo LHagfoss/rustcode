@@ -3306,8 +3306,9 @@ async fn execute_tool_batch(
             let plan_mode = state.lock().await.agent_mode == crate::config::AgentMode::Plan;
             plan_mode && !crate::tools::allowed_in_plan_mode(name)
         };
-        let (executed_name, execution, diff_opt) = async move {
+        let (executed_name, execution, diff_opt, replay_artifact) = async move {
             let is_read_only = is_read_only_tool(&name_clone);
+            let mut replay_artifact = None;
 
             // Repeat-loop guard for read-only tools. For view_file we go
             // further than a signature match: a re-read is only blocked when
@@ -3359,13 +3360,34 @@ async fn execute_tool_batch(
                         .cloned()
                 };
                 match cached {
-                    Some(mut previous) => {
-                        previous.content.insert_str(
-                            0,
-                            "[Unchanged since the last read of this exact range — repeating that output. \
+                    Some(previous) => {
+                        let content = if let Some(mut content) = previous.replayable_content {
+                            content.insert_str(
+                                0,
+                                "[Unchanged since the last read of this exact range — repeating that output. \
 Re-reading will not produce anything new; act on this content.]\n",
-                        );
-                        (previous, None)
+                            );
+                            content
+                        } else {
+                            let mut notice = "[Notice: This exact read was already executed, but its output exceeded the repeat cache limit and is not repeated. Use the original result or request a narrower range.".to_string();
+                            if let Some(path) = previous.full_output_artifact.as_deref() {
+                                notice.push_str(&format!(
+                                    " The bounded output remains available at: {path}."
+                                ));
+                            }
+                            notice.push(']');
+                            notice
+                        };
+                        replay_artifact = previous.full_output_artifact;
+                        (
+                            crate::tools::ToolExecutionOutput {
+                                content,
+                                success: previous.success,
+                                exit_code: previous.exit_code,
+                                truncated: previous.truncated,
+                            },
+                            None,
+                        )
                     }
                     None => (
                         crate::tools::ToolExecutionOutput::success("[Notice: This exact read tool call was previously executed with identical arguments, \
@@ -3428,12 +3450,18 @@ different, read another range or make an edit first; repeating this call returns
                 }
                 if is_read_only && !is_repeat {
                     let sig = tool_signature(&name_clone, &args_clone);
-                    // Keep the output of small reads so an identical re-read can
-                    // be answered with the content rather than a redirection.
-                    if execution.content.len() <= REPLAYABLE_READ_LIMIT {
-                        s.recent_read_outputs
-                            .insert(sig.clone(), execution.clone());
-                    }
+                    s.recent_read_outputs.insert(
+                        sig.clone(),
+                        crate::app::CachedReadOutput {
+                            replayable_content: (execution.content.len()
+                                <= REPLAYABLE_READ_LIMIT)
+                                .then(|| execution.content.clone()),
+                            success: execution.success,
+                            exit_code: execution.exit_code,
+                            truncated: execution.truncated,
+                            full_output_artifact: None,
+                        },
+                    );
                     if !s.recent_read_calls.contains(&sig) {
                         s.recent_read_calls.push_back(sig);
                         while s.recent_read_calls.len() > 8 {
@@ -3452,7 +3480,7 @@ different, read another range or make an edit first; repeating this call returns
                 }
             }
 
-            (name_clone, execution, diff_opt)
+            (name_clone, execution, diff_opt, replay_artifact)
         }
         .await;
         // The real diff (from actual before/after file content, embedded by
@@ -3469,12 +3497,14 @@ different, read another range or make an edit first; repeating this call returns
             diff_opt
         };
         let final_diff = final_tool_diff(&execution.content, preview_fallback);
-        results.push(tool_result_from_execution(
+        let mut result = tool_result_from_execution(
             &executed_name,
             args,
             execution,
             final_diff,
-        ));
+        );
+        result.metadata.full_output_artifact = replay_artifact;
+        results.push(result);
         if cancel_token.is_cancelled() {
             break;
         }
@@ -3515,12 +3545,23 @@ different, read another range or make an edit first; repeating this call returns
             }
         }
     }
-    for result in &mut results {
+    for (result, call) in results.iter_mut().zip(tool_calls) {
         let notice = (result.tool_name == "use_skill")
             .then_some(deferred_notice.as_deref())
             .flatten();
         let finalized = finalize_tool_result(result.clone(), notice);
         *result = finalized;
+        if is_read_only_tool(&call.name) {
+            let sig = tool_signature(&call.name, &call.arguments);
+            if let Some(cached) = state.lock().await.recent_read_outputs.get_mut(&sig) {
+                cached.success = result.metadata.success;
+                cached.exit_code = result.metadata.exit_code;
+                cached.truncated = result.metadata.truncated;
+                if result.metadata.full_output_artifact.is_some() {
+                    cached.full_output_artifact = result.metadata.full_output_artifact.clone();
+                }
+            }
+        }
     }
     results
 }
@@ -6479,6 +6520,66 @@ mod tests {
             repeated.content.contains(&first.content),
             "replay omitted the original truncated output"
         );
+    }
+
+    #[tokio::test]
+    async fn repeated_over_limit_failed_read_preserves_structured_failure() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let invalid_pattern = "(".repeat(REPLAYABLE_READ_LIMIT + 1);
+        let call = test_tool_call("grep", serde_json::json!({"pattern": invalid_pattern}));
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(!first.metadata.success, "got: {}", first.content);
+        assert!(first.content.len() > REPLAYABLE_READ_LIMIT);
+        assert!(!repeated.metadata.success, "got: {}", repeated.content);
+        assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
+        assert_eq!(repeated.metadata.truncated, first.metadata.truncated);
+        assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
+        assert!(repeated.content.contains("not repeated"));
+        assert!(!repeated.content.contains(&first.content));
+    }
+
+    #[tokio::test]
+    async fn repeated_over_limit_truncated_read_preserves_metadata_and_recovery_artifact() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("large.txt");
+        let content: String = (1..=300)
+            .map(|line| format!("line {line}: {}\n", "x".repeat(256)))
+            .collect();
+        std::fs::write(&file, content).expect("write");
+        let path = file.to_string_lossy().to_string();
+        let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(first.metadata.success, "got: {}", first.content);
+        assert!(first.content.len() > REPLAYABLE_READ_LIMIT);
+        assert!(first.metadata.truncated, "got: {}", first.content);
+        let artifact = first
+            .metadata
+            .full_output_artifact
+            .as_deref()
+            .expect("bounded read must retain its recovery artifact");
+        assert!(std::fs::metadata(artifact).is_ok());
+        assert!(repeated.metadata.success, "got: {}", repeated.content);
+        assert!(
+            repeated.metadata.truncated,
+            "replay lost structured truncation: {}",
+            repeated.content
+        );
+        assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
+        assert_eq!(
+            repeated.metadata.full_output_artifact.as_deref(),
+            Some(artifact)
+        );
+        assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
+        assert!(repeated.content.contains("not repeated"));
+        assert!(repeated.content.contains(artifact));
+        assert!(!repeated.content.contains(&first.content));
     }
 
     #[tokio::test]
