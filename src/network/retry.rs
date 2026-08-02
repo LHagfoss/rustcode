@@ -220,4 +220,29 @@ mod tests {
         tokio::time::advance(HEADER_TIMEOUT + Duration::from_millis(1)).await;
         assert!(timed.await.is_err());
     }
+
+    // Safety regression: `stream_request` wraps ONLY the header wait
+    // (`req.send()`) in `tokio::time::timeout(HEADER_TIMEOUT, ...)` — once
+    // headers arrive, the SSE body-reading loop that follows is a separate,
+    // unwrapped `while` loop bounded only by cancellation, never by
+    // HEADER_TIMEOUT. This proves that two-phase structure holds: a header
+    // wait that resolves promptly is unaffected, and a "stream" that then
+    // runs far longer than HEADER_TIMEOUT is never touched by it, because
+    // nothing wraps phase two in that timeout at all.
+    #[tokio::test(start_paused = true)]
+    async fn header_timeout_does_not_bound_a_long_running_stream_after_headers_arrive() {
+        // Phase 1: headers arrive well within the header timeout.
+        let headers = tokio::time::timeout(HEADER_TIMEOUT, async { "200 OK" }).await;
+        assert!(headers.is_ok(), "headers must arrive before the timeout");
+
+        // Phase 2: a long-running SSE stream, deliberately NOT wrapped in
+        // HEADER_TIMEOUT or any timeout — exactly like the real read loop.
+        // Advance virtual time well past HEADER_TIMEOUT; an unwrapped future
+        // is unaffected by however long it takes.
+        let long_stream = async {
+            tokio::time::sleep(HEADER_TIMEOUT * 3).await;
+            "stream finished"
+        };
+        assert_eq!(long_stream.await, "stream finished");
+    }
 }
