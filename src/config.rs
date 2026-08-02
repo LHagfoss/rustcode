@@ -210,6 +210,13 @@ pub struct AppConfig {
     pub agent_mode: AgentMode,
     #[serde(default = "default_false")]
     pub discord_rpc_enabled: bool,
+    /// Opt-in: log the full outbound chat-completion payload (entire message
+    /// array, tool schemas) on every request round instead of a metadata-only
+    /// summary. Off by default — the full payload is what blows debug.log up
+    /// to hundreds of MB over a long session. Turn on only when actually
+    /// diagnosing a request-shape issue.
+    #[serde(default = "default_false")]
+    pub debug_verbose_network_logging: bool,
 }
 
 fn default_false() -> bool {
@@ -292,6 +299,7 @@ impl Default for AppConfig {
 
             agent_mode: AgentMode::default(),
             discord_rpc_enabled: false,
+            debug_verbose_network_logging: false,
         }
     }
 }

@@ -704,6 +704,37 @@ pub async fn probe_function_calling(
     }
 }
 
+/// Metadata-only summary of an outbound chat-completion request: round shape
+/// and size, not content. This is what gets written to debug.log by default
+/// in place of the full serialized payload (see `request_debug_log_line`).
+fn request_log_summary(
+    model: &str,
+    message_count: usize,
+    tool_count: usize,
+    payload_bytes: usize,
+) -> String {
+    format!(
+        "stream_request: sending model={model} messages={message_count} tools={tool_count} payload_bytes={payload_bytes}"
+    )
+}
+
+/// Choose what to write to the debug log for an outbound request: the cheap
+/// structured `summary` by default, or the full serialized `payload`
+/// (pretty-printed, exactly as it goes over the wire) only when
+/// `verbose` (`config.debug_verbose_network_logging`) is explicitly set.
+/// Kept pure/separate from the call site so both paths are unit-testable
+/// without an app state, a request, or a file write.
+fn request_debug_log_line(verbose: bool, summary: &str, payload: &serde_json::Value) -> String {
+    if verbose {
+        format!(
+            "stream_request: Request payload: {}",
+            serde_json::to_string_pretty(payload).unwrap_or_default()
+        )
+    } else {
+        summary.to_string()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn stream_request(
     client: &reqwest::Client,
@@ -716,6 +747,7 @@ pub async fn stream_request(
     quiet: bool,
 ) -> Result<Option<String>, String> {
     let aligned_messages = align_alternating_messages(messages.to_vec());
+    let message_count = aligned_messages.len();
     let mut payload = serde_json::json!({
         "model": model,
         "messages": aligned_messages,
@@ -763,9 +795,27 @@ pub async fn stream_request(
         }
     }
 
+    // Full-payload logging is opt-in (`debug_verbose_network_logging`): the
+    // entire message array — including every file's contents still in
+    // context and the full tool schema list — used to get pretty-printed
+    // into debug.log on *every* round, which is what grew the file to
+    // hundreds of MB over a long session. By default we log a cheap,
+    // metadata-only summary instead; still enough to diagnose a session
+    // (round shape, model, sizes) without the payload itself.
+    let tool_count = payload
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let payload_bytes = serde_json::to_vec(&payload).map(|v| v.len()).unwrap_or(0);
+    let verbose_network_logging = { state.lock().await.config.debug_verbose_network_logging };
     dbg_log!(
-        "stream_request: Request payload: {}",
-        serde_json::to_string_pretty(&payload).unwrap_or_default()
+        "{}",
+        request_debug_log_line(
+            verbose_network_logging,
+            &request_log_summary(model, message_count, tool_count, payload_bytes),
+            &payload,
+        )
     );
 
     let resolved_url = {
@@ -5614,5 +5664,72 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
             !budget_should_fire,
             "cancellation must suppress the budget-stop path"
         );
+    }
+
+    #[test]
+    fn request_log_summary_reports_shape_not_content() {
+        let summary = request_log_summary("gpt-oss-120b", 42, 7, 123_456);
+        assert!(summary.contains("gpt-oss-120b"));
+        assert!(summary.contains("messages=42"));
+        assert!(summary.contains("tools=7"));
+        assert!(summary.contains("payload_bytes=123456"));
+    }
+
+    #[test]
+    fn default_debug_log_line_never_contains_full_payload_content() {
+        // A marker that would only ever appear if the actual message content
+        // (e.g. a file's source text pulled into context by a prior tool
+        // call) leaked into the log line.
+        const FILE_CONTENT_MARKER: &str = "fn super_secret_business_logic_marker() {}";
+        let payload = serde_json::json!({
+            "model": "gpt-oss-120b",
+            "messages": [
+                {"role": "user", "content": FILE_CONTENT_MARKER},
+            ],
+            "tools": [{"type": "function", "function": {"name": "read_file"}}],
+        });
+        let summary = request_log_summary("gpt-oss-120b", 1, 1, 999);
+
+        let default_line = request_debug_log_line(false, &summary, &payload);
+        assert!(
+            !default_line.contains(FILE_CONTENT_MARKER),
+            "default (non-verbose) log line must not contain full message content: {default_line}"
+        );
+        assert_eq!(
+            default_line, summary,
+            "default log line should be exactly the structured summary"
+        );
+    }
+
+    #[test]
+    fn verbose_flag_gates_full_payload_logging() {
+        // This is the config-flag gate for opt-in full-payload logging
+        // (`AppConfig::debug_verbose_network_logging`): false -> structured
+        // summary only, true -> full serialized payload including content.
+        const FILE_CONTENT_MARKER: &str = "fn super_secret_business_logic_marker() {}";
+        let payload = serde_json::json!({
+            "model": "gpt-oss-120b",
+            "messages": [
+                {"role": "user", "content": FILE_CONTENT_MARKER},
+            ],
+        });
+        let summary = request_log_summary("gpt-oss-120b", 1, 0, 999);
+
+        let quiet_line = request_debug_log_line(false, &summary, &payload);
+        let verbose_line = request_debug_log_line(true, &summary, &payload);
+
+        assert!(!quiet_line.contains(FILE_CONTENT_MARKER));
+        assert!(
+            verbose_line.contains(FILE_CONTENT_MARKER),
+            "verbose mode must still support full-payload debugging: {verbose_line}"
+        );
+    }
+
+    #[test]
+    fn debug_verbose_network_logging_defaults_to_off() {
+        // The config flag must default to false so full-payload logging
+        // (and the debug.log growth it causes) stays opt-in.
+        let config = crate::config::AppConfig::default();
+        assert!(!config.debug_verbose_network_logging);
     }
 }

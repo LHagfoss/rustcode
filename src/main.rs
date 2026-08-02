@@ -50,6 +50,11 @@ fn should_draw(needs_redraw: bool, response_active: bool, since_last_draw: Durat
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Cheap, once-per-process check: rotate debug.log out of the way if a
+    // prior session let it grow past the size cap, instead of letting every
+    // subsequent write add to an already-huge file.
+    crate::logger::rotate_if_oversized();
+
     let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
 
