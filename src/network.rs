@@ -2872,6 +2872,7 @@ async fn prepare_turn_request(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
 ) -> Vec<serde_json::Value> {
     // Try AI-driven compaction if history is long enough.
     //
@@ -2894,9 +2895,15 @@ async fn prepare_turn_request(
         let pre_identity: Vec<u64> = working_history.iter().map(message_identity).collect();
 
         // Lock released here: this await performs I/O.
-        let compacted =
-            compaction::maybe_compact(client, &api_url, &model_name, &mut working_history, budget)
-                .await;
+        let compacted = compaction::maybe_compact(
+            client,
+            &api_url,
+            &model_name,
+            &mut working_history,
+            budget,
+            cancel_token,
+        )
+        .await;
 
         // Merge policy for history appended while the lock was down (a tool
         // result or a user message can land mid-compaction):
@@ -3831,7 +3838,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         );
     }
 
-    let msgs = prepare_turn_request(client, state, ctx.tool_rounds).await;
+    let msgs = prepare_turn_request(client, state, ctx.tool_rounds, cancel_token).await;
 
     state.lock().await.current_response.clear();
     stream_buffer.lock().await.reset();
