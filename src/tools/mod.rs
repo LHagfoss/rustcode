@@ -11,6 +11,8 @@ mod filesystem;
 mod misc;
 mod search;
 
+pub(crate) use filesystem::edit_target_and_replacement;
+
 /// A parsed tool request emitted by a model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
