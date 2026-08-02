@@ -136,8 +136,8 @@ pub async fn handle_enter(
                 let api_base_url = s.api_base_url.clone();
                 let model_name = s.model_name.clone();
                 let active_session_id = s.active_session_id.clone();
-                let original_identity = history_identity(&s.history);
-                let mut history_to_compact = s.history.clone();
+                let original_history = s.history.clone();
+                let mut history_to_compact = original_history.clone();
                 drop(s);
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
@@ -157,7 +157,7 @@ pub async fn handle_enter(
                                 &live_session_id,
                                 &mut s.history,
                                 &active_session_id,
-                                &original_identity,
+                                &original_history,
                                 history_to_compact,
                             ) {
                                 s.history.push(ChatMessage::new(
@@ -177,7 +177,7 @@ pub async fn handle_enter(
                                 &s.active_session_id,
                                 &s.history,
                                 &active_session_id,
-                                &original_identity,
+                                &original_history,
                             ) {
                                 s.history.push(ChatMessage::new(
                                     "system",
@@ -841,52 +841,32 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
     false
 }
 
-fn message_identity(message: &ChatMessage) -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    message.role.hash(&mut hasher);
-    message.timestamp.hash(&mut hasher);
-    message.content.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn history_identity(history: &[ChatMessage]) -> Vec<u64> {
-    history.iter().map(message_identity).collect()
-}
-
 fn history_matches_snapshot(
     live_session_id: &str,
     live_history: &[ChatMessage],
     captured_session_id: &str,
-    captured_identity: &[u64],
+    captured_history: &[ChatMessage],
 ) -> bool {
-    live_session_id == captured_session_id
-        && live_history.len() >= captured_identity.len()
-        && live_history
-            .iter()
-            .take(captured_identity.len())
-            .map(message_identity)
-            .eq(captured_identity.iter().copied())
+    live_session_id == captured_session_id && live_history.starts_with(captured_history)
 }
 
 fn try_merge_compacted_history(
     live_session_id: &str,
     live_history: &mut Vec<ChatMessage>,
     captured_session_id: &str,
-    captured_identity: &[u64],
+    captured_history: &[ChatMessage],
     mut compacted_history: Vec<ChatMessage>,
 ) -> bool {
     if !history_matches_snapshot(
         live_session_id,
         live_history,
         captured_session_id,
-        captured_identity,
+        captured_history,
     ) {
         return false;
     }
 
-    compacted_history.extend(live_history.drain(captured_identity.len()..));
+    compacted_history.extend(live_history.drain(captured_history.len()..));
     *live_history = compacted_history;
     true
 }
@@ -1652,33 +1632,80 @@ mod tests {
     }
 
     #[test]
-    fn manual_compaction_discards_result_after_session_change() {
+    fn manual_compaction_discards_result_after_session_only_change() {
         let original = vec![
             crate::app::ChatMessage::new("user", "original task"),
             crate::app::ChatMessage::new("assistant", "original response"),
         ];
-        let original_identity = super::history_identity(&original);
-        let mut live_history = vec![crate::app::ChatMessage::new("user", "new session task")];
-        let expected: Vec<(String, String)> = live_history
-            .iter()
-            .map(|message| (message.role.clone(), message.content.clone()))
-            .collect();
-        let compacted = vec![crate::app::ChatMessage::new("system", "compacted old session")];
+        let captured_history = original.clone();
+        let mut live_history = original;
+        let expected = live_history.clone();
+        let compacted = vec![crate::app::ChatMessage::new(
+            "system",
+            "compacted old session",
+        )];
 
         let applied = super::try_merge_compacted_history(
             "new-session",
             &mut live_history,
             "old-session",
-            &original_identity,
+            &captured_history,
             compacted,
         );
 
-        let actual: Vec<(String, String)> = live_history
-            .iter()
-            .map(|message| (message.role.clone(), message.content.clone()))
-            .collect();
         assert!(!applied);
-        assert_eq!(actual, expected);
+        assert!(live_history == expected);
+    }
+
+    #[test]
+    fn manual_compaction_discards_result_after_token_usage_change() {
+        let original = vec![
+            crate::app::ChatMessage::new("user", "original task"),
+            crate::app::ChatMessage::new("assistant", "original response"),
+        ];
+        let captured_history = original.clone();
+        let mut live_history = original;
+        live_history[1].token_usage = Some(crate::app::TokenUsage {
+            prompt_tokens: 12,
+            completion_tokens: 8,
+            total_tokens: 20,
+            cached_tokens: Some(4),
+        });
+        let expected = live_history.clone();
+        let compacted = vec![crate::app::ChatMessage::new("system", "compacted history")];
+
+        let applied = super::try_merge_compacted_history(
+            "active-session",
+            &mut live_history,
+            "active-session",
+            &captured_history,
+            compacted,
+        );
+
+        assert!(!applied);
+        assert!(live_history == expected);
+    }
+
+    #[test]
+    fn manual_compaction_stale_report_preserves_live_history() {
+        let mut live_history = vec![crate::app::ChatMessage::new(
+            "assistant",
+            "response completed while compaction ran",
+        )];
+        live_history[0].response_time_ms = Some(250);
+        let expected = live_history.clone();
+
+        super::report_stale_compaction(&mut live_history);
+
+        assert!(live_history[..expected.len()] == expected);
+        assert_eq!(live_history.len(), expected.len() + 1);
+        assert!(
+            live_history
+                .last()
+                .unwrap()
+                .content
+                .contains("discarded as stale")
+        );
     }
 
     #[test]
@@ -1687,29 +1714,23 @@ mod tests {
             crate::app::ChatMessage::new("user", "original task"),
             crate::app::ChatMessage::new("assistant", "original response"),
         ];
-        let original_identity = super::history_identity(&original);
+        let captured_history = original.clone();
         let mut live_history = original;
-        live_history.push(crate::app::ChatMessage::new(
-            "user",
-            "message appended during compaction",
-        ));
+        let appended = crate::app::ChatMessage::new("user", "message appended during compaction");
+        live_history.push(appended.clone());
         let compacted = vec![crate::app::ChatMessage::new("system", "compacted history")];
+        let expected = vec![compacted[0].clone(), appended];
 
         let applied = super::try_merge_compacted_history(
             "active-session",
             &mut live_history,
             "active-session",
-            &original_identity,
+            &captured_history,
             compacted,
         );
 
         assert!(applied);
-        assert_eq!(live_history.len(), 2);
-        assert_eq!(live_history[0].content, "compacted history");
-        assert_eq!(
-            live_history[1].content,
-            "message appended during compaction"
-        );
+        assert!(live_history == expected);
     }
 
     #[tokio::test]
