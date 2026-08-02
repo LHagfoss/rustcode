@@ -3359,13 +3359,14 @@ async fn execute_tool_batch(
                         .cloned()
                 };
                 match cached {
-                    Some(previous) => (
-                        crate::tools::ToolExecutionOutput::success(format!(
+                    Some(mut previous) => {
+                        previous.content.insert_str(
+                            0,
                             "[Unchanged since the last read of this exact range — repeating that output. \
-Re-reading will not produce anything new; act on this content.]\n{previous}"
-                        )),
-                        None,
-                    ),
+Re-reading will not produce anything new; act on this content.]\n",
+                        );
+                        (previous, None)
+                    }
                     None => (
                         crate::tools::ToolExecutionOutput::success("[Notice: This exact read tool call was previously executed with identical arguments, \
 and the file has not changed since. Its output is above in the context — use it. To see something \
@@ -3431,7 +3432,7 @@ different, read another range or make an edit first; repeating this call returns
                     // be answered with the content rather than a redirection.
                     if execution.content.len() <= REPLAYABLE_READ_LIMIT {
                         s.recent_read_outputs
-                            .insert(sig.clone(), execution.content.clone());
+                            .insert(sig.clone(), execution.clone());
                     }
                     if !s.recent_read_calls.contains(&sig) {
                         s.recent_read_calls.push_back(sig);
@@ -6365,15 +6366,17 @@ mod tests {
         }
     }
 
-    async fn run_one_tool(call: crate::tools::ToolCall) -> ToolResult {
+    async fn run_one_tool_with_state(
+        state: &Arc<Mutex<AppState>>,
+        call: crate::tools::ToolCall,
+    ) -> ToolResult {
         let client = reqwest::Client::new();
-        let state = Arc::new(Mutex::new(AppState::new()));
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let mut compile_dirty = false;
         let mut compile_cache = None;
         let mut results = execute_tool_batch(
             &client,
-            &state,
+            state,
             &cancel_token,
             &[call],
             true,
@@ -6384,6 +6387,11 @@ mod tests {
         )
         .await;
         results.remove(0)
+    }
+
+    async fn run_one_tool(call: crate::tools::ToolCall) -> ToolResult {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        run_one_tool_with_state(&state, call).await
     }
 
     #[tokio::test]
@@ -6424,6 +6432,53 @@ mod tests {
         .await;
         assert!(targeted.metadata.success);
         assert!(!targeted.metadata.truncated);
+    }
+
+    #[tokio::test]
+    async fn repeated_failed_read_preserves_structured_failure() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing").to_string_lossy().to_string();
+        let call = test_tool_call(
+            "list_directory",
+            serde_json::json!({"path": missing}),
+        );
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(!first.metadata.success, "got: {}", first.content);
+        assert!(!repeated.metadata.success, "got: {}", repeated.content);
+        assert!(
+            repeated.content.contains(&first.content),
+            "replay omitted the original failure: {}",
+            repeated.content
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_truncated_read_preserves_structured_truncation() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("large.txt");
+        let content: String = (1..=300).map(|line| format!("line {line}\n")).collect();
+        std::fs::write(&file, content).expect("write");
+        let path = file.to_string_lossy().to_string();
+        let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(first.metadata.truncated, "got: {}", first.content);
+        assert!(
+            repeated.metadata.truncated,
+            "replay lost structured truncation: {}",
+            repeated.content
+        );
+        assert!(
+            repeated.content.contains(&first.content),
+            "replay omitted the original truncated output"
+        );
     }
 
     #[tokio::test]
