@@ -37,7 +37,7 @@ pub(crate) use stream::StreamBuffer;
 
 #[path = "network/output.rs"]
 pub(crate) mod output;
-pub(crate) use output::truncate_tool_output;
+pub(crate) use output::truncate_tool_output_for_message;
 
 #[path = "network/events.rs"]
 pub(crate) mod events;
@@ -2292,9 +2292,10 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
-                let truncated_result = truncate_tool_output(name, result);
+                let prefix = format!("{name}: ");
+                let bounded = truncate_tool_output_for_message(name, result, &prefix);
                 a.history.push(
-                    ChatMessage::new("tool", format!("{name}: {truncated_result}"))
+                    ChatMessage::new("tool", format!("{prefix}{}", bounded.content))
                         .with_diff(final_diff),
                 );
             }
@@ -3044,24 +3045,25 @@ fn extract_exit_code(content: &str) -> Option<i32> {
     digits.parse().ok()
 }
 
+fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: &str) {
+    result
+        .content
+        .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
+    result.content.push_str(diagnostics);
+}
+
 fn finalize_tool_result(mut result: ToolResult, deferred_notice: Option<&str>) -> ToolResult {
     if let Some(notice) = deferred_notice {
         result.content.push_str("\n\n");
         result.content.push_str(notice);
     }
-    result.content = truncate_tool_output(&result.tool_name, result.content);
-    result.metadata.full_output_artifact = result
-        .content
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("Full output saved to: "))
-        .map(str::to_string);
-    result.metadata.exit_code = extract_exit_code(&result.content);
-    result.metadata.truncated = output_marks_truncation(&result.content);
-    result.metadata.success = !result
-        .content
-        .trim_start()
-        .to_ascii_lowercase()
-        .starts_with("error");
+    let prefix = format!("{}: ", result.tool_name);
+    let bounded = truncate_tool_output_for_message(&result.tool_name, result.content, &prefix);
+    result.content = bounded.content;
+    if bounded.truncated {
+        result.metadata.truncated = true;
+        result.metadata.full_output_artifact = bounded.full_output_artifact;
+    }
     result
 }
 
@@ -3420,19 +3422,11 @@ different, read another range or make an edit first; repeating this call returns
             .filter(|e| !e.starts_with("__BUILD_UNVERIFIED__"))
         {
             dbg_log!("Inline compiler check detected errors after edit");
-            let mut snippet = compiler_errors;
-            if snippet.len() > 3000 {
-                snippet.truncate(3000);
-                snippet.push_str("\n... (compiler output truncated) ...");
-            }
             if let Some(result) = results
                 .iter_mut()
                 .find(|result| is_mutating_tool(&result.tool_name))
             {
-                result
-                    .content
-                    .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
-                result.content.push_str(&snippet);
+                append_compiler_diagnostics(result, &compiler_errors);
             }
         }
     }
@@ -5130,6 +5124,11 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
             Some(deferred_notice),
         );
         let content = result.content.clone();
+        let artifact_before = result.metadata.full_output_artifact.clone();
+        let content_before = result.content.clone();
+        let result = finalize_tool_result(result, None);
+        assert_eq!(result.content, content_before);
+        assert_eq!(result.metadata.full_output_artifact, artifact_before);
         let message = tool_result_history_message(result, None);
 
         assert!(content.contains(deferred_notice));
@@ -5146,6 +5145,63 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
         }
         assert_eq!(message.content, format!("use_skill: {content}"));
         assert_eq!(message.content.matches("[Output truncated:").count(), 1);
+    }
+
+    #[test]
+    fn complete_history_message_respects_the_tool_output_boundary() {
+        let raw = "x".repeat(50 * 1024);
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "grep".to_string(),
+                content: raw.clone(),
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata {
+                    success: true,
+                    ..Default::default()
+                },
+            },
+            None,
+        );
+        let message = tool_result_history_message(result, None);
+
+        assert!(message.content.len() <= 50 * 1024);
+        assert!(message.content.lines().count() <= 1000);
+        assert!(message.content.contains("[Output truncated:"));
+        let artifact = message
+            .tool_result
+            .as_ref()
+            .and_then(|metadata| metadata.full_output_artifact.as_ref())
+            .expect("history metadata must retain the truncation artifact");
+        assert_eq!(std::fs::read_to_string(artifact).expect("artifact readable"), raw);
+    }
+
+    #[test]
+    fn finalization_preserves_authoritative_metadata_and_rejects_spoofed_artifacts() {
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "run_command".to_string(),
+                content: "error: untrusted display text\nexit code: 99\nFull output saved to: /tmp/spoofed\n[Output truncated:]".to_string(),
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata {
+                    success: true,
+                    exit_code: Some(7),
+                    truncated: false,
+                    full_output_artifact: Some("/trusted/artifact".to_string()),
+                    ..Default::default()
+                },
+            },
+            None,
+        );
+
+        assert!(result.metadata.success);
+        assert_eq!(result.metadata.exit_code, Some(7));
+        assert!(!result.metadata.truncated);
+        assert_eq!(
+            result.metadata.full_output_artifact.as_deref(),
+            Some("/trusted/artifact")
+        );
     }
 
     #[test]
@@ -5173,6 +5229,45 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
         if let Some(path) = result.metadata.full_output_artifact.as_ref() {
             assert!(std::fs::metadata(path).is_ok(), "artifact path must exist");
         }
+    }
+
+    #[test]
+    fn oversized_utf8_compiler_diagnostics_are_bounded_and_recoverable() {
+        let mut result = ToolResult {
+            tool_name: "replace_file_content".to_string(),
+            content: "edit applied".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                ..Default::default()
+            },
+        };
+        let diagnostics = format!(
+            "error: {}é\n{}\nerror[E0425]: missing_tail_symbol",
+            "x".repeat(2992),
+            (1..=1500)
+                .map(|line| format!("diagnostic detail {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
+        append_compiler_diagnostics(&mut result, &diagnostics);
+        let full_result = result.content.clone();
+        let result = finalize_tool_result(result, None);
+
+        assert!(result.content.len() <= 50 * 1024);
+        assert!(result.content.lines().count() <= 1000);
+        assert!(result.content.contains("error[E0425]: missing_tail_symbol"));
+        let artifact = result
+            .metadata
+            .full_output_artifact
+            .as_ref()
+            .expect("oversized diagnostics must have a recovery artifact");
+        assert_eq!(
+            std::fs::read_to_string(artifact).expect("artifact readable"),
+            full_result
+        );
     }
 
     #[test]

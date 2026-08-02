@@ -109,22 +109,52 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
     if resolved_path.is_dir() {
         return super::search::list_directory(args);
     }
-    let requested_end = args.get("end_line").and_then(parse_json_number).map(|v| v as usize);
+    let parse_index = |name: &str| -> Result<Option<usize>, String> {
+        let Some(value) = args.get(name) else {
+            return Ok(None);
+        };
+        let number = parse_json_number(value)
+            .ok_or_else(|| format!("{name} must be a non-negative integer"))?;
+        usize::try_from(number)
+            .map(Some)
+            .map_err(|_| format!("{name} is too large for this platform"))
+    };
+    let requested_start = parse_index("start_line")?;
+    let requested_end = parse_index("end_line")?;
+    if requested_start == Some(0) {
+        return Err("start_line must be at least 1".to_string());
+    }
+    if requested_end == Some(0) {
+        return Err("end_line must be at least 1".to_string());
+    }
+    if let (Some(start_line), Some(end_line)) = (requested_start, requested_end)
+        && end_line < start_line
+    {
+        return Err(format!(
+            "end_line {end_line} must be greater than or equal to start_line {start_line}"
+        ));
+    }
 
     let content_bytes =
         std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
 
-    let byte_offset = args
-        .get("content_offset")
-        .and_then(parse_json_number)
-        .map(|v| v as usize)
-        .unwrap_or(0);
+    let byte_offset = parse_index("content_offset")?.unwrap_or(0);
 
-    if byte_offset >= content_bytes.len() && !content_bytes.is_empty() {
+    if byte_offset > content_bytes.len()
+        || (byte_offset == content_bytes.len() && !content_bytes.is_empty())
+    {
         return Err(format!(
             "content_offset {} exceeds file size {}",
             byte_offset,
             content_bytes.len()
+        ));
+    }
+    if content_bytes
+        .get(byte_offset)
+        .is_some_and(|byte| byte & 0b1100_0000 == 0b1000_0000)
+    {
+        return Err(format!(
+            "content_offset {byte_offset} is not at a valid UTF-8 boundary"
         ));
     }
 
@@ -137,17 +167,17 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
     let total = line_number_offset + lines.len();
 
     if total == 0 {
+        if requested_start.is_some() || requested_end.is_some() {
+            return Err("requested line range is out of bounds because the sliced content is empty"
+                .to_string());
+        }
         return Ok(format!(
             "[File: {}, Empty file, Bytes offset: {}]",
             path, byte_offset
         ));
     }
 
-    let start_line = args
-        .get("start_line")
-        .and_then(parse_json_number)
-        .map(|v| v as usize)
-        .unwrap_or(line_number_offset + 1);
+    let start_line = requested_start.unwrap_or(line_number_offset + 1);
     let max_end = start_line.saturating_add(DEFAULT_READ_WINDOW_LINES - 1);
     // A caller-supplied end_line beyond the hard cap is bounded, not honored —
     // otherwise a single explicit huge range (e.g. end_line: 999999999) would
@@ -1257,6 +1287,89 @@ mod tests {
         .expect("read");
         assert!(via_offset.contains("c") || via_offset.contains("d") || via_offset.contains("e"));
         assert_ne!(via_offset, first);
+    }
+
+    #[test]
+    fn malformed_view_file_ranges_return_clear_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("ranges.txt");
+        std::fs::write(&file, "one\ntwo\nthree\n").expect("write");
+        let path = file.to_string_lossy().to_string();
+        let cases = [
+            (
+                serde_json::json!({"path": path, "start_line": 2, "end_line": 1}),
+                "end_line",
+            ),
+            (
+                serde_json::json!({"path": path, "start_line": 0, "end_line": 1}),
+                "start_line",
+            ),
+            (
+                serde_json::json!({"path": path, "start_line": 1, "end_line": 0}),
+                "end_line",
+            ),
+            (
+                serde_json::json!({"path": path, "start_line": "18446744073709551616"}),
+                "start_line",
+            ),
+            (
+                serde_json::json!({"path": path, "end_line": "18446744073709551616"}),
+                "end_line",
+            ),
+            (
+                serde_json::json!({"path": path, "content_offset": "18446744073709551616"}),
+                "content_offset",
+            ),
+        ];
+
+        for (args, expected) in cases {
+            let error = view_file_tool(&args).expect_err("malformed range must be rejected");
+            assert!(error.contains(expected), "expected {expected} in: {error}");
+        }
+
+        let empty = dir.path().join("empty.txt");
+        std::fs::write(&empty, "").expect("write empty file");
+        let error = view_file_tool(&serde_json::json!({
+            "path": empty.to_string_lossy(),
+            "start_line": 1,
+            "end_line": 1,
+        }))
+        .expect_err("a range cannot address empty sliced content");
+        assert!(error.contains("out of bounds"), "got: {error}");
+    }
+
+    #[test]
+    fn view_file_rejects_invalid_utf8_offsets_and_ranges_outside_the_slice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let utf8_file = dir.path().join("utf8.txt");
+        std::fs::write(&utf8_file, "éclair\nsecond\nthird\n").expect("write");
+        let utf8_path = utf8_file.to_string_lossy().to_string();
+
+        let boundary_error = view_file_tool(&serde_json::json!({
+            "path": utf8_path,
+            "content_offset": 1,
+        }))
+        .expect_err("offset inside a UTF-8 code point must be rejected");
+        assert!(boundary_error.contains("UTF-8 boundary"), "got: {boundary_error}");
+
+        let slice_offset = "éclair\n".len();
+        let range_error = view_file_tool(&serde_json::json!({
+            "path": utf8_path,
+            "content_offset": slice_offset,
+            "start_line": 1,
+            "end_line": 1,
+        }))
+        .expect_err("range before sliced content must be rejected");
+        assert!(range_error.contains("out of bounds"), "got: {range_error}");
+
+        let zero_offset = view_file_tool(&serde_json::json!({
+            "path": utf8_path,
+            "content_offset": 0,
+            "start_line": 1,
+            "end_line": 1,
+        }))
+        .expect("zero is a valid byte offset");
+        assert!(zero_offset.contains("1: éclair"));
     }
 
     // Regression: session 1785594233488. The model tried to prepend a line by

@@ -5,22 +5,48 @@ const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_TOOL_OUTPUT_LINES: usize = 1000;
 static NEXT_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+pub(crate) struct BoundedToolOutput {
+    pub(crate) content: String,
+    pub(crate) truncated: bool,
+    pub(crate) full_output_artifact: Option<String>,
+}
+
 /// Truncate tool output at execution time if it exceeds size limits.
 /// Full output is saved to a temp file so the agent can still access it.
+#[allow(
+    dead_code,
+    reason = "preserved payload-only interface for callers outside history insertion"
+)]
 pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
+    truncate_tool_output_for_message(name, result, "").content
+}
+
+/// Bound a tool payload so adding its provider-facing message prefix cannot
+/// push the complete history entry over the result boundary.
+pub(crate) fn truncate_tool_output_for_message(
+    name: &str,
+    result: String,
+    message_prefix: &str,
+) -> BoundedToolOutput {
+    let max_bytes = MAX_TOOL_OUTPUT_BYTES.saturating_sub(message_prefix.len());
+    let max_lines = MAX_TOOL_OUTPUT_LINES.saturating_sub(message_prefix.matches('\n').count());
     let bytes = result.len();
     let lines: Vec<&str> = result.lines().collect();
     let line_count = lines.len();
 
-    if bytes <= MAX_TOOL_OUTPUT_BYTES && line_count <= MAX_TOOL_OUTPUT_LINES {
-        return result;
+    if bytes <= max_bytes && line_count <= max_lines {
+        return BoundedToolOutput {
+            content: result,
+            truncated: false,
+            full_output_artifact: None,
+        };
     }
 
     let saved_path = save_full_tool_output(name, &result);
-    let max_lines = MAX_TOOL_OUTPUT_LINES.min(line_count);
-    let mut head_count = ((max_lines * 3) / 10).max(1).min(line_count);
-    let mut tail_count = ((max_lines * 3) / 10).max(1).min(line_count);
-    let path_note = match saved_path {
+    let retained_line_budget = max_lines.min(line_count);
+    let mut head_count = ((retained_line_budget * 3) / 10).max(1).min(line_count);
+    let mut tail_count = ((retained_line_budget * 3) / 10).max(1).min(line_count);
+    let path_note = match saved_path.as_deref() {
         Some(path) => format!(
             " Full output saved to: {path}\nUse grep to search the full content or view_file with line offsets to read specific sections."
         ),
@@ -43,19 +69,27 @@ pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
             "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]"
         );
 
-        if output.len() <= MAX_TOOL_OUTPUT_BYTES {
-            return output;
+        if output.len() <= max_bytes {
+            return BoundedToolOutput {
+                content: output,
+                truncated: true,
+                full_output_artifact: saved_path,
+            };
         }
         if head_count > 0 {
             head_count -= 1;
         } else if tail_count > 0 {
             tail_count -= 1;
         } else {
-            while !output.is_char_boundary(MAX_TOOL_OUTPUT_BYTES) {
+            while !output.is_char_boundary(max_bytes) {
                 output.pop();
             }
-            output.truncate(MAX_TOOL_OUTPUT_BYTES);
-            return output;
+            output.truncate(max_bytes);
+            return BoundedToolOutput {
+                content: output,
+                truncated: true,
+                full_output_artifact: saved_path,
+            };
         }
     }
 }
@@ -144,6 +178,24 @@ mod tests {
 
         assert!(out.contains("[Output truncated:"));
         assert!(out.len() <= MAX_TOOL_OUTPUT_BYTES, "bounded output was {} bytes", out.len());
+    }
+
+    #[test]
+    fn multiline_history_prefix_counts_toward_the_line_boundary() {
+        let prefix = "background_task: Task task_1 completed. Output:\n";
+        let content = (1..=MAX_TOOL_OUTPUT_LINES)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let bounded = truncate_tool_output_for_message("background_task", content, prefix);
+        let message = format!("{prefix}{}", bounded.content);
+
+        assert!(bounded.truncated);
+        assert!(message.len() <= MAX_TOOL_OUTPUT_BYTES);
+        assert!(message.lines().count() <= MAX_TOOL_OUTPUT_LINES);
+        assert!(message.contains("[Output truncated:"));
+        assert!(bounded.full_output_artifact.is_some());
     }
 
     #[test]

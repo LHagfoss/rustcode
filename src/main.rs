@@ -234,10 +234,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Background output can be huge (long-running servers dump MBs of
                 // logs). Head+tail truncate it like any other tool result so it
                 // doesn't bloat context and the scroll buffer.
-                let body = crate::network::truncate_tool_output("background_task", output);
+                let prefix = format!("background_task: Task {task_id} completed. Output:\n");
+                let body = crate::network::truncate_tool_output_for_message(
+                    "background_task",
+                    output,
+                    &prefix,
+                )
+                .content;
                 s.history.push(ChatMessage::new(
                     "tool",
-                    format!("background_task: Task {task_id} completed. Output:\n{body}"),
+                    format!("{prefix}{body}"),
                 ));
                 crate::config::save_session_history(&session_id, &s.history);
                 s.request_redraw();
@@ -271,9 +277,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             } else {
                 let mut history = crate::config::load_session_history_direct(&session_id);
+                let prefix = format!("background_task: Task {task_id} completed. Output:\n");
+                let body = crate::network::truncate_tool_output_for_message(
+                    "background_task",
+                    output,
+                    &prefix,
+                )
+                .content;
                 history.push(ChatMessage::new(
                     "tool",
-                    format!("background_task: Task {task_id} completed. Output:\n{output}"),
+                    format!("{prefix}{body}"),
                 ));
                 crate::config::save_session_history(&session_id, &history);
             }
