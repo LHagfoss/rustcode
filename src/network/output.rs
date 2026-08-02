@@ -1,5 +1,8 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_TOOL_OUTPUT_LINES: usize = 1000;
+static NEXT_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Truncate tool output at execution time if it exceeds size limits.
 /// Full output is saved to a temp file so the agent can still access it.
@@ -45,11 +48,12 @@ fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or(std::time::Duration::from_secs(0))
         .as_millis();
+    let sequence = NEXT_ARTIFACT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let safe_name: String = name
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '_')
         .collect();
-    let path = dir.join(format!("{ts}_{safe_name}.txt"));
+    let path = dir.join(format!("{ts}_{sequence}_{safe_name}.txt"));
     match std::fs::write(&path, content) {
         Ok(_) => Some(path.to_string_lossy().to_string()),
         Err(_) => None,
@@ -106,5 +110,43 @@ mod tests {
         let path = out[start..].lines().next().expect("path on its own line");
         let recovered = std::fs::read_to_string(path).expect("saved file readable");
         assert_eq!(recovered, content, "saved artifact must be byte-identical to the original");
+    }
+
+    #[test]
+    fn concurrent_same_name_outputs_save_to_distinct_artifacts() {
+        let first = "first\n".to_string() + &"a".repeat(60_000);
+        let second = "second\n".to_string() + &"b".repeat(60_000);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = [
+            (first.clone(), barrier.clone()),
+            (second.clone(), barrier.clone()),
+        ]
+        .into_iter()
+        .map(|(content, barrier)| {
+            std::thread::spawn(move || {
+                barrier.wait();
+                truncate_tool_output("same_tool", content)
+            })
+        })
+        .collect();
+
+        let outputs: Vec<String> = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("output save thread must not panic"))
+            .collect();
+        let paths: Vec<&str> = outputs
+            .iter()
+            .map(|output| {
+                output
+                    .split_once("Full output saved to: ")
+                    .and_then(|(_, rest)| rest.lines().next())
+                    .expect("truncated output must name its artifact")
+            })
+            .collect();
+
+        assert_ne!(paths[0], paths[1], "same-name outputs must not share an artifact path");
+        let recovered = [std::fs::read(paths[0]).unwrap(), std::fs::read(paths[1]).unwrap()];
+        assert!(recovered.contains(&first.into_bytes()));
+        assert!(recovered.contains(&second.into_bytes()));
     }
 }
