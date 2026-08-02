@@ -2845,20 +2845,6 @@ fn build_dynamic_context_tail(
     history::render_context_fragments(&fragments)
 }
 
-/// Cheap identity fingerprint for a history message, used to tell whether the
-/// prefix we snapshotted is still the same prefix after a lock has been released
-/// and re-acquired. `ChatMessage` has no `PartialEq`, and hashing role +
-/// timestamp + content is enough to catch a rewritten or replaced entry without
-/// cloning the (potentially large) content.
-fn message_identity(m: &ChatMessage) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    m.role.hash(&mut hasher);
-    m.timestamp.hash(&mut hasher);
-    m.content.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Assemble the full provider request for one agent turn.
 ///
 /// Runs AI compaction if the history is long enough, snapshots the eligible
@@ -2882,17 +2868,18 @@ async fn prepare_turn_request(
     // under a short lock, compact the owned copy with the lock released, then
     // re-acquire and merge the result back in.
     {
-        let (api_url, model_name, budget, mut working_history) = {
+        let (api_url, model_name, budget, active_session_id, captured_history) = {
             let s = state.lock().await;
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
                 s.get_history_token_budget() as usize,
+                s.active_session_id.clone(),
                 s.history.clone(),
             )
         };
-        let pre_len = working_history.len();
-        let pre_identity: Vec<u64> = working_history.iter().map(message_identity).collect();
+        let pre_len = captured_history.len();
+        let mut working_history = captured_history.clone();
 
         // Lock released here: this await performs I/O.
         let compacted = compaction::maybe_compact(
@@ -2921,12 +2908,9 @@ async fn prepare_turn_request(
         // when it returns false, so the write-back is attempted regardless of
         // the return value; the flag only gates the cache invalidation below.
         let mut s = state.lock().await;
-        let prefix_intact = s.history.len() >= pre_len
-            && s.history
-                .iter()
-                .take(pre_len)
-                .map(message_identity)
-                .eq(pre_identity.iter().copied());
+        let live_session_id = s.active_session_id.clone();
+        let prefix_intact = live_session_id == active_session_id
+            && s.history.starts_with(&captured_history);
         if prefix_intact {
             if s.history.len() > pre_len {
                 working_history.extend(s.history.drain(pre_len..));
@@ -2941,7 +2925,9 @@ async fn prepare_turn_request(
             }
         } else {
             dbg_log!(
-                "Skipping compaction write-back: history changed underneath the summarizer ({} messages before, {} now). Live history kept as-is.",
+                "Skipping automatic compaction write-back: active session or history changed underneath the summarizer (captured session '{}', live session '{}', {} messages before, {} now). Live history kept as-is.",
+                active_session_id,
+                live_session_id,
                 pre_len,
                 s.history.len()
             );
@@ -5008,6 +4994,130 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn gated_json_server(
+        body: serde_json::Value,
+    ) -> (
+        String,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                let read = socket.read(&mut buffer).await.expect("read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+
+            accepted_tx.send(()).ok();
+            release_rx.await.ok();
+
+            let body = body.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+
+        (format!("http://{address}"), accepted_rx, release_tx)
+    }
+
+    #[tokio::test]
+    async fn automatic_compaction_discards_cross_session_result_with_shared_history() {
+        use crate::app::AppState;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let (url, request_accepted, release_response) = gated_json_server(serde_json::json!({
+            "choices": [{"message": {"content": "summary of the old session"}}]
+        }))
+        .await;
+        let mut app = AppState::new();
+        app.api_base_url = url;
+        app.active_session_id = "old-session".to_string();
+        for profile in &mut app.config.models {
+            profile.context_window = Some(400);
+        }
+        app.history = (0..12)
+            .map(|index| {
+                ChatMessage::new(
+                    if index % 2 == 0 { "user" } else { "assistant" },
+                    format!("message {index}: {}", "context ".repeat(80)),
+                )
+            })
+            .collect();
+        let new_session_history = app.history.clone();
+        let state = Arc::new(Mutex::new(app));
+        let request_state = Arc::clone(&state);
+        let task = tokio::spawn(async move {
+            prepare_turn_request(
+                &reqwest::Client::new(),
+                &request_state,
+                1,
+                &CancellationToken::new(),
+            )
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(10), request_accepted)
+            .await
+            .expect("automatic compaction request must start")
+            .expect("test server must observe the request");
+        {
+            let mut live = tokio::time::timeout(Duration::from_secs(1), state.lock())
+                .await
+                .expect("network I/O must not hold the state lock");
+            live.active_session_id = "new-session".to_string();
+            live.history = new_session_history.clone();
+        }
+        release_response
+            .send(())
+            .expect("release automatic compaction response");
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("automatic compaction must finish")
+            .expect("automatic compaction task must not panic");
+
+        let live = state.lock().await;
+        assert_eq!(live.active_session_id, "new-session");
+        assert!(live.history == new_session_history);
+    }
 
     // Regression: session 1785600273324, msgs 7-18. The repeat guard correctly
     // declined four identical `view_file lines 1-1` calls, but answered each with
