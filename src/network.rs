@@ -3044,6 +3044,44 @@ fn extract_exit_code(content: &str) -> Option<i32> {
     digits.parse().ok()
 }
 
+fn finalize_tool_result_content(
+    name: &str,
+    result: String,
+    deferred_notice: Option<&str>,
+) -> String {
+    let result = match deferred_notice {
+        Some(notice) => format!("{result}\n\n{notice}"),
+        None => result,
+    };
+    truncate_tool_output(name, result)
+}
+
+fn tool_result_history_message(
+    result: ToolResult,
+    answered_call: Option<String>,
+) -> ChatMessage {
+    let ToolResult {
+        tool_name,
+        content,
+        diff,
+        file_preview,
+        metadata,
+    } = result;
+    ChatMessage::new("tool", format!("{tool_name}: {content}"))
+        .answering(answered_call)
+        .with_diff(diff)
+        .with_file_preview(file_preview)
+        .with_tool_result(crate::app::ToolResultRecord {
+            tool_name,
+            arguments_hash: metadata.arguments_hash,
+            success: metadata.success,
+            exit_code: metadata.exit_code,
+            changed_paths: metadata.changed_paths,
+            truncated: metadata.truncated,
+            full_output_artifact: metadata.full_output_artifact,
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn execute_tool_batch(
     client: &reqwest::Client,
@@ -3054,6 +3092,7 @@ async fn execute_tool_batch(
     edit_root: &Option<std::path::PathBuf>,
     compile_dirty: &mut bool,
     compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+    deferred_notice: Option<String>,
 ) -> Vec<ToolResult> {
     if !approved {
         return tool_calls
@@ -3104,6 +3143,7 @@ async fn execute_tool_batch(
                             &None,
                             &mut read_dirty,
                             &mut read_cache,
+                            deferred_notice.clone(),
                         )
                         .await
                     });
@@ -3127,6 +3167,7 @@ async fn execute_tool_batch(
                     edit_root,
                     compile_dirty,
                     compile_cache,
+                    deferred_notice.clone(),
                 ))
                 .await,
             );
@@ -3308,7 +3349,13 @@ different, read another range or make an edit first; repeating this call returns
             diff_opt
         };
         let final_diff = final_tool_diff(&result, preview_fallback);
-        let content = truncate_tool_output(&executed_name, result);
+        let content = finalize_tool_result_content(
+            &executed_name,
+            result,
+            (executed_name == "use_skill")
+                .then_some(deferred_notice.as_deref())
+                .flatten(),
+        );
         let changed_paths = if is_mutating_tool(&executed_name) {
             args.get("path")
                 .and_then(|value| value.as_str())
@@ -4070,6 +4117,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 );
             }
 
+            let deferred_notice = (deferred_tool_calls > 0).then(|| {
+                format!(
+                    "[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
+                )
+            });
             let results = execute_tool_batch(
                 client,
                 state,
@@ -4079,6 +4131,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 &ctx.edit_root,
                 &mut ctx.compile_dirty,
                 &mut ctx.compile_cache,
+                deferred_notice,
             )
             .await;
 
@@ -4117,7 +4170,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 let answered_call = call_refs.get(position).map(|call| call.id.clone());
                 let name = result.tool_name;
                 let metadata = result.metadata.clone();
-                let mut content = result.content;
+                let content = result.content;
                 if call.is_some_and(|call| call.name == "run_command")
                     && let Some(command) = call
                         .and_then(|call| call.arguments.get("command"))
@@ -4125,11 +4178,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 {
                     ctx.verification
                         .record_command(command, metadata.exit_code);
-                }
-                if name == "use_skill" && deferred_tool_calls > 0 {
-                    content.push_str(&format!(
-                                "\n\n[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
-                            ));
                 }
                 let diff_opt = result.diff;
                 dbg_log!(
@@ -4191,22 +4239,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 {
                     dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
                 }
-                let truncated_result = truncate_tool_output(&name, content);
-                s.history.push(
-                    ChatMessage::new("tool", format!("{name}: {truncated_result}"))
-                        .answering(answered_call)
-                        .with_diff(diff_opt)
-                        .with_file_preview(result.file_preview)
-                        .with_tool_result(crate::app::ToolResultRecord {
-                            tool_name: name.clone(),
-                            arguments_hash: metadata.arguments_hash,
-                            success: metadata.success,
-                            exit_code: metadata.exit_code,
-                            changed_paths: metadata.changed_paths,
-                            truncated: metadata.truncated,
-                            full_output_artifact: metadata.full_output_artifact,
-                        }),
-                );
+                s.history.push(tool_result_history_message(
+                    ToolResult {
+                        tool_name: name,
+                        content,
+                        diff: diff_opt,
+                        file_preview: result.file_preview,
+                        metadata,
+                    },
+                    answered_call,
+                ));
             }
             // Safety net: an executor that returns fewer results than
             // calls would leave ids unanswered in the replayed transcript.
@@ -5062,6 +5104,58 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
         let clean_full_read =
             "[File: small.rs, Lines 1 to 3 of 3, Bytes offset: 0]\n1: foo\n2: bar\n3: baz\n";
         assert!(!output_marks_truncation(clean_full_read));
+    }
+
+    #[test]
+    fn oversized_tool_result_is_bounded_once_before_history_insertion() {
+        let raw = (1..=2000)
+            .map(|line| format!("payload line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let deferred_notice = "[harness: deferred 2 additional tool call(s) until the next model turn after skill loading]";
+        let content = finalize_tool_result_content("use_skill", raw, Some(deferred_notice));
+        let result = ToolResult {
+            tool_name: "use_skill".to_string(),
+            metadata: ToolResultMetadata {
+                truncated: output_marks_truncation(&content),
+                ..Default::default()
+            },
+            content: content.clone(),
+            diff: None,
+            file_preview: None,
+        };
+        let message = tool_result_history_message(result, None);
+
+        assert!(content.contains(deferred_notice));
+        assert_eq!(content.matches("[Output truncated:").count(), 1);
+        assert_eq!(message.content, format!("use_skill: {content}"));
+        assert_eq!(message.content.matches("[Output truncated:").count(), 1);
+    }
+
+    #[test]
+    fn history_uses_the_bounded_tool_result_without_retruncating_it() {
+        let bounded = truncate_tool_output(
+            "grep",
+            (1..=2000)
+                .map(|line| format!("match {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let result = ToolResult {
+            tool_name: "grep".to_string(),
+            content: bounded.clone(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                truncated: true,
+                ..Default::default()
+            },
+        };
+
+        let message = tool_result_history_message(result, None);
+
+        assert_eq!(message.content, format!("grep: {bounded}"));
+        assert_eq!(message.content.matches("[Output truncated:").count(), 1);
     }
 
     #[test]
@@ -6023,6 +6117,7 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
             &None,
             &mut compile_dirty,
             &mut compile_cache,
+            None,
         )
         .await;
         results.remove(0)
