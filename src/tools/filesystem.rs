@@ -1069,6 +1069,11 @@ mod tests {
             !out.contains(&format!("{total_lines}: line {total_lines}")),
             "got: {out}"
         );
+        assert_eq!(
+            out.lines().filter(|line| line.contains(": line ")).count(),
+            DEFAULT_READ_WINDOW_LINES,
+            "expected exactly {DEFAULT_READ_WINDOW_LINES} returned content lines, got: {out}"
+        );
         // Reported as a genuine, capped truncation — not as "end of requested
         // range", which would falsely imply the read is complete.
         assert!(out.contains("[Truncated:"), "got: {out}");

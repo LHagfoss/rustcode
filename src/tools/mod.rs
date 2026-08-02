@@ -524,8 +524,8 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "view_file",
-        description: "View the contents of a file or directory. Supports line ranges (1-indexed) and optional byte offset if content is truncated.",
-        arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (default start_line + 2000)", "content_offset": "optional byte offset into content"}"#,
+        description: "View the contents of a file or directory. Each call has a 250-line hard cap; request targeted follow-up ranges with start_line/end_line for more content. Supports 1-indexed line ranges and an optional byte offset.",
+        arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (each call is capped at 250 lines; request targeted follow-up ranges for more content)", "content_offset": "optional byte offset into content"}"#,
         handler: filesystem::view_file_tool,
         requires_confirmation: false,
     },
@@ -855,7 +855,8 @@ fn schema_for_tool(name: &str) -> Value {
         "view_file" => serde_json::json!({
             "type": "object", "properties": {
                 "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 1 }, "content_offset": { "type": "integer", "minimum": 0 }
+                "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive end line; each call is capped at 250 lines. Request targeted follow-up ranges for more content." },
+                "content_offset": { "type": "integer", "minimum": 0 }
             }, "required": ["path"]
         }),
         "replace_file_content" => serde_json::json!({
@@ -1868,6 +1869,26 @@ mod tests {
         assert!(spec.description.contains("prepend"), "got: {}", spec.description);
         assert!(spec.description.contains("An empty target is rejected"), "got: {}", spec.description);
         assert!(spec.arguments.contains("never empty"), "got: {}", spec.arguments);
+    }
+
+    #[test]
+    fn the_view_file_spec_describes_the_hard_read_window() {
+        let spec = TOOLS
+            .iter()
+            .find(|tool| tool.name == "view_file")
+            .expect("tool exists");
+
+        assert!(spec.description.contains("250-line hard cap"), "got: {}", spec.description);
+        assert!(spec.description.contains("targeted follow-up ranges"), "got: {}", spec.description);
+        assert!(spec.arguments.contains("250 lines"), "got: {}", spec.arguments);
+        assert!(spec.arguments.contains("targeted follow-up"), "got: {}", spec.arguments);
+        assert!(!spec.arguments.contains("start_line + 2000"), "got: {}", spec.arguments);
+
+        let schema = schema_for_tool("view_file");
+        assert_eq!(
+            schema["properties"]["end_line"]["description"],
+            "Inclusive end line; each call is capped at 250 lines. Request targeted follow-up ranges for more content."
+        );
     }
 
     #[test]
