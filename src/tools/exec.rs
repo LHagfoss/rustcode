@@ -367,8 +367,9 @@ pub fn run_command(args: &Value) -> Result<String, String> {
         output.status.code().unwrap_or(-1)
     ));
 
-    let stdout = truncate_bytes(&output.stdout, MAX_COMMAND_OUTPUT_BYTES);
-    let stderr = truncate_bytes(&output.stderr, MAX_COMMAND_OUTPUT_BYTES);
+    let failed = !output.status.success();
+    let stdout = truncate_bytes(&output.stdout, MAX_COMMAND_OUTPUT_BYTES, failed);
+    let stderr = truncate_bytes(&output.stderr, MAX_COMMAND_OUTPUT_BYTES, failed);
 
     if !stdout.is_empty() {
         result.push_str("stdout:\n");
@@ -505,19 +506,28 @@ fn run_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> Result
     })
 }
 
-fn truncate_bytes(bytes: &[u8], max: usize) -> String {
+/// Truncates to at most `max` bytes, keeping both head and tail rather than
+/// dropping the tail wholesale — compiler errors, test failures, and stack
+/// traces overwhelmingly appear at the *end* of command output, so a
+/// head-only cut can throw away the only useful part of a failing command's
+/// output before it ever reaches the model. `keep_tail_priority` (set for a
+/// nonzero exit code) biases the split further toward the tail.
+fn truncate_bytes(bytes: &[u8], max: usize, keep_tail_priority: bool) -> String {
     if bytes.len() <= max {
         return String::from_utf8_lossy(bytes).to_string();
     }
-    let head_end = (max * 3 / 4).min(bytes.len());
-    let head = &bytes[..head_end];
-    let mut out = String::from_utf8_lossy(head).to_string();
-    out.push_str(&format!(
-        "\n... (truncated, {} bytes total — showing first {} bytes)\n",
-        bytes.len(),
-        head_end
-    ));
-    out
+    let tail_len = if keep_tail_priority {
+        max * 7 / 10
+    } else {
+        max * 3 / 10
+    };
+    let head_len = max - tail_len;
+    let head = String::from_utf8_lossy(&bytes[..head_len]);
+    let tail = String::from_utf8_lossy(&bytes[bytes.len() - tail_len..]);
+    format!(
+        "{head}\n... (truncated, {} bytes total — showing first {head_len} and last {tail_len} bytes) ...\n{tail}\n",
+        bytes.len()
+    )
 }
 
 #[cfg(test)]
@@ -613,5 +623,59 @@ mod tests {
         .expect_err("interactive sudo should be rejected");
 
         assert!(err.contains("Interactive 'sudo' commands"));
+    }
+
+    // Compiler errors, test failures, and stack traces overwhelmingly land at
+    // the *end* of a failing command's output. A head-only truncation (the
+    // prior behavior) would throw that away before the model ever sees it.
+    #[test]
+    fn a_failing_command_with_oversized_output_keeps_the_tail() {
+        let result = run_command(&serde_json::json!({
+            "command": "printf 'START_MARKER\\n'; \
+                i=0; while [ $i -lt 20000 ]; do printf 'filler line %d\\n' $i; i=$((i+1)); done; \
+                printf 'END_MARKER\\n'; exit 1"
+        }))
+        .expect("run_command reports failure via exit code, not Err");
+
+        assert!(
+            result.contains("exit code: 1"),
+            "got: {}",
+            &result[..200.min(result.len())]
+        );
+        assert!(
+            result.contains("END_MARKER"),
+            "tail must survive truncation on failure so the model can see what broke"
+        );
+        assert!(
+            result.contains("truncated"),
+            "output should be reported as truncated"
+        );
+    }
+
+    // Successful output should stay concise (still bounded) but the shared
+    // truncation must not silently drop either end.
+    #[test]
+    fn oversized_output_is_bounded_and_keeps_both_head_and_tail() {
+        let result = run_command(&serde_json::json!({
+            "command": "printf 'START_MARKER\\n'; \
+                i=0; while [ $i -lt 20000 ]; do printf 'filler line %d\\n' $i; i=$((i+1)); done; \
+                printf 'END_MARKER\\n'"
+        }))
+        .expect("shell command should succeed");
+
+        assert!(result.contains("exit code: 0"));
+        assert!(
+            result.contains("START_MARKER"),
+            "head must survive truncation"
+        );
+        assert!(
+            result.contains("END_MARKER"),
+            "tail must survive truncation"
+        );
+        assert!(
+            result.len() < 200_000,
+            "result must actually be bounded, got {} bytes",
+            result.len()
+        );
     }
 }
