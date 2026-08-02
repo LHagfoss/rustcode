@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::{fs::OpenOptions, io::Write};
 
 const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_TOOL_OUTPUT_LINES: usize = 1000;
@@ -17,18 +18,8 @@ pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
 
     let saved_path = save_full_tool_output(name, &result);
     let max_lines = MAX_TOOL_OUTPUT_LINES.min(line_count);
-    let head_count = (max_lines * 3) / 10;
-    let tail_count = (max_lines * 3) / 10;
-
-    let head: String = lines[..head_count.min(line_count)].join("\n");
-    let tail: String = if tail_count > 0 && line_count > head_count + tail_count {
-        lines[line_count - tail_count..].join("\n")
-    } else {
-        String::new()
-    };
-
-    let omitted_lines = line_count.saturating_sub(head_count + tail_count);
-    let omitted_bytes = bytes.saturating_sub(head.len() + tail.len());
+    let mut head_count = (max_lines * 3) / 10;
+    let mut tail_count = (max_lines * 3) / 10;
     let path_note = match saved_path {
         Some(path) => format!(
             " Full output saved to: {path}\nUse grep to search the full content or view_file with line offsets to read specific sections."
@@ -36,9 +27,34 @@ pub(crate) fn truncate_tool_output(name: &str, result: String) -> String {
         None => String::new(),
     };
 
-    format!(
-        "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]"
-    )
+    loop {
+        let head: String = lines[..head_count.min(line_count)].join("\n");
+        let tail: String = if tail_count > 0 && line_count > head_count + tail_count {
+            lines[line_count - tail_count..].join("\n")
+        } else {
+            String::new()
+        };
+        let omitted_lines = line_count.saturating_sub(head_count + tail_count);
+        let omitted_bytes = bytes.saturating_sub(head.len() + tail.len());
+        let mut output = format!(
+            "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]"
+        );
+
+        if output.len() <= MAX_TOOL_OUTPUT_BYTES {
+            return output;
+        }
+        if head_count > 0 {
+            head_count -= 1;
+        } else if tail_count > 0 {
+            tail_count -= 1;
+        } else {
+            while !output.is_char_boundary(MAX_TOOL_OUTPUT_BYTES) {
+                output.pop();
+            }
+            output.truncate(MAX_TOOL_OUTPUT_BYTES);
+            return output;
+        }
+    }
 }
 
 fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
@@ -48,15 +64,25 @@ fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or(std::time::Duration::from_secs(0))
         .as_millis();
-    let sequence = NEXT_ARTIFACT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let mut sequence = NEXT_ARTIFACT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let safe_name: String = name
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '_')
         .collect();
-    let path = dir.join(format!("{ts}_{sequence}_{safe_name}.txt"));
-    match std::fs::write(&path, content) {
-        Ok(_) => Some(path.to_string_lossy().to_string()),
-        Err(_) => None,
+    loop {
+        let path = dir.join(format!("{ts}_{sequence}_{safe_name}.txt"));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                return file
+                    .write_all(content.as_bytes())
+                    .is_ok()
+                    .then(|| path.to_string_lossy().to_string());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                sequence = sequence.wrapping_add(1);
+            }
+            Err(_) => return None,
+        }
     }
 }
 
@@ -88,7 +114,29 @@ mod tests {
         let content = format!("{}\n{}\n", "a".repeat(40_000), "b".repeat(40_000));
         let out = truncate_tool_output("run_command", content);
         assert!(out.contains("[Output truncated:"));
-        assert!(out.len() < 80_000);
+        assert!(out.len() <= MAX_TOOL_OUTPUT_BYTES, "bounded output was {} bytes", out.len());
+    }
+
+    #[test]
+    fn oversized_line_and_byte_count_stays_within_byte_cap() {
+        let content: String = (1..=2000).map(|n| format!("line {n}: {}\n", "x".repeat(100))).collect();
+        let out = truncate_tool_output("run_command", content);
+
+        assert!(out.contains("[Output truncated:"));
+        assert!(out.len() <= MAX_TOOL_OUTPUT_BYTES, "bounded output was {} bytes", out.len());
+    }
+
+    #[test]
+    fn compiler_diagnostic_in_tail_survives_truncation() {
+        let mut content: String = (1..=2000).map(|n| format!("build progress {n}\n")).collect();
+        content.push_str("error[E0425]: cannot find value `missing_symbol` in this scope\n");
+
+        let out = truncate_tool_output("cargo_check", content);
+
+        assert!(
+            out.contains("error[E0425]: cannot find value `missing_symbol` in this scope"),
+            "tail compiler diagnostic must survive truncation, got: {out}"
+        );
     }
 
     #[test]
@@ -109,6 +157,7 @@ mod tests {
         let start = out.find(marker).expect("truncation marker names the saved path") + marker.len();
         let path = out[start..].lines().next().expect("path on its own line");
         let recovered = std::fs::read_to_string(path).expect("saved file readable");
+        assert!(!out.contains(&content), "bounded output must not contain the full payload");
         assert_eq!(recovered, content, "saved artifact must be byte-identical to the original");
     }
 
@@ -145,7 +194,12 @@ mod tests {
             .collect();
 
         assert_ne!(paths[0], paths[1], "same-name outputs must not share an artifact path");
-        let recovered = [std::fs::read(paths[0]).unwrap(), std::fs::read(paths[1]).unwrap()];
+        let recovered = [
+            std::fs::read(paths[0])
+                .unwrap_or_else(|error| panic!("failed to read first artifact {}: {error}", paths[0])),
+            std::fs::read(paths[1])
+                .unwrap_or_else(|error| panic!("failed to read second artifact {}: {error}", paths[1])),
+        ];
         assert!(recovered.contains(&first.into_bytes()));
         assert!(recovered.contains(&second.into_bytes()));
     }
