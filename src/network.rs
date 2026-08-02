@@ -37,7 +37,7 @@ pub(crate) use stream::StreamBuffer;
 
 #[path = "network/output.rs"]
 pub(crate) mod output;
-pub(crate) use output::truncate_tool_output;
+pub(crate) use output::truncate_tool_output_for_message;
 
 #[path = "network/events.rs"]
 pub(crate) mod events;
@@ -1737,7 +1737,7 @@ async fn ask_user_question(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     args: &serde_json::Value,
-) -> String {
+) -> crate::tools::ToolExecutionOutput {
     let question = args
         .get("question")
         .and_then(|v| v.as_str())
@@ -1758,7 +1758,9 @@ async fn ask_user_question(
         .unwrap_or(false);
 
     if question.is_empty() || options.is_empty() {
-        return "error: ask_question requires a non-empty 'question' and 'options'".to_string();
+        return crate::tools::ToolExecutionOutput::failure(
+            "error: ask_question requires a non-empty 'question' and 'options'".to_string(),
+        );
     }
 
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
@@ -1797,8 +1799,12 @@ async fn ask_user_question(
     }
 
     match answer {
-        Some(a) if !a.is_empty() => format!("User selected: {a}"),
-        _ => "error: the user dismissed the question without answering".to_string(),
+        Some(a) if !a.is_empty() => {
+            crate::tools::ToolExecutionOutput::success(format!("User selected: {a}"))
+        }
+        _ => crate::tools::ToolExecutionOutput::failure(
+            "error: the user dismissed the question without answering".to_string(),
+        ),
     }
 }
 
@@ -1813,7 +1819,7 @@ async fn confirm_and_execute(
     display_name: &str,
     bypass_confirm: bool,
     workspace_root: Option<std::path::PathBuf>,
-) -> (String, Option<String>) {
+) -> (crate::tools::ToolExecutionOutput, Option<String>) {
     let (agent_mode, auto_confirm) = {
         let s = state.lock().await;
         (s.agent_mode, s.auto_confirm)
@@ -1821,7 +1827,10 @@ async fn confirm_and_execute(
     if let crate::tools::AuthorizationDecision::Deny(reason) =
         crate::tools::authorize_tool(name, agent_mode, auto_confirm, bypass_confirm)
     {
-        return (format!("error: {reason}"), None);
+        return (
+            crate::tools::ToolExecutionOutput::failure(format!("error: {reason}")),
+            None,
+        );
     }
 
     struct ToolCleanup {
@@ -1880,7 +1889,7 @@ async fn confirm_and_execute(
         let run_fut = tokio::task::spawn_blocking(move || {
             crate::tools::set_active_session_id(Some(session_id));
             crate::tools::set_active_workspace_root(workspace_root_for_task);
-            let result = crate::tools::execute(&name_owned, &args_owned);
+            let result = crate::tools::execute_with_metadata(&name_owned, &args_owned);
             crate::tools::set_active_workspace_root(None);
             crate::tools::set_active_session_id(None);
             result
@@ -1888,11 +1897,15 @@ async fn confirm_and_execute(
 
         tokio::select! {
             res = run_fut => {
-                res.unwrap_or_else(|e| format!("tool panicked: {e}"))
+                res.unwrap_or_else(|e| {
+                    crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
+                })
             }
             _ = cancel_token.cancelled() => {
                 dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
-                "error: tool execution cancelled by user".to_string()
+                crate::tools::ToolExecutionOutput::failure(
+                    "error: tool execution cancelled by user".to_string(),
+                )
             }
         }
     } else {
@@ -1969,7 +1982,7 @@ async fn confirm_and_execute(
                 let run_fut = tokio::task::spawn_blocking(move || {
                     crate::tools::set_active_session_id(Some(session_id));
                     crate::tools::set_active_workspace_root(workspace_root_for_task);
-                    let result = crate::tools::execute(&name_owned, &args_owned);
+                    let result = crate::tools::execute_with_metadata(&name_owned, &args_owned);
                     crate::tools::set_active_workspace_root(None);
                     crate::tools::set_active_session_id(None);
                     result
@@ -1977,11 +1990,15 @@ async fn confirm_and_execute(
 
                 tokio::select! {
                     res = run_fut => {
-                        res.unwrap_or_else(|e| format!("tool panicked: {e}"))
+                        res.unwrap_or_else(|e| {
+                            crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
+                        })
                     }
                     _ = cancel_token.cancelled() => {
                         dbg_log!("Tool execution cancelled during spawn_blocking await");
-                        "error: tool execution cancelled by user".to_string()
+                        crate::tools::ToolExecutionOutput::failure(
+                            "error: tool execution cancelled by user".to_string(),
+                        )
                     }
                 }
             }
@@ -1990,11 +2007,15 @@ async fn confirm_and_execute(
                 let _ = crate::notifications::notify_finished(
                     crate::notifications::FinishedStatus::Denied,
                 );
-                "error: user denied this tool call".to_string()
+                crate::tools::ToolExecutionOutput::failure(
+                    "error: user denied this tool call".to_string(),
+                )
             }
             Err(_) => {
                 dbg_log!("Confirmation channel closed for '{}'", name);
-                "error: confirmation channel closed".to_string()
+                crate::tools::ToolExecutionOutput::failure(
+                    "error: confirmation channel closed".to_string(),
+                )
             }
         };
         {
@@ -2019,12 +2040,12 @@ async fn confirm_and_execute(
             | "delete_file"
             | "move_file"
             | "copy_file"
-    ) && !result.starts_with("error")
+    ) && result.success
     {
         let cwd = get_tool_project_root(name, args);
         if let Some(errors) = run_compiler_check(&cwd).await {
-            result.push_str("\n\nCompiler errors/warnings:\n");
-            result.push_str(&errors);
+            result.content.push_str("\n\nCompiler errors/warnings:\n");
+            result.content.push_str(&errors);
         }
     }
 
@@ -2043,13 +2064,13 @@ fn push_status_line(s: &mut AppState, text: String) {
 /// Run one subagent conversation until it produces a plain reply (no tool
 /// call). Tokens stream quietly (not into the main chat view); tool calls
 /// surface as status lines and go through the same confirmation modal as
-/// the main agent. Returns the subagent's final reply or an error string.
+/// the main agent.
 async fn run_subagent(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     agent_id: u32,
-) -> String {
+) -> Result<String, String> {
     crate::logger::operational_event("subagent.start", serde_json::json!({"agent_id": agent_id}));
     let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
     let mut rounds = 0usize;
@@ -2060,7 +2081,7 @@ async fn run_subagent(
                 "subagent.finish",
                 serde_json::json!({"agent_id": agent_id, "status": "cancelled"}),
             );
-            return "error: cancelled".to_string();
+            return Err("error: cancelled".to_string());
         }
         let mut history_snapshot: Vec<ChatMessage> = {
             let s = state.lock().await;
@@ -2071,7 +2092,7 @@ async fn run_subagent(
                 .unwrap_or_default()
         };
         if history_snapshot.is_empty() {
-            return format!("error: no subagent with id {agent_id}");
+            return Err(format!("error: no subagent with id {agent_id}"));
         }
 
         let budget_token_limit = { state.lock().await.get_history_token_budget() };
@@ -2186,11 +2207,11 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         .await
         {
             Ok(result) => result,
-            Err(e) => return format!("error: subagent request failed: {e}"),
+            Err(e) => return Err(format!("error: subagent request failed: {e}")),
         };
 
         if content.is_empty() {
-            return "error: subagent returned an empty reply".to_string();
+            return Err("error: subagent returned an empty reply".to_string());
         }
 
         let protocol = { state.lock().await.active_tool_protocol() };
@@ -2213,9 +2234,9 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             if let loop_detect::LoopStatus::Abort(repeats) =
                 loop_detector.check_tool(name, &exact, &category)
             {
-                return format!(
+                return Err(format!(
                     "error: subagent {agent_id} stopped after {repeats} repeated '{name}' actions"
-                );
+                ));
             }
             rounds += 1;
             let (write_access, allowed_paths) = {
@@ -2236,20 +2257,26 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                             || path.starts_with(&format!("{}/", allowed.trim_end_matches('/')))
                     })
                 });
-            let (result, diff_opt) = if needs_write_access && !write_access {
+            let (execution, diff_opt) = if needs_write_access && !write_access {
                 (
-                    "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
+                    crate::tools::ToolExecutionOutput::failure(
+                        "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
+                    ),
                     None,
                 )
             } else if write_access && path_outside_contract {
                 (
-                    "error: requested path is outside the subagent allowed_paths contract"
-                        .to_string(),
+                    crate::tools::ToolExecutionOutput::failure(
+                        "error: requested path is outside the subagent allowed_paths contract"
+                            .to_string(),
+                    ),
                     None,
                 )
             } else if crate::tools::is_agent_tool(name) {
                 (
-                    "error: subagents cannot spawn or message other agents".to_string(),
+                    crate::tools::ToolExecutionOutput::failure(
+                        "error: subagents cannot spawn or message other agents".to_string(),
+                    ),
                     None,
                 )
             } else {
@@ -2283,20 +2310,17 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             // embedded in the tool's own result always wins over the
             // pre-execution, argument-only preview — and a no-op or failed
             // edit gets no fallback preview at all.
-            let preview_fallback = if tool_result_precludes_preview_fallback(&result) {
+            let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content) {
                 None
             } else {
                 diff_opt
             };
-            let final_diff = final_tool_diff(&result, preview_fallback);
+            let final_diff = final_tool_diff(&execution.content, preview_fallback);
+            let message = subagent_tool_history_message(name, args, execution, final_diff);
             let mut s = state.lock().await;
             if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                 a.history.push(ChatMessage::new("assistant", &content));
-                let truncated_result = truncate_tool_output(name, result);
-                a.history.push(
-                    ChatMessage::new("tool", format!("{name}: {truncated_result}"))
-                        .with_diff(final_diff),
-                );
+                a.history.push(message);
             }
             continue;
         }
@@ -2309,7 +2333,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             "subagent.finish",
             serde_json::json!({"agent_id": agent_id, "status": "completed", "rounds": rounds}),
         );
-        return strip_leading_think(&content).to_string();
+        return Ok(strip_leading_think(&content).to_string());
     }
 }
 
@@ -2333,18 +2357,22 @@ async fn handle_agent_tool(
     cancel_token: &tokio_util::sync::CancellationToken,
     name: &str,
     args: &serde_json::Value,
-) -> String {
+) -> crate::tools::ToolExecutionOutput {
     match name {
         "spawn_agent" => {
             if !state.lock().await.delegation_active {
-                return "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string(),
+                );
             }
             let Some(task) = args
                 .get("task")
                 .and_then(|t| t.as_str())
                 .filter(|t| !t.trim().is_empty())
             else {
-                return "error: missing 'task' argument".to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: missing 'task' argument".to_string(),
+                );
             };
             let model = args
                 .get("model")
@@ -2365,8 +2393,10 @@ async fn handle_agent_tool(
                 })
                 .unwrap_or_default();
             if write_access && allowed_paths.is_empty() {
-                return "error: write-enabled subagents require at least one allowed_paths entry"
-                    .to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: write-enabled subagents require at least one allowed_paths entry"
+                        .to_string(),
+                );
             }
             let verification_command = args
                 .get("verification_command")
@@ -2384,9 +2414,9 @@ async fn handle_agent_tool(
                     .filter(|agent| agent.status == crate::app::SubAgentStatus::Running)
                     .count();
                 if active_count >= MAX_ACTIVE_SUBAGENTS {
-                    return format!(
+                    return crate::tools::ToolExecutionOutput::failure(format!(
                         "error: maximum active subagents reached ({MAX_ACTIVE_SUBAGENTS}); wait for an existing agent to finish"
-                    );
+                    ));
                 }
                 let id = s.next_subagent_id;
                 s.next_subagent_id += 1;
@@ -2394,9 +2424,9 @@ async fn handle_agent_tool(
                     match crate::config::create_subagent_workspace(&s.active_session_id, id) {
                         Ok(path) => Some(path),
                         Err(error) => {
-                            return format!(
+                            return crate::tools::ToolExecutionOutput::failure(format!(
                                 "error: unable to create isolated subagent workspace: {error}"
-                            );
+                            ));
                         }
                     }
                 } else {
@@ -2425,6 +2455,8 @@ async fn handle_agent_tool(
                 id
             };
             let reply = run_subagent(client, state, cancel_token, agent_id).await;
+            let failed = reply.is_err();
+            let reply = reply.unwrap_or_else(|error| error);
             let review_manifest = {
                 let s = state.lock().await;
                 s.subagents
@@ -2448,7 +2480,7 @@ async fn handle_agent_tool(
             set_subagent_status(
                 state,
                 agent_id,
-                if reply.starts_with("error:") {
+                if failed {
                     crate::app::SubAgentStatus::Failed
                 } else if cancel_token.is_cancelled() {
                     crate::app::SubAgentStatus::Cancelled
@@ -2458,18 +2490,27 @@ async fn handle_agent_tool(
             )
             .await;
             push_status_line(&mut *state.lock().await, format!("agent-{agent_id} done"));
-            format!("(subagent id {agent_id} — follow up with send_agent)\n{reply}")
+            let content = format!("(subagent id {agent_id} — follow up with send_agent)\n{reply}");
+            if failed {
+                crate::tools::ToolExecutionOutput::failure(content)
+            } else {
+                crate::tools::ToolExecutionOutput::success(content)
+            }
         }
         "send_agent" => {
             if !state.lock().await.delegation_active {
-                return "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: subagents are disabled for this task. Run /delegate before starting the task.".to_string(),
+                );
             }
             let id = args.get("id").and_then(|v| {
                 v.as_u64()
                     .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
             });
             let Some(id) = id else {
-                return "error: missing or invalid 'id' argument".to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: missing or invalid 'id' argument".to_string(),
+                );
             };
             let id = id as u32;
             let Some(message) = args
@@ -2477,7 +2518,9 @@ async fn handle_agent_tool(
                 .and_then(|m| m.as_str())
                 .filter(|m| !m.trim().is_empty())
             else {
-                return "error: missing 'message' argument".to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: missing 'message' argument".to_string(),
+                );
             };
             {
                 let mut s = state.lock().await;
@@ -2488,31 +2531,35 @@ async fn handle_agent_tool(
                     .map(|a| a.task.chars().take(40).collect::<String>())
                 else {
                     let known: Vec<String> = s.subagents.iter().map(|a| a.id.to_string()).collect();
-                    return if known.is_empty() {
+                    return crate::tools::ToolExecutionOutput::failure(if known.is_empty() {
                         "error: no subagents exist — use spawn_agent first".to_string()
                     } else {
                         format!(
                             "error: no subagent with id {id}. Known ids: {}",
                             known.join(", ")
                         )
-                    };
+                    });
                 };
                 push_status_line(&mut s, format!("agent-{id} ← follow-up ({task})"));
                 if let Some(a) = s.subagents.iter_mut().find(|a| a.id == id) {
                     if a.status == crate::app::SubAgentStatus::Failed
                         || a.status == crate::app::SubAgentStatus::Cancelled
                     {
-                        return format!("error: subagent {id} is not available for follow-up");
+                        return crate::tools::ToolExecutionOutput::failure(format!(
+                            "error: subagent {id} is not available for follow-up"
+                        ));
                     }
                     a.status = crate::app::SubAgentStatus::Running;
                     a.history.push(ChatMessage::new("user", message));
                 }
             }
             let reply = run_subagent(client, state, cancel_token, id).await;
+            let failed = reply.is_err();
+            let reply = reply.unwrap_or_else(|error| error);
             set_subagent_status(
                 state,
                 id,
-                if reply.starts_with("error:") {
+                if failed {
                     crate::app::SubAgentStatus::Failed
                 } else if cancel_token.is_cancelled() {
                     crate::app::SubAgentStatus::Cancelled
@@ -2522,25 +2569,34 @@ async fn handle_agent_tool(
             )
             .await;
             push_status_line(&mut *state.lock().await, format!("agent-{id} done"));
-            format!("(subagent id {id})\n{reply}")
+            let content = format!("(subagent id {id})\n{reply}");
+            if failed {
+                crate::tools::ToolExecutionOutput::failure(content)
+            } else {
+                crate::tools::ToolExecutionOutput::success(content)
+            }
         }
         "set_goal" => {
             let goal = args.get("goal").and_then(|g| g.as_str()).unwrap_or("");
             if goal.is_empty() {
-                return "error: missing 'goal' argument".to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: missing 'goal' argument".to_string(),
+                );
             }
             let mut s = state.lock().await;
             s.continuous_mode = true;
             s.input_buffer.clear();
             s.cursor_position = 0;
-            format!(
+            crate::tools::ToolExecutionOutput::success(format!(
                 "Success: Goal set to '{}'. You are now in continuous autoloop mode. Continue executing tools to complete this goal, and call the 'complete_task' tool when fully done.",
                 goal
-            )
+            ))
         }
         "todo_write" => {
             let Some(arr) = args.get("todos").and_then(|t| t.as_array()) else {
-                return "error: missing 'todos' array argument".to_string();
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: missing 'todos' array argument".to_string(),
+                );
             };
             let mut todos = Vec::with_capacity(arr.len());
             for item in arr {
@@ -2549,7 +2605,9 @@ async fn handle_agent_tool(
                     .and_then(|c| c.as_str())
                     .filter(|c| !c.trim().is_empty())
                 else {
-                    return "error: each todo needs a non-empty 'content'".to_string();
+                    return crate::tools::ToolExecutionOutput::failure(
+                        "error: each todo needs a non-empty 'content'".to_string(),
+                    );
                 };
                 let status = item
                     .get("status")
@@ -2579,9 +2637,11 @@ async fn handle_agent_tool(
             let mut s = state.lock().await;
             s.todos = todos;
             drop(s);
-            summary
+            crate::tools::ToolExecutionOutput::success(summary)
         }
-        _ => format!("error: unknown agent tool '{name}'"),
+        _ => crate::tools::ToolExecutionOutput::failure(format!(
+            "error: unknown agent tool '{name}'"
+        )),
     }
 }
 
@@ -3019,29 +3079,123 @@ fn stable_arguments_hash(arguments: &serde_json::Value) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Whether the content the model actually saw was cut short by either of the
-/// two independent truncation layers: this module's own byte/line cap on
-/// tool output ("[Output truncated: ...]", see `truncate_tool_output`), or
-/// `view_file`'s own default read-window cap ("[Truncated: lines X-Y of Z
-/// ...]", see `view_file_tool` in `src/tools/filesystem.rs`). Either one
-/// means the model did not see the complete output, so both must flip
-/// `ToolResultMetadata::truncated` — a read that stopped exactly where the
-/// caller's own `end_line` asked it to is deliberately excluded (see
-/// `view_file_tool`'s "end of requested range" message, which is not a
-/// truncation).
-fn output_marks_truncation(content: &str) -> bool {
-    content.contains("[Output truncated:") || content.contains("[Truncated: lines")
+fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: &str) {
+    result
+        .content
+        .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
+    result.content.push_str(diagnostics);
 }
 
-fn extract_exit_code(content: &str) -> Option<i32> {
-    let marker = "exit code";
-    let start = content.find(marker)? + marker.len();
-    let suffix = content[start..].trim_start_matches([':', ' ', '=']);
-    let digits: String = suffix
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '-')
-        .collect();
-    digits.parse().ok()
+fn tool_result_from_execution(
+    tool_name: &str,
+    args: &serde_json::Value,
+    execution: crate::tools::ToolExecutionOutput,
+    diff: Option<String>,
+) -> ToolResult {
+    let changed_paths = if is_mutating_tool(tool_name) {
+        args.get("path")
+            .and_then(|value| value.as_str())
+            .map(|path| vec![path.to_string()])
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    ToolResult {
+        tool_name: tool_name.to_string(),
+        content: execution.content,
+        diff,
+        file_preview: get_file_preview(tool_name, args),
+        metadata: ToolResultMetadata {
+            call_id: None,
+            arguments_hash: stable_arguments_hash(args),
+            success: execution.success,
+            exit_code: execution.exit_code,
+            changed_paths,
+            truncated: execution.truncated,
+            full_output_artifact: None,
+        },
+    }
+}
+
+fn finalize_tool_result_for_prefix(
+    mut result: ToolResult,
+    deferred_notice: Option<&str>,
+    prefix: &str,
+) -> ToolResult {
+    if let Some(notice) = deferred_notice {
+        result.content.push_str("\n\n");
+        result.content.push_str(notice);
+    }
+    let bounded = truncate_tool_output_for_message(&result.tool_name, result.content, prefix);
+    result.content = bounded.content;
+    if bounded.truncated {
+        result.metadata.truncated = true;
+        result.metadata.full_output_artifact = bounded.full_output_artifact;
+    }
+    result
+}
+
+fn finalize_tool_result(result: ToolResult, deferred_notice: Option<&str>) -> ToolResult {
+    let prefix = format!("{}: ", result.tool_name);
+    finalize_tool_result_for_prefix(result, deferred_notice, &prefix)
+}
+
+fn tool_result_history_message(
+    result: ToolResult,
+    answered_call: Option<String>,
+) -> ChatMessage {
+    let prefix = format!("{}: ", result.tool_name);
+    tool_result_history_message_with_prefix(result, &prefix, answered_call)
+}
+
+fn tool_result_history_message_with_prefix(
+    result: ToolResult,
+    prefix: &str,
+    answered_call: Option<String>,
+) -> ChatMessage {
+    let ToolResult {
+        tool_name,
+        content,
+        diff,
+        file_preview,
+        metadata,
+    } = result;
+    ChatMessage::new("tool", format!("{prefix}{content}"))
+        .answering(answered_call)
+        .with_diff(diff)
+        .with_file_preview(file_preview)
+        .with_tool_result(crate::app::ToolResultRecord {
+            tool_name,
+            arguments_hash: metadata.arguments_hash,
+            success: metadata.success,
+            exit_code: metadata.exit_code,
+            changed_paths: metadata.changed_paths,
+            truncated: metadata.truncated,
+            full_output_artifact: metadata.full_output_artifact,
+        })
+}
+
+pub(crate) fn bounded_tool_result_history_message(
+    result: ToolResult,
+    prefix: &str,
+    answered_call: Option<String>,
+) -> ChatMessage {
+    let result = finalize_tool_result_for_prefix(result, None, prefix);
+    tool_result_history_message_with_prefix(result, prefix, answered_call)
+}
+
+fn subagent_tool_history_message(
+    tool_name: &str,
+    args: &serde_json::Value,
+    execution: crate::tools::ToolExecutionOutput,
+    diff: Option<String>,
+) -> ChatMessage {
+    let prefix = format!("{tool_name}: ");
+    bounded_tool_result_history_message(
+        tool_result_from_execution(tool_name, args, execution, diff),
+        &prefix,
+        None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3054,6 +3208,7 @@ async fn execute_tool_batch(
     edit_root: &Option<std::path::PathBuf>,
     compile_dirty: &mut bool,
     compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+    deferred_notice: Option<String>,
 ) -> Vec<ToolResult> {
     if !approved {
         return tool_calls
@@ -3104,6 +3259,7 @@ async fn execute_tool_batch(
                             &None,
                             &mut read_dirty,
                             &mut read_cache,
+                            deferred_notice.clone(),
                         )
                         .await
                     });
@@ -3127,6 +3283,7 @@ async fn execute_tool_batch(
                     edit_root,
                     compile_dirty,
                     compile_cache,
+                    deferred_notice.clone(),
                 ))
                 .await,
             );
@@ -3149,8 +3306,9 @@ async fn execute_tool_batch(
             let plan_mode = state.lock().await.agent_mode == crate::config::AgentMode::Plan;
             plan_mode && !crate::tools::allowed_in_plan_mode(name)
         };
-        let (executed_name, result, diff_opt) = async move {
+        let (executed_name, execution, diff_opt, replay_artifact) = async move {
             let is_read_only = is_read_only_tool(&name_clone);
+            let mut replay_artifact = None;
 
             // Repeat-loop guard for read-only tools. For view_file we go
             // further than a signature match: a re-read is only blocked when
@@ -3189,7 +3347,7 @@ async fn execute_tool_batch(
                 }
             }
 
-            let (result, diff_opt) = if is_repeat {
+            let (execution, diff_opt) = if is_repeat {
                 // Serve the content again when it is small enough to be worth
                 // repeating. A notice that points at earlier context is not an
                 // answer: a model that wanted those lines simply asks a third
@@ -3202,18 +3360,40 @@ async fn execute_tool_batch(
                         .cloned()
                 };
                 match cached {
-                    Some(previous) => (
-                        format!(
-                            "[Unchanged since the last read of this exact range — repeating that output. \
-Re-reading will not produce anything new; act on this content.]\n{previous}"
-                        ),
-                        None,
-                    ),
+                    Some(previous) => {
+                        let content = if let Some(mut content) = previous.replayable_content {
+                            content.insert_str(
+                                0,
+                                "[Unchanged since the last read of this exact range — repeating that output. \
+Re-reading will not produce anything new; act on this content.]\n",
+                            );
+                            content
+                        } else {
+                            let mut notice = "[Notice: This exact read was already executed, but its output exceeded the repeat cache limit and is not repeated. Use the original result or request a narrower range.".to_string();
+                            if let Some(path) = previous.full_output_artifact.as_deref() {
+                                notice.push_str(&format!(
+                                    " The bounded output remains available at: {path}."
+                                ));
+                            }
+                            notice.push(']');
+                            notice
+                        };
+                        replay_artifact = previous.full_output_artifact;
+                        (
+                            crate::tools::ToolExecutionOutput {
+                                content,
+                                success: previous.success,
+                                exit_code: previous.exit_code,
+                                truncated: previous.truncated,
+                            },
+                            None,
+                        )
+                    }
                     None => (
-                        "[Notice: This exact read tool call was previously executed with identical arguments, \
+                        crate::tools::ToolExecutionOutput::success("[Notice: This exact read tool call was previously executed with identical arguments, \
 and the file has not changed since. Its output is above in the context — use it. To see something \
 different, read another range or make an edit first; repeating this call returns this same notice.]"
-                            .to_string(),
+                            .to_string()),
                         None,
                     ),
                 }
@@ -3224,7 +3404,9 @@ different, read another range or make an edit first; repeating this call returns
                 )
             } else if plan_mode_denied {
                 (
-                    "error: Plan mode is active; this tool is not permitted.".to_string(),
+                    crate::tools::ToolExecutionOutput::failure(
+                        "error: Plan mode is active; this tool is not permitted.".to_string(),
+                    ),
                     None,
                 )
             } else if crate::tools::is_agent_tool(&name_clone) {
@@ -3268,11 +3450,18 @@ different, read another range or make an edit first; repeating this call returns
                 }
                 if is_read_only && !is_repeat {
                     let sig = tool_signature(&name_clone, &args_clone);
-                    // Keep the output of small reads so an identical re-read can
-                    // be answered with the content rather than a redirection.
-                    if result.len() <= REPLAYABLE_READ_LIMIT {
-                        s.recent_read_outputs.insert(sig.clone(), result.clone());
-                    }
+                    s.recent_read_outputs.insert(
+                        sig.clone(),
+                        crate::app::CachedReadOutput {
+                            replayable_content: (execution.content.len()
+                                <= REPLAYABLE_READ_LIMIT)
+                                .then(|| execution.content.clone()),
+                            success: execution.success,
+                            exit_code: execution.exit_code,
+                            truncated: execution.truncated,
+                            full_output_artifact: None,
+                        },
+                    );
                     if !s.recent_read_calls.contains(&sig) {
                         s.recent_read_calls.push_back(sig);
                         while s.recent_read_calls.len() > 8 {
@@ -3291,7 +3480,7 @@ different, read another range or make an edit first; repeating this call returns
                 }
             }
 
-            (name_clone, result, diff_opt)
+            (name_clone, execution, diff_opt, replay_artifact)
         }
         .await;
         // The real diff (from actual before/after file content, embedded by
@@ -3302,46 +3491,20 @@ different, read another range or make an edit first; repeating this call returns
         // tool has no embedded diff of its own (e.g. a legacy write_to_file
         // preview) but a preview was still computed — never for a no-op or
         // failed edit, which must show no diff at all.
-        let preview_fallback = if tool_result_precludes_preview_fallback(&result) {
+        let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content) {
             None
         } else {
             diff_opt
         };
-        let final_diff = final_tool_diff(&result, preview_fallback);
-        let content = truncate_tool_output(&executed_name, result);
-        let changed_paths = if is_mutating_tool(&executed_name) {
-            args.get("path")
-                .and_then(|value| value.as_str())
-                .map(|path| vec![path.to_string()])
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let full_output_artifact = content
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("Full output saved to: "))
-            .map(str::to_string);
-        let exit_code = extract_exit_code(&content);
-        let truncated = output_marks_truncation(&content);
-        let success = !content
-            .trim_start()
-            .to_ascii_lowercase()
-            .starts_with("error");
-        results.push(ToolResult {
-            tool_name: executed_name.clone(),
-            content,
-            diff: final_diff,
-            file_preview: get_file_preview(&executed_name, args),
-            metadata: ToolResultMetadata {
-                call_id: None,
-                arguments_hash: stable_arguments_hash(args),
-                success,
-                exit_code,
-                changed_paths,
-                truncated,
-                full_output_artifact,
-            },
-        });
+        let final_diff = final_tool_diff(&execution.content, preview_fallback);
+        let mut result = tool_result_from_execution(
+            &executed_name,
+            args,
+            execution,
+            final_diff,
+        );
+        result.metadata.full_output_artifact = replay_artifact;
+        results.push(result);
         if cancel_token.is_cancelled() {
             break;
         }
@@ -3374,19 +3537,29 @@ different, read another range or make an edit first; repeating this call returns
             .filter(|e| !e.starts_with("__BUILD_UNVERIFIED__"))
         {
             dbg_log!("Inline compiler check detected errors after edit");
-            let mut snippet = compiler_errors;
-            if snippet.len() > 3000 {
-                snippet.truncate(3000);
-                snippet.push_str("\n... (compiler output truncated) ...");
-            }
             if let Some(result) = results
                 .iter_mut()
                 .find(|result| is_mutating_tool(&result.tool_name))
             {
-                result
-                    .content
-                    .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
-                result.content.push_str(&snippet);
+                append_compiler_diagnostics(result, &compiler_errors);
+            }
+        }
+    }
+    for (result, call) in results.iter_mut().zip(tool_calls) {
+        let notice = (result.tool_name == "use_skill")
+            .then_some(deferred_notice.as_deref())
+            .flatten();
+        let finalized = finalize_tool_result(result.clone(), notice);
+        *result = finalized;
+        if is_read_only_tool(&call.name) {
+            let sig = tool_signature(&call.name, &call.arguments);
+            if let Some(cached) = state.lock().await.recent_read_outputs.get_mut(&sig) {
+                cached.success = result.metadata.success;
+                cached.exit_code = result.metadata.exit_code;
+                cached.truncated = result.metadata.truncated;
+                if result.metadata.full_output_artifact.is_some() {
+                    cached.full_output_artifact = result.metadata.full_output_artifact.clone();
+                }
             }
         }
     }
@@ -4070,6 +4243,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 );
             }
 
+            let deferred_notice = (deferred_tool_calls > 0).then(|| {
+                format!(
+                    "[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
+                )
+            });
             let results = execute_tool_batch(
                 client,
                 state,
@@ -4079,6 +4257,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 &ctx.edit_root,
                 &mut ctx.compile_dirty,
                 &mut ctx.compile_cache,
+                deferred_notice,
             )
             .await;
 
@@ -4117,7 +4296,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 let answered_call = call_refs.get(position).map(|call| call.id.clone());
                 let name = result.tool_name;
                 let metadata = result.metadata.clone();
-                let mut content = result.content;
+                let content = result.content;
                 if call.is_some_and(|call| call.name == "run_command")
                     && let Some(command) = call
                         .and_then(|call| call.arguments.get("command"))
@@ -4125,11 +4304,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 {
                     ctx.verification
                         .record_command(command, metadata.exit_code);
-                }
-                if name == "use_skill" && deferred_tool_calls > 0 {
-                    content.push_str(&format!(
-                                "\n\n[harness: deferred {deferred_tool_calls} additional tool call(s) until the next model turn after skill loading]"
-                            ));
                 }
                 let diff_opt = result.diff;
                 dbg_log!(
@@ -4191,22 +4365,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 {
                     dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
                 }
-                let truncated_result = truncate_tool_output(&name, content);
-                s.history.push(
-                    ChatMessage::new("tool", format!("{name}: {truncated_result}"))
-                        .answering(answered_call)
-                        .with_diff(diff_opt)
-                        .with_file_preview(result.file_preview)
-                        .with_tool_result(crate::app::ToolResultRecord {
-                            tool_name: name.clone(),
-                            arguments_hash: metadata.arguments_hash,
-                            success: metadata.success,
-                            exit_code: metadata.exit_code,
-                            changed_paths: metadata.changed_paths,
-                            truncated: metadata.truncated,
-                            full_output_artifact: metadata.full_output_artifact,
-                        }),
-                );
+                s.history.push(tool_result_history_message(
+                    ToolResult {
+                        tool_name: name,
+                        content,
+                        diff: diff_opt,
+                        file_preview: result.file_preview,
+                        metadata,
+                    },
+                    answered_call,
+                ));
             }
             // Safety net: an executor that returns fewer results than
             // calls would leave ids unanswered in the replayed transcript.
@@ -5039,29 +5207,259 @@ mod tests {
         assert!(!summary.contains("cargo check"), "got: {summary}");
     }
 
-    // Feature 5 (lossless reads): ToolResultMetadata::truncated must go true
-    // for either truncation layer — this module's own byte/line cap on tool
-    // output, and view_file's own default read-window cap — and must stay
-    // false for the legitimate "read ended exactly where asked" case, so
-    // downstream code can rely on the flag rather than re-parsing text.
     #[test]
-    fn output_marks_truncation_detects_both_layers_and_not_a_clean_read() {
-        let output_layer_truncated = "some output\n\n[Output truncated: 90000 bytes total, 2000 lines. Full output saved to: /tmp/x.txt]";
-        assert!(output_marks_truncation(output_layer_truncated));
+    fn oversized_tool_result_is_bounded_once_before_history_insertion() {
+        let raw = (1..=2000)
+            .map(|line| format!("payload line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let deferred_notice = "[harness: deferred 2 additional tool call(s) until the next model turn after skill loading]";
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "use_skill".to_string(),
+                content: raw,
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata::default(),
+            },
+            Some(deferred_notice),
+        );
+        let content = result.content.clone();
+        let artifact_before = result.metadata.full_output_artifact.clone();
+        let content_before = result.content.clone();
+        let result = finalize_tool_result(result, None);
+        assert_eq!(result.content, content_before);
+        assert_eq!(result.metadata.full_output_artifact, artifact_before);
+        let message = tool_result_history_message(result, None);
 
-        let read_layer_truncated = "[File: big.rs, Lines 1 to 2000 of 2500, Bytes offset: 0]\n1: foo\n\n\
-[Truncated: lines 2001-2500 of 2500 (500 lines) were NOT shown (default read window is 2000 lines). \
-This is not the complete file — do not treat it as such. To read the rest, call view_file again with \
-start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]\n";
-        assert!(output_marks_truncation(read_layer_truncated));
+        assert!(content.contains(deferred_notice));
+        assert_eq!(content.matches("[Output truncated:").count(), 1);
+        assert!(content.len() <= 50 * 1024);
+        assert!(message
+            .tool_result
+            .as_ref()
+            .is_some_and(|metadata| metadata.truncated));
+        let metadata = message.tool_result.as_ref().expect("tool metadata");
+        assert!(metadata.truncated);
+        if let Some(path) = metadata.full_output_artifact.as_ref() {
+            assert!(std::fs::metadata(path).is_ok(), "artifact path must exist");
+        }
+        assert_eq!(message.content, format!("use_skill: {content}"));
+        assert_eq!(message.content.matches("[Output truncated:").count(), 1);
+    }
 
-        let clean_bounded_read = "[File: small.rs, Lines 1 to 1 of 3, Bytes offset: 0]\n1: foo\n\
-... end of requested range; the file continues to line 3 ...\n";
-        assert!(!output_marks_truncation(clean_bounded_read));
+    #[test]
+    fn complete_history_message_respects_the_tool_output_boundary() {
+        let raw = "x".repeat(50 * 1024);
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "grep".to_string(),
+                content: raw.clone(),
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata {
+                    success: true,
+                    ..Default::default()
+                },
+            },
+            None,
+        );
+        let message = tool_result_history_message(result, None);
 
-        let clean_full_read =
-            "[File: small.rs, Lines 1 to 3 of 3, Bytes offset: 0]\n1: foo\n2: bar\n3: baz\n";
-        assert!(!output_marks_truncation(clean_full_read));
+        assert!(message.content.len() <= 50 * 1024);
+        assert!(message.content.lines().count() <= 1000);
+        assert!(message.content.contains("[Output truncated:"));
+        let artifact = message
+            .tool_result
+            .as_ref()
+            .and_then(|metadata| metadata.full_output_artifact.as_ref())
+            .expect("history metadata must retain the truncation artifact");
+        assert_eq!(std::fs::read_to_string(artifact).expect("artifact readable"), raw);
+    }
+
+    #[test]
+    fn finalization_preserves_authoritative_metadata_and_rejects_spoofed_artifacts() {
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "run_command".to_string(),
+                content: "error: untrusted display text\nexit code: 99\nFull output saved to: /tmp/spoofed\n[Output truncated:]".to_string(),
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata {
+                    success: true,
+                    exit_code: Some(7),
+                    truncated: false,
+                    full_output_artifact: Some("/trusted/artifact".to_string()),
+                    ..Default::default()
+                },
+            },
+            None,
+        );
+
+        assert!(result.metadata.success);
+        assert_eq!(result.metadata.exit_code, Some(7));
+        assert!(!result.metadata.truncated);
+        assert_eq!(
+            result.metadata.full_output_artifact.as_deref(),
+            Some("/trusted/artifact")
+        );
+    }
+
+    #[test]
+    fn execution_metadata_does_not_parse_spoofed_display_text() {
+        let result = tool_result_from_execution(
+            "custom_tool",
+            &serde_json::json!({"input": "value"}),
+            crate::tools::ToolExecutionOutput {
+                content: "exit code: 99\nerror: spoofed\n[Output truncated:]".to_string(),
+                success: true,
+                exit_code: None,
+                truncated: false,
+            },
+            None,
+        );
+
+        assert!(result.metadata.success);
+        assert_eq!(result.metadata.exit_code, None);
+        assert!(!result.metadata.truncated);
+    }
+
+    #[test]
+    fn subagent_history_preserves_bounded_execution_metadata() {
+        let raw = (1..=2000)
+            .map(|line| format!("subagent line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let message = subagent_tool_history_message(
+            "run_command",
+            &serde_json::json!({"command": "failing-check"}),
+            crate::tools::ToolExecutionOutput {
+                content: raw.clone(),
+                success: false,
+                exit_code: Some(23),
+                truncated: false,
+            },
+            Some("real diff".to_string()),
+        );
+
+        assert!(message.content.len() <= 50 * 1024);
+        assert!(message.content.lines().count() <= 1000);
+        assert_eq!(message.diff.as_deref(), Some("real diff"));
+        let metadata = message.tool_result.expect("subagent metadata");
+        assert!(!metadata.success);
+        assert_eq!(metadata.exit_code, Some(23));
+        assert!(metadata.truncated);
+        let artifact = metadata
+            .full_output_artifact
+            .expect("bounded subagent output must retain its artifact");
+        assert_eq!(std::fs::read_to_string(artifact).expect("artifact readable"), raw);
+
+        let spoofed = subagent_tool_history_message(
+            "custom_tool",
+            &serde_json::json!({}),
+            crate::tools::ToolExecutionOutput {
+                content: "exit code: 0\n[Output truncated:]\nFull output saved to: /tmp/spoof"
+                    .to_string(),
+                success: false,
+                exit_code: None,
+                truncated: false,
+            },
+            None,
+        );
+        let metadata = spoofed.tool_result.expect("subagent metadata");
+        assert!(!metadata.success);
+        assert_eq!(metadata.exit_code, None);
+        assert!(!metadata.truncated);
+        assert_eq!(metadata.full_output_artifact, None);
+    }
+
+    #[test]
+    fn compiler_diagnostics_are_finalized_with_the_tool_result() {
+        let mut result = ToolResult {
+            tool_name: "replace_file_content".to_string(),
+            content: (1..=2000)
+                .map(|line| format!("edit output {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata::default(),
+        };
+        result.content.push_str(
+            "\n\nLSP/Compiler errors detected in workspace, please fix:\nerror[E0425]: missing_symbol",
+        );
+
+        let result = finalize_tool_result(result, None);
+
+        assert!(result.content.contains("error[E0425]: missing_symbol"));
+        assert!(result.content.len() <= 50 * 1024);
+        assert!(result.metadata.truncated);
+        assert_eq!(result.content.matches("[Output truncated:").count(), 1);
+        if let Some(path) = result.metadata.full_output_artifact.as_ref() {
+            assert!(std::fs::metadata(path).is_ok(), "artifact path must exist");
+        }
+    }
+
+    #[test]
+    fn oversized_utf8_compiler_diagnostics_are_bounded_and_recoverable() {
+        let mut result = ToolResult {
+            tool_name: "replace_file_content".to_string(),
+            content: "edit applied".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                ..Default::default()
+            },
+        };
+        let diagnostics = format!(
+            "error: {}é\n{}\nerror[E0425]: missing_tail_symbol",
+            "x".repeat(2992),
+            (1..=1500)
+                .map(|line| format!("diagnostic detail {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
+        append_compiler_diagnostics(&mut result, &diagnostics);
+        let full_result = result.content.clone();
+        let result = finalize_tool_result(result, None);
+
+        assert!(result.content.len() <= 50 * 1024);
+        assert!(result.content.lines().count() <= 1000);
+        assert!(result.content.contains("error[E0425]: missing_tail_symbol"));
+        let artifact = result
+            .metadata
+            .full_output_artifact
+            .as_ref()
+            .expect("oversized diagnostics must have a recovery artifact");
+        assert_eq!(
+            std::fs::read_to_string(artifact).expect("artifact readable"),
+            full_result
+        );
+    }
+
+    #[test]
+    fn history_uses_the_bounded_tool_result_without_retruncating_it() {
+        let result = finalize_tool_result(
+            ToolResult {
+                tool_name: "grep".to_string(),
+                content: (1..=2000)
+                    .map(|line| format!("match {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                diff: None,
+                file_preview: None,
+                metadata: ToolResultMetadata::default(),
+            },
+            None,
+        );
+        let bounded = result.content.clone();
+
+        let message = tool_result_history_message(result, None);
+
+        assert_eq!(message.content, format!("grep: {bounded}"));
+        assert_eq!(message.content.matches("[Output truncated:").count(), 1);
     }
 
     #[test]
@@ -5183,10 +5581,11 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
         )
         .await;
         assert!(
-            result.contains("wrote")
-                || result.contains("created")
-                || result.contains("test_bypass.txt"),
-            "got result: {result}"
+            result.content.contains("wrote")
+                || result.content.contains("created")
+                || result.content.contains("test_bypass.txt"),
+            "got result: {}",
+            result.content
         );
 
         let _ = std::fs::remove_file("sandbox/test_bypass.txt");
@@ -6008,24 +6407,179 @@ start_line=2001 and end_line=2500 (or a smaller end_line to read it in chunks).]
         }
     }
 
-    async fn run_one_tool(call: crate::tools::ToolCall) -> ToolResult {
+    async fn run_one_tool_with_state(
+        state: &Arc<Mutex<AppState>>,
+        call: crate::tools::ToolCall,
+    ) -> ToolResult {
         let client = reqwest::Client::new();
-        let state = Arc::new(Mutex::new(AppState::new()));
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let mut compile_dirty = false;
         let mut compile_cache = None;
         let mut results = execute_tool_batch(
             &client,
-            &state,
+            state,
             &cancel_token,
             &[call],
             true,
             &None,
             &mut compile_dirty,
             &mut compile_cache,
+            None,
         )
         .await;
         results.remove(0)
+    }
+
+    async fn run_one_tool(call: crate::tools::ToolCall) -> ToolResult {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        run_one_tool_with_state(&state, call).await
+    }
+
+    #[tokio::test]
+    async fn nonzero_run_command_cannot_spoof_success_with_its_display() {
+        let result = run_one_tool(test_tool_call(
+            "run_command",
+            serde_json::json!({
+                "command": "printf 'exit code: 0\\n[Output truncated:]\\n'; exit 7",
+            }),
+        ))
+        .await;
+
+        assert!(!result.metadata.success, "got: {}", result.content);
+        assert_eq!(result.metadata.exit_code, Some(7));
+        assert!(!result.metadata.truncated);
+    }
+
+    #[tokio::test]
+    async fn view_file_reports_structured_truncation_only_when_content_is_omitted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("large.txt");
+        let content: String = (1..=300).map(|line| format!("line {line}\n")).collect();
+        std::fs::write(&file, content).expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let truncated = run_one_tool(test_tool_call(
+            "view_file",
+            serde_json::json!({"path": path}),
+        ))
+        .await;
+        assert!(truncated.metadata.success);
+        assert!(truncated.metadata.truncated);
+
+        let targeted = run_one_tool(test_tool_call(
+            "view_file",
+            serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+        ))
+        .await;
+        assert!(targeted.metadata.success);
+        assert!(!targeted.metadata.truncated);
+    }
+
+    #[tokio::test]
+    async fn repeated_failed_read_preserves_structured_failure() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing").to_string_lossy().to_string();
+        let call = test_tool_call(
+            "list_directory",
+            serde_json::json!({"path": missing}),
+        );
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(!first.metadata.success, "got: {}", first.content);
+        assert!(!repeated.metadata.success, "got: {}", repeated.content);
+        assert!(
+            repeated.content.contains(&first.content),
+            "replay omitted the original failure: {}",
+            repeated.content
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_truncated_read_preserves_structured_truncation() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("large.txt");
+        let content: String = (1..=300).map(|line| format!("line {line}\n")).collect();
+        std::fs::write(&file, content).expect("write");
+        let path = file.to_string_lossy().to_string();
+        let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(first.metadata.truncated, "got: {}", first.content);
+        assert!(
+            repeated.metadata.truncated,
+            "replay lost structured truncation: {}",
+            repeated.content
+        );
+        assert!(
+            repeated.content.contains(&first.content),
+            "replay omitted the original truncated output"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_over_limit_failed_read_preserves_structured_failure() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let invalid_pattern = "(".repeat(REPLAYABLE_READ_LIMIT + 1);
+        let call = test_tool_call("grep", serde_json::json!({"pattern": invalid_pattern}));
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(!first.metadata.success, "got: {}", first.content);
+        assert!(first.content.len() > REPLAYABLE_READ_LIMIT);
+        assert!(!repeated.metadata.success, "got: {}", repeated.content);
+        assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
+        assert_eq!(repeated.metadata.truncated, first.metadata.truncated);
+        assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
+        assert!(repeated.content.contains("not repeated"));
+        assert!(!repeated.content.contains(&first.content));
+    }
+
+    #[tokio::test]
+    async fn repeated_over_limit_truncated_read_preserves_metadata_and_recovery_artifact() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("large.txt");
+        let content: String = (1..=300)
+            .map(|line| format!("line {line}: {}\n", "x".repeat(256)))
+            .collect();
+        std::fs::write(&file, content).expect("write");
+        let path = file.to_string_lossy().to_string();
+        let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+        let first = run_one_tool_with_state(&state, call.clone()).await;
+        let repeated = run_one_tool_with_state(&state, call).await;
+
+        assert!(first.metadata.success, "got: {}", first.content);
+        assert!(first.content.len() > REPLAYABLE_READ_LIMIT);
+        assert!(first.metadata.truncated, "got: {}", first.content);
+        let artifact = first
+            .metadata
+            .full_output_artifact
+            .as_deref()
+            .expect("bounded read must retain its recovery artifact");
+        assert!(std::fs::metadata(artifact).is_ok());
+        assert!(repeated.metadata.success, "got: {}", repeated.content);
+        assert!(
+            repeated.metadata.truncated,
+            "replay lost structured truncation: {}",
+            repeated.content
+        );
+        assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
+        assert_eq!(
+            repeated.metadata.full_output_artifact.as_deref(),
+            Some(artifact)
+        );
+        assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
+        assert!(repeated.content.contains("not repeated"));
+        assert!(repeated.content.contains(artifact));
+        assert!(!repeated.content.contains(&first.content));
     }
 
     #[tokio::test]

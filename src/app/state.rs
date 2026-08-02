@@ -212,6 +212,15 @@ pub struct ToolResultRecord {
     pub full_output_artifact: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CachedReadOutput {
+    pub(crate) replayable_content: Option<String>,
+    pub(crate) success: bool,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) truncated: bool,
+    pub(crate) full_output_artifact: Option<String>,
+}
+
 impl ChatMessage {
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
@@ -620,11 +629,10 @@ pub struct AppState {
     /// to short-circuit identical re-reads (e.g. viewing the same file twice).
     pub recent_read_calls: std::collections::VecDeque<String>,
 
-    /// Output of recent small reads, keyed by the same signature. A repeat read
-    /// of an unchanged file is answered from here, so the model gets what it
-    /// asked for instead of a notice telling it to look further up the context —
-    /// which it answers by asking again.
-    pub recent_read_outputs: std::collections::HashMap<String, String>,
+    /// Structured facts from recent reads, keyed by the same signature. Content
+    /// is retained separately only for small reads, while failure, truncation,
+    /// and bounded-output recovery metadata remain available for every entry.
+    pub recent_read_outputs: std::collections::HashMap<String, CachedReadOutput>,
 
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
