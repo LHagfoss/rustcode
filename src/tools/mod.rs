@@ -983,6 +983,7 @@ pub fn tool_system_prompt(
 - If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
 - File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk.
 - Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.
+- An edit that reports \"already applied\" changed nothing on disk; re-issuing the identical edit will report the same no-op again, not succeed differently. Neither a no-op nor a failed edit counts as progress, and the harness ends the turn after a handful of either in a row — re-read the file or change your approach instead of repeating the call.
 - Use `todo_write` ONLY for complex code refactors or multi-stage tasks (3+ steps). For routine tasks, git operations, single-file edits, or simple questions, DO NOT use `todo_write` — execute tools directly. Do not update `todo_write` after every single command; only update it when completing major milestones.\n\n"
     );
 
@@ -1005,7 +1006,7 @@ pub fn tool_system_prompt(
                 - Keys must be \"name\" and \"arguments\".\n\
                 - Pass correct type for arguments (no quotes for numbers/booleans).\n\
                 - Use the ```tool fence ONLY. Never use ```tool_code, ```json, or any other fence for tool calls, and never repeat the same call in multiple fences.\n\
-                - Emit one tool call at a time. The harness executes calls sequentially so later calls can depend on earlier results.\n\n"
+                - You may emit several ```tool fences in one response: independent reads in that batch run in parallel, and calls that change the workspace or run a command execute one after another, each grounded in the previous result. Never emit a fence whose arguments depend on a result you do not have yet — request it in a later response instead.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
@@ -1782,6 +1783,76 @@ mod tests {
             prompt.contains(&format!("at most {MAX_MUTATING_CALLS_PER_RESPONSE} such calls")),
             "got: {prompt}"
         );
+    }
+
+    // Regression: the JSON "Tool Format" section used to tell the model to
+    // "Emit one tool call at a time" and claimed "the harness executes calls
+    // sequentially" — flatly contradicting the Rules section's "ISSUE
+    // INDEPENDENT READS TOGETHER" batching instruction a few paragraphs
+    // earlier, and contradicting `parse_tool_calls_fenced`, which walks every
+    // ```tool fence in a response specifically so a model can batch several
+    // calls in one turn. This asserts the contradiction is gone and the
+    // format section now agrees with the executor's real parallel-reads /
+    // serialized-mutations behavior.
+    #[test]
+    fn json_protocol_tool_format_does_not_contradict_the_batching_rule() {
+        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+
+        assert!(!prompt.contains("Emit one tool call at a time"), "got: {prompt}");
+        assert!(!prompt.contains("executes calls sequentially"), "got: {prompt}");
+        assert!(
+            prompt.contains("You may emit several ```tool fences in one response"),
+            "got: {prompt}"
+        );
+        assert!(prompt.contains("ISSUE INDEPENDENT READS TOGETHER"), "got: {prompt}");
+    }
+
+    // Regression: a repeated `replace_file_content` call that reports
+    // "already applied" (PR #306's idempotency guard) is a true no-op — not a
+    // silently-different second edit — and neither a no-op nor a failed
+    // mutation counts toward progress, so the turn's safety budget
+    // (MAX_CONSECUTIVE_NO_PROGRESS / MAX_CONSECUTIVE_FAILED_MUTATIONS in
+    // src/network.rs) ends the turn after a handful of repeats. The prompt
+    // must tell the model this instead of leaving it to rediscover by
+    // retrying.
+    #[test]
+    fn prompt_explains_repeated_edits_are_pointless_noops() {
+        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+
+        assert!(prompt.contains("already applied"), "got: {prompt}");
+        assert!(
+            prompt.contains("harness ends the turn after a handful"),
+            "got: {prompt}"
+        );
+    }
+
+    // The native tag protocol's parser (`parse_tool_calls_tags`) also walks
+    // every `[TOOL_CALLS]` occurrence in one response, so it must not carry
+    // the same "one at a time" claim the JSON section used to have, and its
+    // format text must actually differ from the JSON fence syntax it
+    // describes.
+    #[test]
+    fn native_protocol_prompt_describes_native_syntax_and_not_json_fences() {
+        let native = tool_system_prompt(false, crate::config::ToolProtocol::Native, crate::config::AgentMode::Build);
+        let json = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+
+        assert!(!native.contains("Emit one tool call at a time"), "got: {native}");
+        assert!(native.contains("[TOOL_CALLS]tool_name[ARGS]"), "got: {native}");
+        assert!(!native.contains("```tool"), "native prompt must not describe the JSON fence syntax");
+        assert!(!json.contains("[TOOL_CALLS]tool_name[ARGS]"), "json prompt must not describe the native tag syntax");
+    }
+
+    // ApiNative carries tool schemas through the request's native `tools`
+    // field, not the prompt text, so its section must say to use that
+    // interface directly and must not print either text-based protocol's
+    // call syntax.
+    #[test]
+    fn api_native_protocol_prompt_defers_to_the_request_schema() {
+        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::ApiNative, crate::config::AgentMode::Build);
+
+        assert!(prompt.contains("native function-calling interface"), "got: {prompt}");
+        assert!(!prompt.contains("```tool"), "got: {prompt}");
+        assert!(!prompt.contains("[TOOL_CALLS]"), "got: {prompt}");
     }
 
     #[test]
