@@ -179,6 +179,12 @@ pub(crate) fn reject_broad_git_stage(cmd: &str) -> Option<&'static str> {
 }
 
 pub fn run_command(args: &Value) -> Result<String, String> {
+    run_command_output(args).map(|output| output.content)
+}
+
+pub(super) fn run_command_output(
+    args: &Value,
+) -> Result<super::ToolExecutionOutput, String> {
     let command_str = args
         .get("command")
         .and_then(|c| c.as_str())
@@ -308,7 +314,7 @@ pub fn run_command(args: &Value) -> Result<String, String> {
                 }
             }
 
-            let result = match cmd.spawn() {
+            let output = match cmd.spawn() {
                 Ok(child) => {
                     if let Some(pid) = Some(child.id())
                         && let Ok(mut tasks) = get_background_tasks().lock()
@@ -328,46 +334,56 @@ pub fn run_command(args: &Value) -> Result<String, String> {
                                 full.push_str("stderr:\n");
                                 full.push_str(&err_str);
                             }
-                            if output.status.success() {
-                                Ok(full)
-                            } else {
-                                Err(format!("exit code {:?}\n{}", output.status.code(), full))
+                            let success = output.status.success();
+                            let exit_code = output.status.code();
+                            if !success {
+                                full = format!("exit code {exit_code:?}\n{full}");
+                            }
+                            super::ToolExecutionOutput {
+                                content: full,
+                                success,
+                                exit_code,
+                                truncated: false,
                             }
                         }
-                        Err(e) => Err(format!("failed to wait: {e}")),
+                        Err(e) => super::ToolExecutionOutput::failure(format!(
+                            "failed to wait: {e}"
+                        )),
                     }
                 }
-                Err(e) => Err(format!("failed to spawn: {e}")),
+                Err(e) => {
+                    super::ToolExecutionOutput::failure(format!("failed to spawn: {e}"))
+                }
             };
 
             if let Ok(mut tasks) = get_background_tasks().lock() {
                 tasks.remove(&task_id_clone);
             }
 
-            let output_str = match result {
-                Ok(out) => out,
-                Err(err) => err,
-            };
-
             if let Some(cb) = WAKEUP_CALLBACK.get() {
-                cb(session_id, task_id_clone, output_str);
+                cb(session_id, task_id_clone, output);
             }
         });
 
-        return Ok(format!(
-            "Task started in background. Task ID: {task_id}. Status: Running."
-        ));
+        return Ok(super::ToolExecutionOutput {
+            content: format!(
+                "Task started in background. Task ID: {task_id}. Status: Running."
+            ),
+            success: true,
+            exit_code: None,
+            truncated: false,
+        });
     }
 
     let output = run_with_timeout(cmd, Duration::from_millis(timeout_ms.max(1)))?;
+    let exit_code = output.status.code().unwrap_or(-1);
 
     let mut result = String::new();
-    result.push_str(&format!(
-        "exit code: {}\n",
-        output.status.code().unwrap_or(-1)
-    ));
+    result.push_str(&format!("exit code: {exit_code}\n"));
 
     let failed = !output.status.success();
+    let truncated =
+        output.stdout.len() > MAX_COMMAND_OUTPUT_BYTES || output.stderr.len() > MAX_COMMAND_OUTPUT_BYTES;
     let stdout = truncate_bytes(&output.stdout, MAX_COMMAND_OUTPUT_BYTES, failed);
     let stderr = truncate_bytes(&output.stderr, MAX_COMMAND_OUTPUT_BYTES, failed);
 
@@ -388,7 +404,12 @@ pub fn run_command(args: &Value) -> Result<String, String> {
     if stdout.is_empty() && stderr.is_empty() {
         result.push_str("(no output)\n");
     }
-    Ok(result.trim_end().to_string())
+    Ok(super::ToolExecutionOutput {
+        content: result.trim_end().to_string(),
+        success: !failed,
+        exit_code: Some(exit_code),
+        truncated,
+    })
 }
 
 pub fn manage_task_tool(args: &Value) -> Result<String, String> {

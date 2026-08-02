@@ -20,6 +20,36 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// Authoritative facts returned by a tool invocation alongside its display
+/// text. Consumers must not reconstruct these fields from `content`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolExecutionOutput {
+    pub(crate) content: String,
+    pub(crate) success: bool,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) truncated: bool,
+}
+
+impl ToolExecutionOutput {
+    pub(crate) fn success(content: String) -> Self {
+        Self {
+            content,
+            success: true,
+            exit_code: None,
+            truncated: false,
+        }
+    }
+
+    pub(crate) fn failure(content: String) -> Self {
+        Self {
+            content,
+            success: false,
+            exit_code: None,
+            truncated: false,
+        }
+    }
+}
+
 /// How many calls that can change the workspace may run from one response.
 ///
 /// The limit exists so each edit is grounded in the result of the previous one,
@@ -205,13 +235,13 @@ pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTas
     TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-type WakeupCallback = Box<dyn Fn(String, String, String) + Send + Sync + 'static>;
+type WakeupCallback = Box<dyn Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static>;
 
 pub(crate) static WAKEUP_CALLBACK: OnceLock<WakeupCallback> = OnceLock::new();
 
 pub fn register_wakeup_callback<F>(cb: F)
 where
-    F: Fn(String, String, String) + Send + Sync + 'static,
+    F: Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static,
 {
     let _ = WAKEUP_CALLBACK.set(Box::new(cb));
 }
@@ -1371,7 +1401,7 @@ fn as_error_message(message: &str) -> String {
     }
 }
 
-pub fn execute(name: &str, args: &Value) -> String {
+pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOutput {
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
         for client in reg.values() {
             if let Ok(tools) = client.get_tools()
@@ -1398,6 +1428,11 @@ pub fn execute(name: &str, args: &Value) -> String {
 
                 return match res {
                     Ok(val) => {
+                        let success = !val
+                            .get("result")
+                            .and_then(|result| result.get("isError"))
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
                         if let Some(content_arr) = val
                             .get("result")
                             .and_then(|r| r.get("content"))
@@ -1409,27 +1444,62 @@ pub fn execute(name: &str, args: &Value) -> String {
                                     text_parts.push(text.to_string());
                                 }
                             }
-                            text_parts.join("\n")
+                            ToolExecutionOutput {
+                                content: text_parts.join("\n"),
+                                success,
+                                exit_code: None,
+                                truncated: false,
+                            }
                         } else {
-                            serde_json::to_string_pretty(&val).unwrap_or_default()
+                            ToolExecutionOutput {
+                                content: serde_json::to_string_pretty(&val).unwrap_or_default(),
+                                success,
+                                exit_code: None,
+                                truncated: false,
+                            }
                         }
                     }
-                    Err(e) => format!("error: MCP tool call failed: {e}"),
+                    Err(e) => ToolExecutionOutput::failure(format!(
+                        "error: MCP tool call failed: {e}"
+                    )),
                 };
             }
         }
     }
 
+    if name == "run_command" {
+        return match exec::run_command_output(args) {
+            Ok(output) => output,
+            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+        };
+    }
+    if name == "view_file" {
+        return match filesystem::view_file_output(args) {
+            Ok(output) => ToolExecutionOutput {
+                content: output.content,
+                success: true,
+                exit_code: None,
+                truncated: output.truncated,
+            },
+            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+        };
+    }
+
     match TOOLS.iter().find(|t| t.name == name) {
         Some(tool) => match (tool.handler)(args) {
-            Ok(out) => out,
-            Err(e) => as_error_message(&e),
+            Ok(out) => ToolExecutionOutput::success(out),
+            Err(e) => ToolExecutionOutput::failure(as_error_message(&e)),
         },
-        None => format!(
+        None => ToolExecutionOutput::failure(format!(
             "error: unknown tool '{name}'. Available: {}",
             TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
-        ),
+        )),
     }
+}
+
+#[allow(dead_code, reason = "preserved display-only interface for direct callers")]
+pub fn execute(name: &str, args: &Value) -> String {
+    execute_with_metadata(name, args).content
 }
 
 pub fn needs_confirmation(name: &str) -> bool {

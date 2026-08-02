@@ -25,6 +25,11 @@ struct ReplacementChunk {
     replacement_content: String,
 }
 
+pub(super) struct ViewFileOutput {
+    pub(super) content: String,
+    pub(super) truncated: bool,
+}
+
 fn resolve(path: &str) -> PathBuf {
     resolve_tool_path(path)
 }
@@ -101,13 +106,20 @@ pub fn copy_file(args: &Value) -> Result<String, String> {
 }
 
 pub fn view_file_tool(args: &Value) -> Result<String, String> {
+    view_file_output(args).map(|output| output.content)
+}
+
+pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
     let path = args
         .get("path")
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
     let resolved_path = resolve(path);
     if resolved_path.is_dir() {
-        return super::search::list_directory(args);
+        return super::search::list_directory(args).map(|content| ViewFileOutput {
+            content,
+            truncated: false,
+        });
     }
     let parse_index = |name: &str| -> Result<Option<usize>, String> {
         let Some(value) = args.get(name) else {
@@ -171,13 +183,20 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
             return Err("requested line range is out of bounds because the sliced content is empty"
                 .to_string());
         }
-        return Ok(format!(
-            "[File: {}, Empty file, Bytes offset: {}]",
-            path, byte_offset
-        ));
+        return Ok(ViewFileOutput {
+            content: format!("[File: {}, Empty file, Bytes offset: {}]", path, byte_offset),
+            truncated: false,
+        });
     }
 
     let start_line = requested_start.unwrap_or(line_number_offset + 1);
+    if let Some(end_line) = requested_end
+        && end_line < start_line
+    {
+        return Err(format!(
+            "end_line {end_line} must be greater than or equal to start_line {start_line}"
+        ));
+    }
     let max_end = start_line.saturating_add(DEFAULT_READ_WINDOW_LINES - 1);
     // A caller-supplied end_line beyond the hard cap is bounded, not honored —
     // otherwise a single explicit huge range (e.g. end_line: 999999999) would
@@ -249,7 +268,10 @@ end_line={total} (or a smaller end_line to read it in chunks).]\n"
         }
     }
 
-    Ok(out)
+    Ok(ViewFileOutput {
+        content: out,
+        truncated: actual_end < total && (cap_applied || requested_end.is_none()),
+    })
 }
 
 /// Produces a real unified diff between the actual file content before and
@@ -1336,6 +1358,49 @@ mod tests {
         }))
         .expect_err("a range cannot address empty sliced content");
         assert!(error.contains("out of bounds"), "got: {error}");
+    }
+
+    #[test]
+    fn malformed_offset_ranges_return_errors_without_panicking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("offset-ranges.txt");
+        let content = "one\ntwo\nthree\n";
+        std::fs::write(&file, content).expect("write");
+        let path = file.to_string_lossy().to_string();
+        let line_three_offset = content.find("three").expect("line three offset");
+        let cases = [
+            (
+                serde_json::json!({
+                    "path": path,
+                    "content_offset": line_three_offset,
+                    "end_line": 1,
+                }),
+                "end_line 1 must be greater than or equal to start_line 3",
+            ),
+            (
+                serde_json::json!({
+                    "path": path,
+                    "content_offset": line_three_offset,
+                    "end_line": 0,
+                }),
+                "end_line must be at least 1",
+            ),
+            (
+                serde_json::json!({
+                    "path": path,
+                    "content_offset": "18446744073709551616",
+                    "end_line": 1,
+                }),
+                "content_offset",
+            ),
+        ];
+
+        for (args, expected) in cases {
+            let result = std::panic::catch_unwind(|| view_file_tool(&args));
+            let tool_result = result.expect("malformed range must return Err, not panic");
+            let error = tool_result.expect_err("malformed range must be rejected");
+            assert!(error.contains(expected), "expected {expected:?} in: {error}");
+        }
     }
 
     #[test]
