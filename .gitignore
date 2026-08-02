@@ -1,4 +1,5 @@
 /target
+/docs/
 **/.DS_Store
 *.log
 debug.log
