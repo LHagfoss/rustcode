@@ -162,7 +162,7 @@ pub const TIPS: &[&str] = &[
     "Type /info for basic info, or /help for all commands and keybindings",
 ];
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
