@@ -109,18 +109,7 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
     if resolved_path.is_dir() {
         return super::search::list_directory(args);
     }
-    let start_line = args
-        .get("start_line")
-        .and_then(parse_json_number)
-        .map(|v| v as usize)
-        .unwrap_or(1);
     let requested_end = args.get("end_line").and_then(parse_json_number).map(|v| v as usize);
-    let max_end = start_line + DEFAULT_READ_WINDOW_LINES;
-    // A caller-supplied end_line beyond the hard cap is bounded, not honored —
-    // otherwise a single explicit huge range (e.g. end_line: 999999999) would
-    // bypass the safety window entirely.
-    let cap_applied = requested_end.is_some_and(|e| e > max_end);
-    let end_line = requested_end.map(|e| e.min(max_end)).unwrap_or(max_end);
 
     let content_bytes =
         std::fs::read(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
@@ -141,7 +130,11 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
 
     let sliced_content = String::from_utf8_lossy(&content_bytes[byte_offset..]);
     let lines: Vec<&str> = sliced_content.lines().collect();
-    let total = lines.len();
+    let line_number_offset = content_bytes[..byte_offset]
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count();
+    let total = line_number_offset + lines.len();
 
     if total == 0 {
         return Ok(format!(
@@ -150,10 +143,23 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         ));
     }
 
-    if start_line < 1 || start_line > total {
+    let start_line = args
+        .get("start_line")
+        .and_then(parse_json_number)
+        .map(|v| v as usize)
+        .unwrap_or(line_number_offset + 1);
+    let max_end = start_line.saturating_add(DEFAULT_READ_WINDOW_LINES - 1);
+    // A caller-supplied end_line beyond the hard cap is bounded, not honored —
+    // otherwise a single explicit huge range (e.g. end_line: 999999999) would
+    // bypass the safety window entirely.
+    let cap_applied = requested_end.is_some_and(|e| e > max_end);
+    let end_line = requested_end.map(|e| e.min(max_end)).unwrap_or(max_end);
+
+    let first_available_line = line_number_offset + 1;
+    if start_line < first_available_line || start_line > total {
         return Err(format!(
-            "start_line {} is out of bounds (1 to {})",
-            start_line, total
+            "start_line {} is out of bounds ({} to {})",
+            start_line, first_available_line, total
         ));
     }
 
@@ -163,7 +169,9 @@ pub fn view_file_tool(args: &Value) -> Result<String, String> {
         path, start_line, actual_end, total, byte_offset
     );
 
-    for (idx, line) in lines[start_line - 1..actual_end].iter().enumerate() {
+    let slice_start = start_line - line_number_offset - 1;
+    let slice_end = actual_end - line_number_offset;
+    for (idx, line) in lines[slice_start..slice_end].iter().enumerate() {
         out.push_str(&format!("{}: {}\n", start_line + idx, line));
     }
 
@@ -998,12 +1006,12 @@ mod tests {
         let path = file.to_string_lossy().to_string();
 
         // No end_line given: the tool applies its default window and must
-        // clearly flag the read as incomplete. start_line=1, so the window's
-        // last shown line is 1 + DEFAULT_READ_WINDOW_LINES (inclusive).
+        // clearly flag the read as incomplete. The inclusive window contains
+        // exactly DEFAULT_READ_WINDOW_LINES lines.
         let out =
             view_file_tool(&serde_json::json!({ "path": path, "start_line": 1 })).expect("read");
         assert!(out.contains("[Truncated:"), "got: {out}");
-        let window_end = 1 + DEFAULT_READ_WINDOW_LINES;
+        let window_end = DEFAULT_READ_WINDOW_LINES;
         let expected_next = window_end + 1;
         assert!(
             out.contains(&format!(
@@ -1019,9 +1027,15 @@ mod tests {
             out.contains(&format!("end_line={total_lines}")),
             "expected follow-up end_line hint, got: {out}"
         );
+        assert!(out.contains(&format!("[File: {}, Lines 1 to {window_end} of", path)));
+        assert_eq!(
+            out.lines().filter(|line| line.contains(": line ")).count(),
+            DEFAULT_READ_WINDOW_LINES
+        );
         // Last line actually shown is the last line of the default window, not
         // the true end of the file.
         assert!(out.contains(&format!("{window_end}: line {window_end}")));
+        assert!(!out.contains(&format!("{}: line {}", window_end + 1, window_end + 1)));
         assert!(!out.contains(&format!("{total_lines}: line {total_lines}")));
     }
 
@@ -1045,7 +1059,7 @@ mod tests {
         }))
         .expect("read");
 
-        let window_end = 1 + DEFAULT_READ_WINDOW_LINES;
+        let window_end = DEFAULT_READ_WINDOW_LINES;
         // Bounded to the cap, not the requested end_line.
         assert!(
             out.contains(&format!("{window_end}: line {window_end}")),
@@ -1090,9 +1104,9 @@ mod tests {
 
         let first =
             view_file_tool(&serde_json::json!({ "path": path, "start_line": 1 })).expect("read");
-        // start_line=1, so the default window's last shown line is
-        // 1 + DEFAULT_READ_WINDOW_LINES (inclusive).
-        let next_start = 1 + DEFAULT_READ_WINDOW_LINES + 1;
+        // start_line=1, so the default window contains exactly
+        // DEFAULT_READ_WINDOW_LINES lines.
+        let next_start = DEFAULT_READ_WINDOW_LINES + 1;
 
         let second = view_file_tool(&serde_json::json!({
             "path": path,
@@ -1130,8 +1144,8 @@ mod tests {
         // Put a distinctive marker just after the default window boundary so
         // it would NOT be visible in a first, window-limited read. start_line=1,
         // so the default window's last shown line is
-        // 1 + DEFAULT_READ_WINDOW_LINES (inclusive).
-        let marker_line = 1 + DEFAULT_READ_WINDOW_LINES + 1;
+        // DEFAULT_READ_WINDOW_LINES (inclusive).
+        let marker_line = DEFAULT_READ_WINDOW_LINES + 1;
         let total_lines = DEFAULT_READ_WINDOW_LINES + 12;
         let mut content = String::new();
         for n in 1..=total_lines {
@@ -1152,7 +1166,7 @@ mod tests {
         );
 
         // Follow the tool's own recovery instructions for the omitted range.
-        let next_start = 1 + DEFAULT_READ_WINDOW_LINES + 1;
+        let next_start = DEFAULT_READ_WINDOW_LINES + 1;
         let second = view_file_tool(&serde_json::json!({
             "path": path,
             "start_line": next_start,
@@ -1163,6 +1177,51 @@ mod tests {
             second.contains("UNIQUE_TARGET_MARKER"),
             "the seam-adjacent line must be recoverable via a targeted follow-up read, got: {second}"
         );
+    }
+
+    #[test]
+    fn content_offset_preserves_global_line_numbers_and_bounded_follow_up_ranges() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("offset.txt");
+        let total_lines = DEFAULT_READ_WINDOW_LINES + 150;
+        let content: String = (1..=total_lines).map(|n| format!("line {n}\n")).collect();
+        let byte_offset = content.find("line 2\n").expect("line 2 offset");
+        std::fs::write(&file, &content).expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let first = view_file_tool(&serde_json::json!({
+            "path": path,
+            "content_offset": byte_offset,
+            "start_line": 2,
+        }))
+        .expect("read");
+
+        assert!(first.contains(&format!(
+            "[File: {}, Lines 2 to {} of {total_lines}, Bytes offset: {byte_offset}]",
+            path,
+            1 + DEFAULT_READ_WINDOW_LINES
+        )));
+        assert_eq!(
+            first.lines().filter(|line| line.contains(": line ")).count(),
+            DEFAULT_READ_WINDOW_LINES
+        );
+        assert!(first.contains("2: line 2"));
+        assert!(first.contains(&format!("{}: line {}", 1 + DEFAULT_READ_WINDOW_LINES, 1 + DEFAULT_READ_WINDOW_LINES)));
+        assert!(!first.contains(&format!("{}: line {}", 2 + DEFAULT_READ_WINDOW_LINES, 2 + DEFAULT_READ_WINDOW_LINES)));
+
+        let next_start = 2 + DEFAULT_READ_WINDOW_LINES;
+        let second = view_file_tool(&serde_json::json!({
+            "path": path,
+            "content_offset": byte_offset,
+            "start_line": next_start,
+            "end_line": total_lines,
+        }))
+        .expect("read");
+
+        assert!(second.contains(&format!("{next_start}: line {next_start}")));
+        assert!(!second.lines().any(|line| line == "2: line 2"));
+        let previous_line = format!("{}: line {}", next_start - 1, next_start - 1);
+        assert!(!second.lines().any(|line| line == previous_line));
     }
 
     // Feature 5: two different range requests on the same file must return
