@@ -85,6 +85,12 @@ pub async fn handle_enter(
         return false;
     }
 
+    // Record every submitted input for arrow-key recall — plain text and slash
+    // commands alike. Consecutive duplicates are collapsed, shell-style.
+    if s.input_history.last() != Some(&raw_input) {
+        s.input_history.push(raw_input.clone());
+    }
+
     if raw_input.starts_with('/') {
         let tokens: Vec<&str> = raw_input.split_whitespace().collect();
         if tokens.is_empty() {
