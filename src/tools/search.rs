@@ -36,6 +36,103 @@ fn truncate_line(line: &str) -> String {
     }
 }
 
+fn try_ripgrep(
+    pattern: &str,
+    root: &str,
+    include: Option<&str>,
+    ignore_case: bool,
+) -> Option<Result<String, String>> {
+    let mut cmd = std::process::Command::new("rg");
+    cmd.arg("--line-number")
+        .arg("--color=never")
+        .arg("--heading")
+        .arg("--hidden");
+
+    if ignore_case {
+        cmd.arg("-i");
+    } else {
+        cmd.arg("-s");
+    }
+
+    if let Some(inc) = include {
+        cmd.arg("-g").arg(inc);
+    }
+
+    cmd.arg(pattern).arg(root);
+
+    let output = match cmd.output() {
+        Ok(out) => out,
+        Err(_) => return None,
+    };
+
+    if !output.status.success() && output.status.code() != Some(1) {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim().is_empty() {
+        let root_path = std::path::Path::new(root);
+        if root_path.is_file() {
+            return Some(Ok(format!("no matches for '{pattern}' in '{root}'")));
+        } else {
+            return Some(Ok(format!("no matches for '{pattern}' under '{root}'")));
+        }
+    }
+
+    let mut out = String::new();
+    let mut files_hit = 0usize;
+    let mut total_lines = 0usize;
+    let mut current_file_has_header = false;
+
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((num, text)) = line.split_once(':') {
+            if num.parse::<usize>().is_ok() {
+                if !current_file_has_header {
+                    out.push_str(&format!("{root}:\n"));
+                    current_file_has_header = true;
+                    files_hit += 1;
+                }
+                out.push_str(&format!("  {}: {}\n", num, truncate_line(text)));
+                total_lines += 1;
+                if total_lines >= MAX_GREP_LINES {
+                    out.push_str(&format!(
+                        "\n(truncated — {} matching lines across {} files, stopping at cap of {MAX_GREP_LINES} lines / {MAX_GREP_FILES} files; narrow 'pattern' or 'include')\n",
+                        total_lines, files_hit
+                    ));
+                    break;
+                }
+                continue;
+            }
+        }
+
+        files_hit += 1;
+        if files_hit > MAX_GREP_FILES {
+            break;
+        }
+        let file_header = if line.ends_with(':') {
+            line.to_string()
+        } else {
+            format!("{line}:")
+        };
+        out.push_str(&format!("\n{file_header}\n"));
+        current_file_has_header = true;
+    }
+
+    let root_path = std::path::Path::new(root);
+    if root_path.is_file() {
+        Some(Ok(out.trim_end().to_string()))
+    } else {
+        Some(Ok(format!(
+            "matches for '{pattern}' under '{root}' ({} file(s)):\n{}",
+            files_hit,
+            out.trim_end()
+        )))
+    }
+}
+
 pub fn grep(args: &Value) -> Result<String, String> {
     let pattern = args
         .get("pattern")
@@ -47,6 +144,10 @@ pub fn grep(args: &Value) -> Result<String, String> {
         .get("ignore_case")
         .and_then(parse_json_bool)
         .unwrap_or(false);
+
+    if let Some(res) = try_ripgrep(pattern, root, include, ignore_case) {
+        return res;
+    }
 
     let mut re_builder = regex::RegexBuilder::new(pattern);
     re_builder.case_insensitive(ignore_case);
