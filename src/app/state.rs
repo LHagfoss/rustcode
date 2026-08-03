@@ -587,6 +587,11 @@ pub struct AppState {
     pub response_time: Option<std::time::Duration>,
     pub history_index: Option<usize>,
     pub temp_input: String,
+    /// Every input the user submitted this run, oldest first — both plain text
+    /// and slash commands. Arrow-up/down recalls from this, not from chat
+    /// history (commands never become chat messages, and generated user blobs
+    /// like /goal's "Goal: ..." text aren't typed input).
+    pub input_history: Vec<String>,
 
     pub api_base_url: String,
     pub model_name: String,
@@ -809,6 +814,7 @@ impl AppState {
             response_time: None,
             history_index: None,
             temp_input: String::new(),
+            input_history: Vec::new(),
             api_base_url,
             function_calling_support: std::collections::HashMap::new(),
             model_name,
@@ -1153,12 +1159,7 @@ impl AppState {
     }
 
     pub fn history_up(&mut self) {
-        let user_msgs: Vec<String> = self
-            .history
-            .iter()
-            .filter(|m| m.role == "user")
-            .map(|m| m.content.clone())
-            .collect();
+        let user_msgs = &self.input_history;
         if user_msgs.is_empty() {
             return;
         }
@@ -1183,12 +1184,7 @@ impl AppState {
     }
 
     pub fn history_down(&mut self) {
-        let user_msgs: Vec<String> = self
-            .history
-            .iter()
-            .filter(|m| m.role == "user")
-            .map(|m| m.content.clone())
-            .collect();
+        let user_msgs = &self.input_history;
         if user_msgs.is_empty() {
             return;
         }
@@ -1387,6 +1383,36 @@ mod protocol_tests {
             s.tool_protocol_for("http://localhost:1234/v1/chat/completions"),
             ToolProtocol::ApiNative
         );
+    }
+}
+
+#[cfg(test)]
+mod input_history_tests {
+    use super::AppState;
+
+    #[test]
+    fn recall_uses_typed_inputs_not_chat_history() {
+        let mut s = AppState::new();
+        // Slash commands never become chat messages; generated user blobs
+        // (e.g. /goal's "Goal: ..." text) aren't typed input.
+        s.input_history = vec![
+            "fix the parser".to_string(),
+            "/verbosity toggle".to_string(),
+        ];
+        s.history.push(crate::app::state::ChatMessage::new(
+            "user",
+            "Goal: generated blob that should not be recalled",
+        ));
+
+        s.history_up();
+        assert_eq!(s.input_buffer, "/verbosity toggle");
+        s.history_up();
+        assert_eq!(s.input_buffer, "fix the parser");
+        s.history_down();
+        assert_eq!(s.input_buffer, "/verbosity toggle");
+        s.history_down();
+        assert_eq!(s.input_buffer, "");
+        assert!(s.history_index.is_none());
     }
 }
 
