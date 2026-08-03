@@ -559,8 +559,10 @@ pub enum HoverTarget {
     CopyBadge(u16),
 }
 
-#[derive(Debug, PartialEq, Clone, Hash)]
+#[derive(Debug, PartialEq, Clone, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum Verbosity {
+    #[default]
     Low,
     High,
 }
@@ -787,6 +789,7 @@ impl AppState {
         let (api_base_url, model_name, mut config) = crate::config::load_config();
         let active_session_id = crate::config::start_session(&mut config);
         let agent_mode = config.agent_mode;
+        let verbosity = config.verbosity.clone();
         let history = Vec::new();
         let cwd_and_branch = get_cwd_and_branch();
 
@@ -816,7 +819,7 @@ impl AppState {
             show_model_picker: false,
             model_picker_index: 0,
             model_picker_search: String::new(),
-            verbosity: Verbosity::Low,
+            verbosity,
             show_command_picker: false,
             command_picker_index: 0,
             command_picker_search: String::new(),
