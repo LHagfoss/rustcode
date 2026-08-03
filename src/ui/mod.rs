@@ -551,15 +551,16 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             .as_millis();
 
             let step_duration_ms = 80.0; // Duration of each discrete step in milliseconds
-            let num_pulse_centers = 6;
-            let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 2.0, 1.0]; // Max pulse center is 3.0
+            let num_dots = 6;
+            let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+            let num_cycle_steps = pulse_centers_f.len();
 
             // Calculate a continuous step value
-            let step_float = (millis as f64 / step_duration_ms) % num_pulse_centers as f64;
+            let step_float = (millis as f64 / step_duration_ms) % num_cycle_steps as f64;
 
             // Interpolate the pulse center value
             let current_pulse_center_idx = step_float.floor() as usize;
-            let next_pulse_center_idx = (current_pulse_center_idx + 1) % num_pulse_centers;
+            let next_pulse_center_idx = (current_pulse_center_idx + 1) % num_cycle_steps;
             let fraction = step_float - step_float.floor();
 
             let pulse_center_val = pulse_centers_f[current_pulse_center_idx] * (1.0 - fraction)
@@ -576,7 +577,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 
             let mut spans = Vec::new();
 
-            for i in 0..num_pulse_centers {
+            for i in 0..num_dots {
                 let dist_float = (i as f64 - pulse_center_val).abs();
                 let level_float = 3.0 - dist_float; // Max level is 3.0 at the center
 
@@ -2607,5 +2608,14 @@ mod tests {
             .wrap(Wrap { trim: false })
             .line_count(width) as u16;
         assert_eq!(long_fast_h, long_expected_h);
+    }
+
+    #[test]
+    fn footer_animation_pulse_center_reaches_both_edges() {
+        let num_dots = 6;
+        let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+        assert_eq!(pulse_centers_f.first(), Some(&0.0));
+        assert!(pulse_centers_f.contains(&(num_dots as f64 - 1.0)));
+        assert_eq!(pulse_centers_f[5], 5.0);
     }
 }
