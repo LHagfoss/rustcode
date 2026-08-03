@@ -140,6 +140,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "/usage",
         desc: "Show token usage and context stats",
     },
+    CommandInfo {
+        name: "/verbosity",
+        desc: "Show or set verbosity (low|high|toggle)",
+    },
 ];
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {

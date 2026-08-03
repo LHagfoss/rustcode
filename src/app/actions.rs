@@ -247,27 +247,46 @@ pub async fn handle_enter(
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
             "/verbosity" => {
-                if tokens.len() < 2 {
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        "Usage: /verbosity <low|high>",
-                    ));
-                } else {
-                    match tokens[1] {
-                        "low" => {
-                            s.verbosity = crate::app::state::Verbosity::Low;
-                            s.history.push(ChatMessage::new("system", "Verbosity set to low."));
-                        }
-                        "high" => {
-                            s.verbosity = crate::app::state::Verbosity::High;
-                            s.history.push(ChatMessage::new("system", "Verbosity set to high."));
-                        }
-                        _ => {
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                "Invalid verbosity level. Use 'low' or 'high'.",
-                            ));
-                        }
+                use crate::app::state::Verbosity;
+                let label = |v: &Verbosity| match v {
+                    Verbosity::Low => "low",
+                    Verbosity::High => "high",
+                };
+                match tokens.get(1) {
+                    None => {
+                        let current = label(&s.verbosity).to_string();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "Current verbosity: {}. Use '/verbosity <low|high|toggle>' to change it.",
+                                current
+                            ),
+                        ));
+                    }
+                    Some(&"low") => {
+                        s.verbosity = Verbosity::Low;
+                        s.history.push(ChatMessage::new("system", "Verbosity set to low."));
+                    }
+                    Some(&"high") => {
+                        s.verbosity = Verbosity::High;
+                        s.history.push(ChatMessage::new("system", "Verbosity set to high."));
+                    }
+                    Some(&"toggle") => {
+                        s.verbosity = match s.verbosity {
+                            Verbosity::Low => Verbosity::High,
+                            Verbosity::High => Verbosity::Low,
+                        };
+                        let current = label(&s.verbosity).to_string();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("Verbosity set to {}.", current),
+                        ));
+                    }
+                    _ => {
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            "Invalid verbosity level. Use 'low', 'high', or 'toggle'.",
+                        ));
                     }
                 }
             }
