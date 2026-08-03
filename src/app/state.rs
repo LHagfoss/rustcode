@@ -1158,6 +1158,22 @@ impl AppState {
         self.suggestion_cycle.reset();
     }
 
+    /// Pull the most recently queued prompt back into the input box so the
+    /// user can edit or drop it. Internal wakeup entries are left untouched.
+    /// Returns true when a prompt was pulled.
+    pub fn pop_queued_prompt(&mut self) -> bool {
+        let Some(pos) = self
+            .pending_queue
+            .iter()
+            .rposition(|item| !item.starts_with("__task_wakeup__:"))
+        else {
+            return false;
+        };
+        self.input_buffer = self.pending_queue.remove(pos);
+        self.cursor_position = self.input_buffer.len();
+        true
+    }
+
     pub fn history_up(&mut self) {
         let user_msgs = &self.input_history;
         if user_msgs.is_empty() {
@@ -1413,6 +1429,33 @@ mod input_history_tests {
         s.history_down();
         assert_eq!(s.input_buffer, "");
         assert!(s.history_index.is_none());
+    }
+}
+
+#[cfg(test)]
+mod queue_pull_back_tests {
+    use super::AppState;
+
+    #[test]
+    fn pop_queued_prompt_pulls_latest_user_prompt_skipping_wakeups() {
+        let mut s = AppState::new();
+        s.pending_queue = vec![
+            "first prompt".to_string(),
+            "second prompt".to_string(),
+            "__task_wakeup__:abc123".to_string(),
+        ];
+
+        assert!(s.pop_queued_prompt());
+        assert_eq!(s.input_buffer, "second prompt");
+        assert_eq!(s.cursor_position, "second prompt".len());
+        // The wakeup entry and the older prompt stay queued.
+        assert_eq!(s.pending_queue.len(), 2);
+
+        assert!(s.pop_queued_prompt());
+        assert_eq!(s.input_buffer, "first prompt");
+        // Only the wakeup entry remains — nothing more to pull.
+        assert!(!s.pop_queued_prompt());
+        assert_eq!(s.pending_queue, vec!["__task_wakeup__:abc123"]);
     }
 }
 
