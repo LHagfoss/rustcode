@@ -4580,6 +4580,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
         s.status = AppStatus::Streaming;
         s.stream_tracker = Some(StreamTracker::new());
         drop(s);
+        // The parse failure may have already transitioned the turn machine
+        // to Completed (has_tool_calls=false). Reset it so the next model
+        // response can be classified and executed normally.
+        let _ = ctx.turn_machine.retry_for_finish_gate();
         dbg_log!("Retrying agent loop round due to malformed tool call");
         return true;
     }
