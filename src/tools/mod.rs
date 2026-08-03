@@ -597,7 +597,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "use_skill",
-        description: "Load a skill by name to get its instructions and available files.",
+        description: "Load a skill by name to get its instructions and available files. Control-plane call: emit it ALONE in its response — any other tool calls batched with it are dropped.",
         arguments: r#"{"name": "skill name"}"#,
         handler: misc::use_skill,
         requires_confirmation: false,
@@ -1013,7 +1013,7 @@ pub fn tool_system_prompt(
 - A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
 - Editing an existing file: use `replace_file_content` (pass an `edits` array to batch several changes in one call). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
-- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, and `search_web` run in parallel when emitted in the same response, so when you need several facts at once, ask for them at once — searching four paths is one thought, not four turns. Reads whose arguments depend on an earlier result must of course wait for it.\n\
+- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, and `search_web` run in parallel when emitted in the same response, so when you need several facts at once, ask for them at once — searching four paths is one thought, not four turns. Reads whose arguments depend on an earlier result must of course wait for it. Exception: `use_skill` is a control-plane call and must always be emitted ALONE — any calls batched with it are dropped.\n\
 - ONE CHANGE AT A TIME: anything that writes, runs a command, or delegates (`replace_file_content`, `write_to_file`, `run_command`, `spawn_agent`, …) executes alone and must be grounded in results you already have. Emit at most 4 such calls in a response, and prefer one. Never output a speculative chain that predicts its own results — edits, builds, commits, and a PR in a single turn is a story about what might happen, not work.\n\
 - Chaining shell commands is different from speculative tool batching: it is encouraged for small, related, inspectable command sequences, especially status/log/diff checks and the verified publish sequence. Inspect output before deciding the next mutation.\n\
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
