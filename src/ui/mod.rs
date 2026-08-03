@@ -582,7 +582,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 let level_float = 3.0 - dist_float; // Max level is 3.0 at the center
 
                 // Clamp level_float to [0.0, 3.0]
-                let clamped_level_float = level_float.max(0.0).min(3.0);
+                let clamped_level_float = level_float.clamp(0.0, 3.0);
 
                 // Map clamped_level_float (0.0-3.0) to color index (0-5)
                 let color_index = (clamped_level_float / 3.0 * (colors.len() - 1) as f64).round() as usize;
