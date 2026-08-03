@@ -60,12 +60,43 @@ impl DiscordRpcHandler {
         match client_instance.connect() {
             Ok(_) => {
                 self.client = Some(client_instance);
+                self.set_activity_once("Idle", "");
             }
             Err(e) => {
                 eprintln!("Failed to connect to Discord RPC: {}", e);
                 self.client = None;
             }
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_idle(&mut self, model_name: Option<&str>) {
+        let details = model_name.map_or("", |m| m);
+        self.set_activity("Idle", details);
+    }
+
+    #[allow(dead_code)]
+    pub fn set_queued(&mut self, model_name: Option<&str>) {
+        let details = model_name.map_or("", |m| m);
+        self.set_activity("Queued", details);
+    }
+
+    #[allow(dead_code)]
+    pub fn set_thinking(&mut self, model_name: Option<&str>) {
+        let details = model_name.map_or("", |m| m);
+        self.set_activity("Thinking", details);
+    }
+
+    #[allow(dead_code)]
+    pub fn set_streaming(&mut self, model_name: Option<&str>) {
+        let details = model_name.map_or("", |m| m);
+        self.set_activity("Streaming", details);
+    }
+
+    #[allow(dead_code)]
+    pub fn set_running_tools(&mut self, model_name: Option<&str>) {
+        let details = model_name.map_or("", |m| m);
+        self.set_activity("Running Tools", details);
     }
 
     pub fn set_activity(&mut self, state: &str, details: &str) {
@@ -105,7 +136,6 @@ impl DiscordRpcHandler {
             && let Err(e) = client.clear_activity()
         {
             eprintln!("Failed to clear Discord RPC activity: {}", e);
-            self.disconnect();
         }
     }
 
@@ -133,12 +163,30 @@ pub(crate) fn activity_for_tools(running_tools: usize) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::activity_for_tools;
+    use super::*;
 
     #[test]
     fn tool_activity_distinguishes_idle_tool_execution() {
         assert_eq!(activity_for_tools(0), "Thinking");
         assert_eq!(activity_for_tools(1), "Running tools");
         assert_eq!(activity_for_tools(3), "Running tools");
+    }
+
+    #[test]
+    fn shutdown_is_safe_when_no_client_connected() {
+        let mut handler = DiscordRpcHandler::new();
+        // No client connected
+        handler.shutdown();
+        // Should not panic or error
+        assert!(handler.client.is_none());
+    }
+
+    #[test]
+    fn set_enabled_false_is_safe_when_no_client_connected() {
+        let mut handler = DiscordRpcHandler::new();
+        // No client connected
+        handler.set_enabled(false);
+        // Should not panic or error
+        assert!(handler.client.is_none());
     }
 }
