@@ -550,25 +550,43 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             .unwrap_or_default()
             .as_millis();
 
-        let step = ((millis / 80) % 6) as usize;
-        let pulse_centers = [0, 1, 2, 3, 2, 1];
-        let pulse_center = pulse_centers[step];
+            let step_duration_ms = 80.0; // Duration of each discrete step in milliseconds
+            let num_dots = 6;
+            let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+            let num_cycle_steps = pulse_centers_f.len();
 
-        let colors = [
-            Color::Rgb(25, 29, 32),
-            Color::Rgb(34, 40, 45),
-            Color::Rgb(43, 51, 57),
-            Color::Rgb(52, 62, 70),
-            Color::Rgb(60, 88, 101),
-            Color::Rgb(120, 160, 180),
-        ];
+            // Calculate a continuous step value
+            let step_float = (millis as f64 / step_duration_ms) % num_cycle_steps as f64;
 
-        let mut spans = Vec::new();
+            // Interpolate the pulse center value
+            let current_pulse_center_idx = step_float.floor() as usize;
+            let next_pulse_center_idx = (current_pulse_center_idx + 1) % num_cycle_steps;
+            let fraction = step_float - step_float.floor();
 
-        for i in 0..6 {
-            let dist = (i as isize - pulse_center as isize).unsigned_abs();
-            let level = 3_usize.saturating_sub(dist);
-            let color = colors[level];
+            let pulse_center_val = pulse_centers_f[current_pulse_center_idx] * (1.0 - fraction)
+                + pulse_centers_f[next_pulse_center_idx] * fraction;
+
+            let colors = [
+                Color::Rgb(25, 29, 32),   // Darkest
+                Color::Rgb(34, 40, 45),
+                Color::Rgb(43, 51, 57),
+                Color::Rgb(52, 62, 70),
+                Color::Rgb(60, 88, 101),
+                Color::Rgb(120, 160, 180), // Brightest
+            ];
+
+            let mut spans = Vec::new();
+
+            for i in 0..num_dots {
+                let dist_float = (i as f64 - pulse_center_val).abs();
+                let level_float = 3.0 - dist_float; // Max level is 3.0 at the center
+
+                // Clamp level_float to [0.0, 3.0]
+                let clamped_level_float = level_float.max(0.0).min(3.0);
+
+                // Map clamped_level_float (0.0-3.0) to color index (0-5)
+                let color_index = (clamped_level_float / 3.0 * (colors.len() - 1) as f64).round() as usize;
+                let color = colors[color_index];
             spans.push(Span::styled(
                 "■",
                 get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
@@ -2590,5 +2608,14 @@ mod tests {
             .wrap(Wrap { trim: false })
             .line_count(width) as u16;
         assert_eq!(long_fast_h, long_expected_h);
+    }
+
+    #[test]
+    fn footer_animation_pulse_center_reaches_both_edges() {
+        let num_dots = 6;
+        let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+        assert_eq!(pulse_centers_f.first(), Some(&0.0));
+        assert!(pulse_centers_f.contains(&(num_dots as f64 - 1.0)));
+        assert_eq!(pulse_centers_f[5], 5.0);
     }
 }
