@@ -1597,31 +1597,30 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             };
 
             if should_hide_stream {
+                // The footer already announces "Executing <tool>", so the chat
+                // area keeps the playful rotating statuses instead of a
+                // redundant "Executing ..." line.
                 let random_statuses = [
-                    "Preparing tool action...",
-                    "Analyzing query...",
-                    "Gathering context...",
-                    "Checking codebase...",
-                    "Executing tool...",
-                    "Awaiting response...",
+                    "Thinking...",
+                    "Analyzing code...",
+                    "Consulting the oracle...",
+                    "Brewing coffee...",
+                    "Refactoring reality...",
+                    "Checking documentation...",
+                    "Optimizing loops...",
+                    "Debugging the universe...",
+                    "Synthesizing solutions...",
+                    "Querying knowledge base...",
                 ];
                 let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
-                let status_msg = random_statuses[(elapsed_secs as usize / 2) % random_statuses.len()];
-
-                let tool_label = if let Some(call) = parsed_tool {
-                    format!("Executing {}...", call.name)
-                } else if is_tool_syntax {
-                    "Parsing tool call...".to_string()
-                } else {
-                    status_msg.to_string()
-                };
+                let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
 
                 let elapsed_ms = state.generation_start_time.map(|t| t.elapsed().as_millis()).unwrap_or(0);
                 let circle = if (elapsed_ms / 350).is_multiple_of(2) { "○ " } else { "● " };
 
                 lines.push(Line::from(vec![
                     Span::styled(
-                        format!("{circle}{tool_label} "),
+                        format!("{circle}{status_msg} "),
                         get_themed_style(COLOR_TIP, COLOR_BG, Modifier::BOLD, show_picker),
                     ),
                     Span::styled(
