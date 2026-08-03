@@ -7,8 +7,8 @@ use ratatui::{
 use std::path::Path;
 
 use super::{
-    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_block,
-    highlight_code_line, render_unified_diff, wrap_code_spans,
+    COLOR_BG, COLOR_MUTED, COLOR_TEXT, get_themed_style, highlight_code_block, highlight_code_line,
+    render_unified_diff, wrap_code_spans,
 };
 
 /// Read, search and generic results are chatty and easy to re-request, so they
@@ -76,14 +76,8 @@ pub(super) fn render_tool_result<'a>(
         | "copy_file" => render_mutation_result(result, width, show_picker),
         // The action line already communicates control-plane lifecycle. Their
         // raw acknowledgement is implementation noise in the transcript.
-        "use_skill"
-        | "set_goal"
-        | "todo_write"
-        | "spawn_agent"
-        | "send_agent"
-        | "complete_task"
-        | "ask_question"
-        | "manage_task" => Vec::new(),
+        "use_skill" | "set_goal" | "todo_write" | "spawn_agent" | "send_agent"
+        | "complete_task" | "ask_question" | "manage_task" => Vec::new(),
         _ => render_generic_result(result, show_picker),
     };
 
@@ -163,9 +157,9 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
     };
     let failed = summary.starts_with("error:") || summary.starts_with("Error:");
     let (icon, color) = if failed {
-        ("✗", Color::Rgb(229, 123, 123))
+        ("●", Color::Rgb(229, 123, 123))
     } else {
-        ("✓", super::COLOR_SECONDARY)
+        ("●", super::COLOR_GREEN)
     };
     let diffs: Vec<&str> = result
         .split("```diff")
@@ -204,7 +198,7 @@ fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>>
             } else if raw.contains(" file(s) matched") || raw.starts_with("no files") {
                 ("", super::COLOR_MUTED)
             } else {
-                ("· ", super::COLOR_TEXT)
+                ("· ", super::COLOR_MUTED)
             };
             Line::from(vec![
                 Span::styled(
@@ -303,7 +297,7 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
         let (prefix, color) = if kind == "stderr" {
             ("  ! ", Color::Rgb(229, 192, 123))
         } else {
-            ("  │ ", COLOR_TEXT)
+            ("  │ ", COLOR_MUTED)
         };
         lines.push(Line::from(Span::styled(
             format!("{prefix}{raw}"),
@@ -351,14 +345,14 @@ fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<
         let Some((number, code)) = raw.split_once(": ") else {
             lines.push(Line::from(Span::styled(
                 raw.to_string(),
-                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             )));
             continue;
         };
         let Ok(number) = number.parse::<usize>() else {
             lines.push(Line::from(Span::styled(
                 raw.to_string(),
-                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
             )));
             continue;
         };
@@ -388,7 +382,7 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
             } else {
                 Line::from(Span::styled(
                     raw.to_string(),
-                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ))
             }
         })
@@ -457,7 +451,9 @@ mod tests {
             false,
         );
         assert!(!lines.iter().any(|line| {
-            line.spans.iter().any(|span| span.content.contains("exit 0"))
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("exit 0"))
         }));
         assert!(lines[0].spans[0].content.contains("│ cargo test"));
         assert_eq!(lines.len(), 1);
@@ -484,7 +480,11 @@ mod tests {
             false,
         );
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].spans[0].content.contains("✓ successfully replaced"));
+        assert!(
+            lines[0].spans[0]
+                .content
+                .contains("● successfully replaced")
+        );
     }
 
     #[test]
@@ -497,20 +497,32 @@ mod tests {
         );
         assert!(lines.len() > 1);
         assert!(lines.iter().any(|line| {
-            let text: String = line.spans.iter().map(|span| span.content.as_ref()).collect();
+            let text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
             text.contains("new")
         }));
-        assert!(!lines.iter().any(|line| {
-            line.spans
+        assert!(
+            !lines
                 .iter()
-                .any(|span| span.content.contains("@@"))
-        }));
+                .any(|line| { line.spans.iter().any(|span| span.content.contains("@@")) })
+        );
     }
 
     #[test]
     fn control_plane_results_are_hidden() {
         assert!(render_tool_result("use_skill", "loaded skill", 80, false).is_empty());
         assert!(render_tool_result("spawn_agent", "agent done", 80, false).is_empty());
+    }
+
+    #[test]
+    fn tool_output_uses_darker_muted_color() {
+        let lines = render_tool_result("run_command", "exit code: 0\nstdout:\nhello world", 80, false);
+        assert!(!lines.is_empty());
+        let last = lines.last().unwrap();
+        assert_eq!(last.spans[0].style.fg, Some(COLOR_MUTED));
     }
 
     #[test]
@@ -524,10 +536,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].spans[0].content.starts_with("  │ completed"));
         assert_eq!(lines[0].spans[0].style.fg, Some(COLOR_MUTED));
-        assert_eq!(
-            lines[1].spans[0].style.fg,
-            Some(Color::Rgb(229, 123, 123))
-        );
+        assert_eq!(lines[1].spans[0].style.fg, Some(Color::Rgb(229, 123, 123)));
     }
 
     #[test]
@@ -540,7 +549,9 @@ mod tests {
         );
         assert!(lines[0].spans[0].content.contains("src/temp.rs"));
         assert!(lines.iter().any(|line| {
-            line.spans.iter().any(|span| span.content.contains("println!"))
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("println!"))
         }));
     }
 
@@ -652,6 +663,10 @@ mod tests {
         let lines = render_tool_result("replace_file_content", &result, 80, false);
 
         assert!(lines.len() > MAX_RENDERED_TOOL_LINES);
-        assert!(!lines.iter().any(|line| text_of(line).contains("more lines")));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| text_of(line).contains("more lines"))
+        );
     }
 }
