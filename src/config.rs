@@ -209,6 +209,8 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub agent_mode: AgentMode,
+    #[serde(default)]
+    pub verbosity: crate::app::state::Verbosity,
     #[serde(default = "default_false")]
     pub discord_rpc_enabled: bool,
     /// Opt-in: log the full outbound chat-completion payload (entire message
@@ -294,6 +296,7 @@ impl Default for AppConfig {
             mcp_servers: Vec::new(),
 
             agent_mode: AgentMode::default(),
+            verbosity: crate::app::state::Verbosity::default(),
             discord_rpc_enabled: false,
             debug_verbose_network_logging: false,
         }
