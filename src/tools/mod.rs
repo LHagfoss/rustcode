@@ -1144,15 +1144,7 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
 }
 
 fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
-    let name = json
-        .get("name")
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            json.get("arguments")
-                .and_then(|args| args.get("name"))
-                .and_then(|v| v.as_str())
-        })?
-        .to_string();
+    let top_level_name = json.get("name").and_then(|v| v.as_str());
 
     let mut args = if let Some(args_val) = json.get("arguments") {
         args_val.clone()
@@ -1168,9 +1160,20 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
         Value::Object(Default::default())
     };
 
-    if let Some(obj) = args.as_object_mut() {
-        obj.remove("name");
-    }
+    let name = match top_level_name {
+        Some(name) => name.to_string(),
+        None => {
+            // Tool name nested inside `arguments`: recover it as the tool name
+            // and strip it from the args. Only done when there is no top-level
+            // `name` — otherwise an argument literally called `name` (e.g.
+            // use_skill's skill name) is legitimate and must be kept.
+            let nested = args.get("name").and_then(|v| v.as_str())?.to_string();
+            if let Some(obj) = args.as_object_mut() {
+                obj.remove("name");
+            }
+            nested
+        }
+    };
 
     Some((name, args))
 }
@@ -1785,6 +1788,22 @@ mod tests {
         assert_eq!(calls[0].name, "multi_replace_file_content");
         assert_eq!(calls[0].arguments.get("path").unwrap().as_str().unwrap(), "src/config.rs");
         assert!(calls[0].arguments.get("name").is_none());
+    }
+
+    #[test]
+    fn test_extract_tool_call_keeps_legitimate_name_argument() {
+        // use_skill's only parameter is literally called `name`; with a proper
+        // {"name", "arguments"} envelope it must survive extraction.
+        let text = "```tool\n{\"name\": \"use_skill\", \"arguments\": {\"name\": \"spotify\"}}\n```";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "use_skill");
+        assert_eq!(
+            calls[0].arguments.get("name").unwrap().as_str().unwrap(),
+            "spotify"
+        );
+        // And the full validation path accepts it.
+        validate_tool_calls(&calls).unwrap();
     }
 
     #[test]
