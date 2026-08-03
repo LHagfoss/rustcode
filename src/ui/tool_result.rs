@@ -64,20 +64,15 @@ pub(super) fn render_tool_result<'a>(
     verbosity: &crate::app::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
+    if matches!(verbosity, crate::app::Verbosity::High) {
+        return Vec::new();
+    }
+
     let lines = match tool_name {
-        "view_file" | "grep" | "glob" | "list_directory" | "run_command" => {
-            if matches!(verbosity, crate::app::Verbosity::High) {
-                Vec::new()
-            } else {
-                match tool_name {
-                    "view_file" => render_read_result(result, width, show_picker),
-                    "grep" => render_search_result(result, width, show_picker),
-                    "glob" | "list_directory" => render_directory_result(result, show_picker),
-                    "run_command" => render_command_result(result, show_picker),
-                    _ => unreachable!(), // Should be covered by the outer match
-                }
-            }
-        }
+        "view_file" => render_read_result(result, width, show_picker),
+        "grep" => render_search_result(result, width, show_picker),
+        "glob" | "list_directory" => render_directory_result(result, show_picker),
+        "run_command" => render_command_result(result, show_picker),
         "replace_file_content"
         | "multi_replace_file_content"
         | "write_to_file"
@@ -87,7 +82,7 @@ pub(super) fn render_tool_result<'a>(
         // The action line already communicates control-plane lifecycle. Their
         // raw acknowledgement is implementation noise in the transcript.
         "use_skill" | "set_goal" | "todo_write" | "spawn_agent" | "send_agent"
-        | "complete_task" | "ask_question" | "manage_task" => Vec::new(),
+        | "complete_task" | "ask_question" => Vec::new(),
         _ => render_generic_result(result, show_picker),
     };
 
@@ -691,5 +686,20 @@ mod tests {
                 .iter()
                 .any(|line| text_of(line).contains("more lines"))
         );
+    }
+
+    #[test]
+    fn manage_task_renders_under_low_verbosity() {
+        let result = "TaskId: task-1, Status: RUNNING, PID: 1234, Runtime: 5s, Command: cargo check";
+        let lines = render_tool_result("manage_task", result, 80, &crate::app::Verbosity::Low, false);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn high_verbosity_suppresses_all_tool_results() {
+        let result = "TaskId: task-1, Status: RUNNING, PID: 1234, Runtime: 5s, Command: cargo check";
+        assert!(render_tool_result("manage_task", result, 80, &crate::app::Verbosity::High, false).is_empty());
+        assert!(render_tool_result("replace_file_content", "edited file", 80, &crate::app::Verbosity::High, false).is_empty());
+        assert!(render_tool_result("run_command", "command output", 80, &crate::app::Verbosity::High, false).is_empty());
     }
 }
