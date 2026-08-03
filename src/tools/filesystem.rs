@@ -486,8 +486,11 @@ fn apply_single_edit_to_content_inner(
         return Ok(EditOutcome::Unchanged);
     }
 
-    // 1. Line range matching (with +-15 tolerance window)
-    if let (Some(start), Some(end)) = (edit.start_line, edit.end_line) {
+    // 1. Line range matching (with +-15 tolerance window). A lone `start_line`
+    // anchors the edit to that single line — previously both start_line AND
+    // end_line were required, so start_line-only edits silently fell through
+    // to global matching and failed on non-unique targets.
+    if let Some((start, end)) = edit.start_line.map(|s| (s, edit.end_line.unwrap_or(s))) {
         let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         let total = file_lines.len();
 
@@ -538,7 +541,7 @@ fn apply_single_edit_to_content_inner(
         return Ok(EditOutcome::Changed(new_content));
     } else if occurrences.len() > 1 {
         return Err(format!(
-            "Error: found {} matches for target_content in '{path}'. Either include more surrounding context lines to make it unique, or pass `start_line`/`end_line` to target the specific occurrence you mean (the edit is anchored within that range).",
+            "Error: found {} matches for target_content in '{path}'. Either include more surrounding context lines to make it unique, or pass `start_line` (optionally with `end_line`) to anchor the edit to the specific occurrence you mean.",
             occurrences.len()
         ));
     }
@@ -575,7 +578,7 @@ fn apply_single_edit_to_content_inner(
         "Error: target_content not found in '{path}'.\n\
          Please check that your target content matches the file."
     );
-    if let (Some(start), Some(end)) = (edit.start_line, edit.end_line) {
+    if let Some((start, end)) = edit.start_line.map(|s| (s, edit.end_line.unwrap_or(s))) {
         let file_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         let total = file_lines.len();
         if start >= 1 && start <= total && end >= start && end <= total {
@@ -2096,5 +2099,37 @@ mod tests {
                 "alias {target_key}/{replacement_key}"
             );
         }
+    }
+
+    // Regression guard: a lone `start_line` (without `end_line`) must anchor
+    // the edit to that line. Previously anchoring required BOTH start_line and
+    // end_line, so start_line-only edits fell through to global matching and
+    // failed with "found N matches" on non-unique targets — agents then
+    // retried the identical call in a loop.
+    #[test]
+    fn start_line_alone_anchors_nonunique_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("tool_result.rs");
+        std::fs::write(
+            &file,
+            "fn a() {\n    false,\n}\nfn b() {\n    false,\n}\nfn c() {\n    false,\n}\n",
+        )
+        .expect("write");
+        let path = file.to_string_lossy().to_string();
+
+        let result = replace_file_content_tool(&serde_json::json!({
+            "path": path,
+            "start_line": 5,
+            "target_content": "    false,",
+            "replacement_content": "    false,\n    &crate::app::Verbosity::Low,",
+        }))
+        .expect("start_line-only anchored edit should succeed");
+        assert!(result.contains("successfully"), "got: {result}");
+
+        let content = std::fs::read_to_string(&file).expect("read");
+        assert_eq!(
+            content,
+            "fn a() {\n    false,\n}\nfn b() {\n    false,\n    &crate::app::Verbosity::Low,\n}\nfn c() {\n    false,\n}\n"
+        );
     }
 }
