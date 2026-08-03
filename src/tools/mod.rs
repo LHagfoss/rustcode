@@ -471,7 +471,7 @@ pub fn allowed_in_plan_mode(name: &str) -> bool {
 pub const TOOLS: &[Tool] = &[
     Tool {
         name: "ask_question",
-        description: "Ask the user a multiple-choice question to clarify underspecified requirements, solicit design choices, or select an option. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands.",
+        description: "Ask the user a multiple-choice question to clarify underspecified requirements, solicit design choices, or select an option. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands. The UI automatically appends a 'write your own answer' slot for free-form text, so never add your own 'Other' option and never pass an empty options list.",
         arguments: r#"{"question": "The question title or description to ask", "options": ["Option 1 text", "Option 2 text", "Option 3 text"], "is_multi_select": false}"#,
         handler: misc::ask_question,
         requires_confirmation: false,
