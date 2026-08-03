@@ -1199,7 +1199,9 @@ fn cached_tool_result(
 
 fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
     let rule = "─".repeat(width.max(1) as usize);
-    lines.push(Line::from(""));
+    // No leading blank: the preceding transcript item (assistant text, status
+    // card, tool card, user bubble) already ends with its own trailing blank
+    // row, so pushing one here doubled the gap above the rule.
     lines.push(Line::from(Span::<'static>::styled(
         rule,
         get_themed_style(
