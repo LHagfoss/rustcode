@@ -4181,12 +4181,17 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             loop_detect::LoopStatus::Warning(n) => {
                 dbg_log!("Loop detector: warning at {} repeats", n);
                 let mut s = state.lock().await;
-                s.history.push(ChatMessage::new(
-                            "system",
-                            format!(
-                                "[Loop warning: this action has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — call view_file to check exact line numbers or change your approach.]"
-                            ),
-                        ));
+                let warning_text = format!(
+                    "[Loop warning: this action has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — if an edit failed to match, view a wider line range or use grep to verify exact target content.]"
+                );
+                if let Some(last) = s.history.last_mut()
+                    && last.role == "system"
+                    && last.content.starts_with("[Loop warning: this action has repeated")
+                {
+                    last.content = warning_text;
+                } else {
+                    s.history.push(ChatMessage::new("system", warning_text));
+                }
                 drop(s);
             }
             loop_detect::LoopStatus::Ok => {}
