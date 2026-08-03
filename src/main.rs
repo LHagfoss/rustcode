@@ -1579,14 +1579,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match mouse.kind {
                         MouseEventKind::Moved => {}
                         MouseEventKind::ScrollUp if !modal => {
-                            s.scroll_up(3);
+                            s.scroll_up(1);
                             if s.selecting {
                                 s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
                             }
                             needs_redraw = true;
                         }
                         MouseEventKind::ScrollDown if !modal => {
-                            s.scroll_down(3);
+                            s.scroll_down(1);
                             if s.selecting {
                                 s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
                             }
@@ -1872,7 +1872,10 @@ mod draw_loop_tests {
         let artifact = metadata
             .full_output_artifact
             .expect("bounded background output must retain its artifact");
-        assert_eq!(std::fs::read_to_string(artifact).expect("artifact readable"), raw);
+        assert_eq!(
+            std::fs::read_to_string(artifact).expect("artifact readable"),
+            raw
+        );
     }
 
     #[test]

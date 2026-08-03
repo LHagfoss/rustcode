@@ -4,15 +4,18 @@ mod markdown;
 mod modals;
 mod tool_result;
 
-use highlight::{highlight_code_block, highlight_code_line, highlight_diff_line, pad_to_width, render_unified_diff, wrap_code_spans};
+use highlight::{
+    highlight_code_block, highlight_code_line, highlight_diff_line, pad_to_width,
+    render_unified_diff, wrap_code_spans,
+};
 use markdown::render_markdown;
-use tool_result::{render_file_preview, render_tool_result};
+pub use modals::{PALETTE_ITEMS, PaletteItem};
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
     render_tool_confirmation_modal, render_welcome_screen,
 };
-pub use modals::{PALETTE_ITEMS, PaletteItem};
+use tool_result::{render_file_preview, render_tool_result};
 
 use crate::app::{AppState, AppStatus, HoverTarget, NoticeKind};
 use ratatui::{
@@ -23,10 +26,13 @@ use ratatui::{
     widgets::{Block, Clear, Paragraph, Wrap},
 };
 use std::hash::{Hash, Hasher};
-use unicode_width::{UnicodeWidthStr, UnicodeWidthChar};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn safe_byte_index(s: &str, char_pos: usize) -> usize {
-    s.char_indices().nth(char_pos).map(|(i, _)| i).unwrap_or(s.len())
+    s.char_indices()
+        .nth(char_pos)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
 }
 
 /// Max visible rows in the slash-command popup; longer lists scroll internally.
@@ -85,7 +91,7 @@ fn collapse_image_markers(text: &str) -> String {
     if !text.contains(MARK) {
         return text.to_string();
     }
-    
+
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     let hash = hasher.finish();
@@ -154,19 +160,20 @@ fn render_assistant_message<'a>(
     let mut main_content = content;
 
     if content.contains("<think>")
-        && let Some(start_idx) = content.find("<think>") {
-            if let Some(real_end_idx) = content[start_idx..].find("</think>") {
-                let end_idx = start_idx + real_end_idx;
-                let think_part = &content[start_idx + 7..end_idx];
-                let main_part = &content[end_idx + 8..];
-                think_content = Some(think_part.trim());
-                main_content = main_part.trim();
-            } else {
-                let think_part = &content[start_idx + 7..];
-                think_content = Some(think_part.trim());
-                main_content = "";
-            }
+        && let Some(start_idx) = content.find("<think>")
+    {
+        if let Some(real_end_idx) = content[start_idx..].find("</think>") {
+            let end_idx = start_idx + real_end_idx;
+            let think_part = &content[start_idx + 7..end_idx];
+            let main_part = &content[end_idx + 8..];
+            think_content = Some(think_part.trim());
+            main_content = main_part.trim();
+        } else {
+            let think_part = &content[start_idx + 7..];
+            think_content = Some(think_part.trim());
+            main_content = "";
         }
+    }
 
     if let Some(think) = think_content {
         let label = if let Some(ms) = response_time_ms {
@@ -257,10 +264,12 @@ fn render_assistant_message<'a>(
         // prose dumped inside a fence doesn't get every capitalised word painted
         // yellow and words like `in`/`for`/`type` painted like keywords.
         let is_plain_lang = |lang: &str| -> bool {
-            matches!(lang, "" | "text" | "txt" | "markdown" | "md" | "plain" | "plaintext")
+            matches!(
+                lang,
+                "" | "text" | "txt" | "markdown" | "md" | "plain" | "plaintext"
+            )
         };
-        let is_diff_lang =
-            |lang: &str| -> bool { matches!(lang, "diff" | "patch" | "udiff") };
+        let is_diff_lang = |lang: &str| -> bool { matches!(lang, "diff" | "patch" | "udiff") };
 
         // Code blocks render as one solid full-width panel. Every row is padded
         // (or wrapped) to `box_width` so the panel background fills the whole box
@@ -280,10 +289,9 @@ fn render_assistant_message<'a>(
                     fence_open = !fence_open;
                     let fence_text = line_str.trim();
                     if opening {
-                        if lines
-                            .last()
-                            .is_some_and(|line| line.spans.iter().any(|span| !span.content.is_empty()))
-                        {
+                        if lines.last().is_some_and(|line| {
+                            line.spans.iter().any(|span| !span.content.is_empty())
+                        }) {
                             lines.push(Line::from(""));
                         }
                         current_lang = fence_text.trim_start_matches('`').trim().to_lowercase();
@@ -320,8 +328,8 @@ fn render_assistant_message<'a>(
                         // the Copy badge uses the same panel with a stronger foreground.
                         let code_bg = COLOR_ELEMENT;
                         let left_text = format!(" {lang_label} ");
-                        let pad_len = box_width
-                            .saturating_sub(left_text.width() + button_badge.width());
+                        let pad_len =
+                            box_width.saturating_sub(left_text.width() + button_badge.width());
                         let spans = vec![
                             Span::styled(
                                 left_text,
@@ -329,27 +337,47 @@ fn render_assistant_message<'a>(
                             ),
                             Span::styled(
                                 " ".repeat(pad_len),
-                                get_themed_style(COLOR_MUTED, code_bg, Modifier::empty(), show_picker),
+                                get_themed_style(
+                                    COLOR_MUTED,
+                                    code_bg,
+                                    Modifier::empty(),
+                                    show_picker,
+                                ),
                             ),
                             Span::styled(
                                 button_badge,
-                                get_themed_style(button_color, COLOR_ELEMENT, Modifier::BOLD, show_picker),
+                                get_themed_style(
+                                    button_color,
+                                    COLOR_ELEMENT,
+                                    Modifier::BOLD,
+                                    show_picker,
+                                ),
                             ),
                         ];
                         copy_registry.push((lines.len(), code_text.clone()));
                         lines.push(Line::from(spans));
                         if !is_plain_lang(&current_lang) && !is_diff_lang(&current_lang) {
-                            for body_spans in highlight_code_block(&code_text, &current_lang, show_picker) {
+                            for body_spans in
+                                highlight_code_block(&code_text, &current_lang, show_picker)
+                            {
                                 let mut content_spans = vec![Span::styled(
                                     " ".to_string(),
-                                    get_themed_style(COLOR_TEXT, code_bg, Modifier::empty(), show_picker),
+                                    get_themed_style(
+                                        COLOR_TEXT,
+                                        code_bg,
+                                        Modifier::empty(),
+                                        show_picker,
+                                    ),
                                 )];
-                                content_spans.extend(
-                                    body_spans
-                                        .into_iter()
-                                        .map(|span| Span::styled(span.content, span.style.bg(code_bg))),
-                                );
-                                lines.extend(wrap_code_spans(content_spans, box_width, code_bg, show_picker));
+                                content_spans.extend(body_spans.into_iter().map(|span| {
+                                    Span::styled(span.content, span.style.bg(code_bg))
+                                }));
+                                lines.extend(wrap_code_spans(
+                                    content_spans,
+                                    box_width,
+                                    code_bg,
+                                    show_picker,
+                                ));
                             }
                             i = j.saturating_sub(1);
                         }
@@ -373,7 +401,9 @@ fn render_assistant_message<'a>(
                         current_lang.clear();
                     }
                 } else if is_diff_lang(&current_lang)
-                    && (line_str.starts_with('+') || line_str.starts_with('-') || line_str.starts_with("@@"))
+                    && (line_str.starts_with('+')
+                        || line_str.starts_with('-')
+                        || line_str.starts_with("@@"))
                 {
                     let is_diff_metadata = line_str.starts_with("@@")
                         || line_str.starts_with("--- ")
@@ -384,7 +414,9 @@ fn render_assistant_message<'a>(
                 } else {
                     // Body line: leading gutter space, per-language rendering,
                     // then wrapped and padded so the panel bg fills full width.
-                    let content_spans = if is_plain_lang(&current_lang) || is_diff_lang(&current_lang) {
+                    let content_spans = if is_plain_lang(&current_lang)
+                        || is_diff_lang(&current_lang)
+                    {
                         vec![Span::styled(
                             format!(" {line_str}"),
                             get_themed_style(
@@ -402,7 +434,9 @@ fn render_assistant_message<'a>(
                         s.extend(
                             highlight_code_line(line_str, &current_lang, show_picker)
                                 .into_iter()
-                                .map(|span| Span::styled(span.content, span.style.bg(COLOR_ELEMENT))),
+                                .map(|span| {
+                                    Span::styled(span.content, span.style.bg(COLOR_ELEMENT))
+                                }),
                         );
                         s
                     };
@@ -495,10 +529,11 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
 /// Returns ("Tokens/s: ", "N.N") with the live rate when streaming, or "0.0" when not.
 fn format_tokens_info(state: &AppState) -> (String, String) {
     if state.status == AppStatus::Streaming
-        && let Some(ref tracker) = state.stream_tracker {
-            let (tps, _) = tracker.snapshot();
-            return ("Tps: ".to_string(), format!("{:.1}", tps));
-        }
+        && let Some(ref tracker) = state.stream_tracker
+    {
+        let (tps, _) = tracker.snapshot();
+        return ("Tps: ".to_string(), format!("{:.1}", tps));
+    }
     ("Tps: ".to_string(), "0.0".to_string())
 }
 
@@ -688,8 +723,14 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             } else {
                 Color::Red
             };
-            right_spans.push(Span::styled("   Quota: ", get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker)));
-            right_spans.push(Span::styled(format!("{:.0}%", quota), get_themed_style(color, COLOR_BG, Modifier::BOLD, show_picker)));
+            right_spans.push(Span::styled(
+                "   Quota: ",
+                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            ));
+            right_spans.push(Span::styled(
+                format!("{:.0}%", quota),
+                get_themed_style(color, COLOR_BG, Modifier::BOLD, show_picker),
+            ));
         }
 
         right_spans.push(Span::styled("   ", Style::default()));
@@ -942,35 +983,68 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
     };
 
     let target_arg = match name {
-        "view_file" | "replace_file_content" | "multi_replace_file_content" | "write_to_file" | "delete_file" => {
-            args.get("path").and_then(|v| v.as_str()).unwrap_or("?").to_string()
-        }
+        "view_file"
+        | "replace_file_content"
+        | "multi_replace_file_content"
+        | "write_to_file"
+        | "delete_file" => args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
         "move_file" | "copy_file" => {
             let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
             let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
             format!("{} -> {}", src, dest)
         }
-        "list_directory" | "glob" => {
-            args.get("path").or_else(|| args.get("pattern")).and_then(|v| v.as_str()).unwrap_or(".").to_string()
-        }
+        "list_directory" | "glob" => args
+            .get("path")
+            .or_else(|| args.get("pattern"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(".")
+            .to_string(),
         "grep" => {
             let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
             format!("\"{}\" in {}", pattern, path)
         }
-        "run_command" => {
-            args.get("command").and_then(|v| v.as_str()).unwrap_or("?").to_string()
-        }
-        "search_web" | "find_symbol" => {
-            args.get("query").and_then(|v| v.as_str()).unwrap_or("?").to_string()
-        }
+        "run_command" => args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        "search_web" | "find_symbol" => args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
         // Custom tools: surface their most meaningful single argument so the
         // call reads like UseSkill(git-feature-workflow), SetGoal(...), etc.
-        "use_skill" => args.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        "spawn_agent" => args.get("task").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        "send_agent" => args.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        "set_goal" => args.get("goal").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        "ask_question" => args.get("question").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        "use_skill" => args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "spawn_agent" => args
+            .get("task")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "send_agent" => args
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "set_goal" => args
+            .get("goal")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "ask_question" => args
+            .get("question")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         _ => "".to_string(),
     };
 
@@ -1107,7 +1181,12 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
     lines.push(Line::from(""));
     lines.push(Line::from(Span::<'static>::styled(
         rule,
-        get_themed_style(COLOR_TURN_SEPARATOR, COLOR_BG, Modifier::empty(), show_picker),
+        get_themed_style(
+            COLOR_TURN_SEPARATOR,
+            COLOR_BG,
+            Modifier::empty(),
+            show_picker,
+        ),
     )));
     lines.push(Line::from(""));
 }
@@ -1159,7 +1238,11 @@ fn render_status_panel<'a>(
     }
 
     let header = format!("╭─ {icon} {label} ");
-    let top = format!("{}{}╮", header, "─".repeat(panel_width.saturating_sub(header.width() + 1)));
+    let top = format!(
+        "{}{}╮",
+        header,
+        "─".repeat(panel_width.saturating_sub(header.width() + 1))
+    );
     lines.push(Line::from(Span::styled(
         pad_to_width(&top, panel_width),
         get_themed_style(accent, COLOR_BG, Modifier::BOLD, show_picker),
@@ -1555,6 +1638,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     let mut header_wrapped_rows: Vec<(u16, usize)> = Vec::new();
     let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
     let mut msg_wrapped_rows: Vec<u16> = Vec::new();
+    let mut cum = 0u16;
     {
         let click_map: std::collections::HashMap<usize, usize> =
             thought_clicks.iter().copied().collect();
@@ -1567,7 +1651,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             .copied()
             .filter(|&i| i < lines.len())
             .collect();
-        let mut cum = 0u16;
         for (i, line) in lines.iter().enumerate() {
             if let Some(&midx) = click_map.get(&i) {
                 header_wrapped_rows.push((cum, midx));
@@ -1578,18 +1661,19 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             if msg_line_set.contains(&i) {
                 msg_wrapped_rows.push(cum);
             }
-            let h = Paragraph::new(vec![line.clone()])
-                .wrap(Wrap { trim: false })
-                .line_count(inner_area.width) as u16;
+            let w = line.width() as u16;
+            let h = if inner_area.width == 0 || w <= inner_area.width {
+                1
+            } else {
+                Paragraph::new(vec![line.clone()])
+                    .wrap(Wrap { trim: false })
+                    .line_count(inner_area.width) as u16
+            };
             cum = cum.saturating_add(h);
         }
     }
 
-        // exact rendered height — the paragraph word-wraps, so estimating rows
-        // from character counts undershoots and cuts off the bottom.
-        let total_wrapped_lines = Paragraph::new(lines.clone())
-            .wrap(Wrap { trim: false })
-            .line_count(inner_area.width) as u16;
+    let total_wrapped_lines = cum;
 
         let owned_lines: Vec<Line<'static>> = lines.iter().map(own_line).collect();
         if idle {
@@ -1708,7 +1792,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     let _conv = chunks[0];
     let _view_h = inner_area.height;
     let _content_h = total_wrapped_lines.max(1);
-
 }
 
 pub fn render(f: &mut Frame, state: &mut AppState) {
@@ -1762,9 +1845,13 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         let input_margin = render_input(f, &chunks, state);
         render_footer(f, &chunks, state);
 
-        let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
-            .unwrap_or((0, String::new()));
-        let at_files = if !at_query.is_empty() || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)].ends_with('@') {
+        let (_, at_query) =
+            crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
+                .unwrap_or((0, String::new()));
+        let at_files = if !at_query.is_empty()
+            || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
+                .ends_with('@')
+        {
             crate::app::list_project_file_paths(&at_query)
         } else {
             Vec::new()
@@ -1943,9 +2030,19 @@ fn highlight_selection(
         // Chat content renders flush to ca.x (chat_area is already inset), so the
         // selectable span is [ca.x, ca.x+width-1]. A former `+2`/`-2` gutter here
         // clipped the first and last two columns of every left-aligned line.
-        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
+        (
+            ca.y,
+            ca.y + ca.height.saturating_sub(1),
+            ca.x,
+            ca.x + ca.width.saturating_sub(1),
+        )
     } else {
-        (area.y + 1, area.y + area.height.saturating_sub(2), area.x, area.x + width.saturating_sub(1))
+        (
+            area.y + 1,
+            area.y + area.height.saturating_sub(2),
+            area.x,
+            area.x + width.saturating_sub(1),
+        )
     };
 
     // If the selection is completely scrolled off-screen, don't draw anything
@@ -1961,7 +2058,8 @@ fn highlight_selection(
         for col in (min_col..=max_col).rev() {
             if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
                 let sym = cell.symbol();
-                if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" && sym != "▌" {
+                if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" && sym != "▌"
+                {
                     last_content_col = Some(col);
                     break;
                 }
@@ -1974,7 +2072,11 @@ fn highlight_selection(
             None => continue,
         };
 
-        let col_from = if row == start_row { screen_start.0.max(min_col).min(max_col) } else { min_col };
+        let col_from = if row == start_row {
+            screen_start.0.max(min_col).min(max_col)
+        } else {
+            min_col
+        };
         // Last row stops at the pointer, every earlier row runs to its end of
         // content — the same shape `extract_selection` copies, so what is
         // highlighted and what lands on the clipboard always agree.
@@ -2024,9 +2126,19 @@ pub fn extract_selection(
     let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
         // Must match highlight_selection's bounds so the copied text lines up
         // exactly with what the user sees highlighted (no clipped first/last cols).
-        (ca.y, ca.y + ca.height.saturating_sub(1), ca.x, ca.x + ca.width.saturating_sub(1))
+        (
+            ca.y,
+            ca.y + ca.height.saturating_sub(1),
+            ca.x,
+            ca.x + ca.width.saturating_sub(1),
+        )
     } else {
-        (area.y + 1, area.y + area.height.saturating_sub(2), area.x, area.x + width.saturating_sub(1))
+        (
+            area.y + 1,
+            area.y + area.height.saturating_sub(2),
+            area.x,
+            area.x + width.saturating_sub(1),
+        )
     };
 
     if screen_start.1 > max_row || screen_end.1 < min_row {
@@ -2038,7 +2150,11 @@ pub fn extract_selection(
 
     let mut lines_out = Vec::new();
     for row in start_row..=end_row {
-        let col_from = if row == start_row { screen_start.0.max(min_col).min(max_col) } else { min_col };
+        let col_from = if row == start_row {
+            screen_start.0.max(min_col).min(max_col)
+        } else {
+            min_col
+        };
         let col_to = if row == end_row {
             screen_end.0.max(min_col).min(max_col)
         } else {
@@ -2059,8 +2175,23 @@ pub fn extract_selection(
 
         // Strip leading UI border & header prefixes
         for prefix in &[
-            "│ ", "│", "▌ ", "▌", "⚙ ", "⚙", "→ ", "→", "🦀 ", "🦀", "🌐 ", "🌐",
-            "+ Warning: ", "Warning: ", "+ Thought: ", "Thought: ", "Goal: ",
+            "│ ",
+            "│",
+            "▌ ",
+            "▌",
+            "⚙ ",
+            "⚙",
+            "→ ",
+            "→",
+            "🦀 ",
+            "🦀",
+            "🌐 ",
+            "🌐",
+            "+ Warning: ",
+            "Warning: ",
+            "+ Thought: ",
+            "Thought: ",
+            "Goal: ",
         ] {
             if clean.starts_with(prefix) {
                 clean = &clean[prefix.len()..];
@@ -2092,14 +2223,19 @@ pub fn extract_selection(
     }
 
     let res = lines_out.join("\n");
-    dbg_log!("[SELECTION] Extracted {} chars from selection range start={:?} end={:?}: {:?}", res.len(), start, end, res);
+    dbg_log!(
+        "[SELECTION] Extracted {} chars from selection range start={:?} end={:?}: {:?}",
+        res.len(),
+        start,
+        end,
+        res
+    );
     res
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::{collapse_image_markers, COLOR_ELEMENT};
+    use super::{COLOR_ELEMENT, collapse_image_markers};
 
     // Regression: the tool-result cache used to `clear()` the whole map at the
     // cap, throwing away every still-visible result and forcing a full
@@ -2107,7 +2243,7 @@ mod tests {
     #[test]
     fn tool_result_cache_evicts_one_lru_entry_at_cap() {
         use super::{
-            cached_tool_result, tool_result_cache_key, TOOL_RESULT_CACHE, TOOL_RESULT_CACHE_CAP,
+            TOOL_RESULT_CACHE, TOOL_RESULT_CACHE_CAP, cached_tool_result, tool_result_cache_key,
         };
 
         let cap = TOOL_RESULT_CACHE_CAP;
@@ -2264,11 +2400,7 @@ mod tests {
     #[test]
     fn persisted_edit_result_resolves_tool_name_without_previous_call() {
         let result = "replace_file_content: successfully replaced target_content\n\n```diff\n@@ -1 +1 @@\n-old\n+new\n```";
-        let tool_name = super::resolve_tool_result_name(
-            None,
-            Some("replace_file_content"),
-            result,
-        );
+        let tool_name = super::resolve_tool_result_name(None, Some("replace_file_content"), result);
 
         assert_eq!(tool_name.as_deref(), Some("replace_file_content"));
         assert!(
@@ -2362,7 +2494,9 @@ mod tests {
         }
         for line in &lines[header_idx + 1..header_idx + 5] {
             assert!(
-                line.spans.iter().all(|span| span.style.bg == Some(COLOR_ELEMENT)),
+                line.spans
+                    .iter()
+                    .all(|span| span.style.bg == Some(COLOR_ELEMENT)),
                 "ordinary code fences should use the code panel background"
             );
         }
@@ -2372,7 +2506,8 @@ mod tests {
     fn diff_code_blocks_hide_patch_metadata() {
         use super::{AssistantRenderOptions, render_assistant_message};
 
-        let content = "```diff\n--- a/src/temp.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-old\n-removed\n```";
+        let content =
+            "```diff\n--- a/src/temp.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-old\n-removed\n```";
         let mut lines = Vec::new();
         let mut clicks = Vec::new();
         let mut copies = Vec::new();
@@ -2413,5 +2548,41 @@ mod tests {
 
         assert!(lines.first().is_some_and(|line| line.spans.is_empty()));
         assert!(lines.last().is_some_and(|line| line.spans.is_empty()));
+    }
+
+    #[test]
+    fn line_height_fast_path_matches_paragraph_wrap() {
+        use ratatui::text::Line;
+        use ratatui::widgets::{Paragraph, Wrap};
+
+        let width = 80u16;
+        let short_line = Line::from("Short text fits in viewport");
+        let long_line = Line::from("A ".repeat(100));
+
+        let short_w = short_line.width() as u16;
+        let short_fast_h = if width == 0 || short_w <= width {
+            1
+        } else {
+            Paragraph::new(vec![short_line.clone()])
+                .wrap(Wrap { trim: false })
+                .line_count(width) as u16
+        };
+        let short_expected_h = Paragraph::new(vec![short_line])
+            .wrap(Wrap { trim: false })
+            .line_count(width) as u16;
+        assert_eq!(short_fast_h, short_expected_h);
+
+        let long_w = long_line.width() as u16;
+        let long_fast_h = if width == 0 || long_w <= width {
+            1
+        } else {
+            Paragraph::new(vec![long_line.clone()])
+                .wrap(Wrap { trim: false })
+                .line_count(width) as u16
+        };
+        let long_expected_h = Paragraph::new(vec![long_line])
+            .wrap(Wrap { trim: false })
+            .line_count(width) as u16;
+        assert_eq!(long_fast_h, long_expected_h);
     }
 }
