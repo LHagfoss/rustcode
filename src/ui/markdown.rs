@@ -9,13 +9,13 @@ use ratatui::{
     style::Modifier,
     text::{Line, Span},
 };
-use unicode_width::UnicodeWidthStr;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
+use unicode_width::UnicodeWidthStr;
 
 use super::lru::LruCache;
 use super::{
-    get_themed_style, COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT,
+    COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, get_themed_style,
 };
 
 /// Maximum number of rendered documents kept in [`RENDER_CACHE`].
@@ -315,7 +315,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_key, render_cache, render_markdown, MarkdownCache};
+    use super::{MarkdownCache, cache_key, render_cache, render_markdown};
     use ratatui::style::Modifier;
     use ratatui::text::Line;
 
@@ -328,10 +328,12 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(text, "bold italic and code");
-        assert!(lines
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .any(|span| span.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
+        );
     }
 
     #[test]
@@ -353,7 +355,10 @@ mod tests {
         let cap = 8;
         let mut cache = MarkdownCache::new(cap);
         for i in 0..cap {
-            cache.insert(cache_key(&format!("doc {i}"), 80, false), vec![Line::from("")]);
+            cache.insert(
+                cache_key(&format!("doc {i}"), 80, false),
+                vec![Line::from("")],
+            );
         }
         assert_eq!(cache.entries.len(), cap);
 
@@ -365,7 +370,10 @@ mod tests {
         // that have gone longest without an access ("doc 1" onwards) while the
         // freshly touched "doc 0" survives.
         for i in cap..(cap + 3) {
-            cache.insert(cache_key(&format!("doc {i}"), 80, false), vec![Line::from("")]);
+            cache.insert(
+                cache_key(&format!("doc {i}"), 80, false),
+                vec![Line::from("")],
+            );
         }
         assert_eq!(cache.entries.len(), cap);
         assert!(cache.get(&oldest).is_some());

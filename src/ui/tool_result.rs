@@ -519,7 +519,12 @@ mod tests {
 
     #[test]
     fn tool_output_uses_darker_muted_color() {
-        let lines = render_tool_result("run_command", "exit code: 0\nstdout:\nhello world", 80, false);
+        let lines = render_tool_result(
+            "run_command",
+            "exit code: 0\nstdout:\nhello world",
+            80,
+            false,
+        );
         assert!(!lines.is_empty());
         let last = lines.last().unwrap();
         assert_eq!(last.spans[0].style.fg, Some(COLOR_MUTED));

@@ -50,7 +50,11 @@ pub fn copy_to_clipboard(text: &str) -> bool {
         return false;
     }
 
-    dbg_log!("[CLIPBOARD] Copying {} bytes to system clipboard: {:?}", clean.len(), clean);
+    dbg_log!(
+        "[CLIPBOARD] Copying {} bytes to system clipboard: {:?}",
+        clean.len(),
+        clean
+    );
 
     // 1. Emit OSC 52 ANSI sequence to terminal (supported natively by iTerm2, Terminal.app, Alacritty, Kitty, WezTerm, Tmux)
     use base64::Engine;

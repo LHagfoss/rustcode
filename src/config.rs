@@ -48,15 +48,17 @@ impl ModelProfile {
     pub fn resolved_api_key(&self) -> Option<String> {
         if let Some(ref env_name) = self.env_key
             && let Ok(val) = std::env::var(env_name)
-                && !val.trim().is_empty() {
-                    return Some(val);
-                }
+            && !val.trim().is_empty()
+        {
+            return Some(val);
+        }
         if let Some(ref k) = self.api_key {
             if let Some(var_name) = k.strip_prefix("env:") {
                 if let Ok(val) = std::env::var(var_name)
-                    && !val.trim().is_empty() {
-                        return Some(val);
-                    }
+                    && !val.trim().is_empty()
+                {
+                    return Some(val);
+                }
             } else if let Ok(val) = std::env::var(k) {
                 if !val.trim().is_empty() {
                     return Some(val);
@@ -115,7 +117,6 @@ pub fn provider_supports_function_calling(url: &str) -> bool {
     let url = url.to_ascii_lowercase();
     FUNCTION_CALLING_HOSTS.iter().any(|host| url.contains(host))
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -232,17 +233,12 @@ pub enum AgentMode {
     Plan,
 }
 
-
-
-
 #[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[derive(Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct UserSettings {
     #[serde(default)]
     pub auto_confirm: bool,
 }
-
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -366,7 +362,9 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
     let mut config = match toml::from_str::<AppConfig>(&content) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[rustcode] WARNING: Failed to parse config.toml ({e}). Keeping existing config on disk to prevent overwriting custom profiles.");
+            eprintln!(
+                "[rustcode] WARNING: Failed to parse config.toml ({e}). Keeping existing config on disk to prevent overwriting custom profiles."
+            );
             let backup_path = file_path.with_extension("toml.bak");
             if let Err(backup_err) = std::fs::copy(&file_path, &backup_path) {
                 eprintln!("Warning: could not backup config: {backup_err}");
@@ -705,10 +703,7 @@ pub fn create_subagent_workspace(session_id: &str, agent_id: u32) -> Result<Path
     Ok(root)
 }
 
-pub fn write_subagent_review_manifest(
-    workspace: &Path,
-    agent_id: u32,
-) -> Option<PathBuf> {
+pub fn write_subagent_review_manifest(workspace: &Path, agent_id: u32) -> Option<PathBuf> {
     let output = std::process::Command::new("git")
         .args(["status", "--short"])
         .current_dir(workspace)
@@ -941,9 +936,9 @@ pub fn delete_session_file(path: &Path) {
                 .parent()
                 .map(|p| p.ends_with(SESSIONS_DIR))
                 .unwrap_or(false)
-            {
-                let _ = fs::remove_dir_all(parent);
-            }
+        {
+            let _ = fs::remove_dir_all(parent);
+        }
     } else if path
         .parent()
         .map(|p| p.ends_with(SESSIONS_DIR))
@@ -996,9 +991,10 @@ pub fn get_usage_history() -> std::collections::BTreeMap<String, MonthlyUsage> {
     };
     let path = dir.join("usage_stats.json");
     if path.exists()
-        && let Ok(content) = fs::read_to_string(&path) {
-            return serde_json::from_str(&content).unwrap_or_default();
-        }
+        && let Ok(content) = fs::read_to_string(&path)
+    {
+        return serde_json::from_str(&content).unwrap_or_default();
+    }
     std::collections::BTreeMap::new()
 }
 
@@ -1044,7 +1040,8 @@ pub fn sync_config_pull() -> Result<(), String> {
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
         return Err(
-            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>".to_string(),
+            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>"
+                .to_string(),
         );
     }
 
@@ -1056,7 +1053,8 @@ pub fn sync_config_pull() -> Result<(), String> {
 
     if pull_out.status.success() {
         let msg = String::from_utf8_lossy(&pull_out.stdout);
-        if !msg.contains("Already up to date") && !msg.contains("Current branch main is up to date") {
+        if !msg.contains("Already up to date") && !msg.contains("Current branch main is up to date")
+        {
             println!("Pull result: {}", msg.trim());
         }
         Ok(())
@@ -1071,7 +1069,8 @@ pub fn sync_config_push() -> Result<(), String> {
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
         return Err(
-            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>".to_string(),
+            "Sync repo not initialized. Please run: rustcode sync init <remote-git-url>"
+                .to_string(),
         );
     }
 
@@ -1157,7 +1156,11 @@ mod tests {
 
         let (url, model, loaded) = load_config_from(&dir);
         assert_eq!(loaded.default.big(), "gemma4:e2b-it-qat");
-        let expected = &loaded.models.iter().find(|m| m.name == "gemma4:e2b-it-qat").unwrap();
+        let expected = &loaded
+            .models
+            .iter()
+            .find(|m| m.name == "gemma4:e2b-it-qat")
+            .unwrap();
         assert_eq!(url, expected.url);
         assert_eq!(model, expected.model);
     }
@@ -1172,7 +1175,11 @@ mod tests {
         save_config_to(&dir, &config);
 
         let (url, model, _) = load_config_from(&dir);
-        let expected = &config.models.iter().find(|m| m.name == "gemma4:e2b-it-qat").unwrap();
+        let expected = &config
+            .models
+            .iter()
+            .find(|m| m.name == "gemma4:e2b-it-qat")
+            .unwrap();
         assert_eq!(url, expected.url);
         assert_eq!(model, expected.model);
     }
@@ -1349,8 +1356,8 @@ mod tests {
         assert_eq!(parsed3.default.small(), "my-small-model");
     }
 
-    use tempfile::TempDir;
     use std::io::Write;
+    use tempfile::TempDir;
 
     #[test]
     fn test_load_valid_config() {
@@ -1375,7 +1382,7 @@ mod tests {
 
         let (_url, _model, config) = load_config_from(dir.path());
         assert_eq!(config.default.big(), AppConfig::default().default.big());
-        
+
         let backup_path = dir.path().join("config.toml.bak");
         assert!(backup_path.exists());
     }
@@ -1385,7 +1392,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (_url, _model, config) = load_config_from(dir.path());
         assert_eq!(config.default.big(), AppConfig::default().default.big());
-        
+
         let config_path = dir.path().join("config.toml");
         assert!(config_path.exists());
     }

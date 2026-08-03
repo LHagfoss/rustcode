@@ -162,12 +162,11 @@ fn registered_tool_schema(name: &str) -> Option<Value> {
     None
 }
 
-fn validate_value_against_schema(
-    value: &Value,
-    schema: &Value,
-    path: &str,
-) -> Result<(), String> {
-    let expected = schema.get("type").and_then(Value::as_str).unwrap_or("object");
+fn validate_value_against_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+    let expected = schema
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("object");
     let type_matches = match expected {
         "object" => value.is_object(),
         "array" => value.is_array(),
@@ -189,20 +188,19 @@ fn validate_value_against_schema(
                 }
             }
         }
-        if schema
-            .get("additionalProperties")
-            .and_then(Value::as_bool)
-            == Some(false)
+        if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false)
             && let Some(properties) = schema.get("properties").and_then(Value::as_object)
-                && let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key)) {
-                    return Err(format!("{path}.{unknown} is not an advertised argument"));
-                }
+            && let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key))
+        {
+            return Err(format!("{path}.{unknown} is not an advertised argument"));
+        }
         if let Some(ap_schema) = schema.get("additionalProperties").filter(|v| v.is_object())
-            && let Some(obj) = value.as_object() {
-                for (key, val) in obj {
-                    validate_value_against_schema(val, ap_schema, &format!("{path}.{key}"))?;
-                }
+            && let Some(obj) = value.as_object()
+        {
+            for (key, val) in obj {
+                validate_value_against_schema(val, ap_schema, &format!("{path}.{key}"))?;
             }
+        }
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
             for (key, child) in properties {
                 if let Some(actual) = object.get(key) {
@@ -323,11 +321,12 @@ pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
     }
 
     if (raw_path.starts_with("~/") || raw_path == "~")
-        && let Ok(home) = std::env::var("HOME") {
-            let tail = raw_path.strip_prefix('~').unwrap_or("");
-            let tail = tail.strip_prefix('/').unwrap_or(tail);
-            return PathBuf::from(home).join(tail);
-        }
+        && let Ok(home) = std::env::var("HOME")
+    {
+        let tail = raw_path.strip_prefix('~').unwrap_or("");
+        let tail = tail.strip_prefix('/').unwrap_or(tail);
+        return PathBuf::from(home).join(tail);
+    }
 
     PathBuf::from(raw_path)
 }
@@ -431,13 +430,19 @@ pub fn authorize_tool(
 pub fn tool_capabilities(name: &str) -> &'static [ToolCapability] {
     use ToolCapability::*;
     match name {
-        "view_file" | "list_directory" | "grep" | "glob" | "find_symbol" | "get_project_map" => &[ReadWorkspace],
+        "view_file" | "list_directory" | "grep" | "glob" | "find_symbol" | "get_project_map" => {
+            &[ReadWorkspace]
+        }
         "get_time" => &[],
         "search_web" => &[Network],
         "ask_question" => &[UserInteraction],
         "use_skill" | "todo_write" => &[SessionState],
-        "replace_file_content" | "multi_replace_file_content" | "write_to_file"
-        | "delete_file" | "move_file" | "copy_file" => &[WriteWorkspace],
+        "replace_file_content"
+        | "multi_replace_file_content"
+        | "write_to_file"
+        | "delete_file"
+        | "move_file"
+        | "copy_file" => &[WriteWorkspace],
         "run_command" | "manage_task" => &[ExecuteCommands],
         "spawn_agent" | "send_agent" | "set_goal" => &[AgentDelegation, SessionState],
         "complete_task" => &[SessionState],
@@ -451,7 +456,10 @@ pub fn allowed_in_plan_mode(name: &str) -> bool {
     use ToolCapability::*;
     let capabilities = tool_capabilities(name);
     capabilities.iter().all(|cap| {
-        matches!(cap, ReadWorkspace | Network | UserInteraction | SessionState)
+        matches!(
+            cap,
+            ReadWorkspace | Network | UserInteraction | SessionState
+        )
     }) && (capabilities.contains(&ReadWorkspace)
         || capabilities.contains(&Network)
         || capabilities.contains(&UserInteraction)
@@ -622,8 +630,12 @@ pub fn tool_safety(name: &str) -> ToolSafety {
         "use_skill" => ToolSafety::ControlPlane,
         "view_file" | "list_directory" | "grep" | "glob" | "get_time" | "find_symbol"
         | "get_project_map" | "search_web" => ToolSafety::ReadOnly,
-        "replace_file_content" | "multi_replace_file_content" | "write_to_file"
-        | "delete_file" | "move_file" | "copy_file" => ToolSafety::WorkspaceMutation,
+        "replace_file_content"
+        | "multi_replace_file_content"
+        | "write_to_file"
+        | "delete_file"
+        | "move_file"
+        | "copy_file" => ToolSafety::WorkspaceMutation,
         "run_command" | "background_output" | "write_stdin" => ToolSafety::ProcessControl,
         "ask_question" => ToolSafety::Interactive,
         "spawn_agent" | "send_agent" | "set_goal" | "todo_write" => ToolSafety::Delegation,
@@ -1218,13 +1230,19 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<ToolCall>) {
 
                 let repaired = repair_json(raw_args);
                 if let Ok(json_val) = serde_json::from_str::<Value>(&repaired) {
-                    calls.push(ToolCall { name, arguments: json_val });
+                    calls.push(ToolCall {
+                        name,
+                        arguments: json_val,
+                    });
                 } else {
                     let pattern = &*BRACE_OBJ_RE;
                     if let Some(mat) = pattern.find(raw_args)
                         && let Ok(json_val) = serde_json::from_str::<Value>(mat.as_str())
                     {
-                        calls.push(ToolCall { name, arguments: json_val });
+                        calls.push(ToolCall {
+                            name,
+                            arguments: json_val,
+                        });
                     }
                 }
             }
@@ -1252,7 +1270,10 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<ToolCall>) {
             if let Ok(json_value) = serde_json::from_str::<Value>(&repaired)
                 && let Some(call) = extract_tool_call(&json_value)
             {
-                calls.push(ToolCall { name: call.0, arguments: call.1 });
+                calls.push(ToolCall {
+                    name: call.0,
+                    arguments: call.1,
+                });
             }
         }
 
@@ -1295,10 +1316,7 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
     None
 }
 
-fn parse_tool_calls_impl(
-    text: &str,
-    protocol: crate::config::ToolProtocol,
-) -> Vec<ToolCall> {
+fn parse_tool_calls_impl(text: &str, protocol: crate::config::ToolProtocol) -> Vec<ToolCall> {
     let mut calls = Vec::new();
 
     match protocol {
@@ -1330,7 +1348,10 @@ fn parse_tool_calls_impl(
         if let Ok(json_value) = serde_json::from_str::<Value>(&to_parse)
             && let Some(call) = extract_tool_call(&json_value)
         {
-            calls.push(ToolCall { name: call.0, arguments: call.1 });
+            calls.push(ToolCall {
+                name: call.0,
+                arguments: call.1,
+            });
         }
     }
 
@@ -1342,7 +1363,10 @@ fn parse_tool_calls_impl(
             if let Ok(json_value) = serde_json::from_str::<Value>(json_str)
                 && let Some(call) = extract_tool_call(&json_value)
             {
-                calls.push(ToolCall { name: call.0, arguments: call.1 });
+                calls.push(ToolCall {
+                    name: call.0,
+                    arguments: call.1,
+                });
             }
         }
     }
@@ -1380,10 +1404,7 @@ pub fn is_tool_call_start(text: &str) -> bool {
             && (trimmed.contains("\"name\"") || trimmed.contains("\"tool\"")))
 }
 
-pub fn parse_tool_call(
-    text: &str,
-    protocol: crate::config::ToolProtocol,
-) -> Option<ToolCall> {
+pub fn parse_tool_call(text: &str, protocol: crate::config::ToolProtocol) -> Option<ToolCall> {
     parse_tool_calls(text, protocol).into_iter().next()
 }
 
@@ -1459,9 +1480,9 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
                             }
                         }
                     }
-                    Err(e) => ToolExecutionOutput::failure(format!(
-                        "error: MCP tool call failed: {e}"
-                    )),
+                    Err(e) => {
+                        ToolExecutionOutput::failure(format!("error: MCP tool call failed: {e}"))
+                    }
                 };
             }
         }
@@ -1497,7 +1518,10 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
     }
 }
 
-#[allow(dead_code, reason = "preserved display-only interface for direct callers")]
+#[allow(
+    dead_code,
+    reason = "preserved display-only interface for direct callers"
+)]
 pub fn execute(name: &str, args: &Value) -> String {
     execute_with_metadata(name, args).content
 }
@@ -1598,8 +1622,16 @@ mod tests {
                 Some("spawn_agent") | Some("send_agent")
             )
         }));
-        assert!(enabled.iter().any(|t| t["function"]["name"] == "spawn_agent"));
-        assert!(enabled.iter().any(|t| t["function"]["name"] == "send_agent"));
+        assert!(
+            enabled
+                .iter()
+                .any(|t| t["function"]["name"] == "spawn_agent")
+        );
+        assert!(
+            enabled
+                .iter()
+                .any(|t| t["function"]["name"] == "send_agent")
+        );
     }
 
     #[test]
@@ -1623,7 +1655,10 @@ mod tests {
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "write_to_file");
-        assert_eq!(calls[0].arguments.get("path").unwrap().as_str().unwrap(), "/foo");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "/foo"
+        );
         assert_eq!(
             calls[0].arguments.get("content").unwrap().as_str().unwrap(),
             "hello"
@@ -1655,7 +1690,12 @@ mod tests {
         assert_eq!(calls1.len(), 1);
         assert_eq!(calls1[0].name, "glob");
         assert_eq!(
-            calls1[0].arguments.get("pattern").unwrap().as_str().unwrap(),
+            calls1[0]
+                .arguments
+                .get("pattern")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "**/*.rs"
         );
 
@@ -1664,7 +1704,12 @@ mod tests {
         assert_eq!(calls2.len(), 1);
         assert_eq!(calls2[0].name, "glob");
         assert_eq!(
-            calls2[0].arguments.get("pattern").unwrap().as_str().unwrap(),
+            calls2[0]
+                .arguments
+                .get("pattern")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "**/*.rs"
         );
 
@@ -1683,7 +1728,10 @@ mod tests {
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "grep");
-        assert_eq!(calls[0].arguments.get("pattern").unwrap().as_str().unwrap(), "foo");
+        assert_eq!(
+            calls[0].arguments.get("pattern").unwrap().as_str().unwrap(),
+            "foo"
+        );
         assert_eq!(calls[1].name, "view_file");
         assert_eq!(
             calls[1].arguments.get("path").unwrap().as_str().unwrap(),
@@ -1833,11 +1881,21 @@ mod tests {
     // that change things.
     #[test]
     fn the_prompt_matches_what_the_executor_actually_does() {
-        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
 
-        assert!(prompt.contains("ISSUE INDEPENDENT READS TOGETHER"), "got: {prompt}");
+        assert!(
+            prompt.contains("ISSUE INDEPENDENT READS TOGETHER"),
+            "got: {prompt}"
+        );
         assert!(prompt.contains("run in parallel"), "got: {prompt}");
-        assert!(!prompt.contains("at most 1 or 2 tool calls"), "the old cap is gone");
+        assert!(
+            !prompt.contains("at most 1 or 2 tool calls"),
+            "the old cap is gone"
+        );
 
         // Every tool the prompt names as parallel must actually be one.
         for name in [
@@ -1849,11 +1907,16 @@ mod tests {
             "get_project_map",
             "search_web",
         ] {
-            assert!(supports_parallel_execution(name), "{name} is not parallel-capable");
+            assert!(
+                supports_parallel_execution(name),
+                "{name} is not parallel-capable"
+            );
         }
         // And the stated limit on changes must be the one the executor enforces.
         assert!(
-            prompt.contains(&format!("at most {MAX_MUTATING_CALLS_PER_RESPONSE} such calls")),
+            prompt.contains(&format!(
+                "at most {MAX_MUTATING_CALLS_PER_RESPONSE} such calls"
+            )),
             "got: {prompt}"
         );
     }
@@ -1869,15 +1932,28 @@ mod tests {
     // serialized-mutations behavior.
     #[test]
     fn json_protocol_tool_format_does_not_contradict_the_batching_rule() {
-        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
 
-        assert!(!prompt.contains("Emit one tool call at a time"), "got: {prompt}");
-        assert!(!prompt.contains("executes calls sequentially"), "got: {prompt}");
+        assert!(
+            !prompt.contains("Emit one tool call at a time"),
+            "got: {prompt}"
+        );
+        assert!(
+            !prompt.contains("executes calls sequentially"),
+            "got: {prompt}"
+        );
         assert!(
             prompt.contains("You may emit several ```tool fences in one response"),
             "got: {prompt}"
         );
-        assert!(prompt.contains("ISSUE INDEPENDENT READS TOGETHER"), "got: {prompt}");
+        assert!(
+            prompt.contains("ISSUE INDEPENDENT READS TOGETHER"),
+            "got: {prompt}"
+        );
     }
 
     // Regression: a repeated `replace_file_content` call that reports
@@ -1890,7 +1966,11 @@ mod tests {
     // retrying.
     #[test]
     fn prompt_explains_repeated_edits_are_pointless_noops() {
-        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
 
         assert!(prompt.contains("already applied"), "got: {prompt}");
         assert!(
@@ -1906,13 +1986,33 @@ mod tests {
     // describes.
     #[test]
     fn native_protocol_prompt_describes_native_syntax_and_not_json_fences() {
-        let native = tool_system_prompt(false, crate::config::ToolProtocol::Native, crate::config::AgentMode::Build);
-        let json = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+        let native = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Native,
+            crate::config::AgentMode::Build,
+        );
+        let json = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
 
-        assert!(!native.contains("Emit one tool call at a time"), "got: {native}");
-        assert!(native.contains("[TOOL_CALLS]tool_name[ARGS]"), "got: {native}");
-        assert!(!native.contains("```tool"), "native prompt must not describe the JSON fence syntax");
-        assert!(!json.contains("[TOOL_CALLS]tool_name[ARGS]"), "json prompt must not describe the native tag syntax");
+        assert!(
+            !native.contains("Emit one tool call at a time"),
+            "got: {native}"
+        );
+        assert!(
+            native.contains("[TOOL_CALLS]tool_name[ARGS]"),
+            "got: {native}"
+        );
+        assert!(
+            !native.contains("```tool"),
+            "native prompt must not describe the JSON fence syntax"
+        );
+        assert!(
+            !json.contains("[TOOL_CALLS]tool_name[ARGS]"),
+            "json prompt must not describe the native tag syntax"
+        );
     }
 
     // ApiNative carries tool schemas through the request's native `tools`
@@ -1921,9 +2021,16 @@ mod tests {
     // call syntax.
     #[test]
     fn api_native_protocol_prompt_defers_to_the_request_schema() {
-        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::ApiNative, crate::config::AgentMode::Build);
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::ApiNative,
+            crate::config::AgentMode::Build,
+        );
 
-        assert!(prompt.contains("native function-calling interface"), "got: {prompt}");
+        assert!(
+            prompt.contains("native function-calling interface"),
+            "got: {prompt}"
+        );
         assert!(!prompt.contains("```tool"), "got: {prompt}");
         assert!(!prompt.contains("[TOOL_CALLS]"), "got: {prompt}");
     }
@@ -1935,10 +2042,26 @@ mod tests {
             .find(|tool| tool.name == "replace_file_content")
             .expect("tool exists");
 
-        assert!(spec.description.contains("to INSERT text"), "got: {}", spec.description);
-        assert!(spec.description.contains("prepend"), "got: {}", spec.description);
-        assert!(spec.description.contains("An empty target is rejected"), "got: {}", spec.description);
-        assert!(spec.arguments.contains("never empty"), "got: {}", spec.arguments);
+        assert!(
+            spec.description.contains("to INSERT text"),
+            "got: {}",
+            spec.description
+        );
+        assert!(
+            spec.description.contains("prepend"),
+            "got: {}",
+            spec.description
+        );
+        assert!(
+            spec.description.contains("An empty target is rejected"),
+            "got: {}",
+            spec.description
+        );
+        assert!(
+            spec.arguments.contains("never empty"),
+            "got: {}",
+            spec.arguments
+        );
     }
 
     #[test]
@@ -1948,11 +2071,31 @@ mod tests {
             .find(|tool| tool.name == "view_file")
             .expect("tool exists");
 
-        assert!(spec.description.contains("250-line hard cap"), "got: {}", spec.description);
-        assert!(spec.description.contains("targeted follow-up ranges"), "got: {}", spec.description);
-        assert!(spec.arguments.contains("250 lines"), "got: {}", spec.arguments);
-        assert!(spec.arguments.contains("targeted follow-up"), "got: {}", spec.arguments);
-        assert!(!spec.arguments.contains("start_line + 2000"), "got: {}", spec.arguments);
+        assert!(
+            spec.description.contains("250-line hard cap"),
+            "got: {}",
+            spec.description
+        );
+        assert!(
+            spec.description.contains("targeted follow-up ranges"),
+            "got: {}",
+            spec.description
+        );
+        assert!(
+            spec.arguments.contains("250 lines"),
+            "got: {}",
+            spec.arguments
+        );
+        assert!(
+            spec.arguments.contains("targeted follow-up"),
+            "got: {}",
+            spec.arguments
+        );
+        assert!(
+            !spec.arguments.contains("start_line + 2000"),
+            "got: {}",
+            spec.arguments
+        );
 
         let schema = schema_for_tool("view_file");
         assert_eq!(
@@ -1980,15 +2123,29 @@ mod tests {
 
     #[test]
     fn plan_mode_prompt_demands_investigation_not_a_plan_to_investigate() {
-        let prompt = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Plan);
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Plan,
+        );
 
         assert!(prompt.contains("PLAN MODE"));
-        assert!(prompt.contains("Investigate before planning"), "got: {prompt}");
-        assert!(prompt.contains("specific to THIS repository"), "got: {prompt}");
+        assert!(
+            prompt.contains("Investigate before planning"),
+            "got: {prompt}"
+        );
+        assert!(
+            prompt.contains("specific to THIS repository"),
+            "got: {prompt}"
+        );
         assert!(prompt.contains("is not a plan"), "got: {prompt}");
 
         // Build mode must not carry the plan-mode restrictions.
-        let build = tool_system_prompt(false, crate::config::ToolProtocol::Json, crate::config::AgentMode::Build);
+        let build = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
         assert!(!build.contains("PLAN MODE"));
     }
 
@@ -2065,11 +2222,13 @@ mod tests {
         };
         assert!(validate_tool_calls(std::slice::from_ref(&valid)).is_ok());
         assert!(validate_tool_calls(&[valid.clone(), valid]).is_err());
-        assert!(validate_tool_calls(&[ToolCall {
-            name: "not_registered".to_string(),
-            arguments: serde_json::json!({}),
-        }])
-        .is_err());
+        assert!(
+            validate_tool_calls(&[ToolCall {
+                name: "not_registered".to_string(),
+                arguments: serde_json::json!({}),
+            }])
+            .is_err()
+        );
         let calls = (0..=MAX_TOOL_CALLS_PER_RESPONSE)
             .map(|_| ToolCall {
                 name: "grep".to_string(),
@@ -2077,22 +2236,26 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(validate_tool_calls(&calls).is_err());
-        assert!(validate_tool_calls(&[ToolCall {
-            name: "run_command".to_string(),
-            arguments: serde_json::json!({}),
-        }])
-        .is_err());
-        assert!(validate_tool_calls(&[
-            ToolCall {
-                name: "use_skill".to_string(),
-                arguments: serde_json::json!({"name": "x"}),
-            },
-            ToolCall {
-                name: "grep".to_string(),
-                arguments: serde_json::json!({"pattern": "x"}),
-            },
-        ])
-        .is_err());
+        assert!(
+            validate_tool_calls(&[ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({}),
+            }])
+            .is_err()
+        );
+        assert!(
+            validate_tool_calls(&[
+                ToolCall {
+                    name: "use_skill".to_string(),
+                    arguments: serde_json::json!({"name": "x"}),
+                },
+                ToolCall {
+                    name: "grep".to_string(),
+                    arguments: serde_json::json!({"pattern": "x"}),
+                },
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -2102,7 +2265,12 @@ mod tests {
             AuthorizationDecision::Deny(_)
         ));
         assert_eq!(
-            authorize_tool("write_to_file", crate::config::AgentMode::Build, false, false),
+            authorize_tool(
+                "write_to_file",
+                crate::config::AgentMode::Build,
+                false,
+                false
+            ),
             AuthorizationDecision::RequireConfirmation
         );
         assert_eq!(
@@ -2127,7 +2295,9 @@ mod tests {
         assert!(prompt.contains("Do NOT run `cargo check` on a standalone `.rs` file"));
         assert!(prompt.contains("Prefer the smallest effective tool sequence"));
         assert!(prompt.contains("git-feature-workflow"));
-        assert!(prompt.contains("Chaining shell commands is different from speculative tool batching"));
+        assert!(
+            prompt.contains("Chaining shell commands is different from speculative tool batching")
+        );
         assert!(prompt.contains("never claim a check, test, formatter, or lint command passed"));
         assert!(prompt.contains("Stage only explicit feature paths in Git"));
     }

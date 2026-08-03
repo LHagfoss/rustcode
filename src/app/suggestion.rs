@@ -231,21 +231,25 @@ pub fn list_project_file_paths(query: &str) -> Vec<String> {
     for result in walker {
         if let Ok(entry) = result
             && entry.file_type().is_some_and(|ft| ft.is_file())
-                && let Ok(rel) = entry.path().strip_prefix(&cwd) {
-                    let rel_str = rel.to_string_lossy().to_string();
-                    if query_lower.is_empty() || rel_str.to_lowercase().contains(&query_lower) {
-                        files.push(format!("@{}", rel_str));
-                        if files.len() >= 25 {
-                            break;
-                        }
-                    }
+            && let Ok(rel) = entry.path().strip_prefix(&cwd)
+        {
+            let rel_str = rel.to_string_lossy().to_string();
+            if query_lower.is_empty() || rel_str.to_lowercase().contains(&query_lower) {
+                files.push(format!("@{}", rel_str));
+                if files.len() >= 25 {
+                    break;
                 }
+            }
+        }
     }
     files
 }
 
 fn safe_byte_index(s: &str, char_pos: usize) -> usize {
-    s.char_indices().nth(char_pos).map(|(i, _)| i).unwrap_or(s.len())
+    s.char_indices()
+        .nth(char_pos)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
 }
 
 pub fn get_at_word_query(input_buffer: &str, cursor_pos: usize) -> Option<(usize, String)> {

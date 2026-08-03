@@ -88,11 +88,9 @@ fn parse_semver(s: &str) -> Option<Version> {
 /// on a url/archive line (Homebrew usually derives the version from the tag in
 /// the source URL).
 fn parse_formula_version(rb: &str) -> Option<Version> {
-    static EXPLICIT: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?:version\s+"|tag:\s*")v?(\d+)\.(\d+)\.(\d+)"#).unwrap()
-    });
-    static ANY: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"v?(\d+)\.(\d+)\.(\d+)").unwrap());
+    static EXPLICIT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?:version\s+"|tag:\s*")v?(\d+)\.(\d+)\.(\d+)"#).unwrap());
+    static ANY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"v?(\d+)\.(\d+)\.(\d+)").unwrap());
 
     let cap3 = |c: &regex::Captures| -> Option<Version> {
         Some((c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?))
@@ -191,6 +189,9 @@ mod tests {
 
     #[test]
     fn current_version_matches_cargo() {
-        assert_eq!(current_version(), parse_semver(env!("CARGO_PKG_VERSION")).unwrap());
+        assert_eq!(
+            current_version(),
+            parse_semver(env!("CARGO_PKG_VERSION")).unwrap()
+        );
     }
 }

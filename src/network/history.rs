@@ -12,7 +12,11 @@ pub(crate) enum HistoryEntry {
     User(String),
     Assistant(String),
     ToolCall(ToolCall),
-    ToolResult { tool_name: String, content: String, metadata: Option<ToolResultRecord> },
+    ToolResult {
+        tool_name: String,
+        content: String,
+        metadata: Option<ToolResultRecord>,
+    },
     System(String),
     CompactionSummary(String),
     Lifecycle(String),
@@ -40,9 +44,17 @@ pub(crate) fn normalize_history(history: &[ChatMessage]) -> Vec<HistoryEntry> {
                     .split_once(": ")
                     .map(|(name, content)| (name.to_string(), content.to_string()))
                     .unwrap_or_else(|| ("tool".to_string(), message.content.clone()));
-                HistoryEntry::ToolResult { tool_name, content, metadata: message.tool_result.clone() }
+                HistoryEntry::ToolResult {
+                    tool_name,
+                    content,
+                    metadata: message.tool_result.clone(),
+                }
             }
-            "system" if message.content.starts_with(crate::network::compaction::SUMMARY_MARKER) => {
+            "system"
+                if message
+                    .content
+                    .starts_with(crate::network::compaction::SUMMARY_MARKER) =>
+            {
                 HistoryEntry::CompactionSummary(message.content.clone())
             }
             "system" if message.content.starts_with('[') => {
@@ -363,14 +375,22 @@ mod tests {
 
         assert_eq!(msgs[2]["role"], "user");
         assert!(msgs[2]["tool_call_id"].is_null());
-        assert!(msgs[2]["content"].as_str().unwrap().contains("<tool_result>"));
+        assert!(
+            msgs[2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("<tool_result>")
+        );
     }
 
     #[test]
     fn history_without_ids_keeps_the_text_rendering() {
         let history = vec![
             ChatMessage::new("user", "hi"),
-            ChatMessage::new("assistant", "```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```"),
+            ChatMessage::new(
+                "assistant",
+                "```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```",
+            ),
             ChatMessage::new("tool", "grep: no matches"),
         ];
 
@@ -381,9 +401,13 @@ mod tests {
         assert!(msgs[2]["tool_calls"].is_null());
         // Text-protocol results stay user-context messages.
         assert_eq!(msgs[3]["role"], "user");
-        assert!(msgs[3]["content"].as_str().unwrap().contains("<tool_result>"));
+        assert!(
+            msgs[3]["content"]
+                .as_str()
+                .unwrap()
+                .contains("<tool_result>")
+        );
     }
-
 
     #[test]
     fn preserves_system_user_and_tool_message_contracts() {
@@ -417,7 +441,10 @@ mod tests {
         ];
         let entries = normalize_history(&history);
         assert!(matches!(entries[1], HistoryEntry::ToolCall(_)));
-        assert!(matches!(entries[2], HistoryEntry::ToolResult { metadata: None, .. }));
+        assert!(matches!(
+            entries[2],
+            HistoryEntry::ToolResult { metadata: None, .. }
+        ));
         let messages = to_messages(&history, "system");
         assert_eq!(messages[3]["role"], "user");
         assert!(messages[3]["content"].as_str().unwrap().contains("grep:"));
@@ -443,8 +470,19 @@ mod tests {
             full_output_artifact: None,
         });
         let entries = normalize_history(std::slice::from_ref(&message));
-        assert!(matches!(entries[0], HistoryEntry::ToolResult { metadata: Some(_), .. }));
+        assert!(matches!(
+            entries[0],
+            HistoryEntry::ToolResult {
+                metadata: Some(_),
+                ..
+            }
+        ));
         let messages = to_messages(&[message], "system");
-        assert!(messages[1]["content"].as_str().unwrap().contains("metadata:"));
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("metadata:")
+        );
     }
 }

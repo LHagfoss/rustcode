@@ -4,8 +4,7 @@ use std::future::Future;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tiktoken_rs::{cl100k_base, CoreBPE};
-
+use tiktoken_rs::{CoreBPE, cl100k_base};
 
 static BPE: OnceLock<CoreBPE> = OnceLock::new();
 
@@ -186,10 +185,15 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) {
             // wiped mid-read — the amnesia that made the agent re-read forever.
             // NOTE: still a fixed cap; if you run a small-context model as the
             // main model, lower this to fit its window.
-            if total_tool_tokens > threshold && !m.content.contains("content cleared to save context") {
+            if total_tool_tokens > threshold
+                && !m.content.contains("content cleared to save context")
+            {
                 if let Some(pos) = m.content.find(": ") {
                     let tool_name = &m.content[..pos];
-                    m.content = format!("{}: [Old tool result content cleared to save context]", tool_name);
+                    m.content = format!(
+                        "{}: [Old tool result content cleared to save context]",
+                        tool_name
+                    );
                 } else {
                     m.content = "[Old tool result content cleared to save context]".to_string();
                 }
@@ -245,7 +249,10 @@ pub async fn maybe_compact(
     // 2. Count the post-prune history once. `history` is not touched again
     //    until compaction actually runs, so the same per-message counts serve
     //    both the budget check and the keep-suffix walk below.
-    let per_message: Vec<usize> = history.iter().map(|m| estimate_tokens(&m.content)).collect();
+    let per_message: Vec<usize> = history
+        .iter()
+        .map(|m| estimate_tokens(&m.content))
+        .collect();
     let total_tokens: usize = per_message.iter().sum();
     if total_tokens < budget {
         return false;
@@ -384,7 +391,6 @@ async fn force_compact_internal(
 
     Ok(())
 }
-
 
 /// Prefix that marks a compaction summary message, used to detect and preserve
 /// prior summaries during incremental compaction.
@@ -637,7 +643,10 @@ mod tests {
     fn memoized_counts_match_a_direct_encode() {
         let bpe = cl100k_base().unwrap();
         let long_repeat = "x ".repeat(5000);
-        let code_blob = format!("view_file: {}", "fn main() { println!(\"hi\"); }\n".repeat(200));
+        let code_blob = format!(
+            "view_file: {}",
+            "fn main() { println!(\"hi\"); }\n".repeat(200)
+        );
         let samples: [&str; 6] = [
             "",
             "hello world",
@@ -663,8 +672,14 @@ mod tests {
         let original = format!("run_command: {}", "data ".repeat(400));
         let rewritten = "run_command: [Tool Output Truncated: 400 tokens reduced to summary.]";
 
-        assert_eq!(estimate_tokens(&original), bpe.encode_ordinary(&original).len());
-        assert_eq!(estimate_tokens(rewritten), bpe.encode_ordinary(rewritten).len());
+        assert_eq!(
+            estimate_tokens(&original),
+            bpe.encode_ordinary(&original).len()
+        );
+        assert_eq!(
+            estimate_tokens(rewritten),
+            bpe.encode_ordinary(rewritten).len()
+        );
         assert_ne!(estimate_tokens(&original), estimate_tokens(rewritten));
     }
 
@@ -683,7 +698,9 @@ mod tests {
             }
         }
 
-        let memo = TOKEN_MEMO.get().expect("memo initialized by the calls above");
+        let memo = TOKEN_MEMO
+            .get()
+            .expect("memo initialized by the calls above");
         let guard = memo.lock().unwrap_or_else(|e| e.into_inner());
         assert!(guard.live.len() <= TOKEN_MEMO_CAPACITY);
         assert!(guard.prev.len() <= TOKEN_MEMO_CAPACITY);
@@ -747,7 +764,11 @@ mod tests {
         prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
 
         // Old, large tool output collapsed with prefix + token count preserved.
-        assert!(history[0].content.starts_with("run_command: [Tool Output Truncated:"));
+        assert!(
+            history[0]
+                .content
+                .starts_with("run_command: [Tool Output Truncated:")
+        );
         assert!(history[0].content.contains("tokens reduced to summary"));
         // Recent large tool output left fully intact.
         assert!(history[recent_idx].content.starts_with("run_command: x x"));
@@ -795,11 +816,18 @@ mod tests {
 
         let input = build_summary_input(Some(&prior), &refs);
 
-        assert!(input.len() <= SUMMARY_INPUT_MAX_BYTES, "{} bytes", input.len());
+        assert!(
+            input.len() <= SUMMARY_INPUT_MAX_BYTES,
+            "{} bytes",
+            input.len()
+        );
         assert!(input.contains("ORIGINAL-TASK: preserve this exact objective"));
         assert!(input.contains("NEWEST-FACT: src/network/compaction.rs is the active file"));
         assert!(input.contains("PRIOR-SUMMARY:"));
-        assert!(!input.contains("OLD-FACT-0:"), "oldest bulk should be dropped first");
+        assert!(
+            !input.contains("OLD-FACT-0:"),
+            "oldest bulk should be dropped first"
+        );
     }
 
     #[test]
@@ -829,7 +857,11 @@ mod tests {
 
         let summary = parse_summary_response(&body).expect("valid summary");
 
-        assert!(summary.len() <= SUMMARY_OUTPUT_MAX_BYTES, "{} bytes", summary.len());
+        assert!(
+            summary.len() <= SUMMARY_OUTPUT_MAX_BYTES,
+            "{} bytes",
+            summary.len()
+        );
         assert!(summary.starts_with("useful facts"));
         assert!(std::str::from_utf8(summary.as_bytes()).is_ok());
     }
@@ -849,9 +881,8 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn summary_request_total_timeout_bounds_body_decoding() {
-        let task = tokio::spawn(async {
-            await_summary_request(std::future::pending::<()>(), None).await
-        });
+        let task =
+            tokio::spawn(async { await_summary_request(std::future::pending::<()>(), None).await });
         tokio::task::yield_now().await;
 
         tokio::time::advance(SUMMARY_REQUEST_TIMEOUT + std::time::Duration::from_millis(1)).await;
@@ -867,11 +898,7 @@ mod tests {
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let request_cancel = cancel_token.clone();
         let task = tokio::spawn(async move {
-            await_summary_request(
-                std::future::pending::<()>(),
-                Some(&request_cancel),
-            )
-            .await
+            await_summary_request(std::future::pending::<()>(), Some(&request_cancel)).await
         });
         tokio::task::yield_now().await;
 
@@ -970,7 +997,11 @@ mod tests {
         assert!(!compacted);
         assert_eq!(actual_non_tool, expected_non_tool);
         assert!(history[1].content.contains("Tool Output Truncated"));
-        assert!(!history.iter().any(|message| message.content.starts_with(SUMMARY_MARKER)));
+        assert!(
+            !history
+                .iter()
+                .any(|message| message.content.starts_with(SUMMARY_MARKER))
+        );
     }
 
     #[tokio::test]
@@ -988,14 +1019,8 @@ mod tests {
             .map(|message| (message.role.clone(), message.content.clone()))
             .collect();
 
-        let result = force_compact(
-            &reqwest::Client::new(),
-            &url,
-            "model",
-            &mut history,
-            None,
-        )
-        .await;
+        let result =
+            force_compact(&reqwest::Client::new(), &url, "model", &mut history, None).await;
 
         let actual: Vec<(String, String)> = history
             .iter()
@@ -1003,6 +1028,10 @@ mod tests {
             .collect();
         assert_eq!(result, Err("Failed to generate summary.".to_string()));
         assert_eq!(actual, expected);
-        assert!(!history.iter().any(|message| message.content.starts_with(SUMMARY_MARKER)));
+        assert!(
+            !history
+                .iter()
+                .any(|message| message.content.starts_with(SUMMARY_MARKER))
+        );
     }
 }
