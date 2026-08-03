@@ -261,33 +261,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .push(background_task_history_message(&task_id, output));
                 crate::config::save_session_history(&session_id, &s.history);
                 s.request_redraw();
-                // Only drive a fresh model turn when the agent is actively working
-                // toward a goal. After completion / in plain chat, a late task
-                // finish must NOT wake the model: it would run against the whole
-                // history with no task and tends to regurgitate its system prompt.
-                // The result is still recorded above for the user to act on.
-                if s.continuous_mode {
-                    s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
-                    // Only spawn if no orchestrator is alive; otherwise the
-                    // running one drains the queue. Gating on status==Idle raced
-                    // an exiting turn and spawned a second concurrent orchestrator.
-                    if !s.orchestrator_running {
-                        s.orchestrator_running = true;
-                        s.status = AppStatus::Queued;
-                        if s.config.discord_rpc_enabled {
-                            let model_name = s.model_name.clone();
-                            s.discord_rpc
-                                .set_activity("Queued", &format!("Using model: {}", model_name));
-                        }
-                        drop(s);
-                        crate::network::process_queue_orchestrator(
-                            client_clone,
-                            state_clone,
-                            token_clone,
-                            std::sync::Arc::new(crate::network::policy::InteractivePolicy),
-                        )
-                        .await;
+                // Drive a fresh model turn when a background task completes in the active session
+                // so the agent automatically receives the result and continues working.
+                s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
+                // Only spawn if no orchestrator is alive; otherwise the
+                // running one drains the queue. Gating on status==Idle raced
+                // an exiting turn and spawned a second concurrent orchestrator.
+                if !s.orchestrator_running {
+                    s.orchestrator_running = true;
+                    s.status = AppStatus::Queued;
+                    if s.config.discord_rpc_enabled {
+                        let model_name = s.model_name.clone();
+                        s.discord_rpc
+                            .set_activity("Queued", &format!("Using model: {}", model_name));
                     }
+                    drop(s);
+                    crate::network::process_queue_orchestrator(
+                        client_clone,
+                        state_clone,
+                        token_clone,
+                        std::sync::Arc::new(crate::network::policy::InteractivePolicy),
+                    )
+                    .await;
                 }
             } else {
                 let mut history = crate::config::load_session_history_direct(&session_id);
