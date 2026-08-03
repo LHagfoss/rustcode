@@ -1162,40 +1162,53 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
 }
 
 fn repair_json(s: &str) -> String {
-    let mut repaired = s.to_string();
-    repaired = repaired.trim_end().to_string();
-    if repaired.ends_with(',') {
-        repaired.pop();
+    let trimmed = s.trim_end();
+    let mut s_clean = trimmed.to_string();
+    if s_clean.ends_with(',') {
+        s_clean.pop();
     }
 
+    let mut repaired = String::with_capacity(s_clean.len() + 16);
     let mut in_string = false;
     let mut escaped = false;
     let mut stack = Vec::new();
 
-    for c in repaired.chars() {
+    for c in s_clean.chars() {
         if escaped {
             escaped = false;
+            repaired.push(c);
             continue;
         }
         if c == '\\' && in_string {
             escaped = true;
+            repaired.push(c);
             continue;
         }
         if c == '"' {
             in_string = !in_string;
+            repaired.push(c);
             continue;
         }
-        if !in_string {
-            if c == '{' {
-                stack.push('}');
-            } else if c == '[' {
-                stack.push(']');
-            } else if (c == '}' || c == ']')
-                && let Some(&last) = stack.last()
-                && last == c
-            {
-                stack.pop();
+        if in_string {
+            match c {
+                '\n' => repaired.push_str("\\n"),
+                '\r' => repaired.push_str("\\r"),
+                '\t' => repaired.push_str("\\t"),
+                _ => repaired.push(c),
             }
+            continue;
+        }
+
+        repaired.push(c);
+        if c == '{' {
+            stack.push('}');
+        } else if c == '[' {
+            stack.push(']');
+        } else if (c == '}' || c == ']')
+            && let Some(&last) = stack.last()
+            && last == c
+        {
+            stack.pop();
         }
     }
 
@@ -1302,11 +1315,21 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
         let is_tool_fence = after_tag.chars().next().is_none_or(|c| c.is_whitespace());
         if is_tool_fence {
             let repaired = repair_json(block.trim());
-            if let Err(e) = serde_json::from_str::<Value>(&repaired) {
-                let snippet: String = block.trim().chars().take(240).collect();
-                return Some(format!(
-                    "JSON parse error: {e}. A common cause is a backslash inside a string: every literal `\\` in the file must be written as `\\\\` in the JSON, and a real newline must be `\\n`. Offending block:\n```\n{snippet}\n```"
-                ));
+            match serde_json::from_str::<Value>(&repaired) {
+                Ok(val) => {
+                    if val.get("name").is_none() {
+                        let snippet: String = block.trim().chars().take(240).collect();
+                        return Some(format!(
+                            "Missing required 'name' field in tool call JSON. Every tool call must include `\"name\": \"tool_name\"`. Offending block:\n```\n{snippet}\n```"
+                        ));
+                    }
+                }
+                Err(e) => {
+                    let snippet: String = block.trim().chars().take(240).collect();
+                    return Some(format!(
+                        "JSON parse error: {e}. A common cause is a backslash inside a string: every literal `\\` in the file must be written as `\\\\` in the JSON, and a real newline must be `\\n`. Offending block:\n```\n{snippet}\n```"
+                    ));
+                }
             }
         }
         if next.is_empty() {
@@ -1718,6 +1741,21 @@ mod tests {
         let calls3 = parse_tool_calls(text3, crate::config::ToolProtocol::Json);
         assert_eq!(calls3.len(), 1);
         assert_eq!(calls3[0].name, "todo_write");
+    }
+
+    #[test]
+    fn test_repair_json_escapes_multiline_string_literals() {
+        let text = "```tool\n{\"name\": \"replace_file_content\", \"arguments\": {\"path\": \"src/config.rs\", \"edits\": [{\"old_string\": \"line1\", \"new_string\": \"line1\nline2\nline3\"}]}}\n```";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "replace_file_content");
+    }
+
+    #[test]
+    fn test_diagnose_reports_missing_name_field() {
+        let text = "```tool\n{\"arguments\": {\"path\": \"src/config.rs\"}}\n```";
+        let diag = diagnose_failed_tool_call(text).unwrap();
+        assert!(diag.contains("Missing required 'name' field"));
     }
 
     #[test]
