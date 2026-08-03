@@ -665,6 +665,14 @@ pub async fn probe_function_calling(
     url: &str,
     model: &str,
 ) -> bool {
+    if model.to_lowercase().contains("gemini") {
+        dbg_log!(
+            "probe_function_calling: model {} contains 'gemini', defaulting to Json tool protocol for thought_signature compatibility",
+            model
+        );
+        return false;
+    }
+
     let resolved_url = {
         let trimmed = url.trim_end_matches('/');
         if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
@@ -4990,6 +4998,14 @@ pub fn parse_multimodal_content(text: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn gemini_models_probe_false_for_json_protocol_fallback() {
+        let client = reqwest::Client::new();
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let res = probe_function_calling(&client, &state, "http://localhost:3000/v1", "gemini-3.1-flash-lite").await;
+        assert!(!res, "gemini models must probe false to use Json protocol and prevent thought_signature 400 errors");
+    }
 
     async fn gated_json_server(
         body: serde_json::Value,
