@@ -230,7 +230,11 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
                     serde_json::json!({
                         "id": call.id,
                         "type": "function",
-                        "function": { "name": call.name, "arguments": call.arguments },
+                        "function": {
+                            "name": call.name,
+                            "arguments": call.arguments,
+                            "thought_signature": "context",
+                        },
                     })
                 })
                 .collect();
