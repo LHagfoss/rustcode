@@ -61,13 +61,23 @@ pub(super) fn render_tool_result<'a>(
     tool_name: &str,
     result: &str,
     width: usize,
+    verbosity: &crate::app::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
     let lines = match tool_name {
-        "view_file" => render_read_result(result, width, show_picker),
-        "grep" => render_search_result(result, width, show_picker),
-        "glob" | "list_directory" => render_directory_result(result, show_picker),
-        "run_command" => render_command_result(result, show_picker),
+        "view_file" | "grep" | "glob" | "list_directory" | "run_command" => {
+            if matches!(verbosity, crate::app::Verbosity::High) {
+                Vec::new()
+            } else {
+                match tool_name {
+                    "view_file" => render_read_result(result, width, show_picker),
+                    "grep" => render_search_result(result, width, show_picker),
+                    "glob" | "list_directory" => render_directory_result(result, show_picker),
+                    "run_command" => render_command_result(result, show_picker),
+                    _ => unreachable!(), // Should be covered by the outer match
+                }
+            }
+        }
         "replace_file_content"
         | "multi_replace_file_content"
         | "write_to_file"
@@ -410,6 +420,7 @@ mod tests {
             "view_file",
             "[File: src/main.rs, Lines 4 to 5 of 5]\n4: fn main() {}",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         assert_eq!(lines.len(), 2);
@@ -424,7 +435,7 @@ mod tests {
 
     #[test]
     fn grep_results_distinguish_file_headers_and_matches() {
-        let lines = render_tool_result("grep", "src/main.rs:\n  12: fn main() {}", 80, false);
+        let lines = render_tool_result("grep", "src/main.rs:\n  12: fn main() {}", 80, &crate::app::Verbosity::Low, false);
         assert_eq!(lines.len(), 2);
         assert!(lines[0].spans[0].content.contains("src/main.rs"));
         assert!(
@@ -437,7 +448,7 @@ mod tests {
 
     #[test]
     fn directory_results_get_tree_markers() {
-        let lines = render_tool_result("list_directory", "src/\nmain.rs", 80, false);
+        let lines = render_tool_result("list_directory", "src/\nmain.rs", 80, &crate::app::Verbosity::Low, false);
         assert!(lines[0].spans[0].content.contains('▸'));
         assert!(lines[1].spans[0].content.contains('·'));
     }
@@ -448,6 +459,7 @@ mod tests {
             "run_command",
             "exit code: 0\nstdout:\ncargo test\nstderr:\n",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         assert!(!lines.iter().any(|line| {
@@ -465,6 +477,7 @@ mod tests {
             "run_command",
             "exit code: 1\nstderr:\npermission denied",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         assert!(lines[0].spans[0].content.contains("✗ exit 1"));
@@ -477,6 +490,7 @@ mod tests {
             "replace_file_content",
             "successfully replaced target_content in 'src/main.rs'",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         assert_eq!(lines.len(), 1);
@@ -493,6 +507,7 @@ mod tests {
             "replace_file_content",
             "successfully replaced target_content in 'src/main.rs'\n\n```diff\n@@\n-old\n+new\n```",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         assert!(lines.len() > 1);
@@ -513,8 +528,8 @@ mod tests {
 
     #[test]
     fn control_plane_results_are_hidden() {
-        assert!(render_tool_result("use_skill", "loaded skill", 80, false).is_empty());
-        assert!(render_tool_result("spawn_agent", "agent done", 80, false).is_empty());
+        assert!(render_tool_result("use_skill", "loaded skill", 80, &crate::app::Verbosity::Low, false).is_empty());
+        assert!(render_tool_result("spawn_agent", "agent done", 80, &crate::app::Verbosity::Low, false).is_empty());
     }
 
     #[test]
@@ -523,6 +538,7 @@ mod tests {
             "run_command",
             "exit code: 0\nstdout:\nhello world",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         assert!(!lines.is_empty());
@@ -536,6 +552,7 @@ mod tests {
             "mcp_custom_tool",
             "completed\nerror: remote service failed",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         assert_eq!(lines.len(), 2);
@@ -566,7 +583,7 @@ mod tests {
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_tool_result("mcp_custom_tool", &result, 80, false);
+        let lines = render_tool_result("mcp_custom_tool", &result, 80, &crate::app::Verbosity::Low, false);
 
         assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
         assert!(
@@ -582,8 +599,8 @@ mod tests {
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let command = render_tool_result("run_command", &result, 80, false);
-        let generic = render_tool_result("mcp_custom_tool", &result, 80, false);
+        let command = render_tool_result("run_command", &result, 80, &crate::app::Verbosity::Low, false);
+        let generic = render_tool_result("mcp_custom_tool", &result, 80, &crate::app::Verbosity::Low, false);
 
         assert_eq!(command.len(), MAX_RENDERED_COMMAND_LINES + 1);
         assert!(command.len() > generic.len());
@@ -601,7 +618,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = format!("exit code: 101\nstderr:\n{body}\nerror: build failed");
-        let lines = render_tool_result("run_command", &result, 80, false);
+        let lines = render_tool_result("run_command", &result, 80, &crate::app::Verbosity::Low, false);
 
         assert_eq!(lines.len(), MAX_RENDERED_COMMAND_LINES + 1);
         assert!(text_of(&lines[0]).contains("✗ exit 101"));
@@ -617,7 +634,7 @@ mod tests {
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_tool_result("grep", &result, 80, false);
+        let lines = render_tool_result("grep", &result, 80, &crate::app::Verbosity::Low, false);
         let notice = text_of(lines.last().unwrap());
 
         assert_eq!(notice.trim(), "… 35 more lines");
@@ -627,7 +644,7 @@ mod tests {
 
     #[test]
     fn generic_results_preserve_interior_blank_lines() {
-        let lines = render_tool_result("mcp_custom_tool", "first\n\nsecond", 80, false);
+        let lines = render_tool_result("mcp_custom_tool", "first\n\nsecond", 80, &crate::app::Verbosity::Low, false);
 
         assert_eq!(lines.len(), 3);
         assert!(text_of(&lines[0]).contains("first"));
@@ -637,7 +654,7 @@ mod tests {
 
     #[test]
     fn generic_results_collapse_blank_runs_and_trim_edges() {
-        let lines = render_tool_result("mcp_custom_tool", "\n\nfirst\n\n\n\nsecond\n\n", 80, false);
+        let lines = render_tool_result("mcp_custom_tool", "\n\nfirst\n\n\n\nsecond\n\n", 80, &crate::app::Verbosity::Low, false);
 
         assert_eq!(lines.len(), 3);
         assert!(text_of(&lines[0]).contains("first"));
@@ -650,6 +667,7 @@ mod tests {
             "view_file",
             "[File: src/main.rs, Lines 1 to 2 of 9, Bytes offset: 0]\n1: fn main() {}",
             80,
+            &crate::app::Verbosity::Low,
             false,
         );
         let header = text_of(&lines[0]);
@@ -665,7 +683,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = format!("successfully edited file\n\n```diff\n{diff}\n```");
-        let lines = render_tool_result("replace_file_content", &result, 80, false);
+        let lines = render_tool_result("replace_file_content", &result, 80, &crate::app::Verbosity::Low, false);
 
         assert!(lines.len() > MAX_RENDERED_TOOL_LINES);
         assert!(
