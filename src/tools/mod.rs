@@ -1144,8 +1144,17 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
 }
 
 fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
-    let name = json.get("name")?.as_str()?.to_string();
-    let args = if let Some(args_val) = json.get("arguments") {
+    let name = json
+        .get("name")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            json.get("arguments")
+                .and_then(|args| args.get("name"))
+                .and_then(|v| v.as_str())
+        })?
+        .to_string();
+
+    let mut args = if let Some(args_val) = json.get("arguments") {
         args_val.clone()
     } else if let Some(obj) = json.as_object() {
         let mut map = serde_json::Map::new();
@@ -1158,6 +1167,11 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
     } else {
         Value::Object(Default::default())
     };
+
+    if let Some(obj) = args.as_object_mut() {
+        obj.remove("name");
+    }
+
     Some((name, args))
 }
 
@@ -1756,6 +1770,16 @@ mod tests {
         let text = "```tool\n{\"arguments\": {\"path\": \"src/config.rs\"}}\n```";
         let diag = diagnose_failed_tool_call(text).unwrap();
         assert!(diag.contains("Missing required 'name' field"));
+    }
+
+    #[test]
+    fn test_extract_tool_call_recovers_name_nested_in_arguments() {
+        let text = "```tool\n{\"arguments\": {\"name\": \"multi_replace_file_content\", \"path\": \"src/config.rs\", \"replacements\": []}}\n```";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "multi_replace_file_content");
+        assert_eq!(calls[0].arguments.get("path").unwrap().as_str().unwrap(), "src/config.rs");
+        assert!(calls[0].arguments.get("name").is_none());
     }
 
     #[test]
