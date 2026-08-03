@@ -1331,7 +1331,12 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
             let repaired = repair_json(block.trim());
             match serde_json::from_str::<Value>(&repaired) {
                 Ok(val) => {
-                    if val.get("name").is_none() {
+                    let has_name = val.get("name").is_some()
+                        || val
+                            .get("arguments")
+                            .and_then(|a| a.get("name"))
+                            .is_some();
+                    if !has_name {
                         let snippet: String = block.trim().chars().take(240).collect();
                         return Some(format!(
                             "Missing required 'name' field in tool call JSON. Every tool call must include `\"name\": \"tool_name\"`. Offending block:\n```\n{snippet}\n```"
@@ -1780,6 +1785,20 @@ mod tests {
         assert_eq!(calls[0].name, "multi_replace_file_content");
         assert_eq!(calls[0].arguments.get("path").unwrap().as_str().unwrap(), "src/config.rs");
         assert!(calls[0].arguments.get("name").is_none());
+    }
+
+    #[test]
+    fn test_parse_tool_call_with_escaped_quotes_in_values() {
+        // Reproduces the exact shape from session 1785743879558 MSG 7:
+        // \\\" inside a JSON string value (e.g. serde rename_all = \"lowercase\")
+        let text = "```tool\n{\"name\":\"replace_file_content\",\"arguments\":{\"edits\":[{\"new_string\":\"#[derive(Debug)]\\n#[serde(rename_all = \\\"lowercase\\\")]\\npub enum Foo {\",\"old_string\":\"#[derive(Debug)]\\npub enum Foo {\"}],\"path\":\"src/config.rs\"}}\n```";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 1, "Expected 1 call, got {}: {:?}", calls.len(), calls);
+        assert_eq!(calls[0].name, "replace_file_content");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "src/config.rs"
+        );
     }
 
     #[test]
