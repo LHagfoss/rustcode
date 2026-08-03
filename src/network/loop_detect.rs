@@ -52,19 +52,18 @@ fn is_read_only_category(name: &str, category: &str) -> bool {
     let subcommand = git_args.trim_start_matches(':').split_whitespace().next();
     matches!(
         subcommand,
-        None
-            | Some(
-                "branch"
-                    | "describe"
-                    | "diff"
-                    | "log"
-                    | "ls-files"
-                    | "remote"
-                    | "rev-parse"
-                    | "show"
-                    | "status"
-                    | "tag"
-            )
+        None | Some(
+            "branch"
+                | "describe"
+                | "diff"
+                | "log"
+                | "ls-files"
+                | "remote"
+                | "rev-parse"
+                | "show"
+                | "status"
+                | "tag"
+        )
     )
 }
 
@@ -87,7 +86,11 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
         // line coarsely (per 200 lines) so cosmetic ±N range shifts over the same
         // area collapse to one category, while genuinely distinct parts of a big
         // file stay distinct and don't trip the detector prematurely.
-        match args.get("path").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        match args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             Some(path) => {
                 let start = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
                 format!("view_file:{path}#{}", start / 200)
@@ -96,7 +99,11 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
         }
     } else if name == "grep" {
         let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
-        let path = args.get("path").or_else(|| args.get("include")).and_then(|v| v.as_str()).unwrap_or("");
+        let path = args
+            .get("path")
+            .or_else(|| args.get("include"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         format!("grep:{pattern}@{path}")
     } else if matches!(name, "list_directory" | "glob" | "find_symbol") {
         let target = args
@@ -108,6 +115,22 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
             Some(t) => format!("{name}:{t}"),
             None => exact.clone(),
         }
+    } else if matches!(
+        name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
+    ) {
+        let path = args
+            .get("path")
+            .or_else(|| args.get("target_file"))
+            .or_else(|| args.get("TargetFile"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        format!("edit:{path}")
     } else {
         exact.clone()
     };
@@ -201,7 +224,10 @@ struct FrequencyTracker {
 
 impl FrequencyTracker {
     fn new(size: usize) -> Self {
-        Self { window: Vec::new(), size }
+        Self {
+            window: Vec::new(),
+            size,
+        }
     }
 
     fn record(&mut self, value: &str) -> usize {
@@ -326,8 +352,14 @@ mod tests {
 
     #[test]
     fn search_variants_share_category() {
-        let (_, a) = signatures("run_command", &json!({"command": "rg -n 'TODO|FIXME' src/"}));
-        let (_, b) = signatures("run_command", &json!({"command": "grep -rnE \"TODO|FIXME\" src/ || echo none"}));
+        let (_, a) = signatures(
+            "run_command",
+            &json!({"command": "rg -n 'TODO|FIXME' src/"}),
+        );
+        let (_, b) = signatures(
+            "run_command",
+            &json!({"command": "grep -rnE \"TODO|FIXME\" src/ || echo none"}),
+        );
         assert_eq!(a, b);
         assert_eq!(a, "search:TODO|FIXME src");
     }
@@ -336,8 +368,14 @@ mod tests {
     fn view_file_range_shifting_shares_category() {
         // Same file, different line ranges = one intent. Range-shifting must not
         // dodge the loop detector.
-        let (e1, c1) = signatures("view_file", &json!({"path": "src/network.rs", "start_line": 1, "end_line": 100}));
-        let (e2, c2) = signatures("view_file", &json!({"path": "src/network.rs", "start_line": 50, "end_line": 150}));
+        let (e1, c1) = signatures(
+            "view_file",
+            &json!({"path": "src/network.rs", "start_line": 1, "end_line": 100}),
+        );
+        let (e2, c2) = signatures(
+            "view_file",
+            &json!({"path": "src/network.rs", "start_line": 50, "end_line": 150}),
+        );
         assert_ne!(e1, e2, "exact signatures should differ by range");
         assert_eq!(c1, c2, "same region should collapse to one category");
         assert_eq!(c1, "view_file:src/network.rs#0");
@@ -346,8 +384,14 @@ mod tests {
     #[test]
     fn view_file_distinct_regions_stay_distinct() {
         // Reading far-apart parts of a big file is legit paging, not a loop.
-        let (_, c1) = signatures("view_file", &json!({"path": "src/big.rs", "start_line": 40, "end_line": 240}));
-        let (_, c2) = signatures("view_file", &json!({"path": "src/big.rs", "start_line": 1400, "end_line": 1600}));
+        let (_, c1) = signatures(
+            "view_file",
+            &json!({"path": "src/big.rs", "start_line": 40, "end_line": 240}),
+        );
+        let (_, c2) = signatures(
+            "view_file",
+            &json!({"path": "src/big.rs", "start_line": 1400, "end_line": 1600}),
+        );
         assert_ne!(c1, c2, "distinct regions must not share a category");
     }
 
@@ -367,16 +411,36 @@ mod tests {
     }
 
     #[test]
-    fn non_bash_tool_uses_exact() {
-        let (exact, cat) = signatures("write_to_file", &json!({"path": "src/main.rs"}));
-        assert_eq!(exact, cat);
-        assert!(exact.starts_with("write_to_file:"));
+    fn edit_tool_normalizes_category_to_target_path() {
+        let (exact, cat) = signatures("replace_file_content", &json!({"path": "src/ui/mod.rs", "old_string": "a", "new_string": "b"}));
+        assert_ne!(exact, cat);
+        assert_eq!(cat, "edit:src/ui/mod.rs");
+    }
+
+    #[test]
+    fn alternating_edit_ping_pong_caught_by_category() {
+        let mut d = LoopDetector::new(4);
+        let edit1 = json!({"path": "src/ui/mod.rs", "old_string": "% 6", "new_string": "% 10"});
+        let edit2 = json!({"path": "src/ui/mod.rs", "old_string": "% 10", "new_string": "% 6"});
+        let (e1, c1) = signatures("replace_file_content", &edit1);
+        let (e2, c2) = signatures("replace_file_content", &edit2);
+
+        assert_eq!(d.check(&e1, &c1), LoopStatus::Ok);
+        assert_eq!(d.check(&e2, &c2), LoopStatus::Warning(2));
+        assert_eq!(d.check(&e1, &c1), LoopStatus::Warning(3));
+        assert_eq!(d.check(&e2, &c2), LoopStatus::Abort(4));
     }
 
     #[test]
     fn grep_different_patterns_distinct_categories() {
-        let (_e1, cat1) = signatures("grep", &json!({ "pattern": "command", "path": "src/app/actions.rs" }));
-        let (_e2, cat2) = signatures("grep", &json!({ "pattern": "/clear", "path": "src/app/actions.rs" }));
+        let (_e1, cat1) = signatures(
+            "grep",
+            &json!({ "pattern": "command", "path": "src/app/actions.rs" }),
+        );
+        let (_e2, cat2) = signatures(
+            "grep",
+            &json!({ "pattern": "/clear", "path": "src/app/actions.rs" }),
+        );
         assert_ne!(cat1, cat2);
         assert_eq!(cat1, "grep:command@src/app/actions.rs");
         assert_eq!(cat2, "grep:/clear@src/app/actions.rs");
