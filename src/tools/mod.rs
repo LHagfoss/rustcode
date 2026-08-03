@@ -1012,7 +1012,7 @@ pub fn tool_system_prompt(
 - Tool results are authoritative evidence. If a tool or compiler check reports an error, fix it before giving a final answer. Never replace a concrete tool result with a claim that tools were unavailable.\n\
 - A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
-- Editing an existing file: use `replace_file_content` (pass an `edits` array to batch several changes in one call). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
+- Editing an existing file: use `replace_file_content` (for a single edit, pass `target_content` and `replacement_content` with `start_line` and `end_line`; for multiple edits, pass an `edits` array with `old_string` and `new_string`). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
 - ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, and `search_web` run in parallel when emitted in the same response, so when you need several facts at once, ask for them at once — searching four paths is one thought, not four turns. Reads whose arguments depend on an earlier result must of course wait for it. Exception: `use_skill` is a control-plane call and must always be emitted ALONE — any calls batched with it are dropped.\n\
 - ONE CHANGE AT A TIME: anything that writes, runs a command, or delegates (`replace_file_content`, `write_to_file`, `run_command`, `spawn_agent`, …) executes alone and must be grounded in results you already have. Emit at most 4 such calls in a response, and prefer one. Never output a speculative chain that predicts its own results — edits, builds, commits, and a PR in a single turn is a story about what might happen, not work.\n\
 - Chaining shell commands is different from speculative tool batching: it is encouraged for small, related, inspectable command sequences, especially status/log/diff checks and the verified publish sequence. Inspect output before deciding the next mutation.\n\
@@ -1321,7 +1321,7 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<ToolCall>) {
 /// "malformed" message it tends to reproduce verbatim. Returns `None` when the
 /// text was parseable or contained no recognizable tool syntax.
 pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
-    // Look at every ```tool fence; report the first that fails to parse.
+    // Look at every ```tool fence; report the first that fails to parse or validate.
     let mut search = text;
     while let Some(rel) = search.find("```tool") {
         let after_tag = &search[rel + 7..];
@@ -1344,6 +1344,17 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
                         return Some(format!(
                             "Missing required 'name' field in tool call JSON. Every tool call must include `\"name\": \"tool_name\"`. Offending block:\n```\n{snippet}\n```"
                         ));
+                    }
+                    if let Some((name, args)) = extract_tool_call(&val) {
+                        if let Err(err) = validate_tool_calls(&[ToolCall {
+                            name: name.clone(),
+                            arguments: args,
+                        }]) {
+                            let snippet: String = block.trim().chars().take(240).collect();
+                            return Some(format!(
+                                "Tool call '{name}' failed validation: {err}. Offending block:\n```\n{snippet}\n```"
+                            ));
+                        }
                     }
                 }
                 Err(e) => {
@@ -1727,6 +1738,16 @@ mod tests {
     fn diagnose_ignores_valid_tool_call() {
         let text = "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"x\"}}\n```";
         assert!(diagnose_failed_tool_call(text).is_none());
+    }
+
+    #[test]
+    fn diagnose_reports_validation_error() {
+        let text = "```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```";
+        let diag = diagnose_failed_tool_call(text);
+        assert!(diag.is_some(), "should diagnose invalid arguments");
+        let d = diag.unwrap();
+        assert!(d.contains("failed validation"), "got: {d}");
+        assert!(d.contains("grep"), "got: {d}");
     }
 
     #[test]
