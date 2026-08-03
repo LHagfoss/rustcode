@@ -1401,10 +1401,16 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                 ));
             }
-            // Separate the complete tool card from the next transcript item.
-            // This keeps consecutive tool calls readable without adding padding
-            // inside the structured result itself.
-            lines.push(Line::from(""));
+            // Separate the tool card from the next transcript item — but keep a
+            // run of consecutive tool calls tight so they read as one lean list
+            // instead of a tall stack of padded cards.
+            let next_is_tool = state
+                .history
+                .get(msg_idx + 1)
+                .is_some_and(|m| m.role == "tool");
+            if !next_is_tool {
+                lines.push(Line::from(""));
+            }
 
         } else if msg.role == "user" {
             if msg_idx > 0 {
