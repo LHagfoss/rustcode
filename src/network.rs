@@ -4279,6 +4279,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 for message in unanswered_call_results(&call_refs, "interrupted by the user") {
                     s.history.push(message);
                 }
+                // Text protocols produce no call refs, so the loop above
+                // records nothing there. Leave an explicit marker so both
+                // the transcript and the model's next context show the turn
+                // was cancelled before any result arrived.
+                if call_refs.is_empty() {
+                    s.history.push(ChatMessage::new("system", "Request cancelled by user"));
+                }
                 crate::config::save_history(&s.history);
                 s.status = AppStatus::Idle;
                 ctx.turn_machine.finish_tools_if_executing();
