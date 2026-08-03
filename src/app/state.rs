@@ -559,6 +559,12 @@ pub enum HoverTarget {
     CopyBadge(u16),
 }
 
+#[derive(Debug, PartialEq, Clone, Hash)]
+pub enum Verbosity {
+    Low,
+    High,
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -707,6 +713,7 @@ pub struct AppState {
     /// Cached static system prompt + tool schema, rebuilt only when the tool
     /// protocol, agent mode, or MCP tool set changes.
     pub prompt_cache: PromptCache,
+    pub verbosity: Verbosity,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -809,6 +816,7 @@ impl AppState {
             show_model_picker: false,
             model_picker_index: 0,
             model_picker_search: String::new(),
+            verbosity: Verbosity::Low,
             show_command_picker: false,
             command_picker_index: 0,
             command_picker_search: String::new(),

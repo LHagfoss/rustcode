@@ -246,8 +246,32 @@ pub async fn handle_enter(
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
+            "/verbosity" => {
+                if tokens.len() < 2 {
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Usage: /verbosity <low|high>",
+                    ));
+                } else {
+                    match tokens[1] {
+                        "low" => {
+                            s.verbosity = crate::app::state::Verbosity::Low;
+                            s.history.push(ChatMessage::new("system", "Verbosity set to low."));
+                        }
+                        "high" => {
+                            s.verbosity = crate::app::state::Verbosity::High;
+                            s.history.push(ChatMessage::new("system", "Verbosity set to high."));
+                        }
+                        _ => {
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                "Invalid verbosity level. Use 'low' or 'high'.",
+                            ));
+                        }
+                    }
+                }
+            }
             "/discord" => {
-                s.config.discord_rpc_enabled = !s.config.discord_rpc_enabled;
                 crate::config::save_entire_config(&s.config);
                 let is_enabled = s.config.discord_rpc_enabled;
                 s.history.push(ChatMessage::new(
