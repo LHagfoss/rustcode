@@ -534,7 +534,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "manage_task",
-        description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill').",
+        description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill'). Do NOT poll list or status in a loop — completion notifications arrive automatically.",
         arguments: r#"{"action": "list, status, or kill", "task_id": "required for status/kill"}"#,
         handler: exec::manage_task_tool,
         requires_confirmation: false,
