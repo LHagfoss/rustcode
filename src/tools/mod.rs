@@ -1020,7 +1020,8 @@ pub fn tool_system_prompt(
 - Match project code style.\n\
 - Before adding new code, study how the nearest EXISTING code does the same thing (sibling functions, other match arms, similar handlers) and mirror its patterns — function signatures, how shared state/locks are passed, error handling. Do NOT invent a new pattern when neighbors establish one; diverging from local conventions is a common source of subtle bugs (deadlocks, double-locks, lifetime issues) that compile fine but break at runtime.\n\
 - Prefer the smallest effective tool sequence: locate first, inspect only the relevant range, make one focused change, then verify from the correct project root. Do not repeat successful reads or run broad checks unrelated to the files changed.\n\
-- Run focused tests or checks after code changes unless the user says not to; ask before expensive or externally visible operations.\n\
+- Run focused tests or checks after code changes unless the user says not to. When modifying algorithms, visual curves, or complex logic, verify edge/boundary conditions and add or update unit tests to prove correctness before completing the task.
+- Ask before expensive or externally visible operations.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
 - Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations.\n\
 - When the task is complete, output a plain-text final summary (with no tool block).\n\n\
