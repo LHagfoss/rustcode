@@ -1218,9 +1218,10 @@ fn render_status_panel<'a>(
     show_picker: bool,
     lines: &mut Vec<Line<'a>>,
 ) {
-    // Keep status cards visually separated from the preceding assistant/tool
-    // message. The bottom spacer already exists below the card.
-    lines.push(Line::from(""));
+    // No leading spacer: every preceding transcript item (assistant text, user
+    // bubble, tool card, turn separator, another status card) already ends
+    // with its own trailing blank row. Adding one here doubled the gap under
+    // the previous card whenever two notices landed in a row.
     let lower = content.to_ascii_lowercase();
     let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
         .iter()
@@ -2575,13 +2576,15 @@ mod tests {
     }
 
     #[test]
-    fn status_panels_have_vertical_padding() {
+    fn status_panels_have_trailing_spacer_only() {
         use super::render_status_panel;
 
         let mut lines = Vec::new();
         render_status_panel("Notice: background task finished", 80, false, &mut lines);
 
-        assert!(lines.first().is_some_and(|line| line.spans.is_empty()));
+        // No leading spacer — the preceding transcript item already ends with
+        // its own blank row. The trailing spacer separates from what follows.
+        assert!(lines.first().is_some_and(|line| !line.spans.is_empty()));
         assert!(lines.last().is_some_and(|line| line.spans.is_empty()));
     }
 
