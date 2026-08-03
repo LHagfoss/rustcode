@@ -418,9 +418,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     needs_redraw = true;
-                    if key.modifiers.contains(event::KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('c')
+                    let is_ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
+                    let is_cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
+
+                    if (is_ctrl || is_cmd)
+                        && (key.code == KeyCode::Char('k') || key.code == KeyCode::Char('K'))
                     {
+                        terminal.clear().ok();
+                        continue;
+                    }
+                    if is_ctrl && (key.code == KeyCode::Char('l') || key.code == KeyCode::Char('L')) {
+                        terminal.clear().ok();
+                        continue;
+                    }
+
+                    if is_ctrl && key.code == KeyCode::Char('c') {
                         break;
                     }
 
