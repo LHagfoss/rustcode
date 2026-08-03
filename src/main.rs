@@ -1266,7 +1266,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         current - 1
                                     });
                                 }
-                            } else if s.input_buffer.is_empty() {
+                            } else if s.input_buffer.is_empty() || s.history_index.is_some() {
+                                // Once recall has started, keep walking the
+                                // history — without this, the recalled text made
+                                // the buffer non-empty and the next Up fell
+                                // through to cursor movement, pinning recall on
+                                // the most recent entry.
                                 s.history_up();
                             } else {
                                 s.move_cursor_line_up();
