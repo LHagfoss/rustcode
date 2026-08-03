@@ -34,12 +34,12 @@ pub(crate) fn parse_sse_line(line: &str) -> Option<&str> {
 pub(crate) fn classify_tool_msg(m: &ChatMessage) -> Option<&'static str> {
     if m.role != "tool" {
         return None;
-     }
+    }
     let name = m.content.split(':').next().unwrap_or("").trim();
     Some(match name {
-         "run_command" | "grep" | "glob" | "list_directory" | "get_time"
-         | "find_symbol" | "get_project_map" | "search_web" => "throwaway",
-         "view_file" => "file",
-         _ => "other",
-     })
+        "run_command" | "grep" | "glob" | "list_directory" | "get_time" | "find_symbol"
+        | "get_project_map" | "search_web" => "throwaway",
+        "view_file" => "file",
+        _ => "other",
+    })
 }

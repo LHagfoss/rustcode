@@ -20,12 +20,19 @@ impl ContextSnapshot {
             .unwrap_or_else(|_| "(unknown)".to_string());
         let date = chrono::Local::now().format("%A %Y-%m-%d").to_string();
 
-        let git_branch = run_git(std::path::Path::new(&cwd), &["rev-parse", "--abbrev-ref", "HEAD"])
-            .map(|s| s.trim().to_string());
-        let git_status_summary = run_git(std::path::Path::new(&cwd), &["status", "--short"])
-            .map(|s| {
+        let git_branch = run_git(
+            std::path::Path::new(&cwd),
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+        )
+        .map(|s| s.trim().to_string());
+        let git_status_summary =
+            run_git(std::path::Path::new(&cwd), &["status", "--short"]).map(|s| {
                 let count = s.trim().lines().count();
-                if count == 0 { "clean".to_string() } else { format!("{} changed", count) }
+                if count == 0 {
+                    "clean".to_string()
+                } else {
+                    format!("{} changed", count)
+                }
             });
 
         let tree_entries = std::fs::read_dir(&cwd)
@@ -35,7 +42,9 @@ impl ContextSnapshot {
                     .filter_map(|e| e.ok())
                     .filter_map(|e| {
                         let name = e.file_name().to_string_lossy().to_string();
-                        if name.starts_with('.') { return None; }
+                        if name.starts_with('.') {
+                            return None;
+                        }
                         let mut n = name;
                         if e.file_type().ok().map(|t| t.is_dir()).unwrap_or(false) {
                             n.push('/');
@@ -51,7 +60,14 @@ impl ContextSnapshot {
 
         let agent_doc = load_agent_doc(&cwd);
 
-        Self { cwd, date, git_branch, git_status_summary, tree_entries, agent_doc }
+        Self {
+            cwd,
+            date,
+            git_branch,
+            git_status_summary,
+            tree_entries,
+            agent_doc,
+        }
     }
 
     /// Produce a delta description of what changed between the previous snapshot and now.
@@ -60,28 +76,56 @@ impl ContextSnapshot {
         let mut changes = Vec::new();
 
         if self.cwd != current.cwd {
-            changes.push(format!("Working directory changed: {} -> {}", self.cwd, current.cwd));
+            changes.push(format!(
+                "Working directory changed: {} -> {}",
+                self.cwd, current.cwd
+            ));
         }
         if self.date != current.date {
             changes.push(format!("Date changed: {}", current.date));
         }
         if self.git_branch != current.git_branch {
-            changes.push(format!("Git branch changed: {:?} -> {:?}", self.git_branch, current.git_branch));
+            changes.push(format!(
+                "Git branch changed: {:?} -> {:?}",
+                self.git_branch, current.git_branch
+            ));
         }
         if self.git_status_summary != current.git_status_summary {
-            changes.push(format!("Git status: {}",
-                current.git_status_summary.as_deref().unwrap_or("unknown")));
+            changes.push(format!(
+                "Git status: {}",
+                current.git_status_summary.as_deref().unwrap_or("unknown")
+            ));
         }
         if self.tree_entries != current.tree_entries {
-            let added: Vec<&String> = current.tree_entries.iter()
-                .filter(|e| !self.tree_entries.contains(e)).collect();
-            let removed: Vec<&String> = self.tree_entries.iter()
-                .filter(|e| !current.tree_entries.contains(e)).collect();
+            let added: Vec<&String> = current
+                .tree_entries
+                .iter()
+                .filter(|e| !self.tree_entries.contains(e))
+                .collect();
+            let removed: Vec<&String> = self
+                .tree_entries
+                .iter()
+                .filter(|e| !current.tree_entries.contains(e))
+                .collect();
             if !added.is_empty() {
-                changes.push(format!("New files/dirs: {}", added.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+                changes.push(format!(
+                    "New files/dirs: {}",
+                    added
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
             if !removed.is_empty() {
-                changes.push(format!("Removed files/dirs: {}", removed.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+                changes.push(format!(
+                    "Removed files/dirs: {}",
+                    removed
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
         }
         if self.agent_doc != current.agent_doc {
@@ -160,7 +204,10 @@ fn git_context(cwd: &str) -> Option<String> {
             out.push_str("```\n");
             out.push_str(&shown.join("\n"));
             if lines.len() > shown.len() {
-                out.push_str(&format!("\n... ({} more changed files truncated to save context)", lines.len() - shown.len()));
+                out.push_str(&format!(
+                    "\n... ({} more changed files truncated to save context)",
+                    lines.len() - shown.len()
+                ));
             }
             out.push_str("\n```\n");
         }
@@ -230,7 +277,10 @@ fn top_level_tree(cwd: &str) -> Option<String> {
     let mut out = String::from("\n## Working directory tree (top level)\n\n");
     out.push_str(&shown.join("\n"));
     if total > shown.len() {
-        out.push_str(&format!("\n... ({} more entries truncated to save context)", total - shown.len()));
+        out.push_str(&format!(
+            "\n... ({} more entries truncated to save context)",
+            total - shown.len()
+        ));
     }
     out.push('\n');
     Some(out)

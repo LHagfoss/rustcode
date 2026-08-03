@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::discord_rpc::DiscordRpcHandler;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum AppStatus {
@@ -335,11 +335,12 @@ impl McpEditState {
         let (buf, pos) = self.active_buf_and_pos_mut();
         *pos = (*pos).min(buf.len());
         if *pos > 0
-            && let Some(c) = buf[..*pos].chars().next_back() {
-                let len = c.len_utf8();
-                *pos -= len;
-                buf.remove(*pos);
-            }
+            && let Some(c) = buf[..*pos].chars().next_back()
+        {
+            let len = c.len_utf8();
+            *pos -= len;
+            buf.remove(*pos);
+        }
     }
 
     pub fn delete_char_right(&mut self) {
@@ -358,12 +359,22 @@ impl McpEditState {
         }
         let end = *pos;
         let mut start = *pos;
-        while start > 0 && buf[..start].chars().next_back().is_some_and(|c| c.is_whitespace()) {
+        while start > 0
+            && buf[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_whitespace())
+        {
             if let Some(c) = buf[..start].chars().next_back() {
                 start -= c.len_utf8();
             }
         }
-        while start > 0 && buf[..start].chars().next_back().is_some_and(|c| !c.is_whitespace()) {
+        while start > 0
+            && buf[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_whitespace())
+        {
             if let Some(c) = buf[..start].chars().next_back() {
                 start -= c.len_utf8();
             }
@@ -383,30 +394,42 @@ impl McpEditState {
         let (buf, pos) = self.active_buf_and_pos_mut();
         *pos = (*pos).min(buf.len());
         if *pos > 0
-            && let Some(c) = buf[..*pos].chars().next_back() {
-                *pos -= c.len_utf8();
-            }
+            && let Some(c) = buf[..*pos].chars().next_back()
+        {
+            *pos -= c.len_utf8();
+        }
     }
 
     pub fn move_cursor_right(&mut self) {
         let (buf, pos) = self.active_buf_and_pos_mut();
         *pos = (*pos).min(buf.len());
         if *pos < buf.len()
-            && let Some(c) = buf[*pos..].chars().next() {
-                *pos += c.len_utf8();
-            }
+            && let Some(c) = buf[*pos..].chars().next()
+        {
+            *pos += c.len_utf8();
+        }
     }
 
     pub fn move_cursor_word_left(&mut self) {
         let (buf, pos) = self.active_buf_and_pos_mut();
         *pos = (*pos).min(buf.len());
         let mut p = *pos;
-        while p > 0 && buf[..p].chars().next_back().is_some_and(|c| c.is_whitespace()) {
+        while p > 0
+            && buf[..p]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_whitespace())
+        {
             if let Some(c) = buf[..p].chars().next_back() {
                 p -= c.len_utf8();
             }
         }
-        while p > 0 && buf[..p].chars().next_back().is_some_and(|c| !c.is_whitespace()) {
+        while p > 0
+            && buf[..p]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_whitespace())
+        {
             if let Some(c) = buf[..p].chars().next_back() {
                 p -= c.len_utf8();
             }
@@ -886,7 +909,6 @@ impl AppState {
         (cw as f64 * 0.75) as u32
     }
 
-
     fn clamp_cursor(&mut self) {
         self.cursor_position = self.cursor_position.min(self.input_buffer.len());
         while !self.input_buffer.is_char_boundary(self.cursor_position) {
@@ -1046,11 +1068,17 @@ impl AppState {
 
         if current_line_start > 0 {
             let prev_line_end = current_line_start - 1;
-            let prev_line_start = self.input_buffer[..prev_line_end].rfind('\n').map_or(0, |i| i + 1);
+            let prev_line_start = self.input_buffer[..prev_line_end]
+                .rfind('\n')
+                .map_or(0, |i| i + 1);
             let prev_line = &self.input_buffer[prev_line_start..prev_line_end];
             let prev_char_count = prev_line.chars().count();
             let target_col = col.min(prev_char_count);
-            let target_byte_offset: usize = prev_line.chars().take(target_col).map(|c| c.len_utf8()).sum();
+            let target_byte_offset: usize = prev_line
+                .chars()
+                .take(target_col)
+                .map(|c| c.len_utf8())
+                .sum();
             self.cursor_position = prev_line_start + target_byte_offset;
         } else {
             self.cursor_position = 0;
@@ -1066,11 +1094,17 @@ impl AppState {
 
         if let Some(next_line_start_rel) = self.input_buffer[pos..].find('\n') {
             let next_line_start = pos + next_line_start_rel + 1;
-            let next_line_end = self.input_buffer[next_line_start..].find('\n').map_or(self.input_buffer.len(), |i| next_line_start + i);
+            let next_line_end = self.input_buffer[next_line_start..]
+                .find('\n')
+                .map_or(self.input_buffer.len(), |i| next_line_start + i);
             let next_line = &self.input_buffer[next_line_start..next_line_end];
             let next_char_count = next_line.chars().count();
             let target_col = col.min(next_char_count);
-            let target_byte_offset: usize = next_line.chars().take(target_col).map(|c| c.len_utf8()).sum();
+            let target_byte_offset: usize = next_line
+                .chars()
+                .take(target_col)
+                .map(|c| c.len_utf8())
+                .sum();
             self.cursor_position = next_line_start + target_byte_offset;
         } else {
             self.cursor_position = self.input_buffer.len();
@@ -1095,10 +1129,11 @@ impl AppState {
                 .filter(|c| c.starts_with(prefix))
                 .collect();
             if let Some(idx) = self.suggestion_cycle.suggestion_index
-                && idx < matches.len() {
-                    self.input_buffer = matches[idx].to_string();
-                    self.cursor_position = self.input_buffer.len();
-                }
+                && idx < matches.len()
+            {
+                self.input_buffer = matches[idx].to_string();
+                self.cursor_position = self.input_buffer.len();
+            }
         }
     }
 
@@ -1272,8 +1307,6 @@ impl AppState {
             self.expanded_thoughts.insert(idx);
         }
     }
-
-
 }
 
 #[cfg(test)]
@@ -1287,7 +1320,9 @@ mod protocol_tests {
         s.config.tool_protocol = ToolProtocol::Json;
 
         assert_eq!(
-            s.tool_protocol_for("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
+            s.tool_protocol_for(
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+            ),
             ToolProtocol::ApiNative
         );
         assert_eq!(
