@@ -1772,7 +1772,7 @@ async fn ask_user_question(
 
     if question.is_empty() || options.is_empty() {
         return crate::tools::ToolExecutionOutput::failure(
-            "error: ask_question requires a non-empty 'question' and 'options'".to_string(),
+            "error: ask_question requires a non-empty 'question' and at least one option. The question UI already includes a 'write your own answer' slot for free-form text — do not retry with empty options; offer a real option or ask in plain assistant text instead.".to_string(),
         );
     }
 
