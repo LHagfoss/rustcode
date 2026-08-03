@@ -1267,12 +1267,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                             } else if s.input_buffer.is_empty() || s.history_index.is_some() {
-                                // Once recall has started, keep walking the
-                                // history — without this, the recalled text made
-                                // the buffer non-empty and the next Up fell
-                                // through to cursor movement, pinning recall on
-                                // the most recent entry.
-                                s.history_up();
+                                // With an empty buffer, Up first pulls the most
+                                // recent queued prompt back for editing; only
+                                // when nothing is queued does it recall history.
+                                // Once recall has started, keep walking it —
+                                // without this, the recalled text made the buffer
+                                // non-empty and the next Up fell through to
+                                // cursor movement, pinning recall on the most
+                                // recent entry.
+                                let pulled = s.history_index.is_none() && s.pop_queued_prompt();
+                                if !pulled {
+                                    s.history_up();
+                                }
                             } else {
                                 s.move_cursor_line_up();
                             }
