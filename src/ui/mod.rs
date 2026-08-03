@@ -1163,11 +1163,12 @@ thread_local! {
         RefCell::new(lru::LruCache::new(TOOL_RESULT_CACHE_CAP));
 }
 
-fn tool_result_cache_key(tool_name: &str, result: &str, width: usize, show_picker: bool) -> u64 {
+fn tool_result_cache_key(tool_name: &str, result: &str, width: usize, verbosity: &crate::app::Verbosity, show_picker: bool) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     tool_name.hash(&mut hasher);
     result.hash(&mut hasher);
     width.hash(&mut hasher);
+    verbosity.hash(&mut hasher);
     show_picker.hash(&mut hasher);
     hasher.finish()
 }
@@ -1176,9 +1177,10 @@ fn cached_tool_result(
     tool_name: &str,
     result: &str,
     width: usize,
+    verbosity: &crate::app::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let key = tool_result_cache_key(tool_name, result, width, show_picker);
+    let key = tool_result_cache_key(tool_name, result, width, verbosity, show_picker);
 
     TOOL_RESULT_CACHE.with(|cache| {
         // A hit refreshes recency, so results currently on screen are never the
@@ -1186,7 +1188,7 @@ fn cached_tool_result(
         if let Some(lines) = cache.borrow_mut().get(&key) {
             return lines.clone();
         }
-        let lines = render_tool_result(tool_name, result, width, show_picker)
+        let lines = render_tool_result(tool_name, result, width, verbosity, show_picker)
             .iter()
             .map(own_line)
             .collect::<Vec<_>>();
@@ -1395,6 +1397,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     &tool_name,
                     result,
                     inner_area.width as usize,
+                    &state.verbosity,
                     show_picker,
                 ));
             }
@@ -2271,19 +2274,20 @@ mod tests {
         };
 
         let cap = TOOL_RESULT_CACHE_CAP;
+        let verbosity = crate::app::Verbosity::Low;
         for i in 0..cap {
-            cached_tool_result("Bash", &format!("result {i}"), 80, false);
+            cached_tool_result("Bash", &format!("result {i}"), 80, &verbosity, false);
         }
         TOOL_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().entries.len(), cap));
 
         // Read the oldest entry so it becomes the most recently used one; a hit
         // must refresh recency.
-        let oldest = tool_result_cache_key("Bash", "result 0", 80, false);
-        cached_tool_result("Bash", "result 0", 80, false);
+        let oldest = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
+        cached_tool_result("Bash", "result 0", 80, &verbosity, false);
 
         // Exceed the cap by one: exactly one entry is evicted, and it is the
         // least recently used one rather than the entry just read.
-        cached_tool_result("Bash", "overflow", 80, false);
+        cached_tool_result("Bash", "overflow", 80, &verbosity, false);
         TOOL_RESULT_CACHE.with(|cache| {
             let cache = cache.borrow();
             assert_eq!(cache.entries.len(), cap, "cap must hold after overflow");
@@ -2294,7 +2298,7 @@ mod tests {
             assert!(
                 !cache
                     .entries
-                    .contains_key(&tool_result_cache_key("Bash", "result 1", 80, false)),
+                    .contains_key(&tool_result_cache_key("Bash", "result 1", 80, &verbosity, false)),
                 "the least recently used entry is the eviction victim"
             );
         });
@@ -2432,6 +2436,7 @@ mod tests {
                 tool_name.as_deref().unwrap(),
                 result.strip_prefix("replace_file_content: ").unwrap(),
                 80,
+                &crate::app::Verbosity::Low,
                 false,
             )
             .iter()
