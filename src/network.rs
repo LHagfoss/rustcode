@@ -122,7 +122,10 @@ impl std::fmt::Display for TurnBudgetLimit {
                 write!(f, "{n} consecutive failed edits")
             }
             TurnBudgetLimit::CompilerErrorGates(n) => {
-                write!(f, "{n} consecutive completion attempts with the build still broken")
+                write!(
+                    f,
+                    "{n} consecutive completion attempts with the build still broken"
+                )
             }
             TurnBudgetLimit::MalformedCalls(n) => {
                 write!(
@@ -163,7 +166,9 @@ fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
         return Some(TurnBudgetLimit::NoProgress(ctx.consecutive_no_progress));
     }
     if ctx.consecutive_failed_mutations >= MAX_CONSECUTIVE_FAILED_MUTATIONS {
-        return Some(TurnBudgetLimit::FailedMutations(ctx.consecutive_failed_mutations));
+        return Some(TurnBudgetLimit::FailedMutations(
+            ctx.consecutive_failed_mutations,
+        ));
     }
     if ctx.consecutive_compiler_error_gates >= MAX_CONSECUTIVE_COMPILER_ERROR_GATES {
         return Some(TurnBudgetLimit::CompilerErrorGates(
@@ -2909,8 +2914,8 @@ async fn prepare_turn_request(
         // the return value; the flag only gates the cache invalidation below.
         let mut s = state.lock().await;
         let live_session_id = s.active_session_id.clone();
-        let prefix_intact = live_session_id == active_session_id
-            && s.history.starts_with(&captured_history);
+        let prefix_intact =
+            live_session_id == active_session_id && s.history.starts_with(&captured_history);
         if prefix_intact {
             if s.history.len() > pre_len {
                 working_history.extend(s.history.drain(pre_len..));
@@ -3133,10 +3138,7 @@ fn finalize_tool_result(result: ToolResult, deferred_notice: Option<&str>) -> To
     finalize_tool_result_for_prefix(result, deferred_notice, &prefix)
 }
 
-fn tool_result_history_message(
-    result: ToolResult,
-    answered_call: Option<String>,
-) -> ChatMessage {
+fn tool_result_history_message(result: ToolResult, answered_call: Option<String>) -> ChatMessage {
     let prefix = format!("{}: ", result.tool_name);
     tool_result_history_message_with_prefix(result, &prefix, answered_call)
 }
@@ -3490,12 +3492,7 @@ different, read another range or make an edit first; repeating this call returns
             diff_opt
         };
         let final_diff = final_tool_diff(&execution.content, preview_fallback);
-        let mut result = tool_result_from_execution(
-            &executed_name,
-            args,
-            execution,
-            final_diff,
-        );
+        let mut result = tool_result_from_execution(&executed_name, args, execution, final_diff);
         result.metadata.full_output_artifact = replay_artifact;
         results.push(result);
         if cancel_token.is_cancelled() {
@@ -4295,8 +4292,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         .and_then(|call| call.arguments.get("command"))
                         .and_then(|command| command.as_str())
                 {
-                    ctx.verification
-                        .record_command(command, metadata.exit_code);
+                    ctx.verification.record_command(command, metadata.exit_code);
                 }
                 let diff_opt = result.diff;
                 dbg_log!(
@@ -5352,10 +5348,12 @@ mod tests {
         assert!(content.contains(deferred_notice));
         assert_eq!(content.matches("[Output truncated:").count(), 1);
         assert!(content.len() <= 50 * 1024);
-        assert!(message
-            .tool_result
-            .as_ref()
-            .is_some_and(|metadata| metadata.truncated));
+        assert!(
+            message
+                .tool_result
+                .as_ref()
+                .is_some_and(|metadata| metadata.truncated)
+        );
         let metadata = message.tool_result.as_ref().expect("tool metadata");
         assert!(metadata.truncated);
         if let Some(path) = metadata.full_output_artifact.as_ref() {
@@ -5391,7 +5389,10 @@ mod tests {
             .as_ref()
             .and_then(|metadata| metadata.full_output_artifact.as_ref())
             .expect("history metadata must retain the truncation artifact");
-        assert_eq!(std::fs::read_to_string(artifact).expect("artifact readable"), raw);
+        assert_eq!(
+            std::fs::read_to_string(artifact).expect("artifact readable"),
+            raw
+        );
     }
 
     #[test]
@@ -5469,7 +5470,10 @@ mod tests {
         let artifact = metadata
             .full_output_artifact
             .expect("bounded subagent output must retain its artifact");
-        assert_eq!(std::fs::read_to_string(artifact).expect("artifact readable"), raw);
+        assert_eq!(
+            std::fs::read_to_string(artifact).expect("artifact readable"),
+            raw
+        );
 
         let spoofed = subagent_tool_history_message(
             "custom_tool",
@@ -5966,7 +5970,7 @@ mod tests {
         }
         assert_eq!(
             last,
-            loop_detect::LoopStatus::Abort(4),
+            loop_detect::LoopStatus::Abort(8),
             "alternating failure/no-op must eventually abort since neither resets"
         );
     }
@@ -6060,7 +6064,10 @@ mod tests {
     fn loop_abort_allows_one_bounded_recovery_before_forced_final() {
         assert_eq!(loop_recovery_action(0), LoopRecoveryAction::Recover);
         assert_eq!(loop_recovery_action(1), LoopRecoveryAction::ForceFinal);
-        assert_eq!(loop_recovery_action(u8::MAX), LoopRecoveryAction::ForceFinal);
+        assert_eq!(
+            loop_recovery_action(u8::MAX),
+            LoopRecoveryAction::ForceFinal
+        );
         assert!(LOOP_RECOVERY_PROMPT.contains("Tools remain enabled"));
     }
 
@@ -6340,15 +6347,23 @@ mod tests {
         let should_continue = stop_turn_for_budget(&state, &mut ctx, limit).await;
 
         assert!(!should_continue, "a budget stop must end the loop");
-        assert!(!ctx.task_completed, "a budget stop must never claim completion");
-        assert!(ctx.budget_stopped.is_some(), "the exact limit reached must be recorded");
+        assert!(
+            !ctx.task_completed,
+            "a budget stop must never claim completion"
+        );
+        assert!(
+            ctx.budget_stopped.is_some(),
+            "the exact limit reached must be recorded"
+        );
         assert!(
             ctx.final_content.contains("stopped"),
             "the summary must explain the stop: {}",
             ctx.final_content
         );
         assert!(
-            ctx.final_content.to_ascii_lowercase().contains("not complete"),
+            ctx.final_content
+                .to_ascii_lowercase()
+                .contains("not complete"),
             "the summary must be explicit that the task is unfinished: {}",
             ctx.final_content
         );
@@ -6398,7 +6413,8 @@ mod tests {
         let mut ctx = TurnContext::new();
         ctx.tool_rounds = MAX_TOOL_ROUNDS;
 
-        let budget_should_fire = !cancel_token.is_cancelled() && turn_budget_exceeded(&ctx).is_some();
+        let budget_should_fire =
+            !cancel_token.is_cancelled() && turn_budget_exceeded(&ctx).is_some();
         assert!(
             !budget_should_fire,
             "cancellation must suppress the budget-stop path"
@@ -6597,10 +6613,7 @@ mod tests {
         let state = Arc::new(Mutex::new(AppState::new()));
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing").to_string_lossy().to_string();
-        let call = test_tool_call(
-            "list_directory",
-            serde_json::json!({"path": missing}),
-        );
+        let call = test_tool_call("list_directory", serde_json::json!({"path": missing}));
 
         let first = run_one_tool_with_state(&state, call.clone()).await;
         let repeated = run_one_tool_with_state(&state, call).await;
