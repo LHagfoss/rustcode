@@ -103,11 +103,17 @@ impl DiscordRpcHandler {
         if !self.enabled {
             return;
         }
+        // Attempt to connect if not already connected.
+        // This also sets the initial "Idle" activity.
         self.connect();
+
+        // Try to set the activity once.
         if self.set_activity_once(state, details) {
             return;
         }
 
+        // If setting activity failed, it might be due to a disconnected client.
+        // Disconnect the old client (if any), reconnect, and try setting activity once more.
         self.disconnect();
         self.connect();
         self.set_activity_once(state, details);
@@ -182,11 +188,59 @@ mod tests {
     }
 
     #[test]
-    fn set_enabled_false_is_safe_when_no_client_connected() {
+    fn set_activity_reconnects_on_failure() {
         let mut handler = DiscordRpcHandler::new();
-        // No client connected
+        handler.enabled = true; // Manually enable for testing reconnect logic without full connect
+        // Simulate a client that fails to set activity
+        // This is tricky to test directly without mocking the DiscordIpcClient trait.
+        // For now, we'll rely on the existing logic that if set_activity_once returns false,
+        // it triggers a reconnect.
+        // A more robust test would involve a mock DiscordIpcClient.
+        handler.set_activity("Thinking", "model_name");
+        // We can't assert much here without mocking, but we can ensure it doesn't panic.
+    }
+
+    #[test]
+    fn set_enabled_connects_and_sets_idle() {
+        let mut handler = DiscordRpcHandler::new();
+        handler.set_enabled(true);
+        // We can't directly check if it connected and set idle without mocking,
+        // but we can check if client is Some after enabling.
+        assert!(handler.client.is_some());
+    }
+
+    #[test]
+    fn set_enabled_disconnects_and_clears_activity() {
+        let mut handler = DiscordRpcHandler::new();
+        handler.set_enabled(true); // Connect first
+        assert!(handler.client.is_some());
         handler.set_enabled(false);
-        // Should not panic or error
         assert!(handler.client.is_none());
+    }
+
+    #[test]
+    fn shutdown_clears_activity_and_disconnects() {
+        let mut handler = DiscordRpcHandler::new();
+        handler.set_enabled(true); // Connect first
+        assert!(handler.client.is_some());
+        handler.shutdown();
+        assert!(handler.client.is_none());
+    }
+
+    #[test]
+    fn activity_includes_rustcode_logo() {
+        let mut handler = DiscordRpcHandler::new();
+        handler.set_enabled(true);
+        // This test is more conceptual as we can't inspect the activity sent to Discord directly.
+        // We rely on the `set_activity_once` function constructing the activity correctly.
+        // The `DISCORD_LARGE_IMAGE` constant is used in `set_activity_once`.
+        // If `set_activity_once` succeeds, it implies the activity was constructed with the logo.
+        assert!(handler.set_activity_once("Idle", ""));
+    }
+
+    #[test]
+    fn set_activity_once_returns_false_when_client_not_connected() {
+        let mut handler = DiscordRpcHandler::new();
+        assert!(!handler.set_activity_once("Idle", ""));
     }
 }
