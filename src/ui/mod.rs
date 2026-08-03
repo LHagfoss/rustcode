@@ -1343,12 +1343,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
             lines.push(Line::from(vec![
                 Span::styled(
-                    action,
+                    format!("● {action}"),
                     get_themed_style(COLOR_TIP, COLOR_BG, Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
-                    format!("({})", arg),
-                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+                    format!(" ({arg})"),
+                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
                 ),
             ]));
 
@@ -1460,9 +1460,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 if !has_following_tool_result {
                     let (action, arg) =
                         format_pi_tool_action(&tool_call.name, &tool_call.arguments);
+                    let elapsed_ms = state.generation_start_time.map(|t| t.elapsed().as_millis()).unwrap_or(0);
+                    let circle = if (elapsed_ms / 350).is_multiple_of(2) { "○ " } else { "● " };
                     lines.push(Line::from(vec![
                         Span::styled(
-                            action,
+                            format!("{circle}{action}"),
                             get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
                         ),
                         Span::styled(
@@ -1571,9 +1573,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     status_msg.to_string()
                 };
 
+                let elapsed_ms = state.generation_start_time.map(|t| t.elapsed().as_millis()).unwrap_or(0);
+                let circle = if (elapsed_ms / 350).is_multiple_of(2) { "○ " } else { "● " };
+
                 lines.push(Line::from(vec![
                     Span::styled(
-                        format!("{tool_label} "),
+                        format!("{circle}{tool_label} "),
                         get_themed_style(COLOR_TIP, COLOR_BG, Modifier::BOLD, show_picker),
                     ),
                     Span::styled(
