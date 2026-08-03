@@ -252,6 +252,7 @@ pub async fn handle_enter(
                     Verbosity::Low => "low",
                     Verbosity::High => "high",
                 };
+                let mut changed = false;
                 match tokens.get(1) {
                     None => {
                         let current = label(&s.verbosity).to_string();
@@ -265,10 +266,12 @@ pub async fn handle_enter(
                     }
                     Some(&"low") => {
                         s.verbosity = Verbosity::Low;
+                        changed = true;
                         s.history.push(ChatMessage::new("system", "Verbosity set to low."));
                     }
                     Some(&"high") => {
                         s.verbosity = Verbosity::High;
+                        changed = true;
                         s.history.push(ChatMessage::new("system", "Verbosity set to high."));
                     }
                     Some(&"toggle") => {
@@ -276,6 +279,7 @@ pub async fn handle_enter(
                             Verbosity::Low => Verbosity::High,
                             Verbosity::High => Verbosity::Low,
                         };
+                        changed = true;
                         let current = label(&s.verbosity).to_string();
                         s.history.push(ChatMessage::new(
                             "system",
@@ -288,6 +292,10 @@ pub async fn handle_enter(
                             "Invalid verbosity level. Use 'low', 'high', or 'toggle'.",
                         ));
                     }
+                }
+                if changed {
+                    s.config.verbosity = s.verbosity.clone();
+                    crate::config::save_entire_config(&s.config);
                 }
             }
             "/discord" => {
