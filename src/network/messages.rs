@@ -16,7 +16,10 @@ pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_toke
     let mut total: u32 = msgs.iter().map(estimate_msg_tokens).sum();
     let mut dropped = 0;
     while total > budget_tokens && msgs.len() > 3 {
-        let Some(start) = msgs.iter().position(|m| m.get("role").and_then(|r| r.as_str()) != Some("system")) else {
+        let Some(start) = msgs
+            .iter()
+            .position(|m| m.get("role").and_then(|r| r.as_str()) != Some("system"))
+        else {
             break;
         };
 
@@ -78,22 +81,23 @@ pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str)
 pub(crate) fn inject_system_reminder(msgs: &mut [serde_json::Value]) {
     if msgs.len() >= 4 {
         let reminder_text = "REMINDER: Follow the configured tool protocol exactly. Use tools only when needed, inspect results before choosing the next action, and report relevant verification when finished.";
-        
+
         if let Some(last_msg) = msgs.last_mut()
-            && let Some(content) = last_msg.get_mut("content") {
-                match content {
-                    serde_json::Value::String(s) => {
-                        *s = format!("{}\n\n{}", s, reminder_text);
-                    }
-                    serde_json::Value::Array(arr) => {
-                        arr.push(serde_json::json!({
-                            "type": "text",
-                            "text": format!("\n\n{}", reminder_text)
-                        }));
-                    }
-                    _ => {}
+            && let Some(content) = last_msg.get_mut("content")
+        {
+            match content {
+                serde_json::Value::String(s) => {
+                    *s = format!("{}\n\n{}", s, reminder_text);
                 }
+                serde_json::Value::Array(arr) => {
+                    arr.push(serde_json::json!({
+                        "type": "text",
+                        "text": format!("\n\n{}", reminder_text)
+                    }));
+                }
+                _ => {}
             }
+        }
     }
 }
 

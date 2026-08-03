@@ -5,8 +5,8 @@
 //! module and are pulled in via the `super::*` glob; diff highlighting comes
 //! from the sibling `highlight` module.
 
-use super::*;
 use super::highlight::highlight_diff_line;
+use super::*;
 use crate::app::AppState;
 use ratatui::{
     Frame,
@@ -34,12 +34,7 @@ pub(super) fn render_popup_menu(
     };
 
     let mut popup_lines = Vec::new();
-    for (idx, cmd) in filtered_cmds
-        .iter()
-        .enumerate()
-        .skip(offset)
-        .take(max_rows)
-    {
+    for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
             .active_suggestion_index
             .map(|i| i == idx)
@@ -189,7 +184,7 @@ pub(super) fn render_welcome_screen(
         logo_area,
     );
 
-    let box_padding = width.saturating_sub(box_width) / 2 ;
+    let box_padding = width.saturating_sub(box_width) / 2;
     let box_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -315,15 +310,19 @@ pub(super) fn render_welcome_screen(
         crate::config::AgentMode::Plan => "Plan",
     };
     let agent_style = match state.agent_mode {
-        crate::config::AgentMode::Build => get_themed_style(COLOR_SECONDARY, COLOR_PANEL, Modifier::BOLD, show_picker),
-        crate::config::AgentMode::Plan => get_themed_style(Color::Rgb(229, 192, 123), COLOR_PANEL, Modifier::BOLD, show_picker),
+        crate::config::AgentMode::Build => {
+            get_themed_style(COLOR_SECONDARY, COLOR_PANEL, Modifier::BOLD, show_picker)
+        }
+        crate::config::AgentMode::Plan => get_themed_style(
+            Color::Rgb(229, 192, 123),
+            COLOR_PANEL,
+            Modifier::BOLD,
+            show_picker,
+        ),
     };
 
     box_lines.push(Line::from(vec![
-        Span::styled(
-            agent_label,
-            agent_style,
-        ),
+        Span::styled(agent_label, agent_style),
         Span::styled(
             " · ",
             get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::empty(), show_picker),
@@ -687,7 +686,9 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
 
         let header_line = Line::from(vec![Span::styled(
             "⚠ Delete session?",
-            Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY)
+                .add_modifier(Modifier::BOLD),
         )]);
         f.render_widget(
             Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL)),
@@ -846,7 +847,12 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
         Span::styled("ctrl+d", Style::default().fg(COLOR_MUTED)),
     ];
     if state.history_picker_truncated {
-        footer_spans.push(Span::styled("   (Truncated to 50 sessions. Use /delete_chat to clean up.)", Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD)));
+        footer_spans.push(Span::styled(
+            "   (Truncated to 50 sessions. Use /delete_chat to clean up.)",
+            Style::default()
+                .fg(COLOR_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     let footer_line = Line::from(footer_spans);
     f.render_widget(
@@ -1365,16 +1371,16 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // 0: Header
-                Constraint::Length(1), // 1: Spacer
-                Constraint::Length(1), // 2: Tool
-                Constraint::Length(1), // 3: Path
-                Constraint::Length(1), // 4: Size
-                Constraint::Length(1), // 5: Auto-confirm status
-                Constraint::Length(1), // 6: Spacer
+                Constraint::Length(1),                            // 0: Header
+                Constraint::Length(1),                            // 1: Spacer
+                Constraint::Length(1),                            // 2: Tool
+                Constraint::Length(1),                            // 3: Path
+                Constraint::Length(1),                            // 4: Size
+                Constraint::Length(1),                            // 5: Auto-confirm status
+                Constraint::Length(1),                            // 6: Spacer
                 Constraint::Min(if has_preview { 2 } else { 0 }), // 7: Preview Diff / Content
-                Constraint::Length(1), // 8: Spacer
-                Constraint::Length(1), // 9: Footer buttons
+                Constraint::Length(1),                            // 8: Spacer
+                Constraint::Length(1),                            // 9: Footer buttons
             ])
             .split(inner_area);
 
@@ -1474,13 +1480,18 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                         Constraint::Percentage(50),
                     ])
                     .split(modal_chunks[7]);
-                
+
                 let mut left_lines = Vec::new();
                 let mut right_lines = Vec::new();
-                
+
                 let half_width = (diff_chunks[0].width as usize).saturating_sub(2);
-                
-                for line in confirmation.content_preview.lines().skip(scroll).take(diff_height) {
+
+                for line in confirmation
+                    .content_preview
+                    .lines()
+                    .skip(scroll)
+                    .take(diff_height)
+                {
                     let parts: Vec<&str> = line.split('\x00').collect();
                     if parts.len() == 2 {
                         left_lines.push(highlight_diff_line(parts[0], half_width, false));
@@ -1490,13 +1501,22 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                         right_lines.push(Line::from(""));
                     }
                 }
-                
-                f.render_widget(Paragraph::new(left_lines).wrap(Wrap { trim: false }), diff_chunks[0]);
-                
+
+                f.render_widget(
+                    Paragraph::new(left_lines).wrap(Wrap { trim: false }),
+                    diff_chunks[0],
+                );
+
                 let divider_lines = vec![Line::from("│"); diff_chunks[1].height as usize];
-                f.render_widget(Paragraph::new(divider_lines).style(Style::default().fg(COLOR_MUTED)), diff_chunks[1]);
-                
-                f.render_widget(Paragraph::new(right_lines).wrap(Wrap { trim: false }), diff_chunks[2]);
+                f.render_widget(
+                    Paragraph::new(divider_lines).style(Style::default().fg(COLOR_MUTED)),
+                    diff_chunks[1],
+                );
+
+                f.render_widget(
+                    Paragraph::new(right_lines).wrap(Wrap { trim: false }),
+                    diff_chunks[2],
+                );
             } else {
                 let preview_lines: Vec<Line> = confirmation
                     .content_preview
@@ -1516,8 +1536,13 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         }
 
         let total_lines = confirmation.content_preview.lines().count();
-        let scroll_info = if modal_chunks.len() > 7 && total_lines > modal_chunks[7].height as usize {
-            format!("  ↑/↓ scroll ({}/{})", state.modal_scroll_row + 1, total_lines)
+        let scroll_info = if modal_chunks.len() > 7 && total_lines > modal_chunks[7].height as usize
+        {
+            format!(
+                "  ↑/↓ scroll ({}/{})",
+                state.modal_scroll_row + 1,
+                total_lines
+            )
         } else {
             String::new()
         };
@@ -1699,7 +1724,10 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
     for ql in q_lines {
         lines.push(Line::from(Span::styled(
             ql,
-            Style::default().fg(COLOR_PRIMARY).bg(COLOR_PANEL).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY)
+                .bg(COLOR_PANEL)
+                .add_modifier(Modifier::BOLD),
         )));
     }
     lines.push(Line::from(""));

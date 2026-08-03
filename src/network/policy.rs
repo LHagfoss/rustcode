@@ -26,9 +26,11 @@ impl TurnPolicy for InteractivePolicy {
                 if matches!(decision, tools::AuthorizationDecision::RequireConfirmation)
                     && !tools::is_agent_tool(&call.name)
                 {
-                    let path = if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str()) {
+                    let path = if let Some(p) = call.arguments.get("path").and_then(|p| p.as_str())
+                    {
                         p.to_string()
-                    } else if let Some(cmd) = call.arguments.get("command").and_then(|c| c.as_str()) {
+                    } else if let Some(cmd) = call.arguments.get("command").and_then(|c| c.as_str())
+                    {
                         cmd.to_string()
                     } else if let (Some(src), Some(dest)) = (
                         call.arguments.get("src").and_then(|s| s.as_str()),
@@ -43,7 +45,11 @@ impl TurnPolicy for InteractivePolicy {
                     let (preview, content_bytes) = if let Some(ref d) = diff_opt {
                         (d.clone(), d.len())
                     } else {
-                        let content = call.arguments.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                        let content = call
+                            .arguments
+                            .get("content")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("");
                         let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
                         (preview, content.len())
                     };
@@ -72,7 +78,10 @@ impl TurnPolicy for InteractivePolicy {
             let first_tool_name = &tool_calls[0].name;
             let _ = crate::notifications::notify_pending_confirmation(first_tool_name);
 
-            crate::dbg_log!("Awaiting user batch confirmation for {} tools", tool_calls.len());
+            crate::dbg_log!(
+                "Awaiting user batch confirmation for {} tools",
+                tool_calls.len()
+            );
             approved = match rx.await {
                 Ok(true) => {
                     crate::dbg_log!("User approved batch tool calls");

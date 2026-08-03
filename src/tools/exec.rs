@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 // Re-exports needed by exec tools
 pub(crate) use super::get_active_session_id;
+pub(crate) use super::get_background_tasks;
 pub(crate) use super::parse_json_bool;
 pub(crate) use super::parse_json_number;
-pub(crate) use super::get_background_tasks;
 pub(crate) use super::{BackgroundTaskInfo, WAKEUP_CALLBACK};
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
@@ -156,7 +156,9 @@ pub(crate) fn reject_broad_git_stage(cmd: &str) -> Option<&'static str> {
         if tokens.len() >= 3
             && tokens[0] == "git"
             && tokens[1] == "commit"
-            && tokens[2..].iter().any(|token| *token == "-a" || *token == "--all")
+            && tokens[2..]
+                .iter()
+                .any(|token| *token == "-a" || *token == "--all")
         {
             return Some(
                 "Refusing `git commit -a/--all`. Stage explicit feature paths first so unrelated user changes cannot enter the commit.",
@@ -182,9 +184,7 @@ pub fn run_command(args: &Value) -> Result<String, String> {
     run_command_output(args).map(|output| output.content)
 }
 
-pub(super) fn run_command_output(
-    args: &Value,
-) -> Result<super::ToolExecutionOutput, String> {
+pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOutput, String> {
     let command_str = args
         .get("command")
         .and_then(|c| c.as_str())
@@ -218,14 +218,14 @@ pub(super) fn run_command_output(
             }
         }
         Some(other) => Some(crate::tools::resolve_tool_path(other)),
-        None => super::ACTIVE_WORKSPACE_ROOT
-            .with(|root| root.borrow().clone()),
+        None => super::ACTIVE_WORKSPACE_ROOT.with(|root| root.borrow().clone()),
     };
 
     if let Some(ref cwd_path) = resolved_cwd
-        && !cwd_path.is_dir() {
-            return Err(format!("cwd '{}' is not a directory", cwd_path.display()));
-        }
+        && !cwd_path.is_dir()
+    {
+        return Err(format!("cwd '{}' is not a directory", cwd_path.display()));
+    }
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = std::process::Command::new("cmd");
@@ -318,9 +318,10 @@ pub(super) fn run_command_output(
                 Ok(child) => {
                     if let Some(pid) = Some(child.id())
                         && let Ok(mut tasks) = get_background_tasks().lock()
-                            && let Some(info) = tasks.get_mut(&task_id_clone) {
-                                info.child_pid = Some(pid);
-                            }
+                        && let Some(info) = tasks.get_mut(&task_id_clone)
+                    {
+                        info.child_pid = Some(pid);
+                    }
 
                     match child.wait_with_output() {
                         Ok(output) => {
@@ -346,14 +347,12 @@ pub(super) fn run_command_output(
                                 truncated: false,
                             }
                         }
-                        Err(e) => super::ToolExecutionOutput::failure(format!(
-                            "failed to wait: {e}"
-                        )),
+                        Err(e) => {
+                            super::ToolExecutionOutput::failure(format!("failed to wait: {e}"))
+                        }
                     }
                 }
-                Err(e) => {
-                    super::ToolExecutionOutput::failure(format!("failed to spawn: {e}"))
-                }
+                Err(e) => super::ToolExecutionOutput::failure(format!("failed to spawn: {e}")),
             };
 
             if let Ok(mut tasks) = get_background_tasks().lock() {
@@ -366,9 +365,7 @@ pub(super) fn run_command_output(
         });
 
         return Ok(super::ToolExecutionOutput {
-            content: format!(
-                "Task started in background. Task ID: {task_id}. Status: Running."
-            ),
+            content: format!("Task started in background. Task ID: {task_id}. Status: Running."),
             success: true,
             exit_code: None,
             truncated: false,
@@ -382,8 +379,8 @@ pub(super) fn run_command_output(
     result.push_str(&format!("exit code: {exit_code}\n"));
 
     let failed = !output.status.success();
-    let truncated =
-        output.stdout.len() > MAX_COMMAND_OUTPUT_BYTES || output.stderr.len() > MAX_COMMAND_OUTPUT_BYTES;
+    let truncated = output.stdout.len() > MAX_COMMAND_OUTPUT_BYTES
+        || output.stderr.len() > MAX_COMMAND_OUTPUT_BYTES;
     let stdout = truncate_bytes(&output.stdout, MAX_COMMAND_OUTPUT_BYTES, failed);
     let stderr = truncate_bytes(&output.stderr, MAX_COMMAND_OUTPUT_BYTES, failed);
 
@@ -419,7 +416,9 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
         .ok_or("missing 'action' argument (must be 'list', 'status', or 'kill')")?;
 
     let tasks_lock = get_background_tasks();
-    let mut tasks = tasks_lock.lock().map_err(|e| format!("failed to lock background tasks: {e}"))?;
+    let mut tasks = tasks_lock
+        .lock()
+        .map_err(|e| format!("failed to lock background tasks: {e}"))?;
 
     match action {
         "list" => {
@@ -429,7 +428,10 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
             let mut out = String::from("Running background tasks:\n");
             for (id, info) in tasks.iter() {
                 let elapsed = info.start_time.elapsed().as_secs();
-                let pid_str = info.child_pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string());
+                let pid_str = info
+                    .child_pid
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "N/A".to_string());
                 out.push_str(&format!(
                     "- TaskId: {}, PID: {}, Runtime: {}s, Command: {}\n",
                     id, pid_str, elapsed, info.command
@@ -445,13 +447,18 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
 
             if let Some(info) = tasks.get(task_id) {
                 let elapsed = info.start_time.elapsed().as_secs();
-                let pid_str = info.child_pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string());
+                let pid_str = info
+                    .child_pid
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "N/A".to_string());
                 Ok(format!(
                     "TaskId: {}, Status: RUNNING, PID: {}, Runtime: {}s, Command: {}",
                     task_id, pid_str, elapsed, info.command
                 ))
             } else {
-                Ok(format!("TaskId '{task_id}' is not running (finished or cancelled)."))
+                Ok(format!(
+                    "TaskId '{task_id}' is not running (finished or cancelled)."
+                ))
             }
         }
         "kill" => {
@@ -476,7 +483,9 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 Err(format!("Task '{task_id}' not found."))
             }
         }
-        _ => Err(format!("Unknown action '{action}'. Supported actions: list, status, kill.")),
+        _ => Err(format!(
+            "Unknown action '{action}'. Supported actions: list, status, kill."
+        )),
     }
 }
 

@@ -33,8 +33,9 @@ pub fn init_db() -> Result<Connection, String> {
         open_writable_db(&fallback)
     })?;
 
-    connection.execute(
-        "CREATE TABLE IF NOT EXISTS symbols (
+    connection
+        .execute(
+            "CREATE TABLE IF NOT EXISTS symbols (
             project_root TEXT NOT NULL,
             path TEXT NOT NULL,
             name TEXT NOT NULL,
@@ -45,15 +46,16 @@ pub fn init_db() -> Result<Connection, String> {
             last_modified INTEGER NOT NULL,
             PRIMARY KEY (project_root, path, name, kind, start_line)
         )",
-        [],
-    )
-    .map_err(|e| format!("failed to create symbols table: {e}"))?;
+            [],
+        )
+        .map_err(|e| format!("failed to create symbols table: {e}"))?;
 
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)",
-        [],
-    )
-    .map_err(|e| format!("failed to create index on symbol name: {e}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)",
+            [],
+        )
+        .map_err(|e| format!("failed to create index on symbol name: {e}"))?;
 
     Ok(connection)
 }
@@ -62,8 +64,8 @@ pub fn init_db() -> Result<Connection, String> {
 /// is the user's config directory; a temporary fallback keeps symbol search
 /// usable in read-only or sandboxed environments.
 fn open_writable_db(path: &Path) -> Result<Connection, String> {
-    let connection = Connection::open(path)
-        .map_err(|e| format!("failed to open symbols database: {e}"))?;
+    let connection =
+        Connection::open(path).map_err(|e| format!("failed to open symbols database: {e}"))?;
     connection
         // BEGIN IMMEDIATE alone can succeed against an existing read-only file;
         // changing this harmless header field proves the database is writable.
@@ -86,7 +88,9 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
 
     // 1. Gather all files and track mtimes
     let mut files = Vec::new();
-    let walker = ignore::WalkBuilder::new(root_dir).standard_filters(true).build();
+    let walker = ignore::WalkBuilder::new(root_dir)
+        .standard_filters(true)
+        .build();
 
     for entry in walker {
         let entry = match entry {

@@ -11,7 +11,10 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
         if let Some(profile) = state.config.models.iter().find(|m| m.name == m_name) {
             state.api_base_url = profile.url.clone();
             state.model_name = profile.model.clone();
-            println!("Overriding model profile to: {} ({})", m_name, profile.model);
+            println!(
+                "Overriding model profile to: {} ({})",
+                m_name, profile.model
+            );
         } else {
             println!(
                 "Warning: Model profile '{}' not found in config.toml. Using default.",
@@ -20,7 +23,9 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
         }
     }
 
-    state.history.push(ChatMessage::new("user", prompt.to_string()));
+    state
+        .history
+        .push(ChatMessage::new("user", prompt.to_string()));
     state
 }
 
@@ -42,7 +47,9 @@ impl crate::network::policy::TurnPolicy for HeadlessPolicy {
             let s = s_clone.lock().await;
             for call in &calls {
                 println!("\n[Headless] Executing Tool: {}", call.name);
-                if s.agent_mode == crate::config::AgentMode::Plan && !crate::tools::allowed_in_plan_mode(&call.name) {
+                if s.agent_mode == crate::config::AgentMode::Plan
+                    && !crate::tools::allowed_in_plan_mode(&call.name)
+                {
                     println!("[Headless] Rejected: mutating tool in plan_mode");
                     return false;
                 }

@@ -34,9 +34,9 @@ pub struct Cli {
 #[derive(clap::Subcommand, Debug)]
 pub enum Commands {
     /// Sync config, skills, and sessions with remote Git repository
-    Sync { 
+    Sync {
         #[command(subcommand)]
-        command: Option<SyncCommands> 
+        command: Option<SyncCommands>,
     },
 }
 

@@ -64,15 +64,16 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillInfo>) {
         if path.is_dir() {
             let skill_md = path.join("SKILL.md");
             if skill_md.exists()
-                && let Ok(content) = fs::read_to_string(&skill_md) {
-                    let (name, description) = parse_frontmatter(&content);
-                    skills.push(SkillInfo {
-                        name,
-                        description,
-                        path: path.clone(),
-                        content,
-                    });
-                }
+                && let Ok(content) = fs::read_to_string(&skill_md)
+            {
+                let (name, description) = parse_frontmatter(&content);
+                skills.push(SkillInfo {
+                    name,
+                    description,
+                    path: path.clone(),
+                    content,
+                });
+            }
         }
     }
 }
@@ -126,9 +127,10 @@ pub fn list_skill_files(skill_dir: &Path) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file()
-                && let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
-                    files.push(fname.to_string());
-                }
+                && let Some(fname) = path.file_name().and_then(|f| f.to_str())
+            {
+                files.push(fname.to_string());
+            }
         }
     }
     files.sort();
@@ -141,7 +143,8 @@ mod tests {
     use std::fs;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("rustcode_test_{}_{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("rustcode_test_{}_{}", name, std::process::id()));
         let _ = fs::create_dir_all(&dir);
         dir
     }

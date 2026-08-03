@@ -61,7 +61,9 @@ pub(crate) enum TurnState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnInput {
-    ModelFinished { has_tool_calls: bool },
+    ModelFinished {
+        has_tool_calls: bool,
+    },
     ApprovalGranted,
     ApprovalDenied,
     ToolsFinished,
@@ -114,8 +116,18 @@ pub(crate) fn transition_turn(
         (Completed, TurnInput::RetryRequested) => AwaitingModel,
         (Completed | Cancelled, _) => return Err(InvalidTransition { from: state, input }),
         (_, TurnInput::Cancelled) => Cancelled,
-        (AwaitingModel, TurnInput::ModelFinished { has_tool_calls: true }) => AwaitingApproval,
-        (AwaitingModel, TurnInput::ModelFinished { has_tool_calls: false }) => Completed,
+        (
+            AwaitingModel,
+            TurnInput::ModelFinished {
+                has_tool_calls: true,
+            },
+        ) => AwaitingApproval,
+        (
+            AwaitingModel,
+            TurnInput::ModelFinished {
+                has_tool_calls: false,
+            },
+        ) => Completed,
         (AwaitingApproval, TurnInput::ApprovalGranted) => ExecutingTools,
         (AwaitingApproval, TurnInput::ApprovalDenied) => AwaitingModel,
         (ExecutingTools, TurnInput::ToolsFinished) => AwaitingModel,
@@ -243,7 +255,9 @@ pub(crate) struct TurnMachine {
 
 impl TurnMachine {
     pub(crate) fn new() -> Self {
-        Self { state: TurnState::AwaitingModel }
+        Self {
+            state: TurnState::AwaitingModel,
+        }
     }
 
     pub(crate) fn state(self) -> TurnState {
@@ -342,19 +356,23 @@ impl TurnMachine {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn maps_provider_finish_reasons() {
-        assert_eq!(FinishReason::from_provider(Some("stop")), FinishReason::Stop);
+        assert_eq!(
+            FinishReason::from_provider(Some("stop")),
+            FinishReason::Stop
+        );
         assert_eq!(
             FinishReason::from_provider(Some("tool_calls")),
             FinishReason::ToolCalls
         );
-        assert_eq!(FinishReason::from_provider(Some("length")), FinishReason::Length);
+        assert_eq!(
+            FinishReason::from_provider(Some("length")),
+            FinishReason::Length
+        );
         assert_eq!(FinishReason::from_provider(None), FinishReason::Stop);
     }
 
@@ -366,7 +384,12 @@ mod tests {
             crate::config::ToolProtocol::ApiNative,
         );
         assert_eq!(response.source, ResponseSource::Native);
-        assert!(response.events.iter().any(|event| matches!(event, AgentEvent::ToolCall(_))));
+        assert!(
+            response
+                .events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::ToolCall(_)))
+        );
     }
 
     #[test]
@@ -378,7 +401,10 @@ mod tests {
         );
 
         assert!(matches!(events[0], AgentEvent::ToolCall(_)));
-        assert_eq!(events.last(), Some(&AgentEvent::Finished(FinishReason::ToolCalls)));
+        assert_eq!(
+            events.last(),
+            Some(&AgentEvent::Finished(FinishReason::ToolCalls))
+        );
     }
 
     #[test]
@@ -398,7 +424,10 @@ mod tests {
         );
         assert_eq!(response.source, ResponseSource::Fenced);
         assert!(matches!(response.events[0], AgentEvent::ToolCall(_)));
-        assert_eq!(response.raw_content, "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"x\"}}\n```");
+        assert_eq!(
+            response.raw_content,
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"x\"}}\n```"
+        );
     }
 
     #[test]
@@ -406,7 +435,9 @@ mod tests {
         assert_eq!(
             transition_turn(
                 TurnState::AwaitingModel,
-                TurnInput::ModelFinished { has_tool_calls: true }
+                TurnInput::ModelFinished {
+                    has_tool_calls: true
+                }
             ),
             Ok(TurnState::AwaitingApproval)
         );
@@ -424,7 +455,10 @@ mod tests {
         );
         assert_eq!(
             transition_turn(TurnState::AwaitingModel, TurnInput::ToolsFinished),
-            Err(InvalidTransition { from: TurnState::AwaitingModel, input: TurnInput::ToolsFinished })
+            Err(InvalidTransition {
+                from: TurnState::AwaitingModel,
+                input: TurnInput::ToolsFinished
+            })
         );
     }
 
@@ -432,11 +466,21 @@ mod tests {
     fn every_valid_transition_from_every_state_is_accepted() {
         // AwaitingModel
         assert_eq!(
-            transition_turn(TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: true }),
+            transition_turn(
+                TurnState::AwaitingModel,
+                TurnInput::ModelFinished {
+                    has_tool_calls: true
+                }
+            ),
             Ok(TurnState::AwaitingApproval)
         );
         assert_eq!(
-            transition_turn(TurnState::AwaitingModel, TurnInput::ModelFinished { has_tool_calls: false }),
+            transition_turn(
+                TurnState::AwaitingModel,
+                TurnInput::ModelFinished {
+                    has_tool_calls: false
+                }
+            ),
             Ok(TurnState::Completed)
         );
         assert_eq!(
@@ -486,9 +530,19 @@ mod tests {
             (TurnState::AwaitingModel, TurnInput::ApprovalDenied),
             (TurnState::AwaitingModel, TurnInput::ToolsFinished),
             (TurnState::AwaitingApproval, TurnInput::ToolsFinished),
-            (TurnState::AwaitingApproval, TurnInput::ModelFinished { has_tool_calls: true }),
+            (
+                TurnState::AwaitingApproval,
+                TurnInput::ModelFinished {
+                    has_tool_calls: true,
+                },
+            ),
             (TurnState::ExecutingTools, TurnInput::ApprovalGranted),
-            (TurnState::ExecutingTools, TurnInput::ModelFinished { has_tool_calls: false }),
+            (
+                TurnState::ExecutingTools,
+                TurnInput::ModelFinished {
+                    has_tool_calls: false,
+                },
+            ),
         ];
         for (state, input) in bad {
             assert_eq!(
@@ -503,7 +557,9 @@ mod tests {
     fn terminal_states_reject_all_inputs_including_cancel() {
         for terminal in [TurnState::Cancelled] {
             for input in [
-                TurnInput::ModelFinished { has_tool_calls: true },
+                TurnInput::ModelFinished {
+                    has_tool_calls: true,
+                },
                 TurnInput::ApprovalGranted,
                 TurnInput::ToolsFinished,
                 TurnInput::ErrorRecovered,
@@ -515,7 +571,15 @@ mod tests {
                 );
             }
         }
-        assert!(transition_turn(TurnState::Completed, TurnInput::ModelFinished { has_tool_calls: true }).is_err());
+        assert!(
+            transition_turn(
+                TurnState::Completed,
+                TurnInput::ModelFinished {
+                    has_tool_calls: true
+                }
+            )
+            .is_err()
+        );
         assert!(transition_turn(TurnState::Completed, TurnInput::ApprovalGranted).is_err());
         assert!(transition_turn(TurnState::Completed, TurnInput::ToolsFinished).is_err());
         assert!(transition_turn(TurnState::Completed, TurnInput::ErrorRecovered).is_err());
@@ -530,29 +594,44 @@ mod tests {
     fn turn_machine_owns_model_approval_execution_lifecycle() {
         let mut machine = TurnMachine::new();
         assert_eq!(machine.state(), TurnState::AwaitingModel);
-        assert_eq!(machine.model_finished(false, false, true, false), Ok(TurnAction::ExecuteTools));
+        assert_eq!(
+            machine.model_finished(false, false, true, false),
+            Ok(TurnAction::ExecuteTools)
+        );
         assert_eq!(machine.state(), TurnState::AwaitingApproval);
         machine.approval_granted().unwrap();
         assert_eq!(machine.state(), TurnState::ExecutingTools);
         machine.tools_finished().unwrap();
         assert_eq!(machine.state(), TurnState::AwaitingModel);
-        assert_eq!(machine.model_finished(false, false, false, false), Ok(TurnAction::FinishResponse));
+        assert_eq!(
+            machine.model_finished(false, false, false, false),
+            Ok(TurnAction::FinishResponse)
+        );
         assert_eq!(machine.state(), TurnState::Completed);
     }
 
     #[test]
     fn turn_machine_terminal_inputs_override_tool_requests() {
         let mut machine = TurnMachine::new();
-        assert_eq!(machine.model_finished(true, false, true, false), Ok(TurnAction::Cancel));
+        assert_eq!(
+            machine.model_finished(true, false, true, false),
+            Ok(TurnAction::Cancel)
+        );
         assert_eq!(machine.state(), TurnState::Cancelled);
 
         let mut machine = TurnMachine::new();
-        assert_eq!(machine.model_finished(false, true, true, false), Ok(TurnAction::FinishResponse));
+        assert_eq!(
+            machine.model_finished(false, true, true, false),
+            Ok(TurnAction::FinishResponse)
+        );
         assert_eq!(machine.state(), TurnState::Completed);
 
         // A completed task collapses to a finish even with tool calls present.
         let mut machine = TurnMachine::new();
-        assert_eq!(machine.model_finished(false, false, true, true), Ok(TurnAction::FinishResponse));
+        assert_eq!(
+            machine.model_finished(false, false, true, true),
+            Ok(TurnAction::FinishResponse)
+        );
         assert_eq!(machine.state(), TurnState::Completed);
     }
 

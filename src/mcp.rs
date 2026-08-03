@@ -90,8 +90,14 @@ impl McpClient {
                         }
                     }
                 } else {
-                    eprintln!("[mcp] ignoring non-JSON line from server: {}", 
-                        if line.len() > 100 { &line[..100] } else { &line });
+                    eprintln!(
+                        "[mcp] ignoring non-JSON line from server: {}",
+                        if line.len() > 100 {
+                            &line[..100]
+                        } else {
+                            &line
+                        }
+                    );
                 }
             }
         });
@@ -133,9 +139,9 @@ impl McpClient {
                 .get("result")
                 .and_then(|r| r.get("tools"))
                 .and_then(|t| t.as_array())
-            {
-                tools_list = tools_arr.clone();
-            }
+        {
+            tools_list = tools_arr.clone();
+        }
 
         // Store tools list
         {

@@ -230,7 +230,10 @@ mod tests {
 
         let promoted = promote_bare_thought_markers(raw);
 
-        assert!(promoted.starts_with("<think>\nThe grep confirms"), "got: {promoted}");
+        assert!(
+            promoted.starts_with("<think>\nThe grep confirms"),
+            "got: {promoted}"
+        );
         // The fence closes the span so the tool call stays outside it.
         assert!(promoted.contains("</think>\n```tool"), "got: {promoted}");
         // The trailing span is closed at the end of the text.
@@ -242,7 +245,10 @@ mod tests {
     fn thought_promotion_leaves_ordinary_text_alone() {
         // Mid-sentence use of the word, and a marker followed by a space, are prose.
         let prose = "I had a thought about this.\nthought about the design";
-        assert_eq!(promote_bare_thought_markers(prose), prose.to_string() + "\n");
+        assert_eq!(
+            promote_bare_thought_markers(prose),
+            prose.to_string() + "\n"
+        );
 
         // A word that merely starts with the marker is not a marker.
         let word = "thoughtful answers only";

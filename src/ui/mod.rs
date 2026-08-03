@@ -550,8 +550,9 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             .unwrap_or_default()
             .as_millis();
 
-        let step = ((millis / 80) % 10) as usize;
-        let pulse_center = if step < 5 { step } else { 9 - step };
+        let step = ((millis / 80) % 6) as usize;
+        let pulse_centers = [0, 1, 2, 3, 2, 1];
+        let pulse_center = pulse_centers[step];
 
         let colors = [
             Color::Rgb(25, 29, 32),
@@ -566,7 +567,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
 
         for i in 0..6 {
             let dist = (i as isize - pulse_center as isize).unsigned_abs();
-            let level = 5_usize.saturating_sub(dist);
+            let level = 3_usize.saturating_sub(dist);
             let color = colors[level];
             spans.push(Span::styled(
                 "■",

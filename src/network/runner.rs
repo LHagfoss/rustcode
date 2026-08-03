@@ -21,13 +21,14 @@ impl TurnRunner {
         self.continuation_count += 1;
         true
     }
-
 }
 
 /// Collect one model response, transparently continuing responses cut off by
 /// the provider. The callback owns request construction, allowing TUI, CLI,
 /// and subagent adapters to share exactly one continuation policy.
-pub(crate) async fn collect_response<F, Fut>(mut request: F) -> Result<(String, Option<String>), String>
+pub(crate) async fn collect_response<F, Fut>(
+    mut request: F,
+) -> Result<(String, Option<String>), String>
 where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = Result<(String, Option<String>), String>>,
@@ -69,7 +70,11 @@ mod tests {
             calls += 1;
             previous_args.push(previous);
             let chunk = if calls == 1 { "partial" } else { " finish" };
-            let reason = if calls == 1 { Some("length".to_string()) } else { Some("stop".to_string()) };
+            let reason = if calls == 1 {
+                Some("length".to_string())
+            } else {
+                Some("stop".to_string())
+            };
             async move { Ok((chunk.to_string(), reason)) }
         })
         .await

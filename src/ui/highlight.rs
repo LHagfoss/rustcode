@@ -84,16 +84,20 @@ pub(super) fn highlight_code_block(
         .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
     let mut highlighter = HighlightLines::new(syntax, syntax_theme());
     code.lines()
-        .map(|line| match highlighter.highlight_line(line, syntax_set()) {
-            Ok(ranges) => ranges
-                .into_iter()
-                .map(|(style, text)| Span::styled(text.to_string(), syntect_style(style, show_picker)))
-                .collect(),
-            Err(_) => vec![Span::styled(
-                line.to_string(),
-                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
-            )],
-        })
+        .map(
+            |line| match highlighter.highlight_line(line, syntax_set()) {
+                Ok(ranges) => ranges
+                    .into_iter()
+                    .map(|(style, text)| {
+                        Span::styled(text.to_string(), syntect_style(style, show_picker))
+                    })
+                    .collect(),
+                Err(_) => vec![Span::styled(
+                    line.to_string(),
+                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+                )],
+            },
+        )
         .collect()
 }
 
@@ -467,7 +471,12 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
         let mut spans = diff_cell_spans(left, lw, show_picker);
         spans.push(Span::styled(
             " │ ".to_string(),
-            get_themed_style(Color::Rgb(90, 90, 90), COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(
+                Color::Rgb(90, 90, 90),
+                COLOR_BG,
+                Modifier::empty(),
+                show_picker,
+            ),
         ));
         spans.extend(diff_cell_spans(right, rw, show_picker));
         return Line::from(spans);
@@ -532,7 +541,11 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
 /// Render a unified diff with a compact line-number gutter. Hunk headers reset
 /// the old/new counters; ordinary rows then receive the appropriate source
 /// line number while retaining the existing syntax-aware diff styling.
-pub(super) fn render_unified_diff<'a>(diff: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
+pub(super) fn render_unified_diff<'a>(
+    diff: &str,
+    width: usize,
+    show_picker: bool,
+) -> Vec<Line<'a>> {
     let gutter = 6usize;
     let body_width = width.saturating_sub(gutter).max(1);
     let mut old_line = 1usize;
@@ -544,16 +557,40 @@ pub(super) fn render_unified_diff<'a>(diff: &str, width: usize, show_picker: boo
             old_line = old;
             new_line = new;
             rendered.push(Line::from(vec![
-                Span::styled("      ", get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::BOLD, show_picker)),
-                Span::styled(raw.to_string(), get_themed_style(Color::Rgb(100, 175, 235), COLOR_ELEMENT, Modifier::BOLD, show_picker)),
+                Span::styled(
+                    "      ",
+                    get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    raw.to_string(),
+                    get_themed_style(
+                        Color::Rgb(100, 175, 235),
+                        COLOR_ELEMENT,
+                        Modifier::BOLD,
+                        show_picker,
+                    ),
+                ),
             ]));
             continue;
         }
 
         let line_number = match raw.chars().next() {
-            Some('+') => { let n = new_line; new_line += 1; n }
-            Some('-') => { let n = old_line; old_line += 1; n }
-            Some(' ') => { let n = new_line; old_line += 1; new_line += 1; n }
+            Some('+') => {
+                let n = new_line;
+                new_line += 1;
+                n
+            }
+            Some('-') => {
+                let n = old_line;
+                old_line += 1;
+                n
+            }
+            Some(' ') => {
+                let n = new_line;
+                old_line += 1;
+                new_line += 1;
+                n
+            }
             _ => 0,
         };
         let prefix = if line_number == 0 {
@@ -579,9 +616,23 @@ pub(super) fn render_unified_diff<'a>(diff: &str, width: usize, show_picker: boo
 
 fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
     let mut parts = line.split_whitespace();
-    if parts.next()? != "@@" { return None; }
-    let old = parts.next()?.strip_prefix('-')?.split(',').next()?.parse().ok()?;
-    let new = parts.next()?.strip_prefix('+')?.split(',').next()?.parse().ok()?;
+    if parts.next()? != "@@" {
+        return None;
+    }
+    let old = parts
+        .next()?
+        .strip_prefix('-')?
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+    let new = parts
+        .next()?
+        .strip_prefix('+')?
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
     Some((old, new))
 }
 
@@ -625,7 +676,10 @@ mod tests {
         let line = highlight_diff_line("+added line", 40, false);
         assert_eq!(row_width(&line), 40);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(!text.contains('│'), "unified fallback must not add a separator");
+        assert!(
+            !text.contains('│'),
+            "unified fallback must not add a separator"
+        );
     }
 
     #[test]
@@ -647,10 +701,18 @@ mod tests {
     fn unified_diff_adds_hunk_aware_line_numbers() {
         let lines = render_unified_diff("@@ -4,2 +7,2 @@\n-old\n+new\n context", 60, false);
         assert_eq!(lines.len(), 4);
-        let text: String = lines[1].spans.iter().map(|span| span.content.as_ref()).collect();
+        let text: String = lines[1]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert!(text.starts_with("    4 - "));
         assert_eq!(lines[1].spans[0].style.bg, Some(Color::Rgb(48, 20, 20)));
-        let text: String = lines[2].spans.iter().map(|span| span.content.as_ref()).collect();
+        let text: String = lines[2]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert!(text.starts_with("    7 + "));
         assert_eq!(lines[2].spans[0].style.bg, Some(Color::Rgb(24, 40, 24)));
         assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_ELEMENT));

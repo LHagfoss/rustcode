@@ -1,8 +1,17 @@
 use serde_json::Value;
 pub fn ask_question(args: &Value) -> Result<String, String> {
-    let question = args.get("question").and_then(|v| v.as_str()).ok_or("missing 'question'")?;
-    let options = args.get("options").and_then(|v| v.as_array()).ok_or("missing 'options'")?;
-    let is_multi_select = args.get("is_multi_select").and_then(|v| v.as_bool()).unwrap_or(false);
+    let question = args
+        .get("question")
+        .and_then(|v| v.as_str())
+        .ok_or("missing 'question'")?;
+    let options = args
+        .get("options")
+        .and_then(|v| v.as_array())
+        .ok_or("missing 'options'")?;
+    let is_multi_select = args
+        .get("is_multi_select")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let mut out = format!("ASK_QUESTION: {} | Multi: {}", question, is_multi_select);
     for (i, opt) in options.iter().enumerate() {
@@ -23,7 +32,9 @@ pub fn complete_task_tool(args: &Value) -> Result<String, String> {
         .get("result")
         .and_then(|r| r.as_str())
         .ok_or("missing 'result' argument")?;
-    Ok(format!("Task successfully marked as complete! Result: {result}"))
+    Ok(format!(
+        "Task successfully marked as complete! Result: {result}"
+    ))
 }
 
 pub fn search_web(args: &Value) -> Result<String, String> {
@@ -38,7 +49,8 @@ pub fn search_web(args: &Value) -> Result<String, String> {
         search_query.push_str(&format!(" site:{}", dom));
     }
 
-    let exa_key = std::env::var("EXA_API_KEY").unwrap_or_else(|_| "9a49efa5-675c-4684-94c0-3f96979aa2ac".to_string());
+    let exa_key = std::env::var("EXA_API_KEY")
+        .unwrap_or_else(|_| "9a49efa5-675c-4684-94c0-3f96979aa2ac".to_string());
     if !exa_key.is_empty() {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
@@ -63,31 +75,35 @@ pub fn search_web(args: &Value) -> Result<String, String> {
             .json(&body)
             .send()
             && response.status().is_success()
-                && let Ok(res_json) = response.json::<serde_json::Value>()
-                    && let Some(results) = res_json.get("results").and_then(|r| r.as_array()) {
-                        let mut out = String::new();
-                        out.push_str(&format!(
-                            "Web Search Results for '{}' (via Exa AI):\n\n",
-                            search_query
-                        ));
-                        for (i, r) in results.iter().enumerate() {
-                            let title = r.get("title").and_then(|t| t.as_str()).unwrap_or("No Title");
-                            let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                            let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                            let snippet = if text.len() > 300 { &text[..300] } else { text };
+            && let Ok(res_json) = response.json::<serde_json::Value>()
+            && let Some(results) = res_json.get("results").and_then(|r| r.as_array())
+        {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "Web Search Results for '{}' (via Exa AI):\n\n",
+                search_query
+            ));
+            for (i, r) in results.iter().enumerate() {
+                let title = r
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("No Title");
+                let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                let text = r.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                let snippet = if text.len() > 300 { &text[..300] } else { text };
 
-                            out.push_str(&format!(
-                                "{}. {}\n   Snippet: {}\n   Source: {}\n\n",
-                                i + 1,
-                                title,
-                                snippet.trim(),
-                                url
-                            ));
-                        }
-                        if !results.is_empty() {
-                            return Ok(out);
-                        }
-                    }
+                out.push_str(&format!(
+                    "{}. {}\n   Snippet: {}\n   Source: {}\n\n",
+                    i + 1,
+                    title,
+                    snippet.trim(),
+                    url
+                ));
+            }
+            if !results.is_empty() {
+                return Ok(out);
+            }
+        }
     }
 
     if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {
@@ -230,8 +246,12 @@ pub fn use_skill(args: &Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or("missing 'name' argument")?;
 
-    let skill = crate::skills::get_skill_content(name)
-        .ok_or_else(|| format!("Skill '{}' not found. Use the skills catalog to see available skills.", name))?;
+    let skill = crate::skills::get_skill_content(name).ok_or_else(|| {
+        format!(
+            "Skill '{}' not found. Use the skills catalog to see available skills.",
+            name
+        )
+    })?;
 
     let files = crate::skills::list_skill_files(&skill.path);
     let mut out = format!("<skill_content name=\"{}\">\n", skill.name);

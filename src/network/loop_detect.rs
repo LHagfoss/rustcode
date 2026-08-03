@@ -412,7 +412,10 @@ mod tests {
 
     #[test]
     fn edit_tool_normalizes_category_to_target_path() {
-        let (exact, cat) = signatures("replace_file_content", &json!({"path": "src/ui/mod.rs", "old_string": "a", "new_string": "b"}));
+        let (exact, cat) = signatures(
+            "replace_file_content",
+            &json!({"path": "src/ui/mod.rs", "old_string": "a", "new_string": "b"}),
+        );
         assert_ne!(exact, cat);
         assert_eq!(cat, "edit:src/ui/mod.rs");
     }

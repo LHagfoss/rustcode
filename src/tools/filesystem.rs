@@ -180,11 +180,16 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
 
     if total == 0 {
         if requested_start.is_some() || requested_end.is_some() {
-            return Err("requested line range is out of bounds because the sliced content is empty"
-                .to_string());
+            return Err(
+                "requested line range is out of bounds because the sliced content is empty"
+                    .to_string(),
+            );
         }
         return Ok(ViewFileOutput {
-            content: format!("[File: {}, Empty file, Bytes offset: {}]", path, byte_offset),
+            content: format!(
+                "[File: {}, Empty file, Bytes offset: {}]",
+                path, byte_offset
+            ),
             truncated: false,
         });
     }
@@ -434,7 +439,11 @@ fn extract_edit_chunks(args: &Value) -> Result<Vec<SingleEdit>, String> {
     }
 }
 
-fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) -> Result<EditOutcome, String> {
+fn apply_single_edit_to_content(
+    content: &str,
+    path: &str,
+    edit: &SingleEdit,
+) -> Result<EditOutcome, String> {
     let had_crlf = content.contains("\r\n");
     let content_norm = content.replace("\r\n", "\n");
     let result = apply_single_edit_to_content_inner(&content_norm, path, edit)?;
@@ -448,7 +457,11 @@ fn apply_single_edit_to_content(content: &str, path: &str, edit: &SingleEdit) ->
     }
 }
 
-fn apply_single_edit_to_content_inner(content: &str, path: &str, edit: &SingleEdit) -> Result<EditOutcome, String> {
+fn apply_single_edit_to_content_inner(
+    content: &str,
+    path: &str,
+    edit: &SingleEdit,
+) -> Result<EditOutcome, String> {
     if edit.target == edit.replacement {
         return Err("old_string and new_string are identical".to_string());
     }
@@ -670,8 +683,13 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     let mut any_changed = false;
     let mut unchanged_count = 0usize;
     for (idx, edit) in chunks.iter().enumerate() {
-        let outcome = apply_single_edit_to_content(&current_content, path, edit)
-            .map_err(|e| if chunks.len() > 1 { format!("Edit #{}: {}", idx + 1, e) } else { e })?;
+        let outcome = apply_single_edit_to_content(&current_content, path, edit).map_err(|e| {
+            if chunks.len() > 1 {
+                format!("Edit #{}: {}", idx + 1, e)
+            } else {
+                e
+            }
+        })?;
 
         match outcome {
             EditOutcome::Unchanged => {
@@ -686,7 +704,9 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
 
     if !any_changed {
         return Ok(if chunks.len() == 1 {
-            format!("already applied; no changes made to '{path}' (target_content already reflects replacement_content)")
+            format!(
+                "already applied; no changes made to '{path}' (target_content already reflects replacement_content)"
+            )
         } else {
             format!(
                 "already applied; no changes made to '{path}' ({unchanged_count} of {} edits already reflected)",
@@ -703,7 +723,9 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     let combined_diffs = generate_unified_diff(&original_content, &current_content);
 
     let msg = if chunks.len() == 1 {
-        format!("successfully replaced target_content in '{path}'\n\n```diff\n{combined_diffs}\n```")
+        format!(
+            "successfully replaced target_content in '{path}'\n\n```diff\n{combined_diffs}\n```"
+        )
     } else {
         let note = if unchanged_count > 0 {
             format!(" ({unchanged_count} already applied, skipped)")
@@ -1037,7 +1059,10 @@ mod tests {
         .expect("read");
         assert!(ranged.contains("1: // scratch"), "got: {ranged}");
         assert!(!ranged.contains("truncated"), "got: {ranged}");
-        assert!(ranged.contains("the file continues to line 3"), "got: {ranged}");
+        assert!(
+            ranged.contains("the file continues to line 3"),
+            "got: {ranged}"
+        );
 
         // A read the tool itself cut short still says so.
         let whole = view_file_tool(&serde_json::json!({ "path": path })).expect("read");
@@ -1259,12 +1284,23 @@ mod tests {
             1 + DEFAULT_READ_WINDOW_LINES
         )));
         assert_eq!(
-            first.lines().filter(|line| line.contains(": line ")).count(),
+            first
+                .lines()
+                .filter(|line| line.contains(": line "))
+                .count(),
             DEFAULT_READ_WINDOW_LINES
         );
         assert!(first.contains("2: line 2"));
-        assert!(first.contains(&format!("{}: line {}", 1 + DEFAULT_READ_WINDOW_LINES, 1 + DEFAULT_READ_WINDOW_LINES)));
-        assert!(!first.contains(&format!("{}: line {}", 2 + DEFAULT_READ_WINDOW_LINES, 2 + DEFAULT_READ_WINDOW_LINES)));
+        assert!(first.contains(&format!(
+            "{}: line {}",
+            1 + DEFAULT_READ_WINDOW_LINES,
+            1 + DEFAULT_READ_WINDOW_LINES
+        )));
+        assert!(!first.contains(&format!(
+            "{}: line {}",
+            2 + DEFAULT_READ_WINDOW_LINES,
+            2 + DEFAULT_READ_WINDOW_LINES
+        )));
 
         let next_start = 2 + DEFAULT_READ_WINDOW_LINES;
         let second = view_file_tool(&serde_json::json!({
@@ -1399,7 +1435,10 @@ mod tests {
             let result = std::panic::catch_unwind(|| view_file_tool(&args));
             let tool_result = result.expect("malformed range must return Err, not panic");
             let error = tool_result.expect_err("malformed range must be rejected");
-            assert!(error.contains(expected), "expected {expected:?} in: {error}");
+            assert!(
+                error.contains(expected),
+                "expected {expected:?} in: {error}"
+            );
         }
     }
 
@@ -1415,7 +1454,10 @@ mod tests {
             "content_offset": 1,
         }))
         .expect_err("offset inside a UTF-8 code point must be rejected");
-        assert!(boundary_error.contains("UTF-8 boundary"), "got: {boundary_error}");
+        assert!(
+            boundary_error.contains("UTF-8 boundary"),
+            "got: {boundary_error}"
+        );
 
         let slice_offset = "éclair\n".len();
         let range_error = view_file_tool(&serde_json::json!({
@@ -1484,7 +1526,7 @@ mod tests {
                      }\n\
                      flush();\n\
                      }"
-                .to_string(),
+            .to_string(),
             replacement: "REPLACED".to_string(),
             start_line: None,
             end_line: None,
@@ -1496,7 +1538,10 @@ mod tests {
             EditOutcome::Unchanged => panic!("expected a change"),
         };
         assert!(out.contains("REPLACED"), "got: {out}");
-        assert!(!out.contains("show_spinner"), "old block should be gone: {out}");
+        assert!(
+            !out.contains("show_spinner"),
+            "old block should be gone: {out}"
+        );
     }
 
     #[test]
@@ -1510,7 +1555,10 @@ mod tests {
         };
         let err = apply_single_edit_to_content(file, "f.rs", &edit).unwrap_err();
         assert!(err.contains("Closest region"), "got: {err}");
-        assert!(err.contains("let x = 1;"), "should quote actual line: {err}");
+        assert!(
+            err.contains("let x = 1;"),
+            "should quote actual line: {err}"
+        );
     }
 
     #[test]
