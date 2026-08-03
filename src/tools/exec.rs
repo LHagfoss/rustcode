@@ -365,7 +365,9 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
         });
 
         return Ok(super::ToolExecutionOutput {
-            content: format!("Task started in background. Task ID: {task_id}. Status: Running."),
+            content: format!(
+                "Task started in background. Task ID: {task_id}. Status: Running. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status; continue with other work or wait."
+            ),
             success: true,
             exit_code: None,
             truncated: false,
