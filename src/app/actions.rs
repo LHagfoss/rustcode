@@ -1221,10 +1221,12 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     s.temp_input.clear();
     s.status = AppStatus::Idle;
     let count = s.history.len();
+    let notice_text = format!("Resumed session \"{}\" ({} messages)", meta.title, count);
     append_or_update_resume_notice(
         &mut s.history,
-        format!("Resumed session \"{}\" ({} messages)", meta.title, count),
+        notice_text.clone(),
     );
+    s.set_notice(notice_text);
     crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
