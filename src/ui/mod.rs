@@ -1491,28 +1491,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                 ));
             }
-            // Separate the tool card from the next transcript item — but keep a
-            // run of consecutive tool calls tight so they read as one lean list
-            // instead of a tall stack of padded cards. History interleaves an
-            // assistant message holding the tool call between results, and that
-            // message renders nothing when a tool result follows it, so look
-            // through it: the blank is skipped when the next *rendered* item is
-            // another tool card.
-            let next_is_tool = match state.history.get(msg_idx + 1) {
-                Some(next) if next.role == "tool" => true,
-                Some(next) if next.role == "assistant" => {
-                    crate::tools::parse_tool_call(&next.content, state.active_tool_protocol())
-                        .is_some()
-                        && state
-                            .history
-                            .get(msg_idx + 2)
-                            .is_some_and(|m| m.role == "tool")
-                }
-                _ => false,
-            };
-            if !next_is_tool {
-                lines.push(Line::from(""));
-            }
 
         } else if msg.role == "user" {
             if msg_idx > 0 {
@@ -1609,10 +1587,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 }
                 continue;
             }
-            let prev_was_tool = msg_idx > 0 && state.history.get(msg_idx - 1).is_some_and(|m| m.role == "tool");
-            if prev_was_tool {
-                lines.push(Line::from(""));
-            }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
             render_assistant_message(
@@ -1631,7 +1605,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     is_copied_recently,
                 },
             );
-            lines.push(Line::from(""));
+            let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
+                m.role == "tool"
+                    || (m.role == "assistant"
+                        && crate::tools::parse_tool_call(&m.content, state.active_tool_protocol()).is_some())
+            });
+            if !next_is_tool {
+                lines.push(Line::from(""));
+            }
         }
     }
 
