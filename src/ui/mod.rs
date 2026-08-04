@@ -39,25 +39,48 @@ fn safe_byte_index(s: &str, char_pos: usize) -> usize {
 /// Max visible rows in the slash-command popup; longer lists scroll internally.
 const MAX_POPUP_ROWS: u16 = 10;
 
-const COLOR_BG: Color = Color::Rgb(21, 23, 26);
-const COLOR_PANEL: Color = Color::Rgb(26, 29, 32);
-const COLOR_ELEMENT: Color = Color::Rgb(34, 38, 42);
-const COLOR_TEXT: Color = Color::Rgb(240, 229, 222);
-const COLOR_MUTED: Color = Color::Rgb(136, 146, 154);
-const COLOR_PRIMARY: Color = Color::Rgb(236, 110, 93);
-const COLOR_SECONDARY: Color = Color::Rgb(60, 88, 101);
-const COLOR_GREEN: Color = Color::Rgb(127, 216, 143);
-/// Uniform text-selection background — vibrant selection blue for high visibility.
-const COLOR_SELECTION: Color = Color::Rgb(240, 240, 240);
-const COLOR_TIP: Color = Color::Rgb(224, 169, 109);
-const COLOR_STATUS_BORDER: Color = Color::Rgb(92, 98, 104);
-const COLOR_TURN_SEPARATOR: Color = Color::Rgb(72, 78, 84);
-/// Overlay surface for borderless popups (toast, scroll pill): darker than the
-/// app background so the pill reads as floating without needing a border.
-const COLOR_NOTICE_BG: Color = Color::Rgb(13, 14, 16);
-/// Background for a clickable element under the pointer — one step lighter than
-/// the surfaces around it, so hovering reads as "this responds to a click".
-const COLOR_HOVER_BG: Color = Color::Rgb(45, 50, 56);
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_BG() -> Color { theme::color_bg() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_PANEL() -> Color { theme::color_panel() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_ELEMENT() -> Color { theme::color_element() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_TEXT() -> Color { theme::color_text() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_MUTED() -> Color { theme::color_muted() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_PRIMARY() -> Color { theme::color_primary() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_SECONDARY() -> Color { theme::color_secondary() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_GREEN() -> Color { theme::color_green() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_SELECTION() -> Color { theme::color_selection() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_TIP() -> Color { theme::color_tip() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_STATUS_BORDER() -> Color { theme::color_status_border() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_TURN_SEPARATOR() -> Color { theme::color_turn_separator() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_NOTICE_BG() -> Color { theme::color_notice_bg() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_HOVER_BG() -> Color { theme::color_hover_bg() }
 
 const LOGO: &[&str] = &[
     "                  ▄                   █      ",
@@ -70,7 +93,7 @@ pub use crate::app::suggestion::{COMMANDS, CommandInfo};
 
 fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool) -> Style {
     if show_picker {
-        Style::default().fg(Color::Rgb(60, 68, 72)).bg(COLOR_BG)
+        Style::default().fg(Color::Rgb(60, 68, 72)).bg(COLOR_BG())
     } else {
         Style::default().fg(fg).bg(bg).add_modifier(modifier)
     }
@@ -201,11 +224,11 @@ fn render_assistant_message<'a>(
         lines.push(Line::from(vec![
             Span::styled(
                 toggle,
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
             Span::styled(
                 format!("{label}: {preview}"),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
         ]));
 
@@ -214,11 +237,11 @@ fn render_assistant_message<'a>(
                 lines.push(Line::from(vec![
                     Span::styled(
                         "│ ",
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
                     ),
                     Span::styled(
                         raw_line,
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                     ),
                 ]));
             }
@@ -321,25 +344,25 @@ fn render_assistant_message<'a>(
                             " Copy 📋 "
                         };
                         let button_color = if is_copied_recently {
-                            COLOR_GREEN
+                            COLOR_GREEN()
                         } else {
-                            COLOR_SECONDARY
+                            COLOR_SECONDARY()
                         };
                         // Keep code on a subtle panel so syntax spans remain visually grouped;
                         // the Copy badge uses the same panel with a stronger foreground.
-                        let code_bg = COLOR_ELEMENT;
+                        let code_bg = COLOR_ELEMENT();
                         let left_text = format!(" {lang_label} ");
                         let pad_len =
                             box_width.saturating_sub(left_text.width() + button_badge.width());
                         let spans = vec![
                             Span::styled(
                                 left_text,
-                                get_themed_style(COLOR_MUTED, code_bg, Modifier::BOLD, show_picker),
+                                get_themed_style(COLOR_MUTED(), code_bg, Modifier::BOLD, show_picker),
                             ),
                             Span::styled(
                                 " ".repeat(pad_len),
                                 get_themed_style(
-                                    COLOR_MUTED,
+                                    COLOR_MUTED(),
                                     code_bg,
                                     Modifier::empty(),
                                     show_picker,
@@ -349,7 +372,7 @@ fn render_assistant_message<'a>(
                                 button_badge,
                                 get_themed_style(
                                     button_color,
-                                    COLOR_ELEMENT,
+                                    COLOR_ELEMENT(),
                                     Modifier::BOLD,
                                     show_picker,
                                 ),
@@ -364,7 +387,7 @@ fn render_assistant_message<'a>(
                                 let mut content_spans = vec![Span::styled(
                                     " ".to_string(),
                                     get_themed_style(
-                                        COLOR_TEXT,
+                                        COLOR_TEXT(),
                                         code_bg,
                                         Modifier::empty(),
                                         show_picker,
@@ -387,8 +410,8 @@ fn render_assistant_message<'a>(
                         lines.push(Line::from(Span::styled(
                             " ".repeat(box_width),
                             get_themed_style(
-                                COLOR_MUTED,
-                                COLOR_ELEMENT,
+                                COLOR_MUTED(),
+                                COLOR_ELEMENT(),
                                 Modifier::empty(),
                                 show_picker,
                             ),
@@ -421,8 +444,8 @@ fn render_assistant_message<'a>(
                         vec![Span::styled(
                             format!(" {line_str}"),
                             get_themed_style(
-                                COLOR_TEXT,
-                                COLOR_ELEMENT,
+                                COLOR_TEXT(),
+                                COLOR_ELEMENT(),
                                 Modifier::empty(),
                                 show_picker,
                             ),
@@ -430,13 +453,13 @@ fn render_assistant_message<'a>(
                     } else {
                         let mut s = vec![Span::styled(
                             " ".to_string(),
-                            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+                            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                         )];
                         s.extend(
                             highlight_code_line(line_str, &current_lang, show_picker)
                                 .into_iter()
                                 .map(|span| {
-                                    Span::styled(span.content, span.style.bg(COLOR_ELEMENT))
+                                    Span::styled(span.content, span.style.bg(COLOR_ELEMENT()))
                                 }),
                         );
                         s
@@ -444,7 +467,7 @@ fn render_assistant_message<'a>(
                     lines.extend(wrap_code_spans(
                         content_spans,
                         box_width,
-                        COLOR_ELEMENT,
+                        COLOR_ELEMENT(),
                         show_picker,
                     ));
                 }
@@ -475,28 +498,28 @@ fn render_assistant_message<'a>(
         let mut status_spans = vec![
             Span::styled(
                 "■ ",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
             Span::styled(
                 "Build",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
             Span::styled(
                 " · ",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
         ];
 
         status_spans.push(Span::styled(
             model_name.to_string(),
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
 
         if let Some(ms) = response_time_ms {
             let secs = ms as f32 / 1000.0;
             status_spans.push(Span::styled(
                 format!(" · {:.1}s", secs),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
 
@@ -590,19 +613,19 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 let color = colors[color_index];
             spans.push(Span::styled(
                 "■",
-                get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
 
         if let Some(tool_name) = state.running_tools.first() {
             spans.push(Span::styled(
                 format!("  executing: {tool_name}"),
-                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
             ));
         } else if !state.pending_queue.is_empty() {
             spans.push(Span::styled(
                 format!("  queued: {}", state.pending_queue.len()),
-                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
             ));
         } else {
             let random_statuses = [
@@ -621,24 +644,24 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
             spans.push(Span::styled(
                 format!("  {status_msg}"),
-                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
             ));
             if let Some(t) = state.generation_start_time {
                 let secs = t.elapsed().as_secs();
                 spans.push(Span::styled(
                     format!(" · {}s", secs),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ));
             }
         }
 
         spans.push(Span::styled(
             "   ..... esc ",
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
         spans.push(Span::styled(
             "interrupt",
-            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
         spans
     } else {
@@ -648,13 +671,13 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         for _ in 0..6 {
             spans.push(Span::styled(
                 "■",
-                get_themed_style(static_color, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(static_color, COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
 
         spans.push(Span::styled(
             "   idle",
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
         spans
     };
@@ -664,19 +687,19 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             Span::styled("   ", Style::default()),
             Span::styled(
                 "tab",
-                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
             Span::styled(
                 " agents   ",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
             Span::styled(
                 "ctrl+p",
-                get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
             Span::styled(
                 " commands",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
         ]
     } else {
@@ -734,36 +757,36 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         if !tps_label.is_empty() {
             right_spans.push(Span::styled(
                 tps_label,
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
             right_spans.push(Span::styled(
                 tps_value,
-                get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
             ));
         }
 
         right_spans.push(Span::styled(
             "   Context: ",
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
         right_spans.push(Span::styled(
             token_str,
-            get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
         if !cached_str.is_empty() {
             right_spans.push(Span::styled(
                 cached_str,
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
         }
         right_spans.push(Span::styled(
             format!(" ({:.0}%)", pct),
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
 
         if let Some(quota) = state.model_quota_remaining {
             let color = if quota > 50.0 {
-                COLOR_PRIMARY
+                COLOR_PRIMARY()
             } else if quota > 20.0 {
                 Color::Yellow
             } else {
@@ -771,22 +794,22 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             };
             right_spans.push(Span::styled(
                 "   Quota: ",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ));
             right_spans.push(Span::styled(
                 format!("{:.0}%", quota),
-                get_themed_style(color, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(color, COLOR_BG(), Modifier::BOLD, show_picker),
             ));
         }
 
         right_spans.push(Span::styled("   ", Style::default()));
         right_spans.push(Span::styled(
             "ctrl+p",
-            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::BOLD, show_picker),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
         right_spans.push(Span::styled(
             " commands",
-            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
 
         right_spans
@@ -802,9 +825,9 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         .split(footer_area);
 
     let status_color = if state.auto_confirm {
-        COLOR_PRIMARY
+        COLOR_PRIMARY()
     } else {
-        COLOR_MUTED
+        COLOR_MUTED()
     };
     let status_modifier = if state.auto_confirm {
         Modifier::BOLD
@@ -813,28 +836,28 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
     };
 
     f.render_widget(
-        Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG)),
+        Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG())),
         footer_chunks[0],
     );
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
                 "Auto-Confirm: ",
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
             Span::styled(
                 state.auto_confirm_status_text(),
-                get_themed_style(status_color, COLOR_BG, status_modifier, show_picker),
+                get_themed_style(status_color, COLOR_BG(), status_modifier, show_picker),
             ),
         ]))
         .alignment(ratatui::layout::Alignment::Center)
-        .style(Style::default().bg(COLOR_BG)),
+        .style(Style::default().bg(COLOR_BG())),
         footer_chunks[1],
     );
     f.render_widget(
         Paragraph::new(Line::from(right_spans))
             .alignment(ratatui::layout::Alignment::Right)
-            .style(Style::default().bg(COLOR_BG)),
+            .style(Style::default().bg(COLOR_BG())),
         footer_chunks[2],
     );
 }
@@ -849,14 +872,14 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
 
     let line_chars = "▌\n".repeat(chunks[1].height as usize);
     let vertical_line_widget = Paragraph::new(line_chars).style(get_themed_style(
-        COLOR_SECONDARY,
-        COLOR_BG,
+        COLOR_SECONDARY(),
+        COLOR_BG(),
         Modifier::empty(),
         show_picker,
     ));
     f.render_widget(vertical_line_widget, input_split[0]);
 
-    let solid_panel = Block::default().style(Style::default().bg(COLOR_PANEL));
+    let solid_panel = Block::default().style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(solid_panel, input_split[1]);
 
     let input_margin = Margin {
@@ -866,9 +889,9 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let input_inner = input_split[1].inner(input_margin);
 
     let text_style = if state.input_buffer.starts_with('/') {
-        get_themed_style(COLOR_PRIMARY, COLOR_PANEL, Modifier::BOLD, show_picker)
+        get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
     } else {
-        get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker)
+        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
     };
 
     let inner_width = input_inner.width as usize;
@@ -886,7 +909,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
 
         if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
-                get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::ITALIC, show_picker);
+                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
@@ -959,7 +982,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         input_inner.width,
         text_area_height,
     );
-    let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL));
+    let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(paragraph, text_area);
     // Record the editable region so mouse drag-selection can target it.
     state.input_text_area = Some(text_area);
@@ -967,21 +990,21 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let build_y = input_inner.y + input_inner.height.saturating_sub(1);
     let build_area = ratatui::layout::Rect::new(input_inner.x, build_y, input_inner.width, 1);
     let (mode_label, mode_color) = match state.agent_mode {
-        crate::config::AgentMode::Build => ("Build", COLOR_SECONDARY),
+        crate::config::AgentMode::Build => ("Build", COLOR_SECONDARY()),
         crate::config::AgentMode::Plan => ("Plan", Color::Rgb(229, 192, 123)),
     };
     let build_line = Line::from(vec![
         Span::styled(
             mode_label,
-            get_themed_style(mode_color, COLOR_PANEL, Modifier::BOLD, show_picker),
+            get_themed_style(mode_color, COLOR_PANEL(), Modifier::BOLD, show_picker),
         ),
         Span::styled(
             " · ",
-            get_themed_style(COLOR_MUTED, COLOR_PANEL, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), show_picker),
         ),
         Span::styled(
             model_label(state),
-            get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
         ),
     ]);
     f.render_widget(Paragraph::new(build_line), build_area);
@@ -1232,8 +1255,8 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
     lines.push(Line::from(Span::<'static>::styled(
         rule,
         get_themed_style(
-            COLOR_TURN_SEPARATOR,
-            COLOR_BG,
+            COLOR_TURN_SEPARATOR(),
+            COLOR_BG(),
             Modifier::empty(),
             show_picker,
         ),
@@ -1258,13 +1281,13 @@ fn render_status_panel<'a>(
     let (label, icon, accent) = if is_warning {
         ("Warning", "!", Color::Rgb(229, 192, 123))
     } else if lower.starts_with("session status") {
-        ("Status", "·", COLOR_STATUS_BORDER)
+        ("Status", "·", COLOR_STATUS_BORDER())
     } else if lower.starts_with("session usage") {
-        ("Usage", "·", COLOR_STATUS_BORDER)
+        ("Usage", "·", COLOR_STATUS_BORDER())
     } else if lower.starts_with("available tools") {
-        ("Tools", "·", COLOR_STATUS_BORDER)
+        ("Tools", "·", COLOR_STATUS_BORDER())
     } else {
-        ("Notice", "·", COLOR_STATUS_BORDER)
+        ("Notice", "·", COLOR_STATUS_BORDER())
     };
     let panel_width = width.max(24) as usize;
     let inner_width = panel_width.saturating_sub(4).max(10);
@@ -1296,19 +1319,19 @@ fn render_status_panel<'a>(
     );
     lines.push(Line::from(Span::styled(
         pad_to_width(&top, panel_width),
-        get_themed_style(accent, COLOR_BG, Modifier::BOLD, show_picker),
+        get_themed_style(accent, COLOR_BG(), Modifier::BOLD, show_picker),
     )));
     for row in body {
         let text = pad_to_width(&row, inner_width);
         lines.push(Line::from(Span::styled(
             format!("│ {text} │"),
-            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
         )));
     }
     let bottom = format!("╰{}╯", "─".repeat(panel_width.saturating_sub(2)));
     lines.push(Line::from(Span::styled(
         pad_to_width(&bottom, panel_width),
-        get_themed_style(accent, COLOR_BG, Modifier::empty(), show_picker),
+        get_themed_style(accent, COLOR_BG(), Modifier::empty(), show_picker),
     )));
     lines.push(Line::from(""));
 }
@@ -1395,15 +1418,15 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(vec![
                 Span::styled(
                     "● ",
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
                 Span::styled(
                     action,
-                    get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
                     format!("({arg})"),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ]));
 
@@ -1492,11 +1515,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(vec![
                 Span::styled(
                     "▌",
-                    get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
                 Span::styled(
                     " ".repeat(content_width + 4),
-                    get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
                 ),
             ]));
 
@@ -1505,11 +1528,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 lines.push(Line::from(vec![
                     Span::styled(
                         "▌",
-                        get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
+                        get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
                     ),
                     Span::styled(
                         format!("  {padded_text}  "),
-                        get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+                        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
                     ),
                 ]));
             }
@@ -1518,11 +1541,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(vec![
                 Span::styled(
                     "▌",
-                    get_themed_style(COLOR_SECONDARY, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
                 Span::styled(
                     " ".repeat(content_width + 4),
-                    get_themed_style(COLOR_TEXT, COLOR_PANEL, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
                 ),
             ]));
             lines.push(Line::from(""));
@@ -1539,15 +1562,15 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     lines.push(Line::from(vec![
                         Span::styled(
                             circle,
-                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                         ),
                         Span::styled(
                             action,
-                            get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+                            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                         ),
                         Span::styled(
                             format!("({arg})..."),
-                            get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+                            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
                         ),
                     ]));
                 }
@@ -1682,7 +1705,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     let conversation_paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .style(Style::default().bg(COLOR_BG));
+        .style(Style::default().bg(COLOR_BG()));
 
     let max_scroll = total_wrapped_lines.saturating_sub(inner_area.height);
     state.last_max_scroll = max_scroll;
@@ -1722,9 +1745,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         let btn_rect = ratatui::layout::Rect::new(btn_x, btn_y, btn_width, 1);
         state.scroll_to_bottom_btn = Some(btn_rect);
         let pill_bg = if state.hover == HoverTarget::ScrollPill {
-            COLOR_HOVER_BG
+            COLOR_HOVER_BG()
         } else {
-            COLOR_NOTICE_BG
+            COLOR_NOTICE_BG()
         };
         f.render_widget(ratatui::widgets::Clear, btn_rect);
         f.render_widget(
@@ -1732,7 +1755,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 .alignment(ratatui::layout::Alignment::Center)
                 .style(
                     Style::default()
-                        .fg(COLOR_TEXT)
+                        .fg(COLOR_TEXT())
                         .bg(pill_bg)
                         .add_modifier(Modifier::BOLD),
                 ),
@@ -1774,7 +1797,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         let buf = f.buffer_mut();
         for col in inner_area.x..inner_area.x + inner_area.width {
             if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
-                cell.set_bg(COLOR_HOVER_BG);
+                cell.set_bg(COLOR_HOVER_BG());
             }
         }
     }
@@ -1785,8 +1808,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 }
 
 pub fn render(f: &mut Frame, state: &mut AppState) {
+    theme::set_active_theme(&state.config.theme);
+
     f.render_widget(
-        Block::default().style(Style::default().bg(COLOR_BG)),
+        Block::default().style(Style::default().bg(COLOR_BG())),
         f.area(),
     );
 
@@ -1971,8 +1996,8 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         .iter()
         .any(|word| notice.text.to_ascii_lowercase().contains(word));
     let (glyph, accent) = match notice.kind {
-        NoticeKind::Notice if is_warning => ("!", COLOR_TIP),
-        NoticeKind::Notice => ("✓", COLOR_GREEN),
+        NoticeKind::Notice if is_warning => ("!", COLOR_TIP()),
+        NoticeKind::Notice => ("✓", COLOR_GREEN()),
     };
 
     // Size to the message so short notices ("Copied to clipboard") don't paint a
@@ -1986,12 +2011,12 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
     let para = Paragraph::new(Line::from(vec![
         Span::styled(
             format!(" {glyph} "),
-            Style::default().fg(accent).bg(COLOR_NOTICE_BG),
+            Style::default().fg(accent).bg(COLOR_NOTICE_BG()),
         ),
-        Span::styled(text, Style::default().fg(COLOR_TEXT).bg(COLOR_NOTICE_BG)),
-        Span::styled(" ", Style::default().bg(COLOR_NOTICE_BG)),
+        Span::styled(text, Style::default().fg(COLOR_TEXT()).bg(COLOR_NOTICE_BG())),
+        Span::styled(" ", Style::default().bg(COLOR_NOTICE_BG())),
     ]))
-    .style(Style::default().bg(COLOR_NOTICE_BG));
+    .style(Style::default().bg(COLOR_NOTICE_BG()));
 
     f.render_widget(Clear, rect);
     f.render_widget(para, rect);
@@ -2087,7 +2112,7 @@ fn highlight_selection(
         for col in col_from..=col_to {
             if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
                 cell.set_fg(Color::Rgb(0, 0, 0));
-                cell.set_bg(COLOR_SELECTION);
+                cell.set_bg(COLOR_SELECTION());
             }
         }
     }
@@ -2492,7 +2517,7 @@ mod tests {
             assert!(
                 line.spans
                     .iter()
-                    .all(|span| span.style.bg == Some(COLOR_ELEMENT)),
+                    .all(|span| span.style.bg == Some(COLOR_ELEMENT())),
                 "ordinary code fences should use the code panel background"
             );
         }

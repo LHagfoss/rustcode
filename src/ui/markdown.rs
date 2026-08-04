@@ -65,13 +65,13 @@ impl InlineStyle {
 
 fn text_style(style: InlineStyle, show_picker: bool) -> ratatui::style::Style {
     let fg = if style.code {
-        COLOR_GREEN
+        COLOR_GREEN()
     } else if style.link {
-        COLOR_PRIMARY
+        COLOR_PRIMARY()
     } else {
-        COLOR_TEXT
+        COLOR_TEXT()
     };
-    let bg = if style.code { COLOR_ELEMENT } else { COLOR_BG };
+    let bg = if style.code { COLOR_ELEMENT() } else { COLOR_BG() };
     get_themed_style(fg, bg, style.modifier(), show_picker)
 }
 
@@ -80,9 +80,9 @@ fn heading_style(level: HeadingLevel, show_picker: bool) -> ratatui::style::Styl
         HeadingLevel::H1 => ratatui::style::Color::Rgb(100, 175, 235),
         HeadingLevel::H2 => ratatui::style::Color::Rgb(229, 192, 123),
         HeadingLevel::H3 => ratatui::style::Color::Rgb(224, 169, 109),
-        _ => COLOR_TEXT,
+        _ => COLOR_TEXT(),
     };
-    get_themed_style(fg, COLOR_BG, Modifier::BOLD, show_picker)
+    get_themed_style(fg, COLOR_BG(), Modifier::BOLD, show_picker)
 }
 
 fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width: usize) {
@@ -224,7 +224,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 };
                 paragraph.push(Span::styled(
                     marker,
-                    get_themed_style(COLOR_PRIMARY, COLOR_BG, Modifier::BOLD, show_picker),
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ));
             }
             Event::End(TagEnd::Item) => {
@@ -259,7 +259,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 if quote_depth > 0 && paragraph.is_empty() {
                     paragraph.push(Span::styled(
                         "│ ".repeat(quote_depth),
-                        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                     ));
                 }
                 let span_style = if let Some(level) = heading {
@@ -276,7 +276,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
                 lines.push(Line::from(Span::styled(
                     "─".repeat(width.max(1)),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 )));
             }
             Event::Start(Tag::CodeBlock(kind)) => {
@@ -287,13 +287,13 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 };
                 lines.push(Line::from(Span::styled(
                     format!("```{language}"),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 )));
             }
             Event::End(TagEnd::CodeBlock) => {
                 lines.push(Line::from(Span::styled(
                     "```",
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 )));
             }
             Event::Html(text) => paragraph.push(Span::styled(

@@ -267,3 +267,38 @@ pub fn get_palette(name: &str) -> ThemePalette {
             hover_bg: Color::Rgb(45, 50, 56),
         })
 }
+
+use std::sync::RwLock;
+
+static ACTIVE_THEME: RwLock<Option<ThemePalette>> = RwLock::new(None);
+
+pub fn set_active_theme(name: &str) {
+    let palette = get_palette(name);
+    if let Ok(mut guard) = ACTIVE_THEME.write() {
+        *guard = Some(palette);
+    }
+}
+
+pub fn active_palette() -> ThemePalette {
+    if let Ok(guard) = ACTIVE_THEME.read() {
+        if let Some(p) = guard.as_ref() {
+            return p.clone();
+        }
+    }
+    get_palette("default")
+}
+
+pub fn color_bg() -> Color { active_palette().bg }
+pub fn color_panel() -> Color { active_palette().panel }
+pub fn color_element() -> Color { active_palette().element }
+pub fn color_text() -> Color { active_palette().text }
+pub fn color_muted() -> Color { active_palette().muted }
+pub fn color_primary() -> Color { active_palette().primary }
+pub fn color_secondary() -> Color { active_palette().secondary }
+pub fn color_green() -> Color { active_palette().green }
+pub fn color_selection() -> Color { active_palette().selection }
+pub fn color_tip() -> Color { active_palette().tip }
+pub fn color_status_border() -> Color { active_palette().status_border }
+pub fn color_turn_separator() -> Color { active_palette().turn_separator }
+pub fn color_notice_bg() -> Color { active_palette().notice_bg }
+pub fn color_hover_bg() -> Color { active_palette().hover_bg }
