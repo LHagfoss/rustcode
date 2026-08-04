@@ -14,8 +14,8 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
-    COLOR_BG, COLOR_DIFF_ABSENT_BG, COLOR_DIFF_ADD_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_BG,
-    COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_MUTED, COLOR_TEXT, get_themed_style,
+    COLOR_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_MUTED, COLOR_TEXT,
+    get_themed_style,
 };
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -389,10 +389,10 @@ pub(super) fn wrap_code_spans<'a>(
 /// Returns `(bg, fg, is_empty)`. `~` marks a column with no line on that side.
 fn diff_cell_colors(prefix: char) -> (Color, Color, bool) {
     match prefix {
-        '+' => (COLOR_DIFF_ADD_BG(), COLOR_DIFF_ADD_FG(), false),
-        '-' => (COLOR_DIFF_REMOVE_BG(), COLOR_DIFF_REMOVE_FG(), false),
-        '~' => (COLOR_DIFF_ABSENT_BG(), COLOR_DIFF_ABSENT_BG(), true),
-        _ => (COLOR_BG(), COLOR_TEXT(), false),
+        '+' => (COLOR_ELEMENT(), COLOR_DIFF_ADD_FG(), false),
+        '-' => (COLOR_ELEMENT(), COLOR_DIFF_REMOVE_FG(), false),
+        '~' => (COLOR_ELEMENT(), COLOR_MUTED(), true),
+        _ => (COLOR_ELEMENT(), COLOR_TEXT(), false),
     }
 }
 
@@ -456,7 +456,14 @@ fn diff_cell_spans<'a>(cell: &str, col_width: usize, show_picker: bool) -> Vec<S
         get_themed_style(fg, bg, Modifier::BOLD, show_picker),
     )];
     if !is_empty {
-        spans.extend(highlight_rust_line_with_colors(code, fg, bg, show_picker));
+        if prefix == '+' || prefix == '-' {
+            spans.push(Span::styled(
+                code.to_string(),
+                get_themed_style(fg, bg, Modifier::empty(), show_picker),
+            ));
+        } else {
+            spans.extend(highlight_rust_line_with_colors(code, fg, bg, show_picker));
+        }
     }
     fit_line_spans(spans, col_width, bg, show_picker)
 }
@@ -498,22 +505,22 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
         }
     };
 
-    let bg_color = match prefix {
-        '+' => COLOR_DIFF_ADD_BG(),
-        '-' => COLOR_DIFF_REMOVE_BG(),
-        '~' => COLOR_BG(),
-        _ => COLOR_ELEMENT(),
-    };
+    let bg_color = COLOR_ELEMENT();
 
     let default_fg = match prefix {
         '+' => COLOR_DIFF_ADD_FG(),
         '-' => COLOR_DIFF_REMOVE_FG(),
-        '~' => COLOR_BG(),
+        '~' => COLOR_MUTED(),
         _ => COLOR_TEXT(),
     };
 
     let spans = if prefix == '~' {
         Vec::new()
+    } else if prefix == '+' || prefix == '-' {
+        vec![Span::styled(
+            code.to_string(),
+            get_themed_style(default_fg, bg_color, Modifier::empty(), show_picker),
+        )]
     } else {
         highlight_rust_line_with_colors(code, default_fg, bg_color, show_picker)
     };
@@ -601,11 +608,7 @@ pub(super) fn render_unified_diff<'a>(
         } else {
             format!("{line_number:>5} ")
         };
-        let gutter_bg = match raw.chars().next() {
-            Some('+') => COLOR_DIFF_ADD_BG(),
-            Some('-') => COLOR_DIFF_REMOVE_BG(),
-            _ => COLOR_ELEMENT(),
-        };
+        let gutter_bg = COLOR_ELEMENT();
         let mut line = vec![Span::styled(
             prefix,
             get_themed_style(COLOR_MUTED(), gutter_bg, Modifier::empty(), show_picker),
@@ -710,14 +713,18 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    4 - "));
-        assert_eq!(lines[1].spans[0].style.bg, Some(COLOR_DIFF_REMOVE_BG()));
+        assert_eq!(lines[1].spans[0].style.bg, Some(COLOR_ELEMENT()));
+        assert_eq!(lines[1].spans[1].style.fg, Some(COLOR_DIFF_REMOVE_FG()));
+
         let text: String = lines[2]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    7 + "));
-        assert_eq!(lines[2].spans[0].style.bg, Some(COLOR_DIFF_ADD_BG()));
+        assert_eq!(lines[2].spans[0].style.bg, Some(COLOR_ELEMENT()));
+        assert_eq!(lines[2].spans[1].style.fg, Some(COLOR_DIFF_ADD_FG()));
+
         assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_ELEMENT()));
     }
 }
