@@ -1341,6 +1341,7 @@ fn render_status_panel<'a>(
     show_picker: bool,
     lines: &mut Vec<Line<'a>>,
 ) {
+    let version = env!("CARGO_PKG_VERSION");
     let lower = content.to_ascii_lowercase();
     let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
         .iter()
@@ -1350,6 +1351,17 @@ fn render_status_panel<'a>(
     } else {
         ("·", COLOR_MUTED())
     };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            ">_ RustCode ",
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+        Span::styled(
+            format!("(v{})", version),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+    ]));
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -1975,7 +1987,7 @@ fn scroll_pill_label(hidden: usize) -> String {
 }
 
 /// How long a notice toast stays on screen before it fades out.
-const NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+pub(crate) const NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Columns of padding around the toast text: accent glyph + spaces on both sides.
 const NOTICE_PADDING: u16 = 5;
@@ -2608,9 +2620,10 @@ mod tests {
         let mut lines = Vec::new();
         render_status_panel("Notice: background task finished", 80, false, &mut lines);
 
-        assert_eq!(lines.len(), 1, "minimal inline status takes 1 line");
-        assert!(lines[0].spans[0].content.contains("● ·"));
-        assert!(lines[0].spans[1].content.contains("Notice: background task finished"));
+        assert_eq!(lines.len(), 2, "header line + status line");
+        assert!(lines[0].spans[0].content.contains(">_ RustCode"));
+        assert!(lines[1].spans[0].content.contains("● ·"));
+        assert!(lines[1].spans[1].content.contains("Notice: background task finished"));
     }
 
     #[test]

@@ -1338,6 +1338,12 @@ impl AppState {
         self.sel_in_input = false;
     }
 
+    pub fn has_active_notice(&self) -> bool {
+        self.notice
+            .as_ref()
+            .is_some_and(|n| n.shown_at.elapsed() < crate::ui::NOTICE_TTL)
+    }
+
     /// Show a transient notice toast in the top-right corner.
     pub fn set_notice(&mut self, text: impl Into<String>) {
         let text_str = text.into();
@@ -1354,6 +1360,7 @@ impl AppState {
             kind,
             shown_at: std::time::Instant::now(),
         });
+        self.redraw_requested = true;
     }
 
     pub fn set_warning_notice(&mut self, text: impl Into<String>) {
@@ -1362,6 +1369,7 @@ impl AppState {
             kind: NoticeKind::Warning,
             shown_at: std::time::Instant::now(),
         });
+        self.redraw_requested = true;
     }
 
     pub fn toggle_thought(&mut self, idx: usize) {
