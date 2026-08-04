@@ -10,10 +10,11 @@ use highlight::{
 };
 use markdown::render_markdown;
 pub use modals::{PALETTE_ITEMS, PaletteItem};
+pub mod theme;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
-    render_tool_confirmation_modal, render_welcome_screen,
+    render_theme_picker_modal, render_tool_confirmation_modal, render_welcome_screen,
 };
 use tool_result::{render_file_preview, render_tool_result};
 
@@ -1869,6 +1870,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     if state.show_model_picker {
         render_model_picker_modal(f, state);
+    }
+
+    if state.show_theme_picker {
+        render_theme_picker_modal(f, state);
     }
 
     if state.show_command_picker {

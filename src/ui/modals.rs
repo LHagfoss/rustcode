@@ -1814,3 +1814,86 @@ fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
     }
     out
 }
+
+pub(super) fn render_theme_picker_modal(f: &mut Frame, state: &AppState) {
+    let p = crate::ui::theme::get_palette(&state.config.theme);
+    let modal_area = centered_rect_fixed(65, 14, f.area());
+
+    f.render_widget(Clear, modal_area);
+
+    let modal_block = Block::default().style(Style::default().bg(p.panel));
+    f.render_widget(modal_block, modal_area);
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(6),    // Theme list
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    let header_line = Line::from(vec![
+        Span::styled(
+            "Select UI Theme (Live Preview)",
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ".repeat(inner_area.width.saturating_sub(35) as usize),
+            Style::default(),
+        ),
+        Span::styled("esc", Style::default().fg(p.muted)),
+    ]);
+    f.render_widget(
+        Paragraph::new(header_line).style(Style::default().bg(p.panel)),
+        modal_chunks[0],
+    );
+
+    let themes = crate::ui::theme::THEMES;
+    let selected_idx = state.theme_picker_index.min(themes.len().saturating_sub(1));
+
+    let mut list_lines = Vec::new();
+    for (idx, theme) in themes.iter().enumerate() {
+        let is_selected = selected_idx == idx;
+        let is_active = state.config.theme.eq_ignore_ascii_case(theme.name);
+        let active_badge = if is_active { " [active]" } else { "" };
+        let line = if is_selected {
+            let text = format!(" ● {:<12} — {}{}", theme.name, theme.description, active_badge);
+            let padding = (inner_area.width as usize).saturating_sub(text.len());
+            Line::from(Span::styled(
+                format!("{}{}", text, " ".repeat(padding)),
+                Style::default()
+                    .fg(p.bg)
+                    .bg(p.primary)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else {
+            let left = format!("   {:<12} — {}", theme.name, theme.description);
+            Line::from(vec![
+                Span::styled(left, Style::default().fg(p.text).bg(p.panel)),
+                Span::styled(active_badge.to_string(), Style::default().fg(p.muted).bg(p.panel)),
+            ])
+        };
+        list_lines.push(line);
+    }
+
+    f.render_widget(
+        Paragraph::new(list_lines).style(Style::default().bg(p.panel)),
+        modal_chunks[2],
+    );
+
+    let footer_line = Line::from(Span::styled(
+        "↑/↓ or j/k: preview theme • Enter: save • Esc: cancel",
+        Style::default().fg(p.muted),
+    ));
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(p.panel)),
+        modal_chunks[3],
+    );
+}

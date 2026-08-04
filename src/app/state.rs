@@ -611,6 +611,10 @@ pub struct AppState {
     pub model_picker_index: usize,
     pub model_picker_search: String,
 
+    pub show_theme_picker: bool,
+    pub theme_picker_index: usize,
+    pub theme_picker_initial: String,
+
     pub show_command_picker: bool,
     pub command_picker_index: usize,
     pub command_picker_search: String,
@@ -825,6 +829,9 @@ impl AppState {
             show_model_picker: false,
             model_picker_index: 0,
             model_picker_search: String::new(),
+            show_theme_picker: false,
+            theme_picker_index: 0,
+            theme_picker_initial: String::new(),
             verbosity,
             show_command_picker: false,
             command_picker_index: 0,
@@ -892,6 +899,7 @@ impl AppState {
     /// the background content renders dimmed.
     pub fn modal_open(&self) -> bool {
         self.show_model_picker
+            || self.show_theme_picker
             || self.show_command_picker
             || self.show_history_picker
             || self.show_mcp_config
