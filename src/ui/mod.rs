@@ -1413,6 +1413,8 @@ fn render_status_panel<'a>(
     let is_info_notice = lower.starts_with("session status")
         || lower.starts_with("session usage")
         || lower.starts_with("rustcode info")
+        || lower.starts_with("about rustcode")
+        || lower.starts_with("notice: rustcode")
         || lower.starts_with("rustcode help")
         || lower.starts_with("discovered skills")
         || lower.starts_with("available themes")
@@ -1436,16 +1438,56 @@ fn render_status_panel<'a>(
         if trimmed.is_empty() {
             continue;
         }
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("● {icon} "),
-                get_themed_style(accent, COLOR_BG(), Modifier::BOLD, show_picker),
-            ),
-            Span::styled(
-                trimmed.to_string(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-        ]));
+
+        if is_info_notice && trimmed.eq_ignore_ascii_case("rustcode info") {
+            continue;
+        }
+
+        if is_info_notice && trimmed.ends_with(':') {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    trimmed.to_string(),
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+            ]));
+        } else if is_info_notice && (trimmed.starts_with('•') || trimmed.starts_with('-')) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  • ",
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    trimmed.trim_start_matches('•').trim_start_matches('-').trim().to_string(),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+            ]));
+        } else if is_info_notice && (trimmed.starts_with('⚡') || trimmed.starts_with('📦') || trimmed.starts_with('🎨')) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    trimmed.to_string(),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("● {icon} "),
+                    get_themed_style(accent, COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    trimmed.to_string(),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+            ]));
+        }
     }
 }
 

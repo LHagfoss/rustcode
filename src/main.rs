@@ -1156,7 +1156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 s.history.push(ChatMessage::new("system", out));
                                             }
                                         }
-                                        "/info" => {
+                                        "/info" | "/about" => {
                                             let info = crate::app::actions::build_info_text();
                                             s.history.push(ChatMessage::new("system", info));
                                         }
