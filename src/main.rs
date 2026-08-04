@@ -325,11 +325,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_scroll_time = Instant::now();
 
     loop {
-        let (response_active, background_redraw) = {
+        let (response_active, background_redraw, active_notice) = {
             let mut s = app_state.lock().await;
-            (s.status != AppStatus::Idle, s.take_redraw_request())
+            (
+                s.status != AppStatus::Idle,
+                s.take_redraw_request(),
+                s.has_active_notice(),
+            )
         };
-        needs_redraw |= background_redraw;
+        needs_redraw |= background_redraw || active_notice;
 
         {
             let mut s = app_state.lock().await;
