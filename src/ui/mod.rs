@@ -1108,8 +1108,6 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         "run_command" => "Bash".to_string(),
         "search_web" => "Search".to_string(),
         "get_project_map" => "ProjectMap".to_string(),
-        // Custom/agent/MCP tools (complete_task, use_skill, spawn_agent, …) and
-        // anything else fall back to a generic PascalCase form.
         other => to_pascal_case(other),
     };
 
@@ -1119,9 +1117,10 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         | "multi_replace_file_content"
         | "write_to_file"
         | "delete_file" => args
-            .get("path")
+            .get("TargetFile")
+            .or_else(|| args.get("path"))
             .and_then(|v| v.as_str())
-            .unwrap_or("?")
+            .unwrap_or("")
             .to_string(),
         "move_file" | "copy_file" => {
             let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
@@ -1129,18 +1128,28 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             format!("{} -> {}", src, dest)
         }
         "list_directory" | "glob" => args
-            .get("path")
+            .get("DirectoryPath")
+            .or_else(|| args.get("path"))
             .or_else(|| args.get("pattern"))
             .and_then(|v| v.as_str())
             .unwrap_or(".")
             .to_string(),
         "grep" => {
-            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            let pattern = args
+                .get("Query")
+                .or_else(|| args.get("pattern"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let path = args
+                .get("SearchPath")
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
             format!("\"{}\" in {}", pattern, path)
         }
         "run_command" => args
-            .get("command")
+            .get("CommandLine")
+            .or_else(|| args.get("command"))
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
@@ -1149,8 +1158,6 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
-        // Custom tools: surface their most meaningful single argument so the
-        // call reads like UseSkill(git-feature-workflow), SetGoal(...), etc.
         "use_skill" => args
             .get("name")
             .and_then(|v| v.as_str())
@@ -1176,10 +1183,61 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        _ => "".to_string(),
+        _ => format_generic_tool_args(args),
     };
 
     (action_label, target_arg)
+}
+
+fn format_generic_tool_args(args: &serde_json::Value) -> String {
+    let Some(obj) = args.as_object() else {
+        return String::new();
+    };
+    if obj.is_empty() {
+        return String::new();
+    }
+
+    let mut parts = Vec::new();
+    for (k, v) in obj {
+        if k == "CodeContent"
+            || k == "ReplacementContent"
+            || k == "content"
+            || k == "system_prompt"
+            || k == "Code"
+            || k == "toolSummary"
+            || k == "toolAction"
+        {
+            continue;
+        }
+        let val_str = match v {
+            serde_json::Value::String(s) => {
+                let first_line = s.lines().next().unwrap_or("").trim();
+                if first_line.chars().count() > 30 {
+                    format!("\"{}...\"", first_line.chars().take(27).collect::<String>())
+                } else {
+                    format!("\"{}\"", first_line)
+                }
+            }
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Array(a) => format!("[{} items]", a.len()),
+            serde_json::Value::Object(_) => "{...}".to_string(),
+            serde_json::Value::Null => "null".to_string(),
+        };
+        parts.push(format!("{k}={val_str}"));
+    }
+
+    if parts.is_empty() {
+        if let Some(target) = obj
+            .get("TargetFile")
+            .or_else(|| obj.get("path"))
+            .and_then(|v| v.as_str())
+        {
+            return target.to_string();
+        }
+    }
+
+    parts.join(", ")
 }
 
 fn resolve_tool_result_name(
@@ -1352,16 +1410,26 @@ fn render_status_panel<'a>(
         ("·", COLOR_MUTED())
     };
 
-    lines.push(Line::from(vec![
-        Span::styled(
-            ">_ RustCode ",
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            format!("(v{})", version),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-    ]));
+    let is_info_notice = lower.starts_with("session status")
+        || lower.starts_with("session usage")
+        || lower.starts_with("rustcode info")
+        || lower.starts_with("rustcode help")
+        || lower.starts_with("discovered skills")
+        || lower.starts_with("available themes")
+        || lower.starts_with("quota:");
+
+    if is_info_notice {
+        lines.push(Line::from(vec![
+            Span::styled(
+                ">_ RustCode ",
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ),
+            Span::styled(
+                format!("(v{})", version),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ]));
+    }
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -1443,12 +1511,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let (action, arg) = if let Some(ref tool_call) = prev_tool_info {
                 format_pi_tool_action(&tool_call.name, &tool_call.arguments)
             } else {
-                let (tool_name, tool_result) = if let Some(pos) = msg.content.find(": ") {
-                    (&msg.content[..pos], &msg.content[pos + 2..])
-                } else {
-                    ("", msg.content.as_str())
-                };
-                let action_label = match tool_name {
+                let tool_name = resolve_tool_result_name(
+                    None,
+                    msg.tool_result.as_ref().map(|r| r.tool_name.as_str()),
+                    msg.content.as_str(),
+                )
+                .unwrap_or_default();
+                let action_label = match tool_name.as_str() {
                     "view_file" => "Read".to_string(),
                     "replace_file_content" | "multi_replace_file_content" => "Edit".to_string(),
                     "write_to_file" => "Write".to_string(),
@@ -1457,10 +1526,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     "run_command" => "Bash".to_string(),
                     other => to_pascal_case(other),
                 };
-                (action_label, tool_result.lines().next().unwrap_or("").to_string())
+                (action_label, String::new())
             };
 
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     "● ",
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
@@ -1469,11 +1538,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     action,
                     get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
-                Span::styled(
-                    format!("({arg})"),
+            ];
+            if !arg.is_empty() {
+                spans.push(Span::styled(
+                    format!(" ({arg})"),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-            ]));
+                ));
+            }
+            lines.push(Line::from(spans));
 
             if let Some((ref path, ref content)) = msg.file_preview {
                 lines.extend(render_file_preview(
@@ -2458,9 +2530,13 @@ mod tests {
         assert_eq!(label, "UseSkill");
         assert_eq!(arg, "git-feature-workflow");
 
-        // No meaningful param → empty arg, so it renders as CompleteTask().
         let (label, arg) =
             format_pi_tool_action("complete_task", &serde_json::json!({"result": "done"}));
+        assert_eq!(label, "CompleteTask");
+        assert_eq!(arg, "result=\"done\"");
+
+        let (label, arg) =
+            format_pi_tool_action("complete_task", &serde_json::json!({}));
         assert_eq!(label, "CompleteTask");
         assert_eq!(arg, "");
 
@@ -2618,12 +2694,35 @@ mod tests {
         use super::render_status_panel;
 
         let mut lines = Vec::new();
-        render_status_panel("Notice: background task finished", 80, false, &mut lines);
+        render_status_panel("Session status: 5 messages", 80, false, &mut lines);
 
-        assert_eq!(lines.len(), 2, "header line + status line");
+        assert_eq!(lines.len(), 2, "info status panel includes header");
         assert!(lines[0].spans[0].content.contains(">_ RustCode"));
         assert!(lines[1].spans[0].content.contains("● ·"));
-        assert!(lines[1].spans[1].content.contains("Notice: background task finished"));
+        assert!(lines[1].spans[1].content.contains("Session status: 5 messages"));
+
+        let mut notice_lines = Vec::new();
+        render_status_panel("Notice: background task finished", 80, false, &mut notice_lines);
+
+        assert_eq!(notice_lines.len(), 1, "ordinary notice panel skips header");
+        assert!(notice_lines[0].spans[0].content.contains("● ·"));
+    }
+
+    #[test]
+    fn tool_action_formats_generic_args_and_omits_empty() {
+        use super::format_pi_tool_action;
+
+        let (action, arg) = format_pi_tool_action(
+            "manage_task",
+            &serde_json::json!({"Action": "status", "TaskId": "task-123"}),
+        );
+        assert_eq!(action, "ManageTask");
+        assert!(arg.contains("Action=\"status\""));
+        assert!(arg.contains("TaskId=\"task-123\""));
+
+        let (action2, arg2) = format_pi_tool_action("get_date", &serde_json::json!({}));
+        assert_eq!(action2, "GetDate");
+        assert_eq!(arg2, "");
     }
 
     #[test]
