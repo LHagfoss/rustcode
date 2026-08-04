@@ -1490,10 +1490,12 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
         {
             let mut s = state_clone.lock().await;
             s.update_check = crate::update::UpdateState::Checking;
+            s.set_notice("⚡ Checking lhagfoss/tap for updates...");
             s.history.push(ChatMessage::new(
                 "system",
                 "Checking lhagfoss/tap for updates...",
             ));
+            s.request_redraw();
         }
 
         let check = match crate::update::check_for_update(&client_clone).await {
@@ -1501,10 +1503,12 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             Err(_) => {
                 let mut s = state_clone.lock().await;
                 s.update_check = crate::update::UpdateState::Failed;
+                s.set_warning_notice("Update check failed: couldn't read Homebrew tap.");
                 s.history.push(ChatMessage::new(
                     "system",
-                    "Update check failed: couldn't read the Homebrew tap. Try: brew upgrade rustcode",
+                    "Update check failed: couldn't read the Homebrew tap. Try running: brew upgrade rustcode",
                 ));
+                s.request_redraw();
                 return;
             }
         };
@@ -1514,13 +1518,13 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             crate::update::UpdateCheck::UpToDate { current, latest } => {
                 let mut s = state_clone.lock().await;
                 s.update_check = crate::update::UpdateState::UpToDate(latest);
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!(
-                        "rustcode v{} is up to date.",
-                        crate::update::format_version(current)
-                    ),
-                ));
+                let notice = format!(
+                    "✨ RustCode v{} is up to date.",
+                    crate::update::format_version(current)
+                );
+                s.set_notice(&notice);
+                s.history.push(ChatMessage::new("system", notice));
+                s.request_redraw();
                 return;
             }
         };
@@ -1528,29 +1532,43 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
         {
             let mut s = state_clone.lock().await;
             s.update_check = crate::update::UpdateState::Available(latest);
-            s.history.push(ChatMessage::new(
-                "system",
-                format!(
-                    "Update available!: run `brew upgrade rustcode` or /update in rustcode\n  v{} -> v{}\nRunning brew upgrade rustcode...",
-                    crate::update::format_version(current),
-                    crate::update::format_version(latest)
-                ),
-            ));
+            let notice = format!(
+                "🚀 Update available: v{} → v{}\nRunning `brew upgrade rustcode`...",
+                crate::update::format_version(current),
+                crate::update::format_version(latest)
+            );
+            s.set_notice("🚀 Update available! Upgrading via Homebrew...");
+            s.history.push(ChatMessage::new("system", notice));
+            s.request_redraw();
         }
 
         let result = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
         let mut s = state_clone.lock().await;
         let msg = match result {
-            Ok(Ok(())) => format!(
-                "Installed rustcode v{}. Restart rustcode to get the new version.",
-                crate::update::format_version(latest)
-            ),
-            Ok(Err(e)) => {
-                format!("brew upgrade failed: {e}\nRun manually: brew upgrade rustcode")
+            Ok(Ok(())) => {
+                let text = format!(
+                    "🎉 Successfully installed RustCode v{}!\nRestart rustcode to launch the new version.",
+                    crate::update::format_version(latest)
+                );
+                s.set_notice(format!(
+                    "🎉 Installed RustCode v{}! Restart to apply.",
+                    crate::update::format_version(latest)
+                ));
+                text
             }
-            Err(e) => format!("update task error: {e}"),
+            Ok(Err(e)) => {
+                let text = format!("brew upgrade failed: {e}\nRun manually: brew upgrade rustcode");
+                s.set_warning_notice("brew upgrade failed.");
+                text
+            }
+            Err(e) => {
+                let text = format!("Update task error: {e}");
+                s.set_warning_notice("Update task error.");
+                text
+            }
         };
         s.history.push(ChatMessage::new("system", msg));
+        s.request_redraw();
     });
 }
 
