@@ -8,7 +8,13 @@ pub struct SkillInfo {
     pub content: String,
 }
 
-pub fn discover_skills() -> Vec<SkillInfo> {
+pub struct SkillMetadata {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+}
+
+pub fn discover_skills() -> Vec<SkillMetadata> {
     let mut skills = Vec::new();
 
     // rustcode's own skill locations. We deliberately do NOT scan `.claude/skills`
@@ -49,7 +55,7 @@ pub fn discover_skills() -> Vec<SkillInfo> {
     skills
 }
 
-fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillInfo>) {
+fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillMetadata>) {
     if !dir.is_dir() {
         return;
     }
@@ -67,11 +73,10 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillInfo>) {
                 && let Ok(content) = fs::read_to_string(&skill_md)
             {
                 let (name, description) = parse_frontmatter(&content);
-                skills.push(SkillInfo {
+                skills.push(SkillMetadata {
                     name,
                     description,
                     path: path.clone(),
-                    content,
                 });
             }
         }
@@ -118,7 +123,15 @@ fn parse_frontmatter(content: &str) -> (String, String) {
 }
 
 pub fn get_skill_content(name: &str) -> Option<SkillInfo> {
-    discover_skills().into_iter().find(|s| s.name == name)
+    let meta = discover_skills().into_iter().find(|s| s.name == name)?;
+    let skill_md = meta.path.join("SKILL.md");
+    let content = fs::read_to_string(&skill_md).ok()?;
+    Some(SkillInfo {
+        name: meta.name,
+        description: meta.description,
+        path: meta.path,
+        content,
+    })
 }
 
 pub fn list_skill_files(skill_dir: &Path) -> Vec<String> {
