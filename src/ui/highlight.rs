@@ -624,8 +624,18 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
     }
     let old_part = parts.next()?;
     let new_part = parts.next()?;
-    let old = old_part.trim_start_matches('-').split(',').next()?.parse().ok()?;
-    let new = new_part.trim_start_matches('+').split(',').next()?.parse().ok()?;
+    let old = old_part
+        .trim_start_matches('-')
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
+    let new = new_part
+        .trim_start_matches('+')
+        .split(',')
+        .next()?
+        .parse()
+        .ok()?;
     Some((old, new))
 }
 

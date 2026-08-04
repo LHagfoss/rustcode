@@ -273,12 +273,14 @@ pub async fn handle_enter(
                     Some(&"low") => {
                         s.verbosity = Verbosity::Low;
                         changed = true;
-                        s.history.push(ChatMessage::new("system", "Verbosity set to low."));
+                        s.history
+                            .push(ChatMessage::new("system", "Verbosity set to low."));
                     }
                     Some(&"high") => {
                         s.verbosity = Verbosity::High;
                         changed = true;
-                        s.history.push(ChatMessage::new("system", "Verbosity set to high."));
+                        s.history
+                            .push(ChatMessage::new("system", "Verbosity set to high."));
                     }
                     Some(&"toggle") => {
                         s.verbosity = match s.verbosity {
@@ -326,7 +328,8 @@ pub async fn handle_enter(
                             crate::config::save_entire_config(&s.config);
                             s.set_notice(format!("Theme changed to '{}'", theme.name));
                         } else {
-                            let names: Vec<String> = themes.iter().map(|t| t.name.clone()).collect();
+                            let names: Vec<String> =
+                                themes.iter().map(|t| t.name.clone()).collect();
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
@@ -2023,7 +2026,13 @@ mod tests {
         {
             let s = state.lock().await;
             assert_eq!(s.config.theme, "nord");
-            assert!(s.history.last().unwrap().content.contains("Unknown theme 'unknown_theme'"));
+            assert!(
+                s.history
+                    .last()
+                    .unwrap()
+                    .content
+                    .contains("Unknown theme 'unknown_theme'")
+            );
         }
     }
 }

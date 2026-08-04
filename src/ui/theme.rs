@@ -95,7 +95,9 @@ impl From<&ThemeFile> for ThemePalette {
 }
 
 static BUILTIN_THEMES: &[(&str, &str)] = &[
-    ("default.toml", r##"name = "default"
+    (
+        "default.toml",
+        r##"name = "default"
 description = "Default dark palette"
 bg = "#15171a"
 panel = "#1a1d20"
@@ -111,8 +113,11 @@ status_border = "#5c6268"
 turn_separator = "#484e54"
 notice_bg = "#0d0e10"
 hover_bg = "#2d3238"
-"##),
-    ("light.toml", r##"name = "light"
+"##,
+    ),
+    (
+        "light.toml",
+        r##"name = "light"
 description = "Clean light mode palette"
 bg = "#f5f7fa"
 panel = "#e6eaf0"
@@ -128,8 +133,11 @@ status_border = "#aab3bc"
 turn_separator = "#b9bec3"
 notice_bg = "#ffffff"
 hover_bg = "#d2d8e0"
-"##),
-    ("nord.toml", r##"name = "nord"
+"##,
+    ),
+    (
+        "nord.toml",
+        r##"name = "nord"
 description = "Arctic nord palette"
 bg = "#2e3440"
 panel = "#3b4252"
@@ -145,8 +153,11 @@ status_border = "#4c566a"
 turn_separator = "#4c566a"
 notice_bg = "#1e222a"
 hover_bg = "#4c566a"
-"##),
-    ("dracula.toml", r##"name = "dracula"
+"##,
+    ),
+    (
+        "dracula.toml",
+        r##"name = "dracula"
 description = "Vibrant dracula dark palette"
 bg = "#282a36"
 panel = "#44475a"
@@ -162,8 +173,11 @@ status_border = "#6272a4"
 turn_separator = "#6272a4"
 notice_bg = "#181926"
 hover_bg = "#44475a"
-"##),
-    ("tokyo-night.toml", r##"name = "tokyo-night"
+"##,
+    ),
+    (
+        "tokyo-night.toml",
+        r##"name = "tokyo-night"
 description = "Tokyo night palette"
 bg = "#1a1b26"
 panel = "#24283b"
@@ -179,7 +193,8 @@ status_border = "#414868"
 turn_separator = "#414868"
 notice_bg = "#101118"
 hover_bg = "#292e42"
-"##),
+"##,
+    ),
 ];
 
 pub fn get_themes_dir() -> Option<PathBuf> {
@@ -288,20 +303,48 @@ pub fn active_palette() -> ThemePalette {
     get_palette("default")
 }
 
-pub fn color_bg() -> Color { active_palette().bg }
-pub fn color_panel() -> Color { active_palette().panel }
-pub fn color_element() -> Color { active_palette().element }
-pub fn color_text() -> Color { active_palette().text }
-pub fn color_muted() -> Color { active_palette().muted }
-pub fn color_primary() -> Color { active_palette().primary }
-pub fn color_secondary() -> Color { active_palette().secondary }
-pub fn color_green() -> Color { active_palette().green }
-pub fn color_selection() -> Color { active_palette().selection }
-pub fn color_tip() -> Color { active_palette().tip }
-pub fn color_status_border() -> Color { active_palette().status_border }
-pub fn color_turn_separator() -> Color { active_palette().turn_separator }
-pub fn color_notice_bg() -> Color { active_palette().notice_bg }
-pub fn color_hover_bg() -> Color { active_palette().hover_bg }
+pub fn color_bg() -> Color {
+    active_palette().bg
+}
+pub fn color_panel() -> Color {
+    active_palette().panel
+}
+pub fn color_element() -> Color {
+    active_palette().element
+}
+pub fn color_text() -> Color {
+    active_palette().text
+}
+pub fn color_muted() -> Color {
+    active_palette().muted
+}
+pub fn color_primary() -> Color {
+    active_palette().primary
+}
+pub fn color_secondary() -> Color {
+    active_palette().secondary
+}
+pub fn color_green() -> Color {
+    active_palette().green
+}
+pub fn color_selection() -> Color {
+    active_palette().selection
+}
+pub fn color_tip() -> Color {
+    active_palette().tip
+}
+pub fn color_status_border() -> Color {
+    active_palette().status_border
+}
+pub fn color_turn_separator() -> Color {
+    active_palette().turn_separator
+}
+pub fn color_notice_bg() -> Color {
+    active_palette().notice_bg
+}
+pub fn color_hover_bg() -> Color {
+    active_palette().hover_bg
+}
 
 pub fn is_light_mode() -> bool {
     let c = active_palette().bg;

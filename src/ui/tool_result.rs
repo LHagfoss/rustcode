@@ -430,7 +430,13 @@ mod tests {
 
     #[test]
     fn grep_results_distinguish_file_headers_and_matches() {
-        let lines = render_tool_result("grep", "src/main.rs:\n  12: fn main() {}", 80, &crate::app::Verbosity::Low, false);
+        let lines = render_tool_result(
+            "grep",
+            "src/main.rs:\n  12: fn main() {}",
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
         assert_eq!(lines.len(), 2);
         assert!(lines[0].spans[0].content.contains("src/main.rs"));
         assert!(
@@ -443,7 +449,13 @@ mod tests {
 
     #[test]
     fn directory_results_get_tree_markers() {
-        let lines = render_tool_result("list_directory", "src/\nmain.rs", 80, &crate::app::Verbosity::Low, false);
+        let lines = render_tool_result(
+            "list_directory",
+            "src/\nmain.rs",
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
         assert!(lines[0].spans[0].content.contains('▸'));
         assert!(lines[1].spans[0].content.contains('·'));
     }
@@ -523,8 +535,26 @@ mod tests {
 
     #[test]
     fn control_plane_results_are_hidden() {
-        assert!(render_tool_result("use_skill", "loaded skill", 80, &crate::app::Verbosity::Low, false).is_empty());
-        assert!(render_tool_result("spawn_agent", "agent done", 80, &crate::app::Verbosity::Low, false).is_empty());
+        assert!(
+            render_tool_result(
+                "use_skill",
+                "loaded skill",
+                80,
+                &crate::app::Verbosity::Low,
+                false
+            )
+            .is_empty()
+        );
+        assert!(
+            render_tool_result(
+                "spawn_agent",
+                "agent done",
+                80,
+                &crate::app::Verbosity::Low,
+                false
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -578,7 +608,13 @@ mod tests {
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let lines = render_tool_result("mcp_custom_tool", &result, 80, &crate::app::Verbosity::Low, false);
+        let lines = render_tool_result(
+            "mcp_custom_tool",
+            &result,
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
 
         assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
         assert!(
@@ -594,8 +630,20 @@ mod tests {
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let command = render_tool_result("run_command", &result, 80, &crate::app::Verbosity::Low, false);
-        let generic = render_tool_result("mcp_custom_tool", &result, 80, &crate::app::Verbosity::Low, false);
+        let command = render_tool_result(
+            "run_command",
+            &result,
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
+        let generic = render_tool_result(
+            "mcp_custom_tool",
+            &result,
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
 
         assert_eq!(command.len(), MAX_RENDERED_COMMAND_LINES + 1);
         assert!(command.len() > generic.len());
@@ -613,7 +661,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = format!("exit code: 101\nstderr:\n{body}\nerror: build failed");
-        let lines = render_tool_result("run_command", &result, 80, &crate::app::Verbosity::Low, false);
+        let lines = render_tool_result(
+            "run_command",
+            &result,
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
 
         assert_eq!(lines.len(), MAX_RENDERED_COMMAND_LINES + 1);
         assert!(text_of(&lines[0]).contains("✗ exit 101"));
@@ -639,7 +693,13 @@ mod tests {
 
     #[test]
     fn generic_results_preserve_interior_blank_lines() {
-        let lines = render_tool_result("mcp_custom_tool", "first\n\nsecond", 80, &crate::app::Verbosity::Low, false);
+        let lines = render_tool_result(
+            "mcp_custom_tool",
+            "first\n\nsecond",
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
 
         assert_eq!(lines.len(), 3);
         assert!(text_of(&lines[0]).contains("first"));
@@ -649,7 +709,13 @@ mod tests {
 
     #[test]
     fn generic_results_collapse_blank_runs_and_trim_edges() {
-        let lines = render_tool_result("mcp_custom_tool", "\n\nfirst\n\n\n\nsecond\n\n", 80, &crate::app::Verbosity::Low, false);
+        let lines = render_tool_result(
+            "mcp_custom_tool",
+            "\n\nfirst\n\n\n\nsecond\n\n",
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
 
         assert_eq!(lines.len(), 3);
         assert!(text_of(&lines[0]).contains("first"));
@@ -678,7 +744,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = format!("successfully edited file\n\n```diff\n{diff}\n```");
-        let lines = render_tool_result("replace_file_content", &result, 80, &crate::app::Verbosity::Low, false);
+        let lines = render_tool_result(
+            "replace_file_content",
+            &result,
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
 
         assert!(lines.len() > MAX_RENDERED_TOOL_LINES);
         assert!(
@@ -690,16 +762,51 @@ mod tests {
 
     #[test]
     fn manage_task_renders_under_low_verbosity() {
-        let result = "TaskId: task-1, Status: RUNNING, PID: 1234, Runtime: 5s, Command: cargo check";
-        let lines = render_tool_result("manage_task", result, 80, &crate::app::Verbosity::Low, false);
+        let result =
+            "TaskId: task-1, Status: RUNNING, PID: 1234, Runtime: 5s, Command: cargo check";
+        let lines = render_tool_result(
+            "manage_task",
+            result,
+            80,
+            &crate::app::Verbosity::Low,
+            false,
+        );
         assert!(!lines.is_empty());
     }
 
     #[test]
     fn high_verbosity_suppresses_all_tool_results() {
-        let result = "TaskId: task-1, Status: RUNNING, PID: 1234, Runtime: 5s, Command: cargo check";
-        assert!(render_tool_result("manage_task", result, 80, &crate::app::Verbosity::High, false).is_empty());
-        assert!(render_tool_result("replace_file_content", "edited file", 80, &crate::app::Verbosity::High, false).is_empty());
-        assert!(render_tool_result("run_command", "command output", 80, &crate::app::Verbosity::High, false).is_empty());
+        let result =
+            "TaskId: task-1, Status: RUNNING, PID: 1234, Runtime: 5s, Command: cargo check";
+        assert!(
+            render_tool_result(
+                "manage_task",
+                result,
+                80,
+                &crate::app::Verbosity::High,
+                false
+            )
+            .is_empty()
+        );
+        assert!(
+            render_tool_result(
+                "replace_file_content",
+                "edited file",
+                80,
+                &crate::app::Verbosity::High,
+                false
+            )
+            .is_empty()
+        );
+        assert!(
+            render_tool_result(
+                "run_command",
+                "command output",
+                80,
+                &crate::app::Verbosity::High,
+                false
+            )
+            .is_empty()
+        );
     }
 }

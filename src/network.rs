@@ -1841,7 +1841,11 @@ async fn confirm_and_execute(
     display_name: &str,
     bypass_confirm: bool,
     workspace_root: Option<std::path::PathBuf>,
-) -> (crate::tools::ToolExecutionOutput, Option<String>, std::time::Duration) {
+) -> (
+    crate::tools::ToolExecutionOutput,
+    Option<String>,
+    std::time::Duration,
+) {
     let (agent_mode, auto_confirm) = {
         let s = state.lock().await;
         (s.agent_mode, s.auto_confirm)
@@ -4214,7 +4218,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 );
                 if let Some(last) = s.history.last_mut()
                     && last.role == "system"
-                    && last.content.starts_with("[Loop warning: this action has repeated")
+                    && last
+                        .content
+                        .starts_with("[Loop warning: this action has repeated")
                 {
                     last.content = warning_text;
                 } else {
@@ -4318,7 +4324,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 // the transcript and the model's next context show the turn
                 // was cancelled before any result arrived.
                 if call_refs.is_empty() {
-                    s.history.push(ChatMessage::new("system", "Request cancelled by user"));
+                    s.history
+                        .push(ChatMessage::new("system", "Request cancelled by user"));
                 }
                 crate::config::save_history(&s.history);
                 s.status = AppStatus::Idle;
@@ -5048,8 +5055,17 @@ mod tests {
     async fn gemini_models_probe_false_for_json_protocol_fallback() {
         let client = reqwest::Client::new();
         let state = Arc::new(Mutex::new(AppState::new()));
-        let res = probe_function_calling(&client, &state, "http://localhost:3000/v1", "gemini-3.1-flash-lite").await;
-        assert!(!res, "gemini models must probe false to use Json protocol and prevent thought_signature 400 errors");
+        let res = probe_function_calling(
+            &client,
+            &state,
+            "http://localhost:3000/v1",
+            "gemini-3.1-flash-lite",
+        )
+        .await;
+        assert!(
+            !res,
+            "gemini models must probe false to use Json protocol and prevent thought_signature 400 errors"
+        );
     }
 
     async fn gated_json_server(

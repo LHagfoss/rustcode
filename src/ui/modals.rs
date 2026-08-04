@@ -60,8 +60,14 @@ pub(super) fn render_popup_menu(
             let padding_len = (area.width as usize).saturating_sub(total_len);
 
             Line::from(vec![
-                Span::styled(left_text, Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())),
-                Span::styled(desc_text, Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL())),
+                Span::styled(
+                    left_text,
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                ),
+                Span::styled(
+                    desc_text,
+                    Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+                ),
                 Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
             ])
         };
@@ -104,7 +110,10 @@ pub(super) fn render_at_popup_menu(
             let padding_len = (area.width as usize).saturating_sub(left_text.len());
 
             Line::from(vec![
-                Span::styled(left_text, Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())),
+                Span::styled(
+                    left_text,
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                ),
                 Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
             ])
         };
@@ -310,9 +319,12 @@ pub(super) fn render_welcome_screen(
         crate::config::AgentMode::Plan => "Plan",
     };
     let agent_style = match state.agent_mode {
-        crate::config::AgentMode::Build => {
-            get_themed_style(COLOR_SECONDARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
-        }
+        crate::config::AgentMode::Build => get_themed_style(
+            COLOR_SECONDARY(),
+            COLOR_PANEL(),
+            Modifier::BOLD,
+            show_picker,
+        ),
         crate::config::AgentMode::Plan => get_themed_style(
             Color::Rgb(229, 192, 123),
             COLOR_PANEL(),
@@ -525,7 +537,9 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
     let header_line = Line::from(vec![
         Span::styled(
             "Select model",
-            Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             " ".repeat(inner_area.width.saturating_sub(15) as usize),
@@ -700,7 +714,9 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
                 Span::styled("  session  ", Style::default().fg(COLOR_MUTED())),
                 Span::styled(
                     &meta.title,
-                    Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(COLOR_TEXT())
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]);
             f.render_widget(
@@ -775,7 +791,9 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
     let header_line = Line::from(vec![
         Span::styled(
             "Resume session",
-            Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             " ".repeat(inner_area.width.saturating_sub(17) as usize),
@@ -896,7 +914,9 @@ pub(super) fn render_mcp_config_modal(f: &mut Frame, state: &AppState) {
         };
         let header_line = Line::from(vec![Span::styled(
             title,
-            Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         )]);
         f.render_widget(Paragraph::new(header_line), modal_chunks[0]);
 
@@ -951,17 +971,23 @@ pub(super) fn render_mcp_config_modal(f: &mut Frame, state: &AppState) {
         let footer_line = Line::from(vec![
             Span::styled(
                 "enter",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" Save    ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "esc",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" Cancel    ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "tab / arrows",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" Switch Field", Style::default().fg(COLOR_MUTED())),
         ]);
@@ -971,7 +997,9 @@ pub(super) fn render_mcp_config_modal(f: &mut Frame, state: &AppState) {
         let header_line = Line::from(vec![
             Span::styled(
                 "MCP Servers Configuration",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 " ".repeat(inner_area.width.saturating_sub(29) as usize),
@@ -1049,22 +1077,30 @@ pub(super) fn render_mcp_config_modal(f: &mut Frame, state: &AppState) {
         let footer_line = Line::from(vec![
             Span::styled(
                 "a",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" Add    ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "e",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" Edit    ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "d",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" Delete    ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "enter",
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" Toggle Enabled", Style::default().fg(COLOR_MUTED())),
         ]);
@@ -1223,7 +1259,9 @@ pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
     let header_line = Line::from(vec![
         Span::styled(
             "Commands",
-            Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             " ".repeat(inner_area.width.saturating_sub(12) as usize),
@@ -1299,7 +1337,10 @@ pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
             Line::from(vec![
                 Span::styled(name_part, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
-                Span::styled(item.shortcut.to_string(), Style::default().fg(COLOR_MUTED())),
+                Span::styled(
+                    item.shortcut.to_string(),
+                    Style::default().fg(COLOR_MUTED()),
+                ),
             ])
         };
         list_lines.push(line);
@@ -1398,7 +1439,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         };
         let header_line = Line::from(vec![Span::styled(
             format!("⚠ {action_label}?"),
-            Style::default().fg(COLOR_TIP()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_TIP())
+                .add_modifier(Modifier::BOLD),
         )]);
         f.render_widget(
             Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -1409,7 +1452,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
             Span::styled("  tool  ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 &confirmation.tool_name,
-                Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
             ),
         ]);
         f.render_widget(
@@ -1457,7 +1502,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
             Span::styled("  ", Style::default()),
             Span::styled(
                 auto_confirm_status,
-                Style::default().fg(COLOR_TIP()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TIP())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" (Tab to toggle)", Style::default().fg(COLOR_MUTED())),
         ]);
@@ -1564,7 +1611,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
             Span::styled(" deny  ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "tab",
-                Style::default().fg(COLOR_TIP()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TIP())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" toggle auto-confirm  ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
@@ -1606,7 +1655,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
 
         let header_line = Line::from(vec![Span::styled(
             format!("⚠ Approve {} tool calls in parallel?", confirmations.len()),
-            Style::default().fg(COLOR_TIP()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_TIP())
+                .add_modifier(Modifier::BOLD),
         )]);
         f.render_widget(Paragraph::new(header_line), modal_chunks[0]);
 
@@ -1636,7 +1687,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
                 Span::styled(format!("  {}. ", i + 1), Style::default().fg(COLOR_MUTED())),
                 Span::styled(
                     format!("{:<15}", action),
-                    Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(COLOR_TEXT())
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!(" {}", path_display),
@@ -1656,7 +1709,9 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
         let auto_confirm_line = Line::from(vec![
             Span::styled(
                 auto_confirm_status,
-                Style::default().fg(COLOR_TIP()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(COLOR_TIP())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" (Tab to toggle)", Style::default().fg(COLOR_MUTED())),
         ]);
@@ -1864,7 +1919,10 @@ pub(super) fn render_theme_picker_modal(f: &mut Frame, state: &AppState) {
         let is_active = state.theme_picker_initial.eq_ignore_ascii_case(&theme.name);
         let active_badge = if is_active { " [active]" } else { "" };
         let line = if is_selected {
-            let text = format!(" ● {:<12} — {}{}", theme.name, theme.description, active_badge);
+            let text = format!(
+                " ● {:<12} — {}{}",
+                theme.name, theme.description, active_badge
+            );
             let padding = (inner_area.width as usize).saturating_sub(text.len());
             Line::from(Span::styled(
                 format!("{}{}", text, " ".repeat(padding)),
@@ -1877,7 +1935,10 @@ pub(super) fn render_theme_picker_modal(f: &mut Frame, state: &AppState) {
             let left = format!("   {:<12} — {}", theme.name, theme.description);
             Line::from(vec![
                 Span::styled(left, Style::default().fg(p.text).bg(p.panel)),
-                Span::styled(active_badge.to_string(), Style::default().fg(p.muted).bg(p.panel)),
+                Span::styled(
+                    active_badge.to_string(),
+                    Style::default().fg(p.muted).bg(p.panel),
+                ),
             ])
         };
         list_lines.push(line);

@@ -422,7 +422,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         terminal.clear().ok();
                         continue;
                     }
-                    if is_ctrl && (key.code == KeyCode::Char('l') || key.code == KeyCode::Char('L')) {
+                    if is_ctrl && (key.code == KeyCode::Char('l') || key.code == KeyCode::Char('L'))
+                    {
                         terminal.clear().ok();
                         continue;
                     }
@@ -1038,7 +1039,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             KeyCode::Enter => {
-                                let selected = themes[s.theme_picker_index.min(len.saturating_sub(1))].name.clone();
+                                let selected = themes
+                                    [s.theme_picker_index.min(len.saturating_sub(1))]
+                                .name
+                                .clone();
                                 s.config.theme = selected.clone();
                                 s.show_theme_picker = false;
                                 crate::config::save_entire_config(&s.config);
