@@ -1335,10 +1335,7 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
             match serde_json::from_str::<Value>(&repaired) {
                 Ok(val) => {
                     let has_name = val.get("name").is_some()
-                        || val
-                            .get("arguments")
-                            .and_then(|a| a.get("name"))
-                            .is_some();
+                        || val.get("arguments").and_then(|a| a.get("name")).is_some();
                     if !has_name {
                         let snippet: String = block.trim().chars().take(240).collect();
                         return Some(format!(
@@ -1807,7 +1804,10 @@ mod tests {
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "multi_replace_file_content");
-        assert_eq!(calls[0].arguments.get("path").unwrap().as_str().unwrap(), "src/config.rs");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "src/config.rs"
+        );
         assert!(calls[0].arguments.get("name").is_none());
     }
 
@@ -1815,7 +1815,8 @@ mod tests {
     fn test_extract_tool_call_keeps_legitimate_name_argument() {
         // use_skill's only parameter is literally called `name`; with a proper
         // {"name", "arguments"} envelope it must survive extraction.
-        let text = "```tool\n{\"name\": \"use_skill\", \"arguments\": {\"name\": \"spotify\"}}\n```";
+        let text =
+            "```tool\n{\"name\": \"use_skill\", \"arguments\": {\"name\": \"spotify\"}}\n```";
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "use_skill");
@@ -1833,7 +1834,13 @@ mod tests {
         // \\\" inside a JSON string value (e.g. serde rename_all = \"lowercase\")
         let text = "```tool\n{\"name\":\"replace_file_content\",\"arguments\":{\"edits\":[{\"new_string\":\"#[derive(Debug)]\\n#[serde(rename_all = \\\"lowercase\\\")]\\npub enum Foo {\",\"old_string\":\"#[derive(Debug)]\\npub enum Foo {\"}],\"path\":\"src/config.rs\"}}\n```";
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
-        assert_eq!(calls.len(), 1, "Expected 1 call, got {}: {:?}", calls.len(), calls);
+        assert_eq!(
+            calls.len(),
+            1,
+            "Expected 1 call, got {}: {:?}",
+            calls.len(),
+            calls
+        );
         assert_eq!(calls[0].name, "replace_file_content");
         assert_eq!(
             calls[0].arguments.get("path").unwrap().as_str().unwrap(),

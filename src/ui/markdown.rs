@@ -72,7 +72,11 @@ fn text_style(style: InlineStyle, show_picker: bool) -> ratatui::style::Style {
     } else {
         COLOR_TEXT()
     };
-    let bg = if style.code { COLOR_ELEMENT() } else { COLOR_BG() };
+    let bg = if style.code {
+        COLOR_ELEMENT()
+    } else {
+        COLOR_BG()
+    };
     get_themed_style(fg, bg, style.modifier(), show_picker)
 }
 
