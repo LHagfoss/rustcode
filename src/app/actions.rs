@@ -348,7 +348,7 @@ pub async fn handle_enter(
                     return true;
                 }
             }
-            "/info" => {
+            "/info" | "/about" => {
                 let info = build_info_text();
                 s.history.push(ChatMessage::new("system", info));
             }
@@ -1386,13 +1386,15 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
 
 pub fn build_info_text() -> String {
     format!(
-        "Notice: rustcode v{}\n\n\
-        Description: A terminal-based coding assistant.\n\n\
-        Basic Slash Commands:\n\
-        \x20 /changelog - View the latest changes.\n\
-        \x20 /update    - Upgrade rustcode via Homebrew if a newer version exists.\n\
-        \x20 /help      - Get help on commands and keybindings.\n\
-        \x20 /tools     - List available tools for the harness.\n",
+        "RustCode Info\n\
+        ⚡ AI-powered agentic coding assistant for terminal workflows.\n\n\
+        • Version:      v{}\n\
+        • Repository:   https://github.com/LHagfoss/rustcode\n\n\
+        Quick Commands:\n\
+        • /help      - View full command list & keybindings\n\
+        • /status    - View active session status & model info\n\
+        • /update    - Upgrade rustcode via Homebrew tap\n\
+        • /changelog - View recent version releases",
         env!("CARGO_PKG_VERSION")
     )
 }

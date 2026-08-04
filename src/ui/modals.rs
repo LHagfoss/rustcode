@@ -1217,6 +1217,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
     PaletteItem {
         group: "System",
+        name: "About rustcode",
+        shortcut: "/about",
+    },
+    PaletteItem {
+        group: "System",
         name: "Show info",
         shortcut: "/info",
     },
