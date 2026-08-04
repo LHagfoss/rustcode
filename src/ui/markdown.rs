@@ -15,7 +15,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::lru::LruCache;
 use super::{
-    COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, get_themed_style,
+    COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT,
+    COLOR_TIP, get_themed_style,
 };
 
 /// Maximum number of rendered documents kept in [`RENDER_CACHE`].
@@ -77,9 +78,9 @@ fn text_style(style: InlineStyle, show_picker: bool) -> ratatui::style::Style {
 
 fn heading_style(level: HeadingLevel, show_picker: bool) -> ratatui::style::Style {
     let fg = match level {
-        HeadingLevel::H1 => ratatui::style::Color::Rgb(100, 175, 235),
-        HeadingLevel::H2 => ratatui::style::Color::Rgb(229, 192, 123),
-        HeadingLevel::H3 => ratatui::style::Color::Rgb(224, 169, 109),
+        HeadingLevel::H1 => COLOR_PRIMARY(),
+        HeadingLevel::H2 => COLOR_SECONDARY(),
+        HeadingLevel::H3 => COLOR_TIP(),
         _ => COLOR_TEXT(),
     };
     get_themed_style(fg, COLOR_BG(), Modifier::BOLD, show_picker)

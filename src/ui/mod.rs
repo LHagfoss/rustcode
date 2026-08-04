@@ -81,6 +81,21 @@ pub fn COLOR_NOTICE_BG() -> Color { theme::color_notice_bg() }
 #[allow(non_snake_case)]
 #[inline]
 pub fn COLOR_HOVER_BG() -> Color { theme::color_hover_bg() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_DIFF_ADD_BG() -> Color { theme::color_diff_add_bg() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_DIFF_ADD_FG() -> Color { theme::color_diff_add_fg() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_DIFF_REMOVE_BG() -> Color { theme::color_diff_remove_bg() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_DIFF_REMOVE_FG() -> Color { theme::color_diff_remove_fg() }
+#[allow(non_snake_case)]
+#[inline]
+pub fn COLOR_DIFF_ABSENT_BG() -> Color { theme::color_diff_absent_bg() }
 
 const LOGO: &[&str] = &[
     "                  ▄                   █      ",
@@ -91,12 +106,8 @@ const LOGO: &[&str] = &[
 
 pub use crate::app::suggestion::{COMMANDS, CommandInfo};
 
-fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, show_picker: bool) -> Style {
-    if show_picker {
-        Style::default().fg(Color::Rgb(60, 68, 72)).bg(COLOR_BG())
-    } else {
-        Style::default().fg(fg).bg(bg).add_modifier(modifier)
-    }
+fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, _show_picker: bool) -> Style {
+    Style::default().fg(fg).bg(bg).add_modifier(modifier)
 }
 
 /// Collapse pasted image markers (`![image](file://…)`) into compact

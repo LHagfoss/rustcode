@@ -13,7 +13,10 @@ use syntect::highlighting::{FontStyle, Style as SyntectStyle, Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{COLOR_BG, COLOR_ELEMENT, COLOR_MUTED, COLOR_TEXT, get_themed_style};
+use super::{
+    COLOR_BG, COLOR_DIFF_ABSENT_BG, COLOR_DIFF_ADD_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_BG,
+    COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_MUTED, COLOR_TEXT, get_themed_style,
+};
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static SYNTAX_THEME: OnceLock<Theme> = OnceLock::new();
@@ -386,10 +389,10 @@ pub(super) fn wrap_code_spans<'a>(
 /// Returns `(bg, fg, is_empty)`. `~` marks a column with no line on that side.
 fn diff_cell_colors(prefix: char) -> (Color, Color, bool) {
     match prefix {
-        '+' => (Color::Rgb(24, 40, 24), Color::Rgb(160, 240, 160), false), // add
-        '-' => (Color::Rgb(48, 20, 20), Color::Rgb(240, 150, 150), false), // delete
-        '~' => (Color::Rgb(22, 22, 26), Color::Rgb(22, 22, 26), true),     // absent
-        _ => (COLOR_BG(), COLOR_TEXT(), false),                            // context
+        '+' => (COLOR_DIFF_ADD_BG(), COLOR_DIFF_ADD_FG(), false),
+        '-' => (COLOR_DIFF_REMOVE_BG(), COLOR_DIFF_REMOVE_FG(), false),
+        '~' => (COLOR_DIFF_ABSENT_BG(), COLOR_DIFF_ABSENT_BG(), true),
+        _ => (COLOR_BG(), COLOR_TEXT(), false),
     }
 }
 
@@ -496,17 +499,17 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
     };
 
     let bg_color = match prefix {
-        '+' => Color::Rgb(24, 40, 24), // Dark Green
-        '-' => Color::Rgb(48, 20, 20), // Dark Red
-        '~' => COLOR_BG(),               // Matches bg color
-        _ => COLOR_ELEMENT(),            // Dark Gray
+        '+' => COLOR_DIFF_ADD_BG(),
+        '-' => COLOR_DIFF_REMOVE_BG(),
+        '~' => COLOR_BG(),
+        _ => COLOR_ELEMENT(),
     };
 
     let default_fg = match prefix {
-        '+' => Color::Rgb(160, 240, 160), // Light Green
-        '-' => Color::Rgb(240, 150, 150), // Light Red
-        '~' => COLOR_BG(),                  // Invisible prefix
-        _ => COLOR_TEXT(),                  // Default text color
+        '+' => COLOR_DIFF_ADD_FG(),
+        '-' => COLOR_DIFF_REMOVE_FG(),
+        '~' => COLOR_BG(),
+        _ => COLOR_TEXT(),
     };
 
     let spans = if prefix == '~' {
@@ -599,8 +602,8 @@ pub(super) fn render_unified_diff<'a>(
             format!("{line_number:>5} ")
         };
         let gutter_bg = match raw.chars().next() {
-            Some('+') => Color::Rgb(24, 40, 24),
-            Some('-') => Color::Rgb(48, 20, 20),
+            Some('+') => COLOR_DIFF_ADD_BG(),
+            Some('-') => COLOR_DIFF_REMOVE_BG(),
             _ => COLOR_ELEMENT(),
         };
         let mut line = vec![Span::styled(
@@ -697,14 +700,14 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    4 - "));
-        assert_eq!(lines[1].spans[0].style.bg, Some(Color::Rgb(48, 20, 20)));
+        assert_eq!(lines[1].spans[0].style.bg, Some(COLOR_DIFF_REMOVE_BG()));
         let text: String = lines[2]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    7 + "));
-        assert_eq!(lines[2].spans[0].style.bg, Some(Color::Rgb(24, 40, 24)));
+        assert_eq!(lines[2].spans[0].style.bg, Some(COLOR_DIFF_ADD_BG()));
         assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_ELEMENT()));
     }
 }
