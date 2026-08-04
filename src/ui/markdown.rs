@@ -15,8 +15,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::lru::LruCache;
 use super::{
-    COLOR_BG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT,
-    COLOR_TIP, get_themed_style,
+    COLOR_BG, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP,
+    get_themed_style,
 };
 
 /// Maximum number of rendered documents kept in [`RENDER_CACHE`].
@@ -79,11 +79,7 @@ fn text_style(style: InlineStyle, show_picker: bool) -> ratatui::style::Style {
     } else {
         COLOR_TEXT()
     };
-    let bg = if style.code {
-        COLOR_ELEMENT()
-    } else {
-        COLOR_BG()
-    };
+    let bg = COLOR_BG();
     get_themed_style(fg, bg, style.modifier(), show_picker)
 }
 

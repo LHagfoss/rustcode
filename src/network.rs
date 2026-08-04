@@ -1768,32 +1768,59 @@ async fn ask_user_question(
     cancel_token: &tokio_util::sync::CancellationToken,
     args: &serde_json::Value,
 ) -> (crate::tools::ToolExecutionOutput, std::time::Duration) {
-    let question = args
-        .get("question")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let options: Vec<String> = args
-        .get("options")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|o| o.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let is_multi_select = args
-        .get("is_multi_select")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let (mut question, mut options, is_multi_select) = if let Some(q_arr) = args.get("questions").and_then(|v| v.as_array()) {
+        if let Some(first_q) = q_arr.first().and_then(|v| v.as_object()) {
+            let q_str = first_q
+                .get("question")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let opts: Vec<String> = first_q
+                .get("options")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|o| o.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let multi = first_q
+                .get("is_multi_select")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            (q_str, opts, multi)
+        } else {
+            (String::new(), Vec::new(), false)
+        }
+    } else {
+        let q_str = args
+            .get("question")
+            .or_else(|| args.get("prompt"))
+            .or_else(|| args.get("message"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let opts: Vec<String> = args
+            .get("options")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|o| o.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let multi = args
+            .get("is_multi_select")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        (q_str, opts, multi)
+    };
 
-    if question.is_empty() || options.is_empty() {
-        return (
-            crate::tools::ToolExecutionOutput::failure(
-                "error: ask_question requires a non-empty 'question' and at least one option. The question UI already includes a 'write your own answer' slot for free-form text — do not retry with empty options; offer a real option or ask in plain assistant text instead.".to_string(),
-            ),
-            std::time::Duration::ZERO,
-        );
+    if question.trim().is_empty() {
+        question = "Please confirm how to proceed:".to_string();
+    }
+    if options.is_empty() {
+        options = vec!["Proceed".to_string(), "Cancel".to_string()];
     }
 
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
