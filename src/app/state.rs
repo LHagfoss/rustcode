@@ -1272,8 +1272,13 @@ impl AppState {
             return HoverTarget::ThoughtHeader(row);
         }
         if self.code_copy_rows.iter().any(|(r, _)| *r == row) {
+            let badge_width = if self.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2) {
+                12
+            } else {
+                9
+            };
             let is_on_copy_button = self.chat_area.map_or(true, |ca| {
-                column >= (ca.x + ca.width).saturating_sub(14)
+                column >= (ca.x + ca.width).saturating_sub(badge_width)
             });
             if is_on_copy_button {
                 return HoverTarget::CopyBadge(row);
