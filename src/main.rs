@@ -530,19 +530,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     KeyCode::Enter => {
                                         let mut s = app_state.lock().await;
-                                        let answer = s
+                                        let mut answer = s
                                             .pending_question
                                             .as_ref()
                                             .and_then(|q| q.custom_input.clone())
                                             .unwrap_or_default()
                                             .trim()
                                             .to_string();
-                                        if !answer.is_empty() {
-                                            if let Some(tx) = s.question_response.take() {
-                                                let _ = tx.send(answer);
-                                            }
-                                            s.pending_question = None;
+                                        if answer.is_empty() {
+                                            answer = "No response provided".to_string();
                                         }
+                                        if let Some(tx) = s.question_response.take() {
+                                            let _ = tx.send(answer);
+                                        }
+                                        s.pending_question = None;
                                     }
                                     KeyCode::Esc => {
                                         // Back out to the option list, keep the modal open.
@@ -647,7 +648,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     current_cancel_token =
                                         tokio_util::sync::CancellationToken::new();
                                     let mut s = app_state.lock().await;
-                                    s.question_response = None;
+                                    if let Some(tx) = s.question_response.take() {
+                                        let _ = tx.send("User cancelled prompt.".to_string());
+                                    }
                                     s.pending_question = None;
                                 }
                                 _ => {}

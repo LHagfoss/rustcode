@@ -399,7 +399,7 @@ fn render_assistant_message<'a>(
                         };
                         // Keep code on a subtle panel so syntax spans remain visually grouped;
                         // the Copy badge uses the same panel with a stronger foreground.
-                        let code_bg = COLOR_ELEMENT();
+                        let code_bg = COLOR_BG();
                         let left_text = format!(" {lang_label} ");
                         let pad_len =
                             box_width.saturating_sub(left_text.width() + button_badge.width());
@@ -1108,6 +1108,8 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         "run_command" => "Bash".to_string(),
         "search_web" => "Search".to_string(),
         "get_project_map" => "ProjectMap".to_string(),
+        "manage_task" => "ManageTask".to_string(),
+        "background_task" => "TaskDone".to_string(),
         other => to_pascal_case(other),
     };
 
@@ -1178,11 +1180,39 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        "ask_question" => args
-            .get("question")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        "ask_question" => {
+            if let Some(q) = args.get("question").and_then(|v| v.as_str()) {
+                q.to_string()
+            } else if let Some(q_arr) = args.get("questions").and_then(|v| v.as_array()) {
+                q_arr
+                    .first()
+                    .and_then(|q| q.get("question"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                String::new()
+            }
+        }
+        "manage_task" => {
+            let action = args
+                .get("Action")
+                .or_else(|| args.get("action"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("status");
+            let task_id = args
+                .get("TaskId")
+                .or_else(|| args.get("task_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let clean_id = task_id.rsplit_once('/').map(|(_, r)| r).unwrap_or(task_id);
+            if !clean_id.is_empty() {
+                format!("{action} ({clean_id})")
+            } else {
+                action.to_string()
+            }
+        }
+        "background_task" => String::new(),
         _ => format_generic_tool_args(args),
     };
 
@@ -2759,8 +2789,7 @@ mod tests {
             &serde_json::json!({"Action": "status", "TaskId": "task-123"}),
         );
         assert_eq!(action, "ManageTask");
-        assert!(arg.contains("Action=\"status\""));
-        assert!(arg.contains("TaskId=\"task-123\""));
+        assert_eq!(arg, "status (task-123)");
 
         let (action2, arg2) = format_pi_tool_action("get_date", &serde_json::json!({}));
         assert_eq!(action2, "GetDate");
