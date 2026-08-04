@@ -42,7 +42,7 @@ fn syntect_style(style: SyntectStyle, show_picker: bool) -> Style {
     }
     get_themed_style(
         Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b),
-        COLOR_BG,
+        COLOR_BG(),
         modifier,
         show_picker,
     )
@@ -67,7 +67,7 @@ pub(super) fn highlight_code_line<'a>(
             .collect(),
         Err(_) => vec![Span::styled(
             line.to_string(),
-            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
         )],
     }
 }
@@ -94,7 +94,7 @@ pub(super) fn highlight_code_block(
                     .collect(),
                 Err(_) => vec![Span::styled(
                     line.to_string(),
-                    get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 )],
             },
         )
@@ -343,7 +343,7 @@ pub(super) fn wrap_code_spans<'a>(
     show_picker: bool,
 ) -> Vec<Line<'a>> {
     let width = width.max(1);
-    let pad_style = get_themed_style(COLOR_TEXT, bg, Modifier::empty(), show_picker);
+    let pad_style = get_themed_style(COLOR_TEXT(), bg, Modifier::empty(), show_picker);
     let mut out: Vec<Line> = Vec::new();
     let mut row: Vec<Span> = Vec::new();
     let mut row_w = 0usize;
@@ -389,7 +389,7 @@ fn diff_cell_colors(prefix: char) -> (Color, Color, bool) {
         '+' => (Color::Rgb(24, 40, 24), Color::Rgb(160, 240, 160), false), // add
         '-' => (Color::Rgb(48, 20, 20), Color::Rgb(240, 150, 150), false), // delete
         '~' => (Color::Rgb(22, 22, 26), Color::Rgb(22, 22, 26), true),     // absent
-        _ => (COLOR_BG, COLOR_TEXT, false),                                // context
+        _ => (COLOR_BG(), COLOR_TEXT(), false),                            // context
     }
 }
 
@@ -425,7 +425,7 @@ fn fit_line_spans<'a>(
     if w < width {
         out.push(Span::styled(
             " ".repeat(width - w),
-            get_themed_style(COLOR_TEXT, bg, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_TEXT(), bg, Modifier::empty(), show_picker),
         ));
     }
     out
@@ -473,7 +473,7 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
             " │ ".to_string(),
             get_themed_style(
                 Color::Rgb(90, 90, 90),
-                COLOR_BG,
+                COLOR_BG(),
                 Modifier::empty(),
                 show_picker,
             ),
@@ -498,15 +498,15 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
     let bg_color = match prefix {
         '+' => Color::Rgb(24, 40, 24), // Dark Green
         '-' => Color::Rgb(48, 20, 20), // Dark Red
-        '~' => COLOR_BG,               // Matches bg color
-        _ => COLOR_ELEMENT,            // Dark Gray
+        '~' => COLOR_BG(),               // Matches bg color
+        _ => COLOR_ELEMENT(),            // Dark Gray
     };
 
     let default_fg = match prefix {
         '+' => Color::Rgb(160, 240, 160), // Light Green
         '-' => Color::Rgb(240, 150, 150), // Light Red
-        '~' => COLOR_BG,                  // Invisible prefix
-        _ => COLOR_TEXT,                  // Default text color
+        '~' => COLOR_BG(),                  // Invisible prefix
+        _ => COLOR_TEXT(),                  // Default text color
     };
 
     let spans = if prefix == '~' {
@@ -559,13 +559,13 @@ pub(super) fn render_unified_diff<'a>(
             rendered.push(Line::from(vec![
                 Span::styled(
                     "      ",
-                    get_themed_style(COLOR_MUTED, COLOR_ELEMENT, Modifier::BOLD, show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_ELEMENT(), Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
                     raw.to_string(),
                     get_themed_style(
                         Color::Rgb(100, 175, 235),
-                        COLOR_ELEMENT,
+                        COLOR_ELEMENT(),
                         Modifier::BOLD,
                         show_picker,
                     ),
@@ -601,11 +601,11 @@ pub(super) fn render_unified_diff<'a>(
         let gutter_bg = match raw.chars().next() {
             Some('+') => Color::Rgb(24, 40, 24),
             Some('-') => Color::Rgb(48, 20, 20),
-            _ => COLOR_ELEMENT,
+            _ => COLOR_ELEMENT(),
         };
         let mut line = vec![Span::styled(
             prefix,
-            get_themed_style(COLOR_MUTED, gutter_bg, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_MUTED(), gutter_bg, Modifier::empty(), show_picker),
         )];
         let body = highlight_diff_line(raw, body_width, show_picker);
         line.extend(body.spans);
@@ -619,20 +619,10 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
     if parts.next()? != "@@" {
         return None;
     }
-    let old = parts
-        .next()?
-        .strip_prefix('-')?
-        .split(',')
-        .next()?
-        .parse()
-        .ok()?;
-    let new = parts
-        .next()?
-        .strip_prefix('+')?
-        .split(',')
-        .next()?
-        .parse()
-        .ok()?;
+    let old_part = parts.next()?;
+    let new_part = parts.next()?;
+    let old = old_part.trim_start_matches('-').split(',').next()?.parse().ok()?;
+    let new = new_part.trim_start_matches('+').split(',').next()?.parse().ok()?;
     Some((old, new))
 }
 
@@ -648,7 +638,7 @@ mod tests {
     fn wraps_and_pads_every_row_to_width() {
         // A single long span must split across rows, each padded to full width.
         let spans = vec![Span::raw("abcdefghijklmnop")];
-        let rows = wrap_code_spans(spans, 6, COLOR_ELEMENT, false);
+        let rows = wrap_code_spans(spans, 6, COLOR_ELEMENT(), false);
         assert_eq!(rows.len(), 3); // 16 chars / 6 = 3 rows
         for row in &rows {
             assert_eq!(row_width(row), 6);
@@ -657,7 +647,7 @@ mod tests {
 
     #[test]
     fn pads_empty_input_to_one_full_row() {
-        let rows = wrap_code_spans(Vec::new(), 8, COLOR_ELEMENT, false);
+        let rows = wrap_code_spans(Vec::new(), 8, COLOR_ELEMENT(), false);
         assert_eq!(rows.len(), 1);
         assert_eq!(row_width(&rows[0]), 8);
     }
@@ -715,6 +705,6 @@ mod tests {
             .collect();
         assert!(text.starts_with("    7 + "));
         assert_eq!(lines[2].spans[0].style.bg, Some(Color::Rgb(24, 40, 24)));
-        assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_ELEMENT));
+        assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_ELEMENT()));
     }
 }

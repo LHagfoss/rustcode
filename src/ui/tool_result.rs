@@ -34,15 +34,15 @@ pub(super) fn render_file_preview<'a>(
     let language = language_for_path(path);
     let mut lines = vec![Line::from(Span::styled(
         format!("  {} · {}", path, language),
-        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
     ))];
     for spans in highlight_code_block(content, language, show_picker) {
         let mut row = vec![Span::styled(
             "  ",
-            get_themed_style(COLOR_TEXT, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
         )];
         row.extend(spans);
-        lines.extend(wrap_code_spans(row, width.max(10), COLOR_BG, show_picker));
+        lines.extend(wrap_code_spans(row, width.max(10), COLOR_BG(), show_picker));
     }
     lines
 }
@@ -50,7 +50,7 @@ pub(super) fn render_file_preview<'a>(
 fn line_number<'a>(old: &str, _width: usize, show_picker: bool) -> Span<'a> {
     Span::styled(
         format!("{old:>5} │ "),
-        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
     )
 }
 
@@ -133,7 +133,7 @@ fn collapse<'a>(
     let hidden = lines.len() - pinned - body_budget;
     let notice = Line::from(Span::styled(
         format!("  … {hidden} more lines"),
-        get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::ITALIC, show_picker),
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
     ));
 
     if keep_tail {
@@ -164,7 +164,7 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
     let (icon, color) = if failed {
         ("●", Color::Rgb(229, 123, 123))
     } else {
-        ("●", super::COLOR_GREEN)
+        ("●", super::COLOR_GREEN())
     };
     let diffs: Vec<&str> = result
         .split("```diff")
@@ -188,7 +188,7 @@ fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> 
     } else {
         lines.push(Line::from(Span::styled(
             format!("  {icon} {summary}"),
-            get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
         )));
     }
     lines
@@ -199,20 +199,20 @@ fn render_directory_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>>
         .lines()
         .map(|raw| {
             let (marker, color) = if raw.ends_with('/') {
-                ("▸ ", super::COLOR_PRIMARY)
+                ("▸ ", super::COLOR_PRIMARY())
             } else if raw.contains(" file(s) matched") || raw.starts_with("no files") {
-                ("", super::COLOR_MUTED)
+                ("", super::COLOR_MUTED())
             } else {
-                ("· ", super::COLOR_MUTED)
+                ("· ", super::COLOR_MUTED())
             };
             Line::from(vec![
                 Span::styled(
                     marker,
-                    get_themed_style(color, COLOR_BG, Modifier::BOLD, show_picker),
+                    get_themed_style(color, COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
                     raw.to_string(),
-                    get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ])
         })
@@ -246,7 +246,7 @@ fn render_generic_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
             }
             lines.push(Line::from(Span::styled(
                 "  │".to_string(),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             )));
             continue;
         }
@@ -256,11 +256,11 @@ fn render_generic_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
         let color = if is_error {
             Color::Rgb(229, 123, 123)
         } else {
-            COLOR_MUTED
+            COLOR_MUTED()
         };
         lines.push(Line::from(Span::styled(
             format!("  │ {raw}"),
-            get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
         )));
     }
     lines
@@ -291,7 +291,7 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
             format!("  ✗ exit {code}"),
             get_themed_style(
                 Color::Rgb(229, 123, 123),
-                COLOR_BG,
+                COLOR_BG(),
                 Modifier::BOLD,
                 show_picker,
             ),
@@ -302,11 +302,11 @@ fn render_command_result<'a>(result: &str, show_picker: bool) -> Vec<Line<'a>> {
         let (prefix, color) = if kind == "stderr" {
             ("  ! ", Color::Rgb(229, 192, 123))
         } else {
-            ("  │ ", COLOR_MUTED)
+            ("  │ ", COLOR_MUTED())
         };
         lines.push(Line::from(Span::styled(
             format!("{prefix}{raw}"),
-            get_themed_style(color, COLOR_BG, Modifier::empty(), show_picker),
+            get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
         )));
     }
 
@@ -343,21 +343,21 @@ fn render_read_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<
             }
             lines.push(Line::from(Span::styled(
                 format_read_header(raw),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
             )));
             continue;
         }
         let Some((number, code)) = raw.split_once(": ") else {
             lines.push(Line::from(Span::styled(
                 raw.to_string(),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             )));
             continue;
         };
         let Ok(number) = number.parse::<usize>() else {
             lines.push(Line::from(Span::styled(
                 raw.to_string(),
-                get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
             )));
             continue;
         };
@@ -378,7 +378,7 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
                 language = language_for_path(raw.trim_end_matches(':'));
                 Line::from(Span::styled(
                     raw.to_string(),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::BOLD, show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ))
             } else if let Some((number, text)) = raw.trim_start().split_once(": ") {
                 let mut row = vec![line_number(number, 0, show_picker)];
@@ -387,7 +387,7 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
             } else {
                 Line::from(Span::styled(
                     raw.to_string(),
-                    get_themed_style(COLOR_MUTED, COLOR_BG, Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ))
             }
         })
@@ -538,7 +538,7 @@ mod tests {
         );
         assert!(!lines.is_empty());
         let last = lines.last().unwrap();
-        assert_eq!(last.spans[0].style.fg, Some(COLOR_MUTED));
+        assert_eq!(last.spans[0].style.fg, Some(COLOR_MUTED()));
     }
 
     #[test]
@@ -552,7 +552,7 @@ mod tests {
         );
         assert_eq!(lines.len(), 2);
         assert!(lines[0].spans[0].content.starts_with("  │ completed"));
-        assert_eq!(lines[0].spans[0].style.fg, Some(COLOR_MUTED));
+        assert_eq!(lines[0].spans[0].style.fg, Some(COLOR_MUTED()));
         assert_eq!(lines[1].spans[0].style.fg, Some(Color::Rgb(229, 123, 123)));
     }
 
