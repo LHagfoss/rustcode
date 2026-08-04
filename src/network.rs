@@ -1824,12 +1824,7 @@ async fn ask_user_question(
         s.pending_question = None;
         s.question_response = None;
         if s.status == AppStatus::AwaitingQuestion {
-            let model_name = s.model_name.clone();
             s.status = AppStatus::Streaming;
-            if s.config.discord_rpc_enabled {
-                s.discord_rpc
-                    .set_activity("Thinking", &format!("Using model: {}", model_name));
-            }
         }
     }
 
@@ -1887,12 +1882,6 @@ async fn confirm_and_execute(
                 if let Some(pos) = s.running_tools.iter().position(|t| t == &tool_name) {
                     s.running_tools.remove(pos);
                 }
-                if s.config.discord_rpc_enabled {
-                    let model_name = s.model_name.clone();
-                    let activity = crate::discord_rpc::activity_for_tools(s.running_tools.len());
-                    s.discord_rpc
-                        .set_activity(activity, &format!("Using model: {}", model_name));
-                }
             });
         }
     }
@@ -1910,14 +1899,6 @@ async fn confirm_and_execute(
         {
             let mut s = state.lock().await;
             s.running_tools.push(tool_name.clone());
-            if s.config.discord_rpc_enabled {
-                let model_name = s.model_name.clone();
-                let running_tools = s.running_tools.len();
-                s.discord_rpc.set_activity(
-                    crate::discord_rpc::activity_for_tools(running_tools),
-                    &format!("Using model: {}", model_name),
-                );
-            }
         }
         let _cleanup = ToolCleanup {
             state: Arc::clone(state),
@@ -1999,22 +1980,9 @@ async fn confirm_and_execute(
                 {
                     let mut s = state.lock().await;
                     s.pending_tool_confirmation = None;
-                    let model_name = s.model_name.clone();
                     s.status = AppStatus::Streaming;
-                    if s.config.discord_rpc_enabled {
-                        s.discord_rpc
-                            .set_activity("Thinking", &format!("Using model: {}", model_name));
-                    }
                     s.stream_tracker = Some(StreamTracker::new());
                     s.running_tools.push(tool_name.clone());
-                    if s.config.discord_rpc_enabled {
-                        let model_name = s.model_name.clone();
-                        let running_tools = s.running_tools.len();
-                        s.discord_rpc.set_activity(
-                            crate::discord_rpc::activity_for_tools(running_tools),
-                            &format!("Using model: {}", model_name),
-                        );
-                    }
                 }
                 let _cleanup = ToolCleanup {
                     state: Arc::clone(state),
@@ -2067,12 +2035,7 @@ async fn confirm_and_execute(
         {
             let mut s = state.lock().await;
             s.pending_tool_confirmation = None;
-            let model_name = s.model_name.clone();
             s.status = AppStatus::Streaming;
-            if s.config.discord_rpc_enabled {
-                s.discord_rpc
-                    .set_activity("Thinking", &format!("Using model: {}", model_name));
-            }
             s.stream_tracker = Some(StreamTracker::new());
         }
         res
@@ -4873,19 +4836,9 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
                 // the enqueuer spawns a fresh orchestrator). No lost wakeups, no
                 // second concurrent orchestrator.
                 s.orchestrator_running = false;
-                if s.config.discord_rpc_enabled {
-                    let model_name = s.model_name.clone();
-                    s.discord_rpc
-                        .set_activity("Idle", &format!("Using model: {}", model_name));
-                }
                 break;
             }
-            let model_name = s.model_name.clone();
             s.status = AppStatus::Streaming;
-            if s.config.discord_rpc_enabled {
-                s.discord_rpc
-                    .set_activity("Thinking", &format!("Using model: {}", model_name));
-            }
             s.generation_start_time = Some(std::time::Instant::now());
             s.stream_tracker = Some(StreamTracker::new());
             s.recent_read_calls.clear();

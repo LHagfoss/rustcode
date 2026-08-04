@@ -1,4 +1,3 @@
-use crate::discord_rpc::DiscordRpcHandler;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Clone)]
@@ -723,7 +722,6 @@ pub struct AppState {
 
     /// Snapshot of environment context from the first turn, used for delta diffing.
     pub context_snapshot: Option<crate::context::ContextSnapshot>,
-    pub discord_rpc: DiscordRpcHandler,
     /// Cached static system prompt + tool schema, rebuilt only when the tool
     /// protocol, agent mode, or MCP tool set changes.
     pub prompt_cache: PromptCache,
@@ -895,7 +893,6 @@ impl AppState {
             tip_index: random_tip_index(),
             continuous_mode: false,
             context_snapshot: None,
-            discord_rpc: DiscordRpcHandler::new(),
             prompt_cache: PromptCache::default(),
         };
         let last_system_content = app
