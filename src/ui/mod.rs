@@ -41,61 +41,99 @@ const MAX_POPUP_ROWS: u16 = 10;
 
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_BG() -> Color { theme::color_bg() }
+pub fn COLOR_BG() -> Color {
+    theme::color_bg()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_PANEL() -> Color { theme::color_panel() }
+pub fn COLOR_PANEL() -> Color {
+    theme::color_panel()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_ELEMENT() -> Color { theme::color_element() }
+pub fn COLOR_ELEMENT() -> Color {
+    theme::color_element()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_TEXT() -> Color { theme::color_text() }
+pub fn COLOR_TEXT() -> Color {
+    theme::color_text()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_MUTED() -> Color { theme::color_muted() }
+pub fn COLOR_MUTED() -> Color {
+    theme::color_muted()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_PRIMARY() -> Color { theme::color_primary() }
+pub fn COLOR_PRIMARY() -> Color {
+    theme::color_primary()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_SECONDARY() -> Color { theme::color_secondary() }
+pub fn COLOR_SECONDARY() -> Color {
+    theme::color_secondary()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_GREEN() -> Color { theme::color_green() }
+pub fn COLOR_GREEN() -> Color {
+    theme::color_green()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_SELECTION() -> Color { theme::color_selection() }
+pub fn COLOR_SELECTION() -> Color {
+    theme::color_selection()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_TIP() -> Color { theme::color_tip() }
+pub fn COLOR_TIP() -> Color {
+    theme::color_tip()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_STATUS_BORDER() -> Color { theme::color_status_border() }
+pub fn COLOR_STATUS_BORDER() -> Color {
+    theme::color_status_border()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_TURN_SEPARATOR() -> Color { theme::color_turn_separator() }
+pub fn COLOR_TURN_SEPARATOR() -> Color {
+    theme::color_turn_separator()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_NOTICE_BG() -> Color { theme::color_notice_bg() }
+pub fn COLOR_NOTICE_BG() -> Color {
+    theme::color_notice_bg()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_HOVER_BG() -> Color { theme::color_hover_bg() }
+pub fn COLOR_HOVER_BG() -> Color {
+    theme::color_hover_bg()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_DIFF_ADD_BG() -> Color { theme::color_diff_add_bg() }
+pub fn COLOR_DIFF_ADD_BG() -> Color {
+    theme::color_diff_add_bg()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_DIFF_ADD_FG() -> Color { theme::color_diff_add_fg() }
+pub fn COLOR_DIFF_ADD_FG() -> Color {
+    theme::color_diff_add_fg()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_DIFF_REMOVE_BG() -> Color { theme::color_diff_remove_bg() }
+pub fn COLOR_DIFF_REMOVE_BG() -> Color {
+    theme::color_diff_remove_bg()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_DIFF_REMOVE_FG() -> Color { theme::color_diff_remove_fg() }
+pub fn COLOR_DIFF_REMOVE_FG() -> Color {
+    theme::color_diff_remove_fg()
+}
 #[allow(non_snake_case)]
 #[inline]
-pub fn COLOR_DIFF_ABSENT_BG() -> Color { theme::color_diff_absent_bg() }
+pub fn COLOR_DIFF_ABSENT_BG() -> Color {
+    theme::color_diff_absent_bg()
+}
 
 const LOGO: &[&str] = &[
     "                  ▄                   █      ",
@@ -368,7 +406,12 @@ fn render_assistant_message<'a>(
                         let spans = vec![
                             Span::styled(
                                 left_text,
-                                get_themed_style(COLOR_MUTED(), code_bg, Modifier::BOLD, show_picker),
+                                get_themed_style(
+                                    COLOR_MUTED(),
+                                    code_bg,
+                                    Modifier::BOLD,
+                                    show_picker,
+                                ),
                             ),
                             Span::styled(
                                 " ".repeat(pad_len),
@@ -449,32 +492,36 @@ fn render_assistant_message<'a>(
                 } else {
                     // Body line: leading gutter space, per-language rendering,
                     // then wrapped and padded so the panel bg fills full width.
-                    let content_spans = if is_plain_lang(&current_lang)
-                        || is_diff_lang(&current_lang)
-                    {
-                        vec![Span::styled(
-                            format!(" {line_str}"),
-                            get_themed_style(
-                                COLOR_TEXT(),
-                                COLOR_ELEMENT(),
-                                Modifier::empty(),
-                                show_picker,
-                            ),
-                        )]
-                    } else {
-                        let mut s = vec![Span::styled(
-                            " ".to_string(),
-                            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                        )];
-                        s.extend(
-                            highlight_code_line(line_str, &current_lang, show_picker)
-                                .into_iter()
-                                .map(|span| {
-                                    Span::styled(span.content, span.style.bg(COLOR_ELEMENT()))
-                                }),
-                        );
-                        s
-                    };
+                    let content_spans =
+                        if is_plain_lang(&current_lang) || is_diff_lang(&current_lang) {
+                            vec![Span::styled(
+                                format!(" {line_str}"),
+                                get_themed_style(
+                                    COLOR_TEXT(),
+                                    COLOR_ELEMENT(),
+                                    Modifier::empty(),
+                                    show_picker,
+                                ),
+                            )]
+                        } else {
+                            let mut s = vec![Span::styled(
+                                " ".to_string(),
+                                get_themed_style(
+                                    COLOR_TEXT(),
+                                    COLOR_BG(),
+                                    Modifier::empty(),
+                                    show_picker,
+                                ),
+                            )];
+                            s.extend(
+                                highlight_code_line(line_str, &current_lang, show_picker)
+                                    .into_iter()
+                                    .map(|span| {
+                                        Span::styled(span.content, span.style.bg(COLOR_ELEMENT()))
+                                    }),
+                            );
+                            s
+                        };
                     lines.extend(wrap_code_spans(
                         content_spans,
                         box_width,
@@ -585,43 +632,44 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             .unwrap_or_default()
             .as_millis();
 
-            let step_duration_ms = 80.0; // Duration of each discrete step in milliseconds
-            let num_dots = 6;
-            let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0];
-            let num_cycle_steps = pulse_centers_f.len();
+        let step_duration_ms = 80.0; // Duration of each discrete step in milliseconds
+        let num_dots = 6;
+        let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0];
+        let num_cycle_steps = pulse_centers_f.len();
 
-            // Calculate a continuous step value
-            let step_float = (millis as f64 / step_duration_ms) % num_cycle_steps as f64;
+        // Calculate a continuous step value
+        let step_float = (millis as f64 / step_duration_ms) % num_cycle_steps as f64;
 
-            // Interpolate the pulse center value
-            let current_pulse_center_idx = step_float.floor() as usize;
-            let next_pulse_center_idx = (current_pulse_center_idx + 1) % num_cycle_steps;
-            let fraction = step_float - step_float.floor();
+        // Interpolate the pulse center value
+        let current_pulse_center_idx = step_float.floor() as usize;
+        let next_pulse_center_idx = (current_pulse_center_idx + 1) % num_cycle_steps;
+        let fraction = step_float - step_float.floor();
 
-            let pulse_center_val = pulse_centers_f[current_pulse_center_idx] * (1.0 - fraction)
-                + pulse_centers_f[next_pulse_center_idx] * fraction;
+        let pulse_center_val = pulse_centers_f[current_pulse_center_idx] * (1.0 - fraction)
+            + pulse_centers_f[next_pulse_center_idx] * fraction;
 
-            let colors = [
-                Color::Rgb(25, 29, 32),   // Darkest
-                Color::Rgb(34, 40, 45),
-                Color::Rgb(43, 51, 57),
-                Color::Rgb(52, 62, 70),
-                Color::Rgb(60, 88, 101),
-                Color::Rgb(120, 160, 180), // Brightest
-            ];
+        let colors = [
+            Color::Rgb(25, 29, 32), // Darkest
+            Color::Rgb(34, 40, 45),
+            Color::Rgb(43, 51, 57),
+            Color::Rgb(52, 62, 70),
+            Color::Rgb(60, 88, 101),
+            Color::Rgb(120, 160, 180), // Brightest
+        ];
 
-            let mut spans = Vec::new();
+        let mut spans = Vec::new();
 
-            for i in 0..num_dots {
-                let dist_float = (i as f64 - pulse_center_val).abs();
-                let level_float = 3.0 - dist_float; // Max level is 3.0 at the center
+        for i in 0..num_dots {
+            let dist_float = (i as f64 - pulse_center_val).abs();
+            let level_float = 3.0 - dist_float; // Max level is 3.0 at the center
 
-                // Clamp level_float to [0.0, 3.0]
-                let clamped_level_float = level_float.clamp(0.0, 3.0);
+            // Clamp level_float to [0.0, 3.0]
+            let clamped_level_float = level_float.clamp(0.0, 3.0);
 
-                // Map clamped_level_float (0.0-3.0) to color index (0-5)
-                let color_index = (clamped_level_float / 3.0 * (colors.len() - 1) as f64).round() as usize;
-                let color = colors[color_index];
+            // Map clamped_level_float (0.0-3.0) to color index (0-5)
+            let color_index =
+                (clamped_level_float / 3.0 * (colors.len() - 1) as f64).round() as usize;
+            let color = colors[color_index];
             spans.push(Span::styled(
                 "■",
                 get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
@@ -651,7 +699,10 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 "Synthesizing solutions...",
                 "Querying knowledge base...",
             ];
-            let elapsed_secs = state.generation_start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            let elapsed_secs = state
+                .generation_start_time
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
             let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
             spans.push(Span::styled(
                 format!("  {status_msg}"),
@@ -1224,7 +1275,13 @@ thread_local! {
         RefCell::new(lru::LruCache::new(TOOL_RESULT_CACHE_CAP));
 }
 
-fn tool_result_cache_key(tool_name: &str, result: &str, width: usize, verbosity: &crate::app::Verbosity, show_picker: bool) -> u64 {
+fn tool_result_cache_key(
+    tool_name: &str,
+    result: &str,
+    width: usize,
+    verbosity: &crate::app::Verbosity,
+    show_picker: bool,
+) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     tool_name.hash(&mut hasher);
     result.hash(&mut hasher);
@@ -2024,7 +2081,10 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         Span::styled("▌", Style::default().fg(accent).bg(bg)),
         Span::styled(
             format!(" {glyph} "),
-            Style::default().fg(accent).bg(bg).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(accent)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(text, Style::default().fg(COLOR_TEXT()).bg(bg)),
         Span::styled(" ", Style::default().bg(bg)),
@@ -2301,9 +2361,9 @@ mod tests {
                 "entry read just before the insert must survive"
             );
             assert!(
-                !cache
-                    .entries
-                    .contains_key(&tool_result_cache_key("Bash", "result 1", 80, &verbosity, false)),
+                !cache.entries.contains_key(&tool_result_cache_key(
+                    "Bash", "result 1", 80, &verbosity, false
+                )),
                 "the least recently used entry is the eviction victim"
             );
         });
