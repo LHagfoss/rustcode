@@ -47,21 +47,11 @@ pub async fn handle_escape(
 
     if s.status == AppStatus::Streaming {
         s.status = AppStatus::Idle;
-        if s.config.discord_rpc_enabled {
-            let model_name = s.model_name.clone();
-            s.discord_rpc
-                .set_activity("Idle", &format!("Using model: {}", model_name));
-        }
         s.pending_queue.clear();
     } else if !s.pending_queue.is_empty() {
         s.pending_queue.remove(0);
         if s.pending_queue.is_empty() {
             s.status = AppStatus::Idle;
-            if s.config.discord_rpc_enabled {
-                let model_name = s.model_name.clone();
-                s.discord_rpc
-                    .set_activity("Idle", &format!("Using model: {}", model_name));
-            }
         }
     }
 }
@@ -335,25 +325,7 @@ pub async fn handle_enter(
                     }
                 }
             }
-            "/discord" => {
-                crate::config::save_entire_config(&s.config);
-                let is_enabled = s.config.discord_rpc_enabled;
-                s.history.push(ChatMessage::new(
-                    "system",
-                    format!(
-                        "Switched Discord Rich Presence to {}",
-                        if is_enabled { "ON" } else { "OFF" }
-                    ),
-                ));
-                if is_enabled {
-                    s.discord_rpc.set_enabled(true);
-                    let model_name = s.model_name.clone();
-                    s.discord_rpc
-                        .set_activity("Idle", &format!("Using model: {}", model_name));
-                } else {
-                    s.discord_rpc.set_enabled(false);
-                }
-            }
+
             "/goal" => {
                 let goal_text = tokens[1..].join(" ");
                 if goal_text.trim().is_empty() {
@@ -675,11 +647,6 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
                             "system",
                             format!("Switched to model profile '{}'", name),
                         ));
-                        if s.config.discord_rpc_enabled {
-                            let model_name = s.model_name.clone();
-                            s.discord_rpc
-                                .set_activity("Idle", &format!("Using model: {}", model_name));
-                        }
                     } else {
                         s.model_name = name.clone();
                         let default_name = s.config.default.big().to_string();

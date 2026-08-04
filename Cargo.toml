@@ -8,7 +8,6 @@ name = "rustcode"
 path = "src/main.rs"
 
 [dependencies]
-discord-rich-presence = "0.2.4"
 anyhow = "1.0.97"
 base64 = "0.22.1"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "std"] }

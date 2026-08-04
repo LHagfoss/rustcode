@@ -73,10 +73,6 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Allow subagents for the next task only",
     },
     CommandInfo {
-        name: "/discord",
-        desc: "Toggle Discord Rich Presence",
-    },
-    CommandInfo {
         name: "/ollama",
         desc: "Configure or list Ollama models",
     },

@@ -5,7 +5,6 @@ mod cli;
 mod clipboard;
 mod config;
 mod context;
-mod discord_rpc;
 mod mcp;
 mod network;
 mod notifications;
@@ -205,17 +204,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
-    // Initialize Discord RPC if enabled
-    {
-        let mut s = app_state.lock().await;
-        if s.config.discord_rpc_enabled {
-            s.discord_rpc.set_enabled(true);
-            let model_name = s.model_name.clone();
-            s.discord_rpc
-                .set_activity("Idle", &format!("Using model: {}", model_name));
-        }
-    }
-
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
@@ -270,11 +258,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !s.orchestrator_running {
                     s.orchestrator_running = true;
                     s.status = AppStatus::Queued;
-                    if s.config.discord_rpc_enabled {
-                        let model_name = s.model_name.clone();
-                        s.discord_rpc
-                            .set_activity("Queued", &format!("Using model: {}", model_name));
-                    }
                     drop(s);
                     crate::network::process_queue_orchestrator(
                         client_clone,
@@ -1891,10 +1874,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Shutdown: nothing queued may be lost, so write it out synchronously.
     crate::config::flush_history();
-    {
-        let mut s = app_state.lock().await;
-        s.discord_rpc.shutdown();
-    }
 
     disable_raw_mode()?;
     {

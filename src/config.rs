@@ -211,8 +211,6 @@ pub struct AppConfig {
     pub agent_mode: AgentMode,
     #[serde(default)]
     pub verbosity: crate::app::state::Verbosity,
-    #[serde(default = "default_false")]
-    pub discord_rpc_enabled: bool,
     /// Opt-in: log the full outbound chat-completion payload (entire message
     /// array, tool schemas) on every request round instead of a metadata-only
     /// summary. Off by default — the full payload is what blows debug.log up
@@ -303,7 +301,6 @@ impl Default for AppConfig {
 
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
-            discord_rpc_enabled: false,
             debug_verbose_network_logging: false,
             theme: default_theme(),
         }
