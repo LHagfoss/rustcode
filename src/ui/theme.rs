@@ -1,9 +1,60 @@
 use ratatui::style::Color;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ColorSpec {
+    Hex(String),
+    Rgb([u8; 3]),
+}
+
+impl ColorSpec {
+    pub fn to_color(&self) -> Color {
+        match self {
+            ColorSpec::Rgb([r, g, b]) => Color::Rgb(*r, *g, *b),
+            ColorSpec::Hex(hex) => parse_hex_color(hex).unwrap_or(Color::Reset),
+        }
+    }
+}
+
+fn parse_hex_color(hex: &str) -> Option<Color> {
+    let s = hex.trim_start_matches('#');
+    if s.len() == 6 {
+        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+        Some(Color::Rgb(r, g, b))
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeFile {
+    pub name: String,
+    pub description: Option<String>,
+    pub bg: ColorSpec,
+    pub panel: ColorSpec,
+    pub element: ColorSpec,
+    pub text: ColorSpec,
+    pub muted: ColorSpec,
+    pub primary: ColorSpec,
+    pub secondary: ColorSpec,
+    pub green: ColorSpec,
+    pub selection: ColorSpec,
+    pub tip: ColorSpec,
+    pub status_border: ColorSpec,
+    pub turn_separator: ColorSpec,
+    pub notice_bg: ColorSpec,
+    pub hover_bg: ColorSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemePalette {
-    pub name: &'static str,
-    pub description: &'static str,
+    pub name: String,
+    pub description: String,
     pub bg: Color,
     pub panel: Color,
     pub element: Color,
@@ -20,102 +71,199 @@ pub struct ThemePalette {
     pub hover_bg: Color,
 }
 
-pub static THEMES: &[ThemePalette] = &[
-    ThemePalette {
-        name: "default",
-        description: "Default dark palette",
-        bg: Color::Rgb(21, 23, 26),
-        panel: Color::Rgb(26, 29, 32),
-        element: Color::Rgb(34, 38, 42),
-        text: Color::Rgb(240, 229, 222),
-        muted: Color::Rgb(136, 146, 154),
-        primary: Color::Rgb(236, 110, 93),
-        secondary: Color::Rgb(60, 88, 101),
-        green: Color::Rgb(127, 216, 143),
-        selection: Color::Rgb(240, 240, 240),
-        tip: Color::Rgb(224, 169, 109),
-        status_border: Color::Rgb(92, 98, 104),
-        turn_separator: Color::Rgb(72, 78, 84),
-        notice_bg: Color::Rgb(13, 14, 16),
-        hover_bg: Color::Rgb(45, 50, 56),
-    },
-    ThemePalette {
-        name: "light",
-        description: "Clean light mode palette",
-        bg: Color::Rgb(245, 247, 250),
-        panel: Color::Rgb(230, 234, 240),
-        element: Color::Rgb(215, 221, 228),
-        text: Color::Rgb(30, 35, 42),
-        muted: Color::Rgb(110, 120, 130),
-        primary: Color::Rgb(215, 65, 48),
-        secondary: Color::Rgb(45, 110, 145),
-        green: Color::Rgb(35, 155, 65),
-        selection: Color::Rgb(30, 30, 30),
-        tip: Color::Rgb(190, 120, 30),
-        status_border: Color::Rgb(170, 175, 180),
-        turn_separator: Color::Rgb(185, 190, 195),
-        notice_bg: Color::Rgb(255, 255, 255),
-        hover_bg: Color::Rgb(210, 216, 224),
-    },
-    ThemePalette {
-        name: "nord",
-        description: "Arctic nord palette",
-        bg: Color::Rgb(46, 52, 64),
-        panel: Color::Rgb(59, 66, 82),
-        element: Color::Rgb(67, 76, 94),
-        text: Color::Rgb(236, 239, 244),
-        muted: Color::Rgb(216, 222, 233),
-        primary: Color::Rgb(136, 192, 208),
-        secondary: Color::Rgb(129, 161, 193),
-        green: Color::Rgb(163, 190, 140),
-        selection: Color::Rgb(236, 239, 244),
-        tip: Color::Rgb(235, 203, 139),
-        status_border: Color::Rgb(76, 86, 106),
-        turn_separator: Color::Rgb(76, 86, 106),
-        notice_bg: Color::Rgb(30, 34, 42),
-        hover_bg: Color::Rgb(76, 86, 106),
-    },
-    ThemePalette {
-        name: "dracula",
-        description: "Vibrant dracula dark palette",
-        bg: Color::Rgb(40, 42, 54),
-        panel: Color::Rgb(68, 71, 90),
-        element: Color::Rgb(98, 114, 164),
-        text: Color::Rgb(248, 248, 242),
-        muted: Color::Rgb(98, 114, 164),
-        primary: Color::Rgb(255, 121, 198),
-        secondary: Color::Rgb(189, 147, 249),
-        green: Color::Rgb(80, 250, 123),
-        selection: Color::Rgb(248, 248, 242),
-        tip: Color::Rgb(241, 250, 140),
-        status_border: Color::Rgb(98, 114, 164),
-        turn_separator: Color::Rgb(98, 114, 164),
-        notice_bg: Color::Rgb(24, 25, 38),
-        hover_bg: Color::Rgb(68, 71, 90),
-    },
-    ThemePalette {
-        name: "tokyo-night",
-        description: "Tokyo night palette",
-        bg: Color::Rgb(26, 27, 38),
-        panel: Color::Rgb(36, 40, 59),
-        element: Color::Rgb(41, 46, 66),
-        text: Color::Rgb(192, 202, 245),
-        muted: Color::Rgb(86, 95, 137),
-        primary: Color::Rgb(247, 118, 142),
-        secondary: Color::Rgb(122, 162, 247),
-        green: Color::Rgb(158, 206, 106),
-        selection: Color::Rgb(192, 202, 245),
-        tip: Color::Rgb(224, 175, 104),
-        status_border: Color::Rgb(65, 72, 104),
-        turn_separator: Color::Rgb(65, 72, 104),
-        notice_bg: Color::Rgb(16, 17, 24),
-        hover_bg: Color::Rgb(41, 46, 66),
-    },
+impl From<&ThemeFile> for ThemePalette {
+    fn from(f: &ThemeFile) -> Self {
+        Self {
+            name: f.name.clone(),
+            description: f.description.clone().unwrap_or_else(|| f.name.clone()),
+            bg: f.bg.to_color(),
+            panel: f.panel.to_color(),
+            element: f.element.to_color(),
+            text: f.text.to_color(),
+            muted: f.muted.to_color(),
+            primary: f.primary.to_color(),
+            secondary: f.secondary.to_color(),
+            green: f.green.to_color(),
+            selection: f.selection.to_color(),
+            tip: f.tip.to_color(),
+            status_border: f.status_border.to_color(),
+            turn_separator: f.turn_separator.to_color(),
+            notice_bg: f.notice_bg.to_color(),
+            hover_bg: f.hover_bg.to_color(),
+        }
+    }
+}
+
+static BUILTIN_THEMES: &[(&str, &str)] = &[
+    ("default.toml", r##"name = "default"
+description = "Default dark palette"
+bg = "#15171a"
+panel = "#1a1d20"
+element = "#22262a"
+text = "#f0e5de"
+muted = "#88929a"
+primary = "#ec6e5d"
+secondary = "#3c5865"
+green = "#7fd88f"
+selection = "#f0f0f0"
+tip = "#e0a96d"
+status_border = "#5c6268"
+turn_separator = "#484e54"
+notice_bg = "#0d0e10"
+hover_bg = "#2d3238"
+"##),
+    ("light.toml", r##"name = "light"
+description = "Clean light mode palette"
+bg = "#f5f7fa"
+panel = "#e6eaf0"
+element = "#d7dde4"
+text = "#1e232a"
+muted = "#6e7882"
+primary = "#d74130"
+secondary = "#2d6e91"
+green = "#239b41"
+selection = "#1e1e1e"
+tip = "#be781e"
+status_border = "#aab3bc"
+turn_separator = "#b9bec3"
+notice_bg = "#ffffff"
+hover_bg = "#d2d8e0"
+"##),
+    ("nord.toml", r##"name = "nord"
+description = "Arctic nord palette"
+bg = "#2e3440"
+panel = "#3b4252"
+element = "#434c5e"
+text = "#eceff4"
+muted = "#d8dee9"
+primary = "#88c0d0"
+secondary = "#81a1c1"
+green = "#a3be8c"
+selection = "#eceff4"
+tip = "#ebcb8b"
+status_border = "#4c566a"
+turn_separator = "#4c566a"
+notice_bg = "#1e222a"
+hover_bg = "#4c566a"
+"##),
+    ("dracula.toml", r##"name = "dracula"
+description = "Vibrant dracula dark palette"
+bg = "#282a36"
+panel = "#44475a"
+element = "#6272a4"
+text = "#f8f8f2"
+muted = "#6272a4"
+primary = "#ff79c6"
+secondary = "#bd93f9"
+green = "#50fa7b"
+selection = "#f8f8f2"
+tip = "#f1fa8c"
+status_border = "#6272a4"
+turn_separator = "#6272a4"
+notice_bg = "#181926"
+hover_bg = "#44475a"
+"##),
+    ("tokyo-night.toml", r##"name = "tokyo-night"
+description = "Tokyo night palette"
+bg = "#1a1b26"
+panel = "#24283b"
+element = "#292e42"
+text = "#c0caf5"
+muted = "#565f89"
+primary = "#f7768e"
+secondary = "#7aa2f7"
+green = "#9ece6a"
+selection = "#c0caf5"
+tip = "#e0af68"
+status_border = "#414868"
+turn_separator = "#414868"
+notice_bg = "#101118"
+hover_bg = "#292e42"
+"##),
 ];
 
-pub fn get_palette(name: &str) -> &'static ThemePalette {
-    THEMES
-        .iter()
+pub fn get_themes_dir() -> Option<PathBuf> {
+    let config_dir = crate::config::get_config_dir()?;
+    Some(config_dir.join("themes"))
+}
+
+pub fn ensure_themes_dir() -> Option<PathBuf> {
+    let themes_dir = get_themes_dir()?;
+    if !themes_dir.exists() {
+        let _ = fs::create_dir_all(&themes_dir);
+    }
+
+    for (filename, content) in BUILTIN_THEMES {
+        let file_path = themes_dir.join(filename);
+        if !file_path.exists() {
+            let _ = fs::write(file_path, content);
+        }
+    }
+
+    Some(themes_dir)
+}
+
+pub fn load_available_themes() -> Vec<ThemePalette> {
+    let mut themes = Vec::new();
+    let themes_dir = ensure_themes_dir();
+
+    if let Some(dir) = themes_dir {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if let Ok(file_struct) = toml::from_str::<ThemeFile>(&content) {
+                            themes.push(ThemePalette::from(&file_struct));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if themes.is_empty() {
+        for (_, content) in BUILTIN_THEMES {
+            if let Ok(file_struct) = toml::from_str::<ThemeFile>(content) {
+                themes.push(ThemePalette::from(&file_struct));
+            }
+        }
+    }
+
+    themes.sort_by(|a, b| {
+        if a.name == "default" {
+            std::cmp::Ordering::Less
+        } else if b.name == "default" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.name.cmp(&b.name)
+        }
+    });
+
+    themes
+}
+
+pub fn get_palette(name: &str) -> ThemePalette {
+    let themes = load_available_themes();
+    themes
+        .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(name))
-        .unwrap_or(&THEMES[0])
+        .unwrap_or_else(|| ThemePalette {
+            name: "default".to_string(),
+            description: "Default dark palette".to_string(),
+            bg: Color::Rgb(21, 23, 26),
+            panel: Color::Rgb(26, 29, 32),
+            element: Color::Rgb(34, 38, 42),
+            text: Color::Rgb(240, 229, 222),
+            muted: Color::Rgb(136, 146, 154),
+            primary: Color::Rgb(236, 110, 93),
+            secondary: Color::Rgb(60, 88, 101),
+            green: Color::Rgb(127, 216, 143),
+            selection: Color::Rgb(240, 240, 240),
+            tip: Color::Rgb(224, 169, 109),
+            status_border: Color::Rgb(92, 98, 104),
+            turn_separator: Color::Rgb(72, 78, 84),
+            notice_bg: Color::Rgb(13, 14, 16),
+            hover_bg: Color::Rgb(45, 50, 56),
+        })
 }
