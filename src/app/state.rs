@@ -1272,7 +1272,12 @@ impl AppState {
             return HoverTarget::ThoughtHeader(row);
         }
         if self.code_copy_rows.iter().any(|(r, _)| *r == row) {
-            return HoverTarget::CopyBadge(row);
+            let is_on_copy_button = self.chat_area.map_or(true, |ca| {
+                column >= (ca.x + ca.width).saturating_sub(14)
+            });
+            if is_on_copy_button {
+                return HoverTarget::CopyBadge(row);
+            }
         }
         HoverTarget::None
     }
