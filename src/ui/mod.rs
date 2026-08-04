@@ -1955,20 +1955,29 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     // Hover feedback for the clickable chat rows. The rows live inside the
     // memoized conversation lines, so tinting them here — after the paragraph
     // is painted — keeps the pointer out of the cache key.
-    let hovered_row = match state.hover {
-        HoverTarget::ThoughtHeader(row) | HoverTarget::CopyBadge(row) => Some(row),
-        _ => None,
-    };
-    if let Some(row) = hovered_row
-        && row >= inner_area.y
-        && row < inner_area.y + inner_area.height
-    {
-        let buf = f.buffer_mut();
-        for col in inner_area.x..inner_area.x + inner_area.width {
-            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
-                cell.set_bg(COLOR_HOVER_BG());
+    match state.hover {
+        HoverTarget::ThoughtHeader(row) => {
+            if row >= inner_area.y && row < inner_area.y + inner_area.height {
+                let buf = f.buffer_mut();
+                for col in inner_area.x..inner_area.x + inner_area.width {
+                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
+                        cell.set_bg(COLOR_HOVER_BG());
+                    }
+                }
             }
         }
+        HoverTarget::CopyBadge(row) => {
+            if row >= inner_area.y && row < inner_area.y + inner_area.height {
+                let buf = f.buffer_mut();
+                let badge_start = (inner_area.x + inner_area.width).saturating_sub(14);
+                for col in badge_start..inner_area.x + inner_area.width {
+                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
+                        cell.set_bg(COLOR_HOVER_BG());
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 
     let _conv = chunks[0];
@@ -2717,11 +2726,7 @@ mod tests {
             assert!(
                 line.spans
                     .iter()
-                    .all(|span| {
-                        span.style.bg == Some(COLOR_BG())
-                            || span.style.bg == None
-                            || span.style.bg == Some(ratatui::style::Color::Reset)
-                    }),
+                    .all(|span| span.style.bg == Some(super::COLOR_BG())),
                 "ordinary code fences should use the code panel background"
             );
         }
