@@ -1226,6 +1226,7 @@ struct ChatKey {
     show_picker: bool,
     thoughts: (usize, usize),
     copied_recently: bool,
+    theme: String,
 }
 
 thread_local! {
@@ -1247,6 +1248,7 @@ fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
         copied_recently: state
             .last_copy_time
             .is_some_and(|t| t.elapsed().as_secs() < 2),
+        theme: state.config.theme.clone(),
     }
 }
 
@@ -1288,6 +1290,7 @@ fn tool_result_cache_key(
     width.hash(&mut hasher);
     verbosity.hash(&mut hasher);
     show_picker.hash(&mut hasher);
+    theme::active_palette().name.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -2371,6 +2374,23 @@ mod tests {
                 "the least recently used entry is the eviction victim"
             );
         });
+    }
+
+    #[test]
+    fn theme_change_changes_cache_keys() {
+        use super::{theme, tool_result_cache_key};
+
+        let verbosity = crate::app::Verbosity::Low;
+        theme::set_active_theme("default");
+        let key1 = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
+
+        theme::set_active_theme("nord");
+        let key2 = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
+
+        assert_ne!(
+            key1, key2,
+            "cache key must differ when active theme changes"
+        );
     }
 
     // Regression: selection clamped to chat_area.x + 2, so the first two columns

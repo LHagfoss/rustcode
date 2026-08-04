@@ -22,7 +22,7 @@ use super::{
 /// Maximum number of rendered documents kept in [`RENDER_CACHE`].
 const RENDER_CACHE_CAP: usize = 256;
 
-type CacheKey = (u64, usize, bool);
+type CacheKey = (u64, usize, bool, u64);
 
 /// Bounded render cache with least-recently-used eviction.
 type MarkdownCache = LruCache<CacheKey, Vec<Line<'static>>>;
@@ -36,7 +36,14 @@ fn render_cache() -> &'static Mutex<MarkdownCache> {
 fn cache_key(content: &str, width: usize, show_picker: bool) -> CacheKey {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     content.hash(&mut hasher);
-    (hasher.finish(), width, show_picker)
+    let mut theme_hasher = std::collections::hash_map::DefaultHasher::new();
+    super::theme::active_palette().name.hash(&mut theme_hasher);
+    (
+        hasher.finish(),
+        width,
+        show_picker,
+        theme_hasher.finish(),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -394,7 +401,7 @@ mod tests {
             .unwrap()
             .entries
             .keys()
-            .filter(|(_, w, _)| *w == width)
+            .filter(|(_, w, _, _)| *w == width)
             .count()
     }
 
