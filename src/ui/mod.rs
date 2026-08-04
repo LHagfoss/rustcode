@@ -2442,7 +2442,7 @@ pub fn extract_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::{COLOR_BG, collapse_image_markers};
+    use super::collapse_image_markers;
 
     // Regression: the tool-result cache used to `clear()` the whole map at the
     // cap, throwing away every still-visible result and forcing a full
