@@ -1,3 +1,8 @@
+## [v0.11.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.2) - 2026-08-04
+### Features
+- **UI:** Convert /info and /about into structured notice blocks ([#381](https://github.com/LHagfoss/rustcode/pull/381) / [`d6c45f1`](https://github.com/LHagfoss/rustcode/commit/d6c45f1))
+- **UI:** Remove background tint boxes from diffs and render full-line green/red text for added/removed diff lines ([#380](https://github.com/LHagfoss/rustcode/pull/380) / [`361410f`](https://github.com/LHagfoss/rustcode/commit/361410f))
+
 ## [v0.11.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.1) - 2026-08-04
 ### Features
 - **UI:** Add >_ RustCode (vX.X.X) notice header, animated /update flow, and automatic UI redraw on notice toast changes ([#375](https://github.com/LHagfoss/rustcode/pull/375) / [`41b5678`](https://github.com/LHagfoss/rustcode/commit/41b5678))
