@@ -1010,7 +1010,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     if s.show_theme_picker {
-                        let themes = crate::ui::theme::THEMES;
+                        let themes = crate::ui::theme::load_available_themes();
                         let len = themes.len();
                         match key.code {
                             KeyCode::Esc => {
@@ -1024,7 +1024,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     } else {
                                         s.theme_picker_index - 1
                                     };
-                                    s.config.theme = themes[s.theme_picker_index].name.to_string();
+                                    s.config.theme = themes[s.theme_picker_index].name.clone();
                                 }
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
@@ -1034,11 +1034,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     } else {
                                         s.theme_picker_index + 1
                                     };
-                                    s.config.theme = themes[s.theme_picker_index].name.to_string();
+                                    s.config.theme = themes[s.theme_picker_index].name.clone();
                                 }
                             }
                             KeyCode::Enter => {
-                                let selected = themes[s.theme_picker_index.min(len.saturating_sub(1))].name.to_string();
+                                let selected = themes[s.theme_picker_index.min(len.saturating_sub(1))].name.clone();
                                 s.config.theme = selected.clone();
                                 s.show_theme_picker = false;
                                 crate::config::save_entire_config(&s.config);

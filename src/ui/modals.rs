@@ -1855,13 +1855,13 @@ pub(super) fn render_theme_picker_modal(f: &mut Frame, state: &AppState) {
         modal_chunks[0],
     );
 
-    let themes = crate::ui::theme::THEMES;
+    let themes = crate::ui::theme::load_available_themes();
     let selected_idx = state.theme_picker_index.min(themes.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
     for (idx, theme) in themes.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let is_active = state.config.theme.eq_ignore_ascii_case(theme.name);
+        let is_active = state.config.theme.eq_ignore_ascii_case(&theme.name);
         let active_badge = if is_active { " [active]" } else { "" };
         let line = if is_selected {
             let text = format!(" ● {:<12} — {}{}", theme.name, theme.description, active_badge);

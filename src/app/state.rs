@@ -801,6 +801,7 @@ impl AppState {
         let verbosity = config.verbosity.clone();
         let history = Vec::new();
         let cwd_and_branch = get_cwd_and_branch();
+        crate::ui::theme::ensure_themes_dir();
 
         Self {
             input_buffer: String::new(),
