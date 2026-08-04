@@ -429,7 +429,7 @@ fn render_assistant_message<'a>(
                                 button_badge,
                                 get_themed_style(
                                     button_color,
-                                    COLOR_ELEMENT(),
+                                    COLOR_BG(),
                                     Modifier::BOLD,
                                     show_picker,
                                 ),
@@ -463,16 +463,6 @@ fn render_assistant_message<'a>(
                             i = j.saturating_sub(1);
                         }
                     } else {
-                        // Closing fence: one solid trailing row to close the panel.
-                        lines.push(Line::from(Span::styled(
-                            " ".repeat(box_width),
-                            get_themed_style(
-                                COLOR_MUTED(),
-                                COLOR_ELEMENT(),
-                                Modifier::empty(),
-                                show_picker,
-                            ),
-                        )));
                         if processed_lines
                             .get(i + 1)
                             .is_some_and(|(_, text)| !text.trim().is_empty())
@@ -501,7 +491,7 @@ fn render_assistant_message<'a>(
                                 format!(" {line_str}"),
                                 get_themed_style(
                                     COLOR_TEXT(),
-                                    COLOR_ELEMENT(),
+                                    COLOR_BG(),
                                     Modifier::empty(),
                                     show_picker,
                                 ),
@@ -520,7 +510,7 @@ fn render_assistant_message<'a>(
                                 highlight_code_line(line_str, &current_lang, show_picker)
                                     .into_iter()
                                     .map(|span| {
-                                        Span::styled(span.content, span.style.bg(COLOR_ELEMENT()))
+                                        Span::styled(span.content, span.style.bg(COLOR_BG()))
                                     }),
                             );
                             s
@@ -528,7 +518,7 @@ fn render_assistant_message<'a>(
                     lines.extend(wrap_code_spans(
                         content_spans,
                         box_width,
-                        COLOR_ELEMENT(),
+                        COLOR_BG(),
                         show_picker,
                     ));
                 }
@@ -2443,7 +2433,7 @@ pub fn extract_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::{COLOR_ELEMENT, collapse_image_markers};
+    use super::{COLOR_BG, collapse_image_markers};
 
     // Regression: the tool-result cache used to `clear()` the whole map at the
     // cap, throwing away every still-visible result and forcing a full
@@ -2717,17 +2707,21 @@ mod tests {
         assert_eq!(copies.len(), 1);
         let header_idx = copies[0].0;
 
-        // Header + 3 body rows (text, blank, text) + closing row must each be
-        // exactly `width` display columns so the panel background fills the box.
-        for line in &lines[header_idx..header_idx + 5] {
+        // Header + 3 body rows (text, blank, text) must each be
+        // exactly `width` display columns.
+        for line in &lines[header_idx..header_idx + 4] {
             let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
             assert_eq!(w, width as usize, "code panel row must fill full width");
         }
-        for line in &lines[header_idx + 1..header_idx + 5] {
+        for line in &lines[header_idx + 1..header_idx + 4] {
             assert!(
                 line.spans
                     .iter()
-                    .all(|span| span.style.bg == Some(COLOR_ELEMENT())),
+                    .all(|span| {
+                        span.style.bg == Some(COLOR_BG())
+                            || span.style.bg == None
+                            || span.style.bg == Some(ratatui::style::Color::Reset)
+                    }),
                 "ordinary code fences should use the code panel background"
             );
         }
