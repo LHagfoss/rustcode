@@ -174,6 +174,18 @@ fn normalize_command(cmd: &str) -> String {
     }
 }
 
+/// Collapse outputs that differ only in the query they report on into one
+/// stagnation key. A model re-rolling search terms ("no matches for 'foo'",
+/// "no matches for 'bar'") is stuck exactly as surely as one repeating the
+/// identical call, but exact-output hashing never sees it.
+pub fn stagnation_key(output: &str) -> &str {
+    if output.starts_with("no matches for '") {
+        "grep:no-matches"
+    } else {
+        output
+    }
+}
+
 /// Tracks consecutive repeats of a string value.
 #[derive(Default)]
 struct ConsecutiveTracker {
@@ -556,5 +568,31 @@ mod tests {
         assert_eq!(d.record_output("no matches"), LoopStatus::Warning(2));
         assert_eq!(d.record_output("no matches"), LoopStatus::Warning(3));
         assert_eq!(d.record_output("no matches"), LoopStatus::Abort(4));
+    }
+
+    #[test]
+    fn varied_no_match_searches_stagnate_as_one() {
+        // Session 1785836601539: the model burned the whole tool-round budget
+        // grepping for one hallucinated function name after another. Distinct
+        // patterns produce distinct output strings, so exact hashing never
+        // fired — the stagnation key must collapse them.
+        let mut d = LoopDetector::new(4);
+        let outputs = [
+            "no matches for 'fn handle_input' under '.' (include filter: 'src/app/**/*.rs')",
+            "no matches for 'fn handle_event' under '.' (include filter: 'src/**/*.rs')",
+            "no matches for 'handle_key_event' under '.' (include filter: 'src/**/*.rs')",
+            "no matches for 'on_key' under '.'",
+        ];
+        let mut last = LoopStatus::Ok;
+        for out in outputs {
+            last = d.record_output(stagnation_key(out));
+        }
+        assert_eq!(last, LoopStatus::Abort(4));
+    }
+
+    #[test]
+    fn stagnation_key_leaves_real_output_untouched() {
+        let out = "matches for 'foo' under '.' (1 file(s)):\n\n./a.rs:\n  1: foo";
+        assert_eq!(stagnation_key(out), out);
     }
 }
