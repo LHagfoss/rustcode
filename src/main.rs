@@ -1009,6 +1009,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
 
+                    if s.show_theme_picker {
+                        let themes = crate::ui::theme::THEMES;
+                        let len = themes.len();
+                        match key.code {
+                            KeyCode::Esc => {
+                                s.config.theme = s.theme_picker_initial.clone();
+                                s.show_theme_picker = false;
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if len > 0 {
+                                    s.theme_picker_index = if s.theme_picker_index == 0 {
+                                        len - 1
+                                    } else {
+                                        s.theme_picker_index - 1
+                                    };
+                                    s.config.theme = themes[s.theme_picker_index].name.to_string();
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if len > 0 {
+                                    s.theme_picker_index = if s.theme_picker_index + 1 >= len {
+                                        0
+                                    } else {
+                                        s.theme_picker_index + 1
+                                    };
+                                    s.config.theme = themes[s.theme_picker_index].name.to_string();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                let selected = themes[s.theme_picker_index.min(len.saturating_sub(1))].name.to_string();
+                                s.config.theme = selected.clone();
+                                s.show_theme_picker = false;
+                                crate::config::save_entire_config(&s.config);
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    format!("Theme set to '{}' and saved to config.", selected),
+                                ));
+                            }
+                            _ => {}
+                        }
+                        drop(s);
+                        continue;
+                    }
+
                     if s.show_command_picker {
                         let search = s.command_picker_search.to_lowercase();
                         let filtered_items: Vec<&crate::ui::PaletteItem> = crate::ui::PALETTE_ITEMS
