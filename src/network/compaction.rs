@@ -105,9 +105,9 @@ const SUMMARY_PRIOR_MAX_BYTES: usize = 24 * 1024;
 const SUMMARY_OUTPUT_MAX_BYTES: usize = 16 * 1024;
 
 /// Total wall-clock budget for a non-streaming summary request, including
-/// connection, response headers, body transfer, and JSON decoding. Sixty
-/// seconds is conservative for a 1024-token summary while remaining finite.
-const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// connection, response headers, body transfer, and JSON decoding. Twenty-five
+/// seconds bounds the request while leaving ample time for valid summaries.
+const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// Preserve the existing per-message limit while additionally enforcing the
 /// whole-input byte ceiling above.
