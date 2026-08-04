@@ -1434,11 +1434,6 @@ fn render_status_panel<'a>(
     let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
         .iter()
         .any(|word| lower.contains(word));
-    let (icon, accent) = if is_warning {
-        ("!", COLOR_TIP())
-    } else {
-        ("·", COLOR_MUTED())
-    };
 
     let is_info_notice = lower.starts_with("session status")
         || lower.starts_with("session usage")
@@ -1506,15 +1501,26 @@ fn render_status_panel<'a>(
                     get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
             ]));
-        } else {
+        } else if is_warning {
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("● {icon} "),
-                    get_themed_style(accent, COLOR_BG(), Modifier::BOLD, show_picker),
+                    "! ",
+                    get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
                     trimmed.to_string(),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    trimmed.to_string(),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ]));
         }
@@ -2770,14 +2776,14 @@ mod tests {
 
         assert_eq!(lines.len(), 2, "info status panel includes header");
         assert!(lines[0].spans[0].content.contains(">_ RustCode"));
-        assert!(lines[1].spans[0].content.contains("● ·"));
+        assert!(lines[1].spans[0].content.contains("  "));
         assert!(lines[1].spans[1].content.contains("Session status: 5 messages"));
 
         let mut notice_lines = Vec::new();
         render_status_panel("Notice: background task finished", 80, false, &mut notice_lines);
 
         assert_eq!(notice_lines.len(), 1, "ordinary notice panel skips header");
-        assert!(notice_lines[0].spans[0].content.contains("● ·"));
+        assert!(notice_lines[0].spans[0].content.contains("  "));
     }
 
     #[test]
