@@ -2004,6 +2004,11 @@ mod tests {
         let client = reqwest::Client::new();
         let mut cancel_token = CancellationToken::new();
 
+        let initial_theme = {
+            let s = state.lock().await;
+            s.config.theme.clone()
+        };
+
         // Open theme picker modal via /theme
         {
             let mut s = state.lock().await;
@@ -2047,5 +2052,12 @@ mod tests {
                     .contains("Unknown theme 'unknown_theme'")
             );
         }
+
+        // Restore initial theme so test execution does not leak theme changes into user config file
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = format!("/theme {}", initial_theme);
+        }
+        let _ = super::handle_enter(&state, &client, &mut cancel_token).await;
     }
 }
