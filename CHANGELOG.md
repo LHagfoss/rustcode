@@ -1,3 +1,13 @@
+## [v0.11.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.1) - 2026-08-04
+### Features
+- **UI:** Add >_ RustCode (vX.X.X) notice header, animated /update flow, and automatic UI redraw on notice toast changes ([#375](https://github.com/LHagfoss/rustcode/pull/375) / [`41b5678`](https://github.com/LHagfoss/rustcode/commit/41b5678))
+- **UI:** Display formatted tool call parameters and scope >_ RustCode notice headers exclusively to system info commands ([#377](https://github.com/LHagfoss/rustcode/pull/377) / [`e458f56`](https://github.com/LHagfoss/rustcode/commit/e458f56))
+- Completely remove Discord RPC module, config settings, and dependencies ([#378](https://github.com/LHagfoss/rustcode/pull/378) / [`0859e04`](https://github.com/LHagfoss/rustcode/commit/0859e04))
+
+### Fixes
+- Clean up Cargo.lock ([#379](https://github.com/LHagfoss/rustcode/pull/379) / [`e9bd5b0`](https://github.com/LHagfoss/rustcode/commit/e9bd5b0))
+- **Test:** Isolate theme unit test to prevent overwriting user config with nord ([#376](https://github.com/LHagfoss/rustcode/pull/376) / [`faceb13`](https://github.com/LHagfoss/rustcode/commit/faceb13))
+
 ## [v0.11.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.0) - 2026-08-04
 ### Features
 - **UI:** Render minimal inline system messages in chat and show toast popup on session resume/notices ([#373](https://github.com/LHagfoss/rustcode/pull/373) / [`b63fac8`](https://github.com/LHagfoss/rustcode/commit/b63fac8))
