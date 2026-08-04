@@ -537,6 +537,7 @@ impl PromptCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoticeKind {
     Notice,
+    Warning,
 }
 
 pub struct Notice {
@@ -805,7 +806,7 @@ impl AppState {
         let cwd_and_branch = get_cwd_and_branch();
         crate::ui::theme::ensure_themes_dir();
 
-        Self {
+        let mut app = Self {
             input_buffer: String::new(),
             scroll_to_bottom_btn: None,
             hover: HoverTarget::None,
@@ -896,7 +897,16 @@ impl AppState {
             context_snapshot: None,
             discord_rpc: DiscordRpcHandler::new(),
             prompt_cache: PromptCache::default(),
+        };
+        let last_system_content = app
+            .history
+            .iter()
+            .rfind(|m| m.role == "system" && !m.content.contains("Loop warning:"))
+            .map(|m| m.content.clone());
+        if let Some(content) = last_system_content {
+            app.set_notice(content);
         }
+        app
     }
 
     /// True when any modal overlay is open (pickers or tool confirmation);
@@ -1330,9 +1340,26 @@ impl AppState {
 
     /// Show a transient notice toast in the top-right corner.
     pub fn set_notice(&mut self, text: impl Into<String>) {
+        let text_str = text.into();
+        let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
+            .iter()
+            .any(|word| text_str.to_ascii_lowercase().contains(word));
+        let kind = if is_warning {
+            NoticeKind::Warning
+        } else {
+            NoticeKind::Notice
+        };
+        self.notice = Some(Notice {
+            text: text_str,
+            kind,
+            shown_at: std::time::Instant::now(),
+        });
+    }
+
+    pub fn set_warning_notice(&mut self, text: impl Into<String>) {
         self.notice = Some(Notice {
             text: text.into(),
-            kind: NoticeKind::Notice,
+            kind: NoticeKind::Warning,
             shown_at: std::time::Instant::now(),
         });
     }
@@ -1346,8 +1373,18 @@ impl AppState {
 
 #[cfg(test)]
 mod protocol_tests {
-    use super::AppState;
+    use super::{AppState, NoticeKind};
     use crate::config::ToolProtocol;
+
+    #[test]
+    fn test_set_warning_notice() {
+        let mut state = AppState::new();
+        state.set_warning_notice("Custom warning");
+        assert_eq!(state.notice.as_ref().unwrap().kind, NoticeKind::Warning);
+
+        state.set_notice("Execution error occurred");
+        assert_eq!(state.notice.as_ref().unwrap().kind, NoticeKind::Warning);
+    }
 
     #[test]
     fn known_providers_get_structured_calls_and_local_servers_keep_text() {
