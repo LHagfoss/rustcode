@@ -155,7 +155,10 @@ fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
     if ctx.tool_rounds >= MAX_TOOL_ROUNDS {
         return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
     }
-    let elapsed = ctx.turn_started_at.elapsed();
+    let elapsed = ctx
+        .turn_started_at
+        .elapsed()
+        .saturating_sub(ctx.user_wait_duration);
     if elapsed >= MAX_TURN_WALL_CLOCK {
         return Some(TurnBudgetLimit::WallClock(elapsed.as_secs()));
     }
@@ -1750,7 +1753,7 @@ async fn ask_user_question(
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     args: &serde_json::Value,
-) -> crate::tools::ToolExecutionOutput {
+) -> (crate::tools::ToolExecutionOutput, std::time::Duration) {
     let question = args
         .get("question")
         .and_then(|v| v.as_str())
@@ -1771,8 +1774,11 @@ async fn ask_user_question(
         .unwrap_or(false);
 
     if question.is_empty() || options.is_empty() {
-        return crate::tools::ToolExecutionOutput::failure(
-            "error: ask_question requires a non-empty 'question' and at least one option. The question UI already includes a 'write your own answer' slot for free-form text — do not retry with empty options; offer a real option or ask in plain assistant text instead.".to_string(),
+        return (
+            crate::tools::ToolExecutionOutput::failure(
+                "error: ask_question requires a non-empty 'question' and at least one option. The question UI already includes a 'write your own answer' slot for free-form text — do not retry with empty options; offer a real option or ask in plain assistant text instead.".to_string(),
+            ),
+            std::time::Duration::ZERO,
         );
     }
 
@@ -1792,10 +1798,12 @@ async fn ask_user_question(
     }
     let _ = crate::notifications::notify_pending_confirmation("ask_question");
 
+    let start_wait = std::time::Instant::now();
     let answer = tokio::select! {
         _ = cancel_token.cancelled() => None,
         res = rx => res.ok(),
     };
+    let user_wait = start_wait.elapsed();
 
     {
         let mut s = state.lock().await;
@@ -1811,14 +1819,15 @@ async fn ask_user_question(
         }
     }
 
-    match answer {
+    let out = match answer {
         Some(a) if !a.is_empty() => {
             crate::tools::ToolExecutionOutput::success(format!("User selected: {a}"))
         }
         _ => crate::tools::ToolExecutionOutput::failure(
-            "error: the user dismissed the question without answering".to_string(),
+            "User cancelled or provided no selection.".to_string(),
         ),
-    }
+    };
+    (out, user_wait)
 }
 
 /// Show the Y/N confirmation modal (when the tool requires it) and run the
@@ -1832,7 +1841,7 @@ async fn confirm_and_execute(
     display_name: &str,
     bypass_confirm: bool,
     workspace_root: Option<std::path::PathBuf>,
-) -> (crate::tools::ToolExecutionOutput, Option<String>) {
+) -> (crate::tools::ToolExecutionOutput, Option<String>, std::time::Duration) {
     let (agent_mode, auto_confirm) = {
         let s = state.lock().await;
         (s.agent_mode, s.auto_confirm)
@@ -1843,6 +1852,7 @@ async fn confirm_and_execute(
         return (
             crate::tools::ToolExecutionOutput::failure(format!("error: {reason}")),
             None,
+            std::time::Duration::ZERO,
         );
     }
 
@@ -1875,6 +1885,7 @@ async fn confirm_and_execute(
         crate::tools::authorize_tool(name, agent_mode, auto_confirm, bypass_confirm),
         crate::tools::AuthorizationDecision::RequireConfirmation
     );
+    let mut user_wait_dur = std::time::Duration::ZERO;
     let mut result = if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
         let tool_name = name.to_string();
@@ -1959,7 +1970,11 @@ async fn confirm_and_execute(
         // their approval. Harmless on other terminals.
         let _ = crate::notifications::notify_pending_confirmation(name);
         dbg_log!("Awaiting user confirmation for '{}'", name);
-        let res = match rx.await {
+        let start_wait = std::time::Instant::now();
+        let rx_res = rx.await;
+        user_wait_dur = start_wait.elapsed();
+
+        let res = match rx_res {
             Ok(true) => {
                 dbg_log!("User approved tool call '{}', executing...", name);
                 let tool_name = name.to_string();
@@ -2062,7 +2077,7 @@ async fn confirm_and_execute(
         }
     }
 
-    (result, diff_opt)
+    (result, diff_opt, user_wait_dur)
 }
 
 const MAX_ACTIVE_SUBAGENTS: usize = 4;
@@ -2260,7 +2275,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     .map(|agent| (agent.write_access, agent.allowed_paths.clone()))
                     .unwrap_or((false, Vec::new()))
             };
-            let needs_write_access = is_mutating_tool(name) || name == "run_command";
+            let _needs_write_access = is_mutating_tool(name) || name == "run_command";
             let path_outside_contract = args
                 .get("path")
                 .and_then(|value| value.as_str())
@@ -2270,12 +2285,13 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                             || path.starts_with(&format!("{}/", allowed.trim_end_matches('/')))
                     })
                 });
-            let (execution, diff_opt) = if needs_write_access && !write_access {
+            let (execution, diff_opt, _user_wait) = if !write_access && !is_read_only_tool(name) {
                 (
                     crate::tools::ToolExecutionOutput::failure(
                         "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
                     ),
                     None,
+                    std::time::Duration::ZERO,
                 )
             } else if write_access && path_outside_contract {
                 (
@@ -2284,6 +2300,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                             .to_string(),
                     ),
                     None,
+                    std::time::Duration::ZERO,
                 )
             } else if crate::tools::is_agent_tool(name) {
                 (
@@ -2291,6 +2308,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         "error: subagents cannot spawn or message other agents".to_string(),
                     ),
                     None,
+                    std::time::Duration::ZERO,
                 )
             } else {
                 {
@@ -3211,6 +3229,7 @@ async fn execute_tool_batch(
     edit_root: &Option<std::path::PathBuf>,
     compile_dirty: &mut bool,
     compile_cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+    user_wait_duration: &mut std::time::Duration,
     deferred_notice: Option<String>,
 ) -> Vec<ToolResult> {
     if !approved {
@@ -3253,6 +3272,7 @@ async fn execute_tool_batch(
                     .map(|call| async {
                         let mut read_dirty = false;
                         let mut read_cache = None;
+                        let mut user_wait = std::time::Duration::ZERO;
                         execute_tool_batch(
                             client,
                             state,
@@ -3262,6 +3282,7 @@ async fn execute_tool_batch(
                             &None,
                             &mut read_dirty,
                             &mut read_cache,
+                            &mut user_wait,
                             deferred_notice.clone(),
                         )
                         .await
@@ -3286,6 +3307,7 @@ async fn execute_tool_batch(
                     edit_root,
                     compile_dirty,
                     compile_cache,
+                    user_wait_duration,
                     deferred_notice.clone(),
                 ))
                 .await,
@@ -3309,7 +3331,7 @@ async fn execute_tool_batch(
             let plan_mode = state.lock().await.agent_mode == crate::config::AgentMode::Plan;
             plan_mode && !crate::tools::allowed_in_plan_mode(name)
         };
-        let (executed_name, execution, diff_opt, replay_artifact) = async move {
+        let (executed_name, execution, diff_opt, replay_artifact, user_wait) = async move {
             let is_read_only = is_read_only_tool(&name_clone);
             let mut replay_artifact = None;
 
@@ -3350,8 +3372,9 @@ async fn execute_tool_batch(
                 }
             }
 
-            let (execution, diff_opt) = if is_repeat {
-                // Serve the content again when it is small enough to be worth
+            let (execution, diff_opt, user_wait) = if is_repeat {
+                // Repeating an unmutated read call: return a cached copy if we have
+                // one, or a explicit guidance notice so the model stops
                 // repeating. A notice that points at earlier context is not an
                 // answer: a model that wanted those lines simply asks a third
                 // time, which is how an identical read repeats four times in a
@@ -3362,7 +3385,7 @@ async fn execute_tool_batch(
                         .get(&tool_signature(&name_clone, &args_clone))
                         .cloned()
                 };
-                match cached {
+                let tuple = match cached {
                     Some(previous) => {
                         let content = if let Some(mut content) = previous.replayable_content {
                             content.insert_str(
@@ -3399,18 +3422,18 @@ different, read another range or make an edit first; repeating this call returns
                             .to_string()),
                         None,
                     ),
-                }
+                };
+                (tuple.0, tuple.1, std::time::Duration::ZERO)
             } else if name_clone == "ask_question" {
-                (
-                    ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await,
-                    None,
-                )
+                let (output, wait) = ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await;
+                (output, None, wait)
             } else if plan_mode_denied {
                 (
                     crate::tools::ToolExecutionOutput::failure(
                         "error: Plan mode is active; this tool is not permitted.".to_string(),
                     ),
                     None,
+                    std::time::Duration::ZERO,
                 )
             } else if crate::tools::is_agent_tool(&name_clone) {
                 (
@@ -3423,6 +3446,7 @@ different, read another range or make an edit first; repeating this call returns
                     )
                     .await,
                     None,
+                    std::time::Duration::ZERO,
                 )
             } else {
                 confirm_and_execute(
@@ -3483,9 +3507,10 @@ different, read another range or make an edit first; repeating this call returns
                 }
             }
 
-            (name_clone, execution, diff_opt, replay_artifact)
+            (name_clone, execution, diff_opt, replay_artifact, user_wait)
         }
         .await;
+        *user_wait_duration += user_wait;
         // The real diff (from actual before/after file content, embedded by
         // the edit tools themselves) always wins over the pre-execution,
         // argument-only preview — that preview is provisional and must
@@ -3752,6 +3777,8 @@ pub struct TurnContext {
     /// Set once a safety budget stops the turn, so the caller can tell a
     /// budget stop apart from a normal finish or a detected loop.
     pub budget_stopped: Option<String>,
+    /// Accumulated duration spent waiting for interactive user response (ask_question / confirmation).
+    pub user_wait_duration: std::time::Duration,
 }
 
 impl TurnContext {
@@ -3783,6 +3810,7 @@ impl TurnContext {
             consecutive_compiler_error_gates: 0,
             consecutive_malformed_calls: 0,
             budget_stopped: None,
+            user_wait_duration: std::time::Duration::ZERO,
         }
     }
 }
@@ -4260,6 +4288,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 &ctx.edit_root,
                 &mut ctx.compile_dirty,
                 &mut ctx.compile_cache,
+                &mut ctx.user_wait_duration,
                 deferred_notice,
             )
             .await;
@@ -5723,7 +5752,7 @@ mod tests {
             "overwrite": true
         });
 
-        let (result, _) = confirm_and_execute(
+        let (result, _, _) = confirm_and_execute(
             &state,
             &cancel_token,
             "write_to_file",
@@ -6580,6 +6609,7 @@ mod tests {
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let mut compile_dirty = false;
         let mut compile_cache = None;
+        let mut user_wait = std::time::Duration::ZERO;
         let mut results = execute_tool_batch(
             &client,
             state,
@@ -6589,6 +6619,7 @@ mod tests {
             &None,
             &mut compile_dirty,
             &mut compile_cache,
+            &mut user_wait,
             None,
         )
         .await;
