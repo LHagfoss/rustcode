@@ -16,7 +16,7 @@ mod tools;
 mod ui;
 mod update;
 
-use crate::app::{AppState, AppStatus, ChatMessage};
+use crate::app::{AppState, AppStatus, ChatMessage, Verbosity};
 use clap::Parser;
 use crossterm::{
     cursor::SetCursorStyle,
@@ -662,6 +662,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let mut s = app_state.lock().await;
                                     s.question_response = None;
                                     s.pending_question = None;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if s.status == AppStatus::VerbosityPicker {
+                            drop(s);
+                            match key.code {
+                                KeyCode::Up => {
+                                    let mut s = app_state.lock().await;
+                                    s.modal_picker_index = s.modal_picker_index.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    let mut s = app_state.lock().await;
+                                    s.modal_picker_index = s.modal_picker_index.saturating_add(1).min(1); // 0 for Low, 1 for High
+                                }
+                                KeyCode::Enter => {
+                                    let mut s = app_state.lock().await;
+                                    let new_verbosity = match s.modal_picker_index {
+                                        0 => Verbosity::Low,
+                                        1 => Verbosity::High,
+                                        _ => Verbosity::Low, // Should not happen
+                                    };
+                                    s.verbosity = new_verbosity.clone();
+                                    s.config.verbosity = new_verbosity;
+                                    s.status = AppStatus::Idle;
+                                }
+                                KeyCode::Esc => {
+                                    let mut s = app_state.lock().await;
+                                    s.status = AppStatus::Idle;
                                 }
                                 _ => {}
                             }
