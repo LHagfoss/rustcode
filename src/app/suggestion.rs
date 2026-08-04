@@ -144,6 +144,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "/verbosity",
         desc: "Show or set verbosity (low|high|toggle)",
     },
+    CommandInfo {
+        name: "/theme",
+        desc: "Show or set UI color theme (default|light|nord|dracula|tokyo-night)",
+    },
 ];
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {

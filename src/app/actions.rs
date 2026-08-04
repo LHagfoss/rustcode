@@ -304,6 +304,41 @@ pub async fn handle_enter(
                     crate::config::save_entire_config(&s.config);
                 }
             }
+            "/theme" => {
+                let available = vec!["default", "light", "nord", "dracula", "tokyo-night"];
+                match tokens.get(1) {
+                    None => {
+                        let current = s.config.theme.clone();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!(
+                                "Current theme: {}. Available themes: {}. Use '/theme <name>' to switch.",
+                                current,
+                                available.join(", ")
+                            ),
+                        ));
+                    }
+                    Some(&theme_name) => {
+                        if available.contains(&theme_name) {
+                            s.config.theme = theme_name.to_string();
+                            crate::config::save_entire_config(&s.config);
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                format!("Theme changed to '{}' and saved to config.", theme_name),
+                            ));
+                        } else {
+                            s.history.push(ChatMessage::new(
+                                "system",
+                                format!(
+                                    "Unknown theme '{}'. Available themes: {}.",
+                                    theme_name,
+                                    available.join(", ")
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
             "/discord" => {
                 crate::config::save_entire_config(&s.config);
                 let is_enabled = s.config.discord_rpc_enabled;
@@ -1942,6 +1977,57 @@ mod tests {
                     .contains("Continuous autoloop mode is active")
             );
             assert!(s.input_buffer.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_theme_command_flow() {
+        use crate::app::state::AppState;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+
+        // Query current theme
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/theme".to_string();
+        }
+        let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(!trigger);
+        {
+            let s = state.lock().await;
+            assert!(s.history.last().unwrap().content.contains("Current theme:"));
+            assert!(s.history.last().unwrap().content.contains("tokyo-night"));
+        }
+
+        // Switch to theme 'nord'
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/theme nord".to_string();
+        }
+        let trigger2 = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(!trigger2);
+        {
+            let s = state.lock().await;
+            assert_eq!(s.config.theme, "nord");
+            assert!(s.history.last().unwrap().content.contains("Theme changed to 'nord'"));
+        }
+
+        // Switch to unknown theme
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/theme unknown_theme".to_string();
+        }
+        let trigger3 = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(!trigger3);
+        {
+            let s = state.lock().await;
+            assert_eq!(s.config.theme, "nord");
+            assert!(s.history.last().unwrap().content.contains("Unknown theme 'unknown_theme'"));
         }
     }
 }
