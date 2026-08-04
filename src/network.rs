@@ -234,6 +234,20 @@ fn loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
     }
 }
 
+/// Push a loop warning, replacing the previous one if it's still the last
+/// history entry — a model stuck in a loop would otherwise collect one
+/// near-identical warning per round, crowding out the transcript.
+fn push_or_replace_loop_warning(history: &mut Vec<ChatMessage>, text: String) {
+    if let Some(last) = history.last_mut()
+        && last.role == "system"
+        && last.content.starts_with("[Loop warning:")
+    {
+        last.content = text;
+    } else {
+        history.push(ChatMessage::new("system", text));
+    }
+}
+
 /// True when a mutating tool's result reflects real forward progress —
 /// not merely a reported success. A failed edit changed nothing, and
 /// neither did an idempotent no-op (PR #306's "already applied" signal
@@ -4148,11 +4162,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         // keep the worst status. Abort stops auto-execution; Warning
         // injects a nudge so the model changes approach.
         let mut loop_status = loop_detect::LoopStatus::Ok;
+        let mut loop_offender: Option<String> = None;
         for call in &tool_calls {
             let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
             let s = ctx.loop_detector.check_tool(&call.name, &exact, &category);
             if s.rank() > loop_status.rank() {
                 loop_status = s;
+                loop_offender = Some(format!("{} ({category})", call.name));
             }
             // Remember where code is being touched, so the finish gate can
             // compile-check before accepting a "done". Whether anything
@@ -4213,19 +4229,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             loop_detect::LoopStatus::Warning(n) => {
                 dbg_log!("Loop detector: warning at {} repeats", n);
                 let mut s = state.lock().await;
+                // Name the offending action: "this action has repeated" left
+                // the model (and anyone resuming the transcript) guessing
+                // which of the round's calls the warning was about.
+                let action = loop_offender
+                    .as_deref()
+                    .unwrap_or("the last tool action");
                 let warning_text = format!(
-                    "[Loop warning: this action has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — if an edit failed to match, view a wider line range or use grep to verify exact target content.]"
+                    "[Loop warning: '{action}' has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — if an edit failed to match, view a wider line range or use grep to verify exact target content.]"
                 );
-                if let Some(last) = s.history.last_mut()
-                    && last.role == "system"
-                    && last
-                        .content
-                        .starts_with("[Loop warning: this action has repeated")
-                {
-                    last.content = warning_text;
-                } else {
-                    s.history.push(ChatMessage::new("system", warning_text));
-                }
+                push_or_replace_loop_warning(&mut s.history, warning_text);
                 drop(s);
             }
             loop_detect::LoopStatus::Ok => {}
@@ -4336,6 +4349,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             let mut s = state.lock().await;
             s.status = AppStatus::Streaming;
             let mut completed = false;
+            let mut stagnation = loop_detect::LoopStatus::Ok;
             let executed = results.len();
             for (position, result) in results.into_iter().enumerate() {
                 let call = tool_calls.get(position);
@@ -4405,10 +4419,15 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 }
                 // Output-stagnation signal: repeated identical results
                 // (e.g. "No matches found") despite varied commands.
-                if let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
-                    ctx.loop_detector.record_output(&content)
-                {
-                    dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
+                match ctx.loop_detector.record_output(loop_detect::stagnation_key(&content)) {
+                    status @ (loop_detect::LoopStatus::Warning(n)
+                    | loop_detect::LoopStatus::Abort(n)) => {
+                        dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
+                        if status.rank() > stagnation.rank() {
+                            stagnation = status;
+                        }
+                    }
+                    loop_detect::LoopStatus::Ok => {}
                 }
                 s.history.push(tool_result_history_message(
                     ToolResult {
@@ -4429,6 +4448,21 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 {
                     s.history.push(message);
                 }
+            }
+
+            // Surface output stagnation to the model. Until now this signal
+            // was only written to the debug log, so a model re-rolling search
+            // terms against an empty result set got no feedback until the
+            // tool-round budget killed the turn.
+            if let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
+                stagnation
+            {
+                push_or_replace_loop_warning(
+                    &mut s.history,
+                    format!(
+                        "[Loop warning: the last {n} tool results were identical in kind (e.g. repeated \"no matches\"). Re-phrasing the same search is not progress — the answer is not where you are looking. View the relevant file directly or change approach.]"
+                    ),
+                );
             }
 
             // Completion gate: every edit this task attempted failed, so
