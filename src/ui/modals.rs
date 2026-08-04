@@ -496,6 +496,45 @@ pub fn get_filtered_picker_items(state: &AppState) -> Vec<PickerItem> {
         .collect()
 }
 
+pub(super) fn render_verbosity_picker_modal(f: &mut Frame, state: &AppState) {
+    let modal_area = centered_rect_fixed(40, 10, f.area());
+    f.render_widget(Clear, modal_area);
+    let modal_block = Block::default()
+        .title("Verbosity Level")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(COLOR_PANEL()));
+    f.render_widget(modal_block, modal_area);
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 1
+    });
+
+    let choices = [("Low", crate::app::state::Verbosity::Low), ("High", crate::app::state::Verbosity::High)];
+    let mut lines = Vec::new();
+
+    for (idx, (label, verbosity_level)) in choices.iter().enumerate() {
+        let is_selected = state.modal_picker_index == idx;
+        let is_current = state.verbosity == *verbosity_level;
+        let mut style = Style::default().fg(COLOR_TEXT());
+
+        if is_selected {
+            style = style.bg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
+        }
+        if is_current {
+            lines.push(Line::from(Span::styled(format!("{} (current)", label), style)));
+        } else {
+            lines.push(Line::from(Span::styled(label.to_string(), style)));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default())
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, inner_area);
+}
+
 /// Render the model picker modal overlay.
 pub(super) fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
     let filtered_items = get_filtered_picker_items(state);
