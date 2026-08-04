@@ -27,6 +27,23 @@ fn build_include_matcher(include: Option<&str>) -> Result<Option<globset::GlobSe
     ))
 }
 
+/// "No matches" must say whether an `include` filter was applied — otherwise
+/// the model can't tell "pattern absent" apart from "filter excluded every
+/// file" and starts distrusting the search instead of its pattern.
+fn no_matches_message(pattern: &str, root: &str, include: Option<&str>) -> String {
+    let scope = if std::path::Path::new(root).is_file() {
+        "in"
+    } else {
+        "under"
+    };
+    match include {
+        Some(inc) => {
+            format!("no matches for '{pattern}' {scope} '{root}' (include filter: '{inc}')")
+        }
+        None => format!("no matches for '{pattern}' {scope} '{root}'"),
+    }
+}
+
 fn truncate_line(line: &str) -> String {
     if line.chars().count() > MAX_LINE_CHARS {
         let cut: String = line.chars().take(MAX_LINE_CHARS).collect();
@@ -71,12 +88,7 @@ fn try_ripgrep(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     if stdout.trim().is_empty() {
-        let root_path = std::path::Path::new(root);
-        if root_path.is_file() {
-            return Some(Ok(format!("no matches for '{pattern}' in '{root}'")));
-        } else {
-            return Some(Ok(format!("no matches for '{pattern}' under '{root}'")));
-        }
+        return Some(Ok(no_matches_message(pattern, root, include)));
     }
 
     let mut out = String::new();
@@ -222,7 +234,7 @@ pub fn grep(args: &Value) -> Result<String, String> {
     }
 
     if out.is_empty() {
-        Ok(format!("no matches for '{pattern}' under '{root}'"))
+        Ok(no_matches_message(pattern, root, include))
     } else {
         Ok(format!(
             "matches for '{pattern}' under '{root}' ({} file(s)):\n{}",
@@ -403,4 +415,25 @@ pub fn get_project_map_tool(_args: &Value) -> Result<String, String> {
     let _ = crate::symbols::update_index(&cwd);
 
     crate::symbols::get_project_map(&cwd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_matches_names_the_include_filter() {
+        assert_eq!(
+            no_matches_message("foo", ".", Some("src/**/*.rs")),
+            "no matches for 'foo' under '.' (include filter: 'src/**/*.rs')"
+        );
+    }
+
+    #[test]
+    fn no_matches_without_filter_stays_plain() {
+        assert_eq!(
+            no_matches_message("foo", ".", None),
+            "no matches for 'foo' under '.'"
+        );
+    }
 }
