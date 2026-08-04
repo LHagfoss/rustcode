@@ -2002,21 +2002,23 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
 
     // Size to the message so short notices ("Copied to clipboard") don't paint a
     // full-width slab over the conversation.
-    let text_width = notice.text.chars().count().min(56) as u16;
+    let text_width = notice.text.chars().count().min(60) as u16;
     let Some(rect) = notice_rect(f.area(), text_width) else {
         return;
     };
 
-    let text: String = notice.text.chars().take(56).collect();
+    let text: String = notice.text.chars().take(60).collect();
+    let bg = COLOR_PANEL();
     let para = Paragraph::new(Line::from(vec![
+        Span::styled("▌", Style::default().fg(accent).bg(bg)),
         Span::styled(
             format!(" {glyph} "),
-            Style::default().fg(accent).bg(COLOR_NOTICE_BG()),
+            Style::default().fg(accent).bg(bg).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(text, Style::default().fg(COLOR_TEXT()).bg(COLOR_NOTICE_BG())),
-        Span::styled(" ", Style::default().bg(COLOR_NOTICE_BG())),
+        Span::styled(text, Style::default().fg(COLOR_TEXT()).bg(bg)),
+        Span::styled(" ", Style::default().bg(bg)),
     ]))
-    .style(Style::default().bg(COLOR_NOTICE_BG()));
+    .style(Style::default().bg(bg));
 
     f.render_widget(Clear, rect);
     f.render_widget(para, rect);
