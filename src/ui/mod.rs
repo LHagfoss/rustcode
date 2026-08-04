@@ -14,7 +14,7 @@ pub mod theme;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
-    render_theme_picker_modal, render_tool_confirmation_modal, render_welcome_screen,
+    render_theme_picker_modal, render_tool_confirmation_modal, render_welcome_screen, render_verbosity_picker_modal,
 };
 use tool_result::{render_file_preview, render_tool_result};
 
@@ -1987,6 +1987,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     if state.status == AppStatus::AwaitingQuestion {
         render_question_modal(f, state);
+    }
+
+    if state.status == AppStatus::VerbosityPicker {
+        render_verbosity_picker_modal(f, state);
     }
 
     // Painted last so it sits on top of everything, like a native selection.

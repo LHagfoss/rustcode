@@ -261,14 +261,7 @@ pub async fn handle_enter(
                 let mut changed = false;
                 match tokens.get(1) {
                     None => {
-                        let current = label(&s.verbosity).to_string();
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!(
-                                "Current verbosity: {}. Use '/verbosity <low|high|toggle>' to change it.",
-                                current
-                            ),
-                        ));
+                        s.status = AppStatus::VerbosityPicker;
                     }
                     Some(&"low") => {
                         s.verbosity = Verbosity::Low;

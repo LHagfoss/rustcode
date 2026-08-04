@@ -9,6 +9,7 @@ pub enum AppStatus {
 
     AwaitingToolConfirmation,
     AwaitingQuestion,
+    VerbosityPicker,
 }
 
 #[derive(Debug, Clone)]
@@ -609,6 +610,7 @@ pub struct AppState {
 
     pub show_model_picker: bool,
     pub model_picker_index: usize,
+    pub modal_picker_index: usize,
     pub model_picker_search: String,
 
     pub show_theme_picker: bool,
@@ -829,6 +831,7 @@ impl AppState {
             active_suggestion_index: None,
             show_model_picker: false,
             model_picker_index: 0,
+            modal_picker_index: 0,
             model_picker_search: String::new(),
             show_theme_picker: false,
             theme_picker_index: 0,
