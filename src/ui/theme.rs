@@ -302,3 +302,52 @@ pub fn color_status_border() -> Color { active_palette().status_border }
 pub fn color_turn_separator() -> Color { active_palette().turn_separator }
 pub fn color_notice_bg() -> Color { active_palette().notice_bg }
 pub fn color_hover_bg() -> Color { active_palette().hover_bg }
+
+pub fn is_light_mode() -> bool {
+    let c = active_palette().bg;
+    match c {
+        Color::Rgb(r, g, b) => (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000 > 140,
+        Color::White | Color::Gray | Color::Yellow | Color::LightYellow => true,
+        _ => false,
+    }
+}
+
+pub fn color_diff_add_bg() -> Color {
+    if is_light_mode() {
+        Color::Rgb(225, 245, 225)
+    } else {
+        Color::Rgb(24, 40, 24)
+    }
+}
+
+pub fn color_diff_add_fg() -> Color {
+    if is_light_mode() {
+        Color::Rgb(30, 120, 40)
+    } else {
+        Color::Rgb(160, 240, 160)
+    }
+}
+
+pub fn color_diff_remove_bg() -> Color {
+    if is_light_mode() {
+        Color::Rgb(252, 230, 230)
+    } else {
+        Color::Rgb(48, 20, 20)
+    }
+}
+
+pub fn color_diff_remove_fg() -> Color {
+    if is_light_mode() {
+        Color::Rgb(180, 40, 40)
+    } else {
+        Color::Rgb(240, 150, 150)
+    }
+}
+
+pub fn color_diff_absent_bg() -> Color {
+    if is_light_mode() {
+        Color::Rgb(235, 240, 245)
+    } else {
+        Color::Rgb(22, 22, 26)
+    }
+}
