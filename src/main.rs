@@ -1042,10 +1042,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.config.theme = selected.clone();
                                 s.show_theme_picker = false;
                                 crate::config::save_entire_config(&s.config);
-                                s.history.push(ChatMessage::new(
-                                    "system",
-                                    format!("Theme set to '{}' and saved to config.", selected),
-                                ));
+                                s.set_notice(format!("Theme set to '{}'", selected));
                             }
                             _ => {}
                         }

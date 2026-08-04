@@ -324,10 +324,7 @@ pub async fn handle_enter(
                             s.config.theme = theme.name.to_string();
                             s.theme_picker_index = idx;
                             crate::config::save_entire_config(&s.config);
-                            s.history.push(ChatMessage::new(
-                                "system",
-                                format!("Theme changed to '{}' and saved to config.", theme.name),
-                            ));
+                            s.set_notice(format!("Theme changed to '{}'", theme.name));
                         } else {
                             let names: Vec<String> = themes.iter().map(|t| t.name.clone()).collect();
                             s.history.push(ChatMessage::new(
@@ -1480,10 +1477,7 @@ pub fn select_picker_model(s: &mut AppState) {
         s.model_name = profile.model.clone();
         s.config.default.set_big(profile.name.clone());
         crate::config::save_entire_config(&s.config);
-        s.history.push(ChatMessage::new(
-            "system",
-            format!("Switched to model profile '{}'", profile.name),
-        ));
+        s.set_notice(format!("Switched to model profile '{}'", profile.name));
     }
 }
 
@@ -2016,7 +2010,7 @@ mod tests {
         {
             let s = state.lock().await;
             assert_eq!(s.config.theme, "nord");
-            assert!(s.history.last().unwrap().content.contains("Theme changed to 'nord'"));
+            assert!(s.notice.as_ref().unwrap().text.contains("nord"));
         }
 
         // Switch to unknown theme
