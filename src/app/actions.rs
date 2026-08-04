@@ -305,34 +305,37 @@ pub async fn handle_enter(
                 }
             }
             "/theme" => {
-                let available = vec!["default", "light", "nord", "dracula", "tokyo-night"];
+                let themes = crate::ui::theme::load_available_themes();
                 match tokens.get(1) {
                     None => {
-                        let current = s.config.theme.clone();
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!(
-                                "Current theme: {}. Available themes: {}. Use '/theme <name>' to switch.",
-                                current,
-                                available.join(", ")
-                            ),
-                        ));
+                        s.theme_picker_initial = s.config.theme.clone();
+                        s.theme_picker_index = themes
+                            .iter()
+                            .position(|t| t.name.eq_ignore_ascii_case(&s.config.theme))
+                            .unwrap_or(0);
+                        s.show_theme_picker = true;
                     }
                     Some(&theme_name) => {
-                        if available.contains(&theme_name) {
-                            s.config.theme = theme_name.to_string();
+                        if let Some((idx, theme)) = themes
+                            .iter()
+                            .enumerate()
+                            .find(|(_, t)| t.name.eq_ignore_ascii_case(theme_name))
+                        {
+                            s.config.theme = theme.name.to_string();
+                            s.theme_picker_index = idx;
                             crate::config::save_entire_config(&s.config);
                             s.history.push(ChatMessage::new(
                                 "system",
-                                format!("Theme changed to '{}' and saved to config.", theme_name),
+                                format!("Theme changed to '{}' and saved to config.", theme.name),
                             ));
                         } else {
+                            let names: Vec<String> = themes.iter().map(|t| t.name.clone()).collect();
                             s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
                                     "Unknown theme '{}'. Available themes: {}.",
                                     theme_name,
-                                    available.join(", ")
+                                    names.join(", ")
                                 ),
                             ));
                         }
@@ -1991,7 +1994,7 @@ mod tests {
         let client = reqwest::Client::new();
         let mut cancel_token = CancellationToken::new();
 
-        // Query current theme
+        // Open theme picker modal via /theme
         {
             let mut s = state.lock().await;
             s.input_buffer = "/theme".to_string();
@@ -2000,8 +2003,7 @@ mod tests {
         assert!(!trigger);
         {
             let s = state.lock().await;
-            assert!(s.history.last().unwrap().content.contains("Current theme:"));
-            assert!(s.history.last().unwrap().content.contains("tokyo-night"));
+            assert!(s.show_theme_picker);
         }
 
         // Switch to theme 'nord'
