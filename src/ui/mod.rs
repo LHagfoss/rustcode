@@ -1622,7 +1622,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             ];
             if !arg.is_empty() {
                 spans.push(Span::styled(
-                    format!(" ({arg})"),
+                    format!("({arg})"),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ));
             }
