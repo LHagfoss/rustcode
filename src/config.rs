@@ -220,10 +220,16 @@ pub struct AppConfig {
     /// diagnosing a request-shape issue.
     #[serde(default = "default_false")]
     pub debug_verbose_network_logging: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_false() -> bool {
     false
+}
+
+fn default_theme() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,6 +305,7 @@ impl Default for AppConfig {
             verbosity: crate::app::state::Verbosity::default(),
             discord_rpc_enabled: false,
             debug_verbose_network_logging: false,
+            theme: default_theme(),
         }
     }
 }
