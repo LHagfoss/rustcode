@@ -1969,7 +1969,12 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         HoverTarget::CopyBadge(row) => {
             if row >= inner_area.y && row < inner_area.y + inner_area.height {
                 let buf = f.buffer_mut();
-                let badge_start = (inner_area.x + inner_area.width).saturating_sub(14);
+                let badge_width = if state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2) {
+                    12
+                } else {
+                    9
+                };
+                let badge_start = (inner_area.x + inner_area.width).saturating_sub(badge_width);
                 for col in badge_start..inner_area.x + inner_area.width {
                     if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
                         cell.set_bg(COLOR_HOVER_BG());
