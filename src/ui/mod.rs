@@ -1337,74 +1337,36 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
 
 fn render_status_panel<'a>(
     content: &str,
-    width: u16,
+    _width: u16,
     show_picker: bool,
     lines: &mut Vec<Line<'a>>,
 ) {
-    // No leading spacer: every preceding transcript item (assistant text, user
-    // bubble, tool card, turn separator, another status card) already ends
-    // with its own trailing blank row. Adding one here doubled the gap under
-    // the previous card whenever two notices landed in a row.
     let lower = content.to_ascii_lowercase();
     let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
         .iter()
         .any(|word| lower.contains(word));
-    let (label, icon, accent) = if is_warning {
-        ("Warning", "!", Color::Rgb(229, 192, 123))
-    } else if lower.starts_with("session status") {
-        ("Status", "·", COLOR_STATUS_BORDER())
-    } else if lower.starts_with("session usage") {
-        ("Usage", "·", COLOR_STATUS_BORDER())
-    } else if lower.starts_with("available tools") {
-        ("Tools", "·", COLOR_STATUS_BORDER())
+    let (icon, accent) = if is_warning {
+        ("!", COLOR_TIP())
     } else {
-        ("Notice", "·", COLOR_STATUS_BORDER())
+        ("·", COLOR_MUTED())
     };
-    let panel_width = width.max(24) as usize;
-    let inner_width = panel_width.saturating_sub(4).max(10);
-    let mut body = Vec::new();
-    for raw in content.lines() {
-        let mut current = String::new();
-        for word in raw.split_whitespace() {
-            if current.is_empty() {
-                current.push_str(word);
-            } else if current.width() + 1 + word.width() <= inner_width {
-                current.push(' ');
-                current.push_str(word);
-            } else {
-                body.push(current);
-                current = word.to_string();
-            }
-        }
-        body.push(current);
-    }
-    if body.is_empty() {
-        body.push(String::new());
-    }
 
-    let header = format!("╭─ {icon} {label} ");
-    let top = format!(
-        "{}{}╮",
-        header,
-        "─".repeat(panel_width.saturating_sub(header.width() + 1))
-    );
-    lines.push(Line::from(Span::styled(
-        pad_to_width(&top, panel_width),
-        get_themed_style(accent, COLOR_BG(), Modifier::BOLD, show_picker),
-    )));
-    for row in body {
-        let text = pad_to_width(&row, inner_width);
-        lines.push(Line::from(Span::styled(
-            format!("│ {text} │"),
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-        )));
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("● {icon} "),
+                get_themed_style(accent, COLOR_BG(), Modifier::BOLD, show_picker),
+            ),
+            Span::styled(
+                trimmed.to_string(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ]));
     }
-    let bottom = format!("╰{}╯", "─".repeat(panel_width.saturating_sub(2)));
-    lines.push(Line::from(Span::styled(
-        pad_to_width(&bottom, panel_width),
-        get_themed_style(accent, COLOR_BG(), Modifier::empty(), show_picker),
-    )));
-    lines.push(Line::from(""));
 }
 
 fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
@@ -2071,6 +2033,7 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
         .iter()
         .any(|word| notice.text.to_ascii_lowercase().contains(word));
     let (glyph, accent) = match notice.kind {
+        NoticeKind::Warning => ("!", COLOR_TIP()),
         NoticeKind::Notice if is_warning => ("!", COLOR_TIP()),
         NoticeKind::Notice => ("✓", COLOR_GREEN()),
     };
@@ -2658,16 +2621,15 @@ mod tests {
     }
 
     #[test]
-    fn status_panels_have_trailing_spacer_only() {
+    fn status_panels_render_minimal_inline() {
         use super::render_status_panel;
 
         let mut lines = Vec::new();
         render_status_panel("Notice: background task finished", 80, false, &mut lines);
 
-        // No leading spacer — the preceding transcript item already ends with
-        // its own blank row. The trailing spacer separates from what follows.
-        assert!(lines.first().is_some_and(|line| !line.spans.is_empty()));
-        assert!(lines.last().is_some_and(|line| line.spans.is_empty()));
+        assert_eq!(lines.len(), 1, "minimal inline status takes 1 line");
+        assert!(lines[0].spans[0].content.contains("● ·"));
+        assert!(lines[0].spans[1].content.contains("Notice: background task finished"));
     }
 
     #[test]
