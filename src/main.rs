@@ -1806,11 +1806,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .find(|(row, _)| *row == click_screen_row)
                                         .map(|(r, t)| (*r, t.clone()))
                                     {
-                                        // Clicked a code block's [Copy] badge row.
-                                        if crate::clipboard::copy_to_clipboard(&code) {
-                                            s.set_notice("Copied to clipboard");
+                                        // Clicked a code block's header row. Only copy if click is near the right edge Copy button.
+                                        let is_on_copy_button = s.chat_area.map_or(true, |ca| {
+                                            b.0 >= (ca.x + ca.width).saturating_sub(14)
+                                        });
+                                        if is_on_copy_button {
+                                            if crate::clipboard::copy_to_clipboard(&code) {
+                                                s.set_notice("Copied to clipboard");
+                                            }
+                                            s.last_copy_time = Some(std::time::Instant::now());
                                         }
-                                        s.last_copy_time = Some(std::time::Instant::now());
                                     }
                                 }
                             }
