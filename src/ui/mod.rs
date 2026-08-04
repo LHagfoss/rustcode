@@ -299,6 +299,9 @@ fn render_assistant_message<'a>(
     }
 
     if !main_content.trim().is_empty() || is_generating {
+        if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+            lines.push(Line::from(""));
+        }
         let content_width = (viewport_width as usize).saturating_sub(8).max(10);
         let mut processed_lines: Vec<(bool, String)> = Vec::new();
         let mut in_code_block = false;
@@ -538,9 +541,9 @@ fn render_assistant_message<'a>(
                 }
 
                 let normal_text = normal_block.join("\n");
-                // While generating, `content` is the live streaming buffer and
-                // changes every frame; caching it would grow the render cache
-                // without bound. Only settled history messages are cached.
+                if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                    lines.push(Line::from(""));
+                }
                 lines.extend(render_markdown(
                     &normal_text,
                     content_width,
