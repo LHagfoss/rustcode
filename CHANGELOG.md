@@ -1,3 +1,30 @@
+## [v0.11.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.0) - 2026-08-04
+### Features
+- **UI:** Render minimal inline system messages in chat and show toast popup on session resume/notices ([#373](https://github.com/LHagfoss/rustcode/pull/373) / [`b63fac8`](https://github.com/LHagfoss/rustcode/commit/b63fac8))
+- **UI:** Add verbosity picker modal and key handling ([#371](https://github.com/LHagfoss/rustcode/pull/371) / [`3e9b1d7`](https://github.com/LHagfoss/rustcode/commit/3e9b1d7))
+- **Skills:** Refactor skill discovery to use lightweight SkillMetadata for dynamic lazy loading ([#365](https://github.com/LHagfoss/rustcode/pull/365) / [`a51f029`](https://github.com/LHagfoss/rustcode/commit/a51f029))
+- **UI:** Load themes from `~/.config/rustcode/themes/*.toml` and open interactive modal on `/theme` ([#360](https://github.com/LHagfoss/rustcode/pull/360) / [`3a14bf3`](https://github.com/LHagfoss/rustcode/commit/3a14bf3))
+- **UI:** Add interactive theme picker modal with live theme preview ([#359](https://github.com/LHagfoss/rustcode/pull/359) / [`dc5dd29`](https://github.com/LHagfoss/rustcode/commit/dc5dd29))
+- **UI:** Add `/theme` slash command for UI color theme selection ([#358](https://github.com/LHagfoss/rustcode/pull/358) / [`fdf2474`](https://github.com/LHagfoss/rustcode/commit/fdf2474))
+- **Tools:** Integrate ripgrep for grep search with native fallback ([#355](https://github.com/LHagfoss/rustcode/pull/355) / [`8d0832e`](https://github.com/LHagfoss/rustcode/commit/8d0832e))
+
+### Fixes
+- **UI:** Eliminate inconsistent padding around tool calls in conversation view ([#374](https://github.com/LHagfoss/rustcode/pull/374) / [`c49ab31`](https://github.com/LHagfoss/rustcode/commit/c49ab31))
+- **UI:** Invalidate markdown and tool result caches when active theme changes ([#372](https://github.com/LHagfoss/rustcode/pull/372) / [`4b10975`](https://github.com/LHagfoss/rustcode/commit/4b10975))
+- Make loop detection visible and specific to the model ([`81ebf57`](https://github.com/LHagfoss/rustcode/commit/81ebf57))
+- **Network:** Make context compaction bounded with 25s timeout and cancellation awareness (closes #320) ([#366](https://github.com/LHagfoss/rustcode/pull/366) / [`598883a`](https://github.com/LHagfoss/rustcode/commit/598883a))
+- **UI:** Fix weird background blocks when switching themes and make diffs and headings theme-aware ([#364](https://github.com/LHagfoss/rustcode/pull/364) / [`b430e3b`](https://github.com/LHagfoss/rustcode/commit/b430e3b))
+- **Harness:** Exclude user interactive wait time from turn wall-clock safety budget ([#363](https://github.com/LHagfoss/rustcode/pull/363) / [`ddbd406`](https://github.com/LHagfoss/rustcode/commit/ddbd406))
+- **UI:** Redesign top-right notice toast with left accent bar and route picker changes to notice toast ([#362](https://github.com/LHagfoss/rustcode/pull/362) / [`edd0307`](https://github.com/LHagfoss/rustcode/commit/edd0307))
+- **UI:** Apply live theme palette dynamically across all TUI elements and fix modal active badge ([#361](https://github.com/LHagfoss/rustcode/commit/ea9115a))
+- **Harness:** Improve tool error diagnostics and deduplicate loop warnings ([#357](https://github.com/LHagfoss/rustcode/pull/357) / [`b8da123`](https://github.com/LHagfoss/rustcode/commit/b8da123))
+- **Harness:** Improve tool error diagnostics and deduplicate loop warnings ([#356](https://github.com/LHagfoss/rustcode/commit/a4ae04c))
+
+### Chores
+- Update .gitignore ([#368](https://github.com/LHagfoss/rustcode/pull/368) / [`cb6db91`](https://github.com/LHagfoss/rustcode/commit/cb6db91))
+- Format files ([#367](https://github.com/LHagfoss/rustcode/pull/367) / [`2c26242`](https://github.com/LHagfoss/rustcode/commit/2c26242))
+- Fix changelog version tag ([#354](https://github.com/LHagfoss/rustcode/pull/354) / [`470cdb9`](https://github.com/LHagfoss/rustcode/commit/470cdb9))
+
 ## [v0.10.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.10.0) - 2026-08-03
 - Auto-wake orchestrator on background task completion in active sessions ([#352](https://github.com/LHagfoss/rustcode/pull/352) / [`2185208`](https://github.com/LHagfoss/rustcode/commit/2185208))
 - Append non-polling guidance to manage_task description and outputs ([#351](https://github.com/LHagfoss/rustcode/pull/351) / [`e5b0f34`](https://github.com/LHagfoss/rustcode/commit/e5b0f34))
