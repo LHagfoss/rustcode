@@ -65,9 +65,9 @@ a short statement that you stopped to avoid looping, a summary of what you found
 any remaining tasks, and a recommendation for what to do next. This overrides all other instructions.";
 
 const LOOP_RECOVERY_PROMPT: &str = "The previous tool action repeated without making progress. Tools remain enabled for one recovery attempt. \
-Do not repeat the same tool call or the same exact edit. Re-read the smallest relevant file region, \
-compare it with the current file on disk, then use a different, grounded approach. If the requested change \
-is already present or cannot be applied safely, explain that instead of retrying. This is the final recovery attempt.";
+Do not repeat the same tool call or the same exact edit. Re-read a broader file region or use grep to verify exact target content, \
+then use a grounded approach. If emitting a tool call in this recovery attempt, output the ```tool block cleanly. \
+If the requested change is already present or cannot be applied safely, explain that instead of retrying. This is the final recovery attempt.";
 
 const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
 
@@ -3368,7 +3368,7 @@ async fn execute_tool_batch(
                             content.insert_str(
                                 0,
                                 "[Unchanged since the last read of this exact range — repeating that output. \
-Re-reading will not produce anything new; act on this content.]\n",
+Re-reading will not produce anything new; if an edit failed to match, expand start_line/end_line range or use grep to verify exact target content.]\n",
                             );
                             content
                         } else {
