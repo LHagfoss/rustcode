@@ -297,7 +297,13 @@ impl Default for AppConfig {
             ],
             tool_protocol: ToolProtocol::default(),
             last_active_session_id: None,
-            mcp_servers: Vec::new(),
+            mcp_servers: vec![McpServerConfig {
+                name: "socraticode".to_string(),
+                command: "npx".to_string(),
+                args: vec!["-y".to_string(), "socraticode@latest".to_string()],
+                env: std::collections::HashMap::new(),
+                enabled: true,
+            }],
 
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
