@@ -1903,7 +1903,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     terminal.show_cursor()?;
 
+    print_goodbye();
+
     Ok(())
+}
+
+/// Printed on every exit path (/quit, /exit, Ctrl+C, ...) after the terminal
+/// is restored, so the box lands on the normal screen like other CLIs'
+/// farewell messages.
+fn print_goodbye() {
+    use std::io::Write;
+
+    // Theme colors are ratatui `Color`s; convert the RGB variants to ANSI
+    // true-color escapes (falls back to default fg for anything else).
+    fn fg(c: ratatui::style::Color) -> String {
+        match c {
+            ratatui::style::Color::Rgb(r, g, b) => format!("\x1b[38;2;{r};{g};{b}m"),
+            _ => String::new(),
+        }
+    }
+    const RESET: &str = "\x1b[0m";
+
+    let border = fg(crate::ui::theme::color_primary());
+    let text = fg(crate::ui::theme::color_text());
+
+    let title = format!(" rustcode v{} ", env!("CARGO_PKG_VERSION"));
+    // The 👋 emoji renders as 2 cells but counts as 1 char; +1 keeps the
+    // right border aligned.
+    let msg = "👋 Bye bye — happy hacking!";
+    let msg_width = msg.chars().count() + 1;
+    let content = msg_width.max(title.chars().count());
+
+    let top = format!(
+        "╭─{}{}─╮",
+        title,
+        "─".repeat(content - title.chars().count())
+    );
+    let bot = format!("╰{}╯", "─".repeat(content + 2));
+    let msg_fill = " ".repeat(content - msg_width);
+
+    let mut out = std::io::stdout();
+    let _ = writeln!(out);
+    let _ = writeln!(out, "{border}{top}");
+    let _ = writeln!(out, "{border}│ {text}{msg}{msg_fill}{border} │");
+    let _ = writeln!(out, "{border}{bot}{RESET}");
+    let _ = writeln!(out);
 }
 
 #[cfg(test)]
