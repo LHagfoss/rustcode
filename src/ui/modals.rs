@@ -497,42 +497,98 @@ pub fn get_filtered_picker_items(state: &AppState) -> Vec<PickerItem> {
 }
 
 pub(super) fn render_verbosity_picker_modal(f: &mut Frame, state: &AppState) {
-    let modal_area = centered_rect_fixed(40, 10, f.area());
+    let p = crate::ui::theme::get_palette(&state.config.theme);
+    let modal_area = centered_rect_fixed(72, 8, f.area());
+
     f.render_widget(Clear, modal_area);
-    let modal_block = Block::default()
-        .title("Verbosity Level")
-        .borders(Borders::ALL)
-        .style(Style::default().bg(COLOR_PANEL()));
+
+    let modal_block = Block::default().style(Style::default().bg(p.panel));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 1
+        horizontal: 3,
     });
 
-    let choices = [("Low", crate::app::state::Verbosity::Low), ("High", crate::app::state::Verbosity::High)];
-    let mut lines = Vec::new();
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(2),    // Options list
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
 
-    for (idx, (label, verbosity_level)) in choices.iter().enumerate() {
-        let is_selected = state.modal_picker_index == idx;
+    let header_line = Line::from(vec![
+        Span::styled(
+            "Select Output Verbosity",
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ".repeat(inner_area.width.saturating_sub(26) as usize),
+            Style::default(),
+        ),
+        Span::styled("esc", Style::default().fg(p.muted)),
+    ]);
+    f.render_widget(
+        Paragraph::new(header_line).style(Style::default().bg(p.panel)),
+        modal_chunks[0],
+    );
+
+    let choices = [
+        (
+            "Low",
+            crate::app::state::Verbosity::Low,
+            "Compact tool outputs & clean diff summaries",
+        ),
+        (
+            "High",
+            crate::app::state::Verbosity::High,
+            "Pure model text output (hides tool outputs & diffs)",
+        ),
+    ];
+
+    let selected_idx = state.modal_picker_index.min(choices.len().saturating_sub(1));
+
+    let mut list_lines = Vec::new();
+    for (idx, (name, verbosity_level, desc)) in choices.iter().enumerate() {
+        let is_selected = selected_idx == idx;
         let is_current = state.verbosity == *verbosity_level;
-        let mut style = Style::default().fg(COLOR_TEXT());
-
-        if is_selected {
-            style = style.bg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
-        }
-        if is_current {
-            lines.push(Line::from(Span::styled(format!("{} (current)", label), style)));
+        let active_badge = if is_current { " [active]" } else { "" };
+        let line = if is_selected {
+            let text = format!(" ● {:<5} — {}{}", name, desc, active_badge);
+            let padding = (inner_area.width as usize).saturating_sub(text.len());
+            Line::from(vec![Span::styled(
+                format!("{}{}", text, " ".repeat(padding)),
+                Style::default()
+                    .fg(p.primary)
+                    .bg(p.bg)
+                    .add_modifier(Modifier::BOLD),
+            )])
         } else {
-            lines.push(Line::from(Span::styled(label.to_string(), style)));
-        }
+            let text = format!("   {:<5} — {}{}", name, desc, active_badge);
+            Line::from(vec![Span::styled(
+                text,
+                Style::default().fg(p.muted),
+            )])
+        };
+        list_lines.push(line);
     }
 
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default())
-        .wrap(Wrap { trim: false });
+    f.render_widget(
+        Paragraph::new(list_lines).style(Style::default().bg(p.panel)),
+        modal_chunks[2],
+    );
 
-    f.render_widget(paragraph, inner_area);
+    let footer_line = Line::from(vec![Span::styled(
+        "↑/↓ Navigate  ·  Enter Select  ·  Esc Close",
+        Style::default().fg(p.muted),
+    )]);
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(p.panel)),
+        modal_chunks[3],
+    );
 }
 
 /// Render the model picker modal overlay.
