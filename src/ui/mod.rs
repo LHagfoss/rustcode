@@ -733,10 +733,17 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             ));
         }
 
-        spans.push(Span::styled(
-            "   idle",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
+        if !state.pending_queue.is_empty() {
+            spans.push(Span::styled(
+                format!("   idle (queued: {})", state.pending_queue.len()),
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "   idle",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
         spans
     };
 
@@ -1616,7 +1623,23 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         } else if msg.role == "tool" {
             let prev_tool_info = if msg_idx > 0 {
                 state.history.get(msg_idx - 1).and_then(|prev| {
-                    crate::tools::parse_tool_call(&prev.content, state.active_tool_protocol())
+                    let calls = crate::tools::parse_tool_calls(&prev.content, state.active_tool_protocol());
+                    if calls.is_empty() {
+                        None
+                    } else {
+                        // Count preceding tool responses immediately after prev assistant message
+                        let mut tool_resp_idx: usize = 0;
+                        for i in (0..msg_idx).rev() {
+                            if state.history[i].role == "tool" {
+                                tool_resp_idx += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        // tool_resp_idx is 1-based index of current tool message in consecutive tool group
+                        let idx = tool_resp_idx.saturating_sub(1);
+                        calls.get(idx).cloned().or_else(|| calls.first().cloned())
+                    }
                 })
             } else {
                 None
