@@ -1215,7 +1215,7 @@ pub fn copy_last_reply(s: &mut AppState) {
     if let Some(content) = last_reply {
         let clean_text = extract_code_blocks_or_content(&content);
         if crate::clipboard::copy_to_clipboard(&clean_text) {
-            s.last_copy_row = None;
+            s.last_copy_text = Some((clean_text.clone(), std::time::Instant::now()));
             s.history.push(ChatMessage::new(
                 "system",
                 "Copied code/reply to clipboard ✅",

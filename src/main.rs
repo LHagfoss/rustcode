@@ -1807,7 +1807,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .map(|(r, t)| (*r, t.clone()))
                                     {
                                         // Clicked a code block's header row. Only copy if click is on the right edge Copy button.
-                                        let badge_width = if s.last_copy_row.is_some_and(|(r, t)| r == click_screen_row as usize && t.elapsed().as_secs() < 2) {
+                                        let badge_width = if s.last_copy_text.as_ref().is_some_and(|(t_text, t)| t_text == &code && t.elapsed().as_secs() < 2) {
                                             12
                                         } else {
                                             9
@@ -1819,7 +1819,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if crate::clipboard::copy_to_clipboard(&code) {
                                                 s.set_notice("Copied to clipboard");
                                             }
-                                            s.last_copy_row = Some((b.0 as usize, std::time::Instant::now()));
+                                            s.last_copy_text = Some((code.clone(), std::time::Instant::now()));
                                         }
                                     }
                                 }
