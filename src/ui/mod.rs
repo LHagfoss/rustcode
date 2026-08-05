@@ -1424,9 +1424,6 @@ fn render_status_panel<'a>(
 ) {
     let version = env!("CARGO_PKG_VERSION");
     let lower = content.to_ascii_lowercase();
-    let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
-        .iter()
-        .any(|word| lower.contains(word));
 
     let is_info_notice = lower.starts_with("session status")
         || lower.starts_with("session usage")
@@ -1434,9 +1431,18 @@ fn render_status_panel<'a>(
         || lower.starts_with("about rustcode")
         || lower.starts_with("notice: rustcode")
         || lower.starts_with("rustcode help")
+        || lower.starts_with("available commands")
+        || lower.starts_with("core & session")
+        || lower.starts_with("help & commands")
         || lower.starts_with("discovered skills")
         || lower.starts_with("available themes")
+        || lower.contains("model quota status")
         || lower.starts_with("quota:");
+
+    let is_warning = !is_info_notice
+        && ["warning", "error", "failed", "blocked", "abort", "loop"]
+            .iter()
+            .any(|word| lower.contains(word));
 
     if is_info_notice {
         lines.push(Line::from(vec![
@@ -1454,6 +1460,9 @@ fn render_status_panel<'a>(
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            if is_info_notice {
+                lines.push(Line::from(""));
+            }
             continue;
         }
 
@@ -1461,7 +1470,7 @@ fn render_status_panel<'a>(
             continue;
         }
 
-        if is_info_notice && trimmed.ends_with(':') {
+        if is_info_notice && (trimmed.ends_with(':') || trimmed.starts_with("📊") || trimmed.starts_with("📦") || trimmed.starts_with("🎨")) {
             lines.push(Line::from(vec![
                 Span::styled(
                     "  ",
@@ -1470,6 +1479,42 @@ fn render_status_panel<'a>(
                 Span::styled(
                     trimmed.to_string(),
                     get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+            ]));
+        } else if is_info_notice && trimmed.starts_with('/') {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            let cmd_name = parts.first().copied().unwrap_or("");
+            let cmd_desc = if parts.len() > 1 { parts[1..].join(" ") } else { String::new() };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    format!("{:<18}", cmd_name),
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    cmd_desc,
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+            ]));
+        } else if is_info_notice && (trimmed.starts_with("Enter") || trimmed.starts_with("Shift+") || trimmed.starts_with("Esc") || trimmed.starts_with("Up/Down") || trimmed.starts_with("Ctrl+") || trimmed.starts_with("Alt+")) {
+            let parts: Vec<&str> = trimmed.splitn(2, "  ").collect();
+            let key = parts.first().copied().unwrap_or("").trim();
+            let desc = if parts.len() > 1 { parts[1].trim() } else { "" };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    format!("{:<18}", key),
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    desc.to_string(),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ]));
         } else if is_info_notice && (trimmed.starts_with('•') || trimmed.starts_with('-')) {
@@ -1481,17 +1526,6 @@ fn render_status_panel<'a>(
                 Span::styled(
                     trimmed.trim_start_matches('•').trim_start_matches('-').trim().to_string(),
                     get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-            ]));
-        } else if is_info_notice && (trimmed.starts_with('⚡') || trimmed.starts_with('📦') || trimmed.starts_with('🎨')) {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "  ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    trimmed.to_string(),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
             ]));
         } else if is_warning {
