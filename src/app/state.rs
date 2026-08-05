@@ -632,7 +632,7 @@ pub struct AppState {
     pub mcp_picker_index: usize,
     pub mcp_edit_state: Option<McpEditState>,
 
-    pub last_copy_time: Option<std::time::Instant>,
+    pub last_copy_row: Option<(usize, std::time::Instant)>,
     pub generation_start_time: Option<std::time::Instant>,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     pub modal_scroll_row: u16,
@@ -847,7 +847,7 @@ impl AppState {
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
-            last_copy_time: None,
+            last_copy_row: None,
             generation_start_time: None,
             pending_tool_confirmation: None,
             modal_scroll_row: 0,
@@ -1272,7 +1272,7 @@ impl AppState {
             return HoverTarget::ThoughtHeader(row);
         }
         if self.code_copy_rows.iter().any(|(r, _)| *r == row) {
-            let badge_width = if self.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2) {
+            let badge_width = if self.last_copy_row.is_some_and(|(r, t)| r == row as usize && t.elapsed().as_secs() < 2) {
                 12
             } else {
                 9
