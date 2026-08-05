@@ -195,6 +195,7 @@ pub async fn handle_enter(
                             }
                         }
                     }
+                    state_clone.lock().await.request_redraw();
                 });
                 return false;
             }
@@ -813,6 +814,7 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
                                 ));
                             }
                         }
+                        state_clone.lock().await.request_redraw();
                     });
                 } else if tokens.len() == 3 {
                     let url = tokens[1].to_string();
@@ -1307,6 +1309,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
         s.generation_start_time = None;
         s.history
             .push(ChatMessage::new("system", "Nothing to summarize yet."));
+        s.request_redraw();
         return;
     }
 
@@ -1370,6 +1373,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
             ));
         }
     }
+    s.request_redraw();
 }
 
 pub fn build_info_text() -> String {
@@ -1657,6 +1661,7 @@ pub fn trigger_quota_fetch(s: &AppState, state: &Arc<Mutex<AppState>>, client: &
                 ));
             }
         }
+        state_clone.lock().await.request_redraw();
     });
 }
 
