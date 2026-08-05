@@ -1,5 +1,6 @@
 use crate::app::ChatMessage;
 use serde::{Deserialize, Serialize};
+use serde_millis;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -220,6 +221,8 @@ pub struct AppConfig {
     pub debug_verbose_network_logging: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(with = "serde_millis")]
+    pub start_time: Option<std::time::SystemTime>,
 }
 
 fn default_false() -> bool {
@@ -309,6 +312,8 @@ impl Default for AppConfig {
             verbosity: crate::app::state::Verbosity::default(),
             debug_verbose_network_logging: false,
             theme: default_theme(),
+            start_time: None,
+
         }
     }
 }

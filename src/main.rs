@@ -1905,6 +1905,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// farewell messages.
 fn print_goodbye() {
     use std::io::Write;
+    use unicode_width::UnicodeWidthStr;
+
+    let (_, _, config) = crate::config::load_config();
+    let duration_seconds = config.start_time.map_or(0, |start| start.elapsed().map_or(0, |d| d.as_secs()));
 
     // Theme colors are ratatui `Color`s; convert the RGB variants to ANSI
     // true-color escapes (falls back to default fg for anything else).
@@ -1920,17 +1924,19 @@ fn print_goodbye() {
     let text = fg(crate::ui::theme::color_text());
 
     let title = format!(" rustcode v{} ", env!("CARGO_PKG_VERSION"));
-    let msg = "👋 Bye bye — happy hacking!";
-    let msg_width = msg.chars().count() + 1;
-    let content = msg_width.max(title.chars().count());
+    let msg = format!("👋 Goodbye - session ran for {}s", duration_seconds);
+    let msg_width = UnicodeWidthStr::width(msg.as_str());
+    let title_width = UnicodeWidthStr::width(title.as_str());
+    let content_width = msg_width.max(title_width);
 
     let top = format!(
-        "╭─{}{}─╮",
+        "╭─{}{}{}─╮",
         title,
-        "─".repeat(content - title.chars().count())
+        "─".repeat(content_width - title_width),
+        border
     );
-    let bot = format!("╰{}╯", "─".repeat(content + 2));
-    let msg_fill = " ".repeat(content - msg_width);
+    let bot = format!("{border}╰{}{border}╯", "─".repeat(content_width + 2));
+    let msg_fill = " ".repeat(content_width - msg_width);
 
     let mut out = std::io::stdout();
     let _ = writeln!(out, "{border}{top}");

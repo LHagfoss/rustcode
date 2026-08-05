@@ -797,6 +797,8 @@ impl AppState {
 
     pub fn new() -> Self {
         let (api_base_url, model_name, mut config) = crate::config::load_config();
+        config.start_time = Some(std::time::SystemTime::now());
+        crate::config::save_entire_config(&config);
         let active_session_id = crate::config::start_session(&mut config);
         let agent_mode = config.agent_mode;
         let verbosity = config.verbosity.clone();
