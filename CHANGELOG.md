@@ -1,3 +1,11 @@
+## [v0.11.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.3) - 2026-08-05
+### Features
+- **UI:** Redesign /verbosity picker modal with modern theme card styling and descriptions ([#397](https://github.com/LHagfoss/rustcode/pull/397) / [`93d0942`](https://github.com/LHagfoss/rustcode/commit/93d0942))
+
+### Fixes
+- **Update:** Keep session active, enable 60Hz live redraw during update, and run brew update first ([#398](https://github.com/LHagfoss/rustcode/pull/398) / [`9fd283c`](https://github.com/LHagfoss/rustcode/commit/9fd283c))
+- **UI:** Hide msg.diff in high verbosity and remove background block tinting behind diff text ([#396](https://github.com/LHagfoss/rustcode/pull/396) / [`f216380`](https://github.com/LHagfoss/rustcode/commit/f216380))
+
 ## [v0.11.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.2) - 2026-08-05
 ### Features
 - **UI:** Format /help and /quota like /status with title headers, grouped sections, and bold commands ([#392](https://github.com/LHagfoss/rustcode/pull/392) / [`605563e`](https://github.com/LHagfoss/rustcode/commit/605563e))
