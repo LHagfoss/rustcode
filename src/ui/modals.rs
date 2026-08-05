@@ -137,10 +137,11 @@ pub(super) fn render_welcome_screen(
     let box_width = 80u16.min(width.saturating_sub(6));
     let inner_width = box_width.saturating_sub(5).max(1);
 
+    let display_buffer = collapse_image_markers(&state.input_buffer);
     let input_lines = if state.input_buffer.is_empty() {
         1
     } else {
-        count_input_lines(&state.input_buffer, inner_width as usize)
+        count_input_lines(&display_buffer, inner_width as usize)
     };
     let prompt_box_height = input_lines + 4;
 
@@ -237,8 +238,7 @@ pub(super) fn render_welcome_screen(
             get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
         };
 
-        let mut styled_chars: Vec<(char, Style)> = state
-            .input_buffer
+        let mut styled_chars: Vec<(char, Style)> = display_buffer
             .chars()
             .map(|c| (c, text_style))
             .collect();
@@ -249,10 +249,11 @@ pub(super) fn render_welcome_screen(
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
-        let cursor_char_index = state.input_buffer
-            [..state.cursor_position.min(state.input_buffer.len())]
-            .chars()
-            .count();
+        // Caret position is computed in the collapsed view so it matches the
+        // `[Image #N]` chips the user sees (same remap as the chat input).
+        let safe_end = safe_byte_index(&state.input_buffer, state.cursor_position);
+        let raw_prefix = &state.input_buffer[..safe_end];
+        let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 
         let mut current_line_spans = Vec::new();
         let mut current_run: Option<(Style, String)> = None;
