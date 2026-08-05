@@ -1656,25 +1656,30 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             }
         } else if msg.role == "tool" {
             let prev_tool_info = if msg_idx > 0 {
-                state.history.get(msg_idx - 1).and_then(|prev| {
-                    let calls = crate::tools::parse_tool_calls(&prev.content, state.active_tool_protocol());
-                    if calls.is_empty() {
-                        None
+                // Walk backward past consecutive tool messages to find the preceding assistant message
+                let mut assistant_idx = None;
+                let mut tool_count_before_this = 0;
+                for i in (0..msg_idx).rev() {
+                    if state.history[i].role == "tool" {
+                        tool_count_before_this += 1;
+                    } else if state.history[i].role == "assistant" {
+                        assistant_idx = Some(i);
+                        break;
                     } else {
-                        // Count preceding tool responses immediately after prev assistant message
-                        let mut tool_resp_idx: usize = 0;
-                        for i in (0..msg_idx).rev() {
-                            if state.history[i].role == "tool" {
-                                tool_resp_idx += 1;
-                            } else {
-                                break;
-                            }
-                        }
-                        // tool_resp_idx is 1-based index of current tool message in consecutive tool group
-                        let idx = tool_resp_idx.saturating_sub(1);
-                        calls.get(idx).cloned().or_else(|| calls.first().cloned())
+                        break;
                     }
-                })
+                }
+
+                if let Some(a_idx) = assistant_idx {
+                    let assistant_msg = &state.history[a_idx];
+                    let calls = crate::tools::parse_tool_calls(
+                        &assistant_msg.content,
+                        state.active_tool_protocol(),
+                    );
+                    calls.get(tool_count_before_this).cloned().or_else(|| calls.first().cloned())
+                } else {
+                    None
+                }
             } else {
                 None
             };
