@@ -125,8 +125,10 @@ pub async fn latest_tap_version(client: &reqwest::Client) -> Option<Version> {
     None
 }
 
-/// Run `brew upgrade rustcode`. Blocking — call from `spawn_blocking`.
+/// Run `brew update` followed by `brew upgrade rustcode`. Blocking — call from `spawn_blocking`.
 pub fn run_brew_upgrade() -> Result<(), String> {
+    let _ = Command::new("brew").arg("update").output();
+
     let out = Command::new("brew")
         .args(["upgrade", "rustcode"])
         .output()

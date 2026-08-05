@@ -1491,11 +1491,12 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
     tokio::spawn(async move {
         {
             let mut s = state_clone.lock().await;
+            s.status = crate::app::AppStatus::Streaming;
             s.update_check = crate::update::UpdateState::Checking;
-            s.set_notice("⚡ Checking lhagfoss/tap for updates...");
+            s.set_notice("⚡ Running brew update & checking for updates...");
             s.history.push(ChatMessage::new(
                 "system",
-                "Checking lhagfoss/tap for updates...",
+                "Running brew update & checking for updates...",
             ));
             s.request_redraw();
         }
@@ -1504,11 +1505,12 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             Ok(check) => check,
             Err(_) => {
                 let mut s = state_clone.lock().await;
+                s.status = crate::app::AppStatus::Idle;
                 s.update_check = crate::update::UpdateState::Failed;
                 s.set_warning_notice("Update check failed: couldn't read Homebrew tap.");
                 s.history.push(ChatMessage::new(
                     "system",
-                    "Update check failed: couldn't read the Homebrew tap. Try running: brew upgrade rustcode",
+                    "Update check failed: couldn't read the Homebrew tap. Try running: brew update && brew upgrade rustcode",
                 ));
                 s.request_redraw();
                 return;
@@ -1519,6 +1521,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             crate::update::UpdateCheck::Available { current, latest } => (current, latest),
             crate::update::UpdateCheck::UpToDate { current, latest } => {
                 let mut s = state_clone.lock().await;
+                s.status = crate::app::AppStatus::Idle;
                 s.update_check = crate::update::UpdateState::UpToDate(latest);
                 let notice = format!(
                     "✨ RustCode v{} is up to date.",
@@ -1533,9 +1536,10 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
 
         {
             let mut s = state_clone.lock().await;
+            s.status = crate::app::AppStatus::Streaming;
             s.update_check = crate::update::UpdateState::Available(latest);
             let notice = format!(
-                "🚀 Update available: v{} → v{}\nRunning `brew upgrade rustcode`...",
+                "🚀 Update available: v{} → v{}\nRunning `brew update && brew upgrade rustcode`...",
                 crate::update::format_version(current),
                 crate::update::format_version(latest)
             );
@@ -1546,6 +1550,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
 
         let result = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
         let mut s = state_clone.lock().await;
+        s.status = crate::app::AppStatus::Idle;
         let msg = match result {
             Ok(Ok(())) => {
                 let text = format!(
@@ -1559,7 +1564,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
                 text
             }
             Ok(Err(e)) => {
-                let text = format!("brew upgrade failed: {e}\nRun manually: brew upgrade rustcode");
+                let text = format!("brew upgrade failed: {e}\nRun manually: brew update && brew upgrade rustcode");
                 s.set_warning_notice("brew upgrade failed.");
                 text
             }
