@@ -209,7 +209,7 @@ struct AssistantRenderOptions<'a> {
     show_picker: bool,
     thought_collapsed: bool,
     msg_index: Option<usize>,
-    last_copy_row: Option<(usize, std::time::Instant)>,
+    last_copy_text: Option<(String, std::time::Instant)>,
 }
 
 fn render_assistant_message<'a>(
@@ -227,7 +227,7 @@ fn render_assistant_message<'a>(
         show_picker,
         thought_collapsed,
         msg_index,
-        last_copy_row,
+        last_copy_text,
     } = options;
     let mut think_content = None;
     let mut main_content = content;
@@ -390,7 +390,9 @@ fn render_assistant_message<'a>(
                         } else {
                             current_lang.clone()
                         };
-                        let is_copied_recently = last_copy_row.is_some_and(|(r, t)| r == lines.len() && t.elapsed().as_secs() < 2);
+                        let is_copied_recently = last_copy_text
+                            .as_ref()
+                            .is_some_and(|(t_text, t)| t_text == &code_text && t.elapsed().as_secs() < 2);
                         let button_badge = if is_copied_recently {
                             " Copied! 📋 "
                         } else {
@@ -1307,7 +1309,7 @@ struct ChatKey {
     width: u16,
     show_picker: bool,
     thoughts: (usize, usize),
-    copied_recently: Option<(usize, bool)>,
+    copied_recently: Option<(String, bool)>,
     theme: String,
 }
 
@@ -1328,9 +1330,9 @@ fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
             state.expanded_thoughts.iter().sum(),
         ),
         copied_recently: state
-            .last_copy_row
+            .last_copy_text
             .as_ref()
-            .map(|(r, t)| (*r, t.elapsed().as_secs() < 2)),
+            .map(|(t_text, t)| (t_text.clone(), t.elapsed().as_secs() < 2)),
         theme: state.config.theme.clone(),
     }
 }
@@ -1799,7 +1801,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                     thought_collapsed: collapsed,
                     msg_index: Some(msg_idx),
-                    last_copy_row: state.last_copy_row,
+                    last_copy_text: state.last_copy_text.clone(),
                 },
             );
             let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
@@ -1841,7 +1843,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                     thought_collapsed: false,
                     msg_index: None,
-                    last_copy_row: state.last_copy_row,
+                    last_copy_text: state.last_copy_text.clone(),
                 },
             );
             lines.push(Line::from(""));
@@ -2008,7 +2010,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         HoverTarget::CopyBadge(row) => {
             if row >= inner_area.y && row < inner_area.y + inner_area.height {
                 let buf = f.buffer_mut();
-                let badge_width = if state.last_copy_row.is_some_and(|(r, t)| r == row as usize && t.elapsed().as_secs() < 2) {
+                let code_text = state.code_copy_rows.iter().find(|(r, _)| *r == row).map(|(_, t)| t);
+                let badge_width = if code_text.is_some_and(|ct| state.last_copy_text.as_ref().is_some_and(|(t_text, t)| t_text == ct && t.elapsed().as_secs() < 2)) {
                     12
                 } else {
                     9
@@ -2150,17 +2153,21 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     // Painted last so it sits on top of everything, like a native selection.
     if !state.modal_open() {
         if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
-            // Input-box selections have no scroll offset and use the input rect;
-            // chat selections use chat_area and the chat scroll_row.
-            let (area, scroll) = if state.sel_in_input {
-                (state.input_text_area, 0)
+            if start != end {
+                // Input-box selections have no scroll offset and use the input rect;
+                // chat selections use chat_area and the chat scroll_row.
+                let (area, scroll) = if state.sel_in_input {
+                    (state.input_text_area, 0)
+                } else {
+                    (state.chat_area, state.scroll_row)
+                };
+                highlight_selection(f, start, end, area, scroll);
+                let text = extract_selection(f.buffer_mut(), start, end, area, scroll);
+                if !text.is_empty() {
+                    state.selected_text = Some(text);
+                }
             } else {
-                (state.chat_area, state.scroll_row)
-            };
-            highlight_selection(f, start, end, area, scroll);
-            let text = extract_selection(f.buffer_mut(), start, end, area, scroll);
-            if !text.is_empty() {
-                state.selected_text = Some(text);
+                state.selected_text = None;
             }
         } else {
             state.selected_text = None;
@@ -2752,7 +2759,7 @@ mod tests {
                 show_picker: false,
                 thought_collapsed: true,
                 msg_index: None,
-                last_copy_row: None,
+                last_copy_text: None,
             },
         );
 
@@ -2798,7 +2805,7 @@ mod tests {
                 show_picker: false,
                 thought_collapsed: true,
                 msg_index: None,
-                last_copy_row: None,
+                last_copy_text: None,
             },
         );
 
