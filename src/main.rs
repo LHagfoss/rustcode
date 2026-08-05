@@ -172,7 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         crossterm::event::EnableMouseCapture,
         crossterm::event::EnableBracketedPaste,
         crossterm::event::EnableFocusChange,
-        SetCursorStyle::BlinkingBlock,
+        SetCursorStyle::BlinkingBar,
         crossterm::style::Print("\x1b]0;rustcode · new session\x07")
     )?;
 
