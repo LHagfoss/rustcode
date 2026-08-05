@@ -1390,22 +1390,67 @@ pub fn build_info_text() -> String {
 }
 
 pub fn build_help_text() -> String {
-    let mut help = String::from("Available Commands:\n");
-    for cmd in crate::app::suggestion::COMMANDS {
-        help.push_str(&format!("  {} - {}\n", cmd.name, cmd.desc));
+    let mut help = String::from("Available Commands:\n\n");
+    let categories: &[(&str, &[(&str, &str)])] = &[
+        (
+            "Core & Session:",
+            &[
+                ("/help", "Show help and commands"),
+                ("/status", "Show session status and model quota"),
+                ("/info", "Show version and system info"),
+                ("/clear", "Clear conversation history"),
+                ("/new", "Start a new conversation"),
+                ("/delete_chat", "Delete current session and start fresh"),
+                ("/history", "Pick a previous session to resume"),
+                ("/change_title", "Rename current session title"),
+                ("/cancel", "Cancel active stream or queued prompt"),
+                ("/exit", "Exit the app"),
+            ],
+        ),
+        (
+            "Model & Configuration:",
+            &[
+                ("/model", "Open model picker or switch profile"),
+                ("/quota", "Show provider quota and remaining limits"),
+                ("/context", "Show or set active profile context window"),
+                ("/mcp", "Configure Model Context Protocol (MCP) servers"),
+                ("/ollama", "Configure or list Ollama models"),
+                ("/provider", "Add or update model provider profile"),
+                ("/protocol", "Show or set current tool protocol"),
+            ],
+        ),
+        (
+            "Automation & Utilities:",
+            &[
+                ("/goal", "Run a task in continuous autoloop mode"),
+                ("/delegate", "Allow subagents for next task only"),
+                ("/skills", "Discover and list custom skills"),
+                ("/copy", "Copy last assistant reply to clipboard"),
+                ("/memory", "Show process RAM usage"),
+                ("/changelog", "Show recent changelog updates"),
+            ],
+        ),
+    ];
+
+    for (cat, cmds) in categories {
+        help.push_str(&format!("{}\n", cat));
+        for (name, desc) in *cmds {
+            help.push_str(&format!("  {:<16} {}\n", name, desc));
+        }
+        help.push_str("\n");
     }
-    help.push_str("\nKeys:\n");
-    help.push_str("  Enter         Send prompt\n");
-    help.push_str("  Shift+Enter   Insert newline\n");
-    help.push_str("  Esc           Clear input or cancel generation\n");
-    help.push_str("  Up/Down       Cycle history\n");
-    help.push_str("  Ctrl+P        Open command picker\n");
-    help.push_str("  Ctrl+V        Paste image/text from clipboard\n");
-    help.push_str("  Ctrl+O        Insert newline\n");
-    help.push_str("  Ctrl+L        Clear screen\n");
-    help.push_str("  Alt+F/Alt+B   Move cursor word right/left\n");
-    help.push_str("  Ctrl+A/Ctrl+E Move cursor to start/end of line\n");
-    help.push_str("  Ctrl+U/Ctrl+W Delete line/word\n");
+
+    help.push_str("Keyboard Shortcuts:\n");
+    help.push_str("  Enter            Send prompt\n");
+    help.push_str("  Shift+Enter      Insert newline\n");
+    help.push_str("  Esc              Clear input or cancel generation\n");
+    help.push_str("  Up/Down          Cycle prompt history\n");
+    help.push_str("  Ctrl+P           Open command picker\n");
+    help.push_str("  Ctrl+V           Paste image or text from clipboard\n");
+    help.push_str("  Ctrl+L           Clear screen\n");
+    help.push_str("  Ctrl+A / Ctrl+E  Move cursor to start / end of line\n");
+    help.push_str("  Alt+F / Alt+B    Move cursor word right / left\n");
+    help.push_str("  Ctrl+U / Ctrl+W  Delete line / word\n");
     help
 }
 
