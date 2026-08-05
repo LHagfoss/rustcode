@@ -980,7 +980,12 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let mut styled_chars: Vec<(char, Style)> =
             display_buffer.chars().map(|c| (c, text_style)).collect();
 
-        if let Some(suffix) = state.get_command_suggestion() {
+        if state.input_buffer.is_empty() && state.get_command_suggestion().is_none() {
+            let placeholder_style =
+                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
+            let placeholder_text = "Ask RustCode a question, or type / for commands...";
+            styled_chars.extend(placeholder_text.chars().map(|c| (c, placeholder_style)));
+        } else if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
                 get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
