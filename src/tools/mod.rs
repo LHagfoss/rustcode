@@ -534,7 +534,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "manage_task",
-        description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill'). Do NOT poll list or status in a loop — completion notifications arrive automatically.",
+        description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill'). Do NOT poll 'status' or 'list' in a loop — completion notifications arrive automatically. Stop calling tools to wait for completion.",
         arguments: r#"{"action": "list, status, or kill", "task_id": "required for status/kill"}"#,
         handler: exec::manage_task_tool,
         requires_confirmation: false,
@@ -1025,7 +1025,8 @@ pub fn tool_system_prompt(
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
 - Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations.\n\
 - When the task is complete, output a plain-text final summary (with no tool block).\n\n\
-# Working memory & avoiding loops
+# Working memory & avoiding loops\n\
+- BACKGROUND TASKS & WAITING: When a background task is running (e.g. from `run_command` with `\"background\": true`), completion notifications arrive automatically when it finishes. Do NOT poll `manage_task` with action `status` or `list` in a loop while waiting for a background task — stop calling tools now so execution pauses until completion.\n\
 - If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
 - File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk.
 - Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.

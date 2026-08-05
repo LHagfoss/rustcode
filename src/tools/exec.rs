@@ -366,7 +366,7 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
 
         return Ok(super::ToolExecutionOutput {
             content: format!(
-                "Task started in background. Task ID: {task_id}. Status: Running. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status; continue with other work or wait."
+                "Task started in background. Task ID: {task_id}. Status: Running. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion."
             ),
             success: true,
             exit_code: None,
@@ -439,7 +439,7 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                     id, pid_str, elapsed, info.command
                 ));
             }
-            out.push_str("\n(Note: You will be notified automatically with the full output when tasks complete — do NOT poll manage_task for status in a loop; continue with other work or wait.)");
+            out.push_str("\n(Note: You will be notified automatically with the full output when tasks complete — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion.)");
             Ok(out.trim_end().to_string())
         }
         "status" => {
@@ -455,7 +455,7 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "N/A".to_string());
                 Ok(format!(
-                    "TaskId: {}, Status: RUNNING, PID: {}, Runtime: {}s, Command: {}\n(Note: You will be notified automatically with the full output when this task completes — do NOT poll manage_task for status; continue with other work or wait.)",
+                    "TaskId: {}, Status: RUNNING, PID: {}, Runtime: {}s, Command: {}\n(Note: You will be notified automatically with the full output when this task completes — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion.)",
                     task_id, pid_str, elapsed, info.command
                 ))
             } else {
