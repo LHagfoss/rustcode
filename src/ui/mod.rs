@@ -1665,8 +1665,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                 ));
             } else if let Some(ref diff) = msg.diff {
-                let code_content_width = inner_area.width as usize;
-                lines.extend(render_unified_diff(diff, code_content_width, show_picker));
+                if !matches!(state.verbosity, crate::app::Verbosity::High) {
+                    let code_content_width = inner_area.width as usize;
+                    lines.extend(render_unified_diff(diff, code_content_width, show_picker));
+                }
             } else if let Some(tool_name) = resolve_tool_result_name(
                 prev_tool_info.as_ref().map(|call| call.name.as_str()),
                 msg.tool_result.as_ref().map(|result| result.tool_name.as_str()),

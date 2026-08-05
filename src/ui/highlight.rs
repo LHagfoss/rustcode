@@ -389,10 +389,10 @@ pub(super) fn wrap_code_spans<'a>(
 /// Returns `(bg, fg, is_empty)`. `~` marks a column with no line on that side.
 fn diff_cell_colors(prefix: char) -> (Color, Color, bool) {
     match prefix {
-        '+' => (COLOR_ELEMENT(), COLOR_DIFF_ADD_FG(), false),
-        '-' => (COLOR_ELEMENT(), COLOR_DIFF_REMOVE_FG(), false),
-        '~' => (COLOR_ELEMENT(), COLOR_MUTED(), true),
-        _ => (COLOR_ELEMENT(), COLOR_TEXT(), false),
+        '+' => (COLOR_BG(), COLOR_DIFF_ADD_FG(), false),
+        '-' => (COLOR_BG(), COLOR_DIFF_REMOVE_FG(), false),
+        '~' => (COLOR_BG(), COLOR_MUTED(), true),
+        _ => (COLOR_BG(), COLOR_TEXT(), false),
     }
 }
 
@@ -505,7 +505,7 @@ pub(super) fn highlight_diff_line<'a>(line: &str, width: usize, show_picker: boo
         }
     };
 
-    let bg_color = COLOR_ELEMENT();
+    let bg_color = COLOR_BG();
 
     let default_fg = match prefix {
         '+' => COLOR_DIFF_ADD_FG(),
@@ -569,13 +569,13 @@ pub(super) fn render_unified_diff<'a>(
             rendered.push(Line::from(vec![
                 Span::styled(
                     "      ",
-                    get_themed_style(COLOR_MUTED(), COLOR_ELEMENT(), Modifier::BOLD, show_picker),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
                     raw.to_string(),
                     get_themed_style(
                         Color::Rgb(100, 175, 235),
-                        COLOR_ELEMENT(),
+                        COLOR_BG(),
                         Modifier::BOLD,
                         show_picker,
                     ),
@@ -608,7 +608,7 @@ pub(super) fn render_unified_diff<'a>(
         } else {
             format!("{line_number:>5} ")
         };
-        let gutter_bg = COLOR_ELEMENT();
+        let gutter_bg = COLOR_BG();
         let mut line = vec![Span::styled(
             prefix,
             get_themed_style(COLOR_MUTED(), gutter_bg, Modifier::empty(), show_picker),
@@ -713,7 +713,7 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    4 - "));
-        assert_eq!(lines[1].spans[0].style.bg, Some(COLOR_ELEMENT()));
+        assert_eq!(lines[1].spans[0].style.bg, Some(COLOR_BG()));
         assert_eq!(lines[1].spans[1].style.fg, Some(COLOR_DIFF_REMOVE_FG()));
 
         let text: String = lines[2]
@@ -722,9 +722,9 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    7 + "));
-        assert_eq!(lines[2].spans[0].style.bg, Some(COLOR_ELEMENT()));
+        assert_eq!(lines[2].spans[0].style.bg, Some(COLOR_BG()));
         assert_eq!(lines[2].spans[1].style.fg, Some(COLOR_DIFF_ADD_FG()));
 
-        assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_ELEMENT()));
+        assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_BG()));
     }
 }
