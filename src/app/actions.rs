@@ -1141,8 +1141,6 @@ pub fn resume_latest_session(s: &mut AppState) {
     }
 }
 
-
-
 pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     let mut loaded = crate::config::load_session_file(&meta.path);
     if loaded.is_empty() {
@@ -1568,7 +1566,9 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
                 text
             }
             Ok(Err(e)) => {
-                let text = format!("brew upgrade failed: {e}\nRun manually: brew update && brew upgrade rustcode");
+                let text = format!(
+                    "brew upgrade failed: {e}\nRun manually: brew update && brew upgrade rustcode"
+                );
                 s.set_warning_notice("brew upgrade failed.");
                 text
             }
@@ -1755,8 +1755,6 @@ mod tests {
         assert!(text.contains("ChatGPT secondary (1d): 50.0% remaining"));
         assert!(text.contains("resets "));
     }
-
-
 
     #[test]
     fn manual_compaction_discards_result_after_session_only_change() {

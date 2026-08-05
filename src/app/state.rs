@@ -1272,7 +1272,11 @@ impl AppState {
             return HoverTarget::ThoughtHeader(row);
         }
         if let Some((_, code_text)) = self.code_copy_rows.iter().find(|(r, _)| *r == row) {
-            let badge_width = if self.last_copy_text.as_ref().is_some_and(|(t_text, t)| t_text == code_text && t.elapsed().as_secs() < 2) {
+            let badge_width = if self
+                .last_copy_text
+                .as_ref()
+                .is_some_and(|(t_text, t)| t_text == code_text && t.elapsed().as_secs() < 2)
+            {
                 12
             } else {
                 9
