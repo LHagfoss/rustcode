@@ -1602,8 +1602,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             if msg.content.contains("Loop warning:") {
                 continue;
             }
+            if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                lines.push(Line::from(""));
+            }
             render_status_panel(&msg.content, inner_area.width, show_picker, &mut lines);
-
+            if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                lines.push(Line::from(""));
+            }
         } else if msg.role == "tool" {
             let prev_tool_info = if msg_idx > 0 {
                 state.history.get(msg_idx - 1).and_then(|prev| {
