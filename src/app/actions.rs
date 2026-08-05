@@ -458,7 +458,6 @@ pub async fn handle_enter(
                 }
             }
             "/status" => {
-                trigger_quota_fetch(&s, state, client);
                 let mut text = String::from("Session status");
                 let user_msgs = s.history.iter().filter(|m| m.role == "user").count();
                 let assistant_msgs = s.history.iter().filter(|m| m.role == "assistant").count();
@@ -469,7 +468,6 @@ pub async fn handle_enter(
                 ));
                 text.push_str(&format!("\nModel: {}", s.model_name));
                 text.push_str(&format!("\nSession: {}", s.active_session_id));
-                text.push_str("\nQuota: fetching provider status…");
                 s.history.push(ChatMessage::new("system", text));
             }
             "/usage" | "/stats" => {
