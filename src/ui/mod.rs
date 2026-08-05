@@ -14,7 +14,8 @@ pub mod theme;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
-    render_theme_picker_modal, render_tool_confirmation_modal, render_welcome_screen, render_verbosity_picker_modal,
+    render_theme_picker_modal, render_tool_confirmation_modal, render_verbosity_picker_modal,
+    render_welcome_screen,
 };
 use tool_result::{render_file_preview, render_tool_result};
 
@@ -398,9 +399,10 @@ fn render_assistant_message<'a>(
                         } else {
                             current_lang.clone()
                         };
-                        let is_copied_recently = last_copy_text
-                            .as_ref()
-                            .is_some_and(|(t_text, t)| t_text == &code_text && t.elapsed().as_secs() < 2);
+                        let is_copied_recently =
+                            last_copy_text.as_ref().is_some_and(|(t_text, t)| {
+                                t_text == &code_text && t.elapsed().as_secs() < 2
+                            });
                         let button_badge = if is_copied_recently {
                             " Copied! 📋 "
                         } else {
@@ -496,36 +498,35 @@ fn render_assistant_message<'a>(
                 } else {
                     // Body line: leading gutter space, per-language rendering,
                     // then wrapped and padded so the panel bg fills full width.
-                    let content_spans =
-                        if is_plain_lang(&current_lang) || is_diff_lang(&current_lang) {
-                            vec![Span::styled(
-                                format!(" {line_str}"),
-                                get_themed_style(
-                                    COLOR_TEXT(),
-                                    COLOR_BG(),
-                                    Modifier::empty(),
-                                    show_picker,
-                                ),
-                            )]
-                        } else {
-                            let mut s = vec![Span::styled(
-                                " ".to_string(),
-                                get_themed_style(
-                                    COLOR_TEXT(),
-                                    COLOR_BG(),
-                                    Modifier::empty(),
-                                    show_picker,
-                                ),
-                            )];
-                            s.extend(
-                                highlight_code_line(line_str, &current_lang, show_picker)
-                                    .into_iter()
-                                    .map(|span| {
-                                        Span::styled(span.content, span.style.bg(COLOR_BG()))
-                                    }),
-                            );
-                            s
-                        };
+                    let content_spans = if is_plain_lang(&current_lang)
+                        || is_diff_lang(&current_lang)
+                    {
+                        vec![Span::styled(
+                            format!(" {line_str}"),
+                            get_themed_style(
+                                COLOR_TEXT(),
+                                COLOR_BG(),
+                                Modifier::empty(),
+                                show_picker,
+                            ),
+                        )]
+                    } else {
+                        let mut s = vec![Span::styled(
+                            " ".to_string(),
+                            get_themed_style(
+                                COLOR_TEXT(),
+                                COLOR_BG(),
+                                Modifier::empty(),
+                                show_picker,
+                            ),
+                        )];
+                        s.extend(
+                            highlight_code_line(line_str, &current_lang, show_picker)
+                                .into_iter()
+                                .map(|span| Span::styled(span.content, span.style.bg(COLOR_BG()))),
+                        );
+                        s
+                    };
                     lines.extend(wrap_code_spans(
                         content_spans,
                         box_width,
@@ -1494,7 +1495,12 @@ fn render_status_panel<'a>(
             continue;
         }
 
-        if is_info_notice && (trimmed.ends_with(':') || trimmed.starts_with("📊") || trimmed.starts_with("📦") || trimmed.starts_with("🎨")) {
+        if is_info_notice
+            && (trimmed.ends_with(':')
+                || trimmed.starts_with("📊")
+                || trimmed.starts_with("📦")
+                || trimmed.starts_with("🎨"))
+        {
             lines.push(Line::from(vec![
                 Span::styled(
                     "  ",
@@ -1508,7 +1514,11 @@ fn render_status_panel<'a>(
         } else if is_info_notice && trimmed.starts_with('/') {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             let cmd_name = parts.first().copied().unwrap_or("");
-            let cmd_desc = if parts.len() > 1 { parts[1..].join(" ") } else { String::new() };
+            let cmd_desc = if parts.len() > 1 {
+                parts[1..].join(" ")
+            } else {
+                String::new()
+            };
             lines.push(Line::from(vec![
                 Span::styled(
                     "  ",
@@ -1523,7 +1533,14 @@ fn render_status_panel<'a>(
                     get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ]));
-        } else if is_info_notice && (trimmed.starts_with("Enter") || trimmed.starts_with("Shift+") || trimmed.starts_with("Esc") || trimmed.starts_with("Up/Down") || trimmed.starts_with("Ctrl+") || trimmed.starts_with("Alt+")) {
+        } else if is_info_notice
+            && (trimmed.starts_with("Enter")
+                || trimmed.starts_with("Shift+")
+                || trimmed.starts_with("Esc")
+                || trimmed.starts_with("Up/Down")
+                || trimmed.starts_with("Ctrl+")
+                || trimmed.starts_with("Alt+"))
+        {
             let parts: Vec<&str> = trimmed.splitn(2, "  ").collect();
             let key = parts.first().copied().unwrap_or("").trim();
             let desc = if parts.len() > 1 { parts[1].trim() } else { "" };
@@ -1548,7 +1565,11 @@ fn render_status_panel<'a>(
                     get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
                 Span::styled(
-                    trimmed.trim_start_matches('•').trim_start_matches('-').trim().to_string(),
+                    trimmed
+                        .trim_start_matches('•')
+                        .trim_start_matches('-')
+                        .trim()
+                        .to_string(),
                     get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ]));
@@ -2046,8 +2067,17 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         HoverTarget::CopyBadge(row) => {
             if row >= inner_area.y && row < inner_area.y + inner_area.height {
                 let buf = f.buffer_mut();
-                let code_text = state.code_copy_rows.iter().find(|(r, _)| *r == row).map(|(_, t)| t);
-                let badge_width = if code_text.is_some_and(|ct| state.last_copy_text.as_ref().is_some_and(|(t_text, t)| t_text == ct && t.elapsed().as_secs() < 2)) {
+                let code_text = state
+                    .code_copy_rows
+                    .iter()
+                    .find(|(r, _)| *r == row)
+                    .map(|(_, t)| t);
+                let badge_width = if code_text.is_some_and(|ct| {
+                    state
+                        .last_copy_text
+                        .as_ref()
+                        .is_some_and(|(t_text, t)| t_text == ct && t.elapsed().as_secs() < 2)
+                }) {
                     12
                 } else {
                     9
@@ -2702,8 +2732,7 @@ mod tests {
         assert_eq!(label, "CompleteTask");
         assert_eq!(arg, "result=\"done\"");
 
-        let (label, arg) =
-            format_pi_tool_action("complete_task", &serde_json::json!({}));
+        let (label, arg) = format_pi_tool_action("complete_task", &serde_json::json!({}));
         assert_eq!(label, "CompleteTask");
         assert_eq!(arg, "");
 
@@ -2866,10 +2895,19 @@ mod tests {
         assert_eq!(lines.len(), 2, "info status panel includes header");
         assert!(lines[0].spans[0].content.contains(">_ RustCode"));
         assert!(lines[1].spans[0].content.contains("  "));
-        assert!(lines[1].spans[1].content.contains("Session status: 5 messages"));
+        assert!(
+            lines[1].spans[1]
+                .content
+                .contains("Session status: 5 messages")
+        );
 
         let mut notice_lines = Vec::new();
-        render_status_panel("Notice: background task finished", 80, false, &mut notice_lines);
+        render_status_panel(
+            "Notice: background task finished",
+            80,
+            false,
+            &mut notice_lines,
+        );
 
         assert_eq!(notice_lines.len(), 1, "ordinary notice panel skips header");
         assert!(notice_lines[0].spans[0].content.contains("  "));

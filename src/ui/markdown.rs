@@ -38,12 +38,7 @@ fn cache_key(content: &str, width: usize, show_picker: bool) -> CacheKey {
     content.hash(&mut hasher);
     let mut theme_hasher = std::collections::hash_map::DefaultHasher::new();
     super::theme::active_palette().name.hash(&mut theme_hasher);
-    (
-        hasher.finish(),
-        width,
-        show_picker,
-        theme_hasher.finish(),
-    )
+    (hasher.finish(), width, show_picker, theme_hasher.finish())
 }
 
 #[derive(Clone, Copy, Debug, Default)]

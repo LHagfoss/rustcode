@@ -238,10 +238,8 @@ pub(super) fn render_welcome_screen(
             get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
         };
 
-        let mut styled_chars: Vec<(char, Style)> = display_buffer
-            .chars()
-            .map(|c| (c, text_style))
-            .collect();
+        let mut styled_chars: Vec<(char, Style)> =
+            display_buffer.chars().map(|c| (c, text_style)).collect();
 
         if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
@@ -550,7 +548,9 @@ pub(super) fn render_verbosity_picker_modal(f: &mut Frame, state: &AppState) {
         ),
     ];
 
-    let selected_idx = state.modal_picker_index.min(choices.len().saturating_sub(1));
+    let selected_idx = state
+        .modal_picker_index
+        .min(choices.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
     for (idx, (name, verbosity_level, desc)) in choices.iter().enumerate() {
@@ -569,10 +569,7 @@ pub(super) fn render_verbosity_picker_modal(f: &mut Frame, state: &AppState) {
             )])
         } else {
             let text = format!("   {:<5} — {}{}", name, desc, active_badge);
-            Line::from(vec![Span::styled(
-                text,
-                Style::default().fg(p.muted),
-            )])
+            Line::from(vec![Span::styled(text, Style::default().fg(p.muted))])
         };
         list_lines.push(line);
     }

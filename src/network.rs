@@ -1768,14 +1768,40 @@ async fn ask_user_question(
     cancel_token: &tokio_util::sync::CancellationToken,
     args: &serde_json::Value,
 ) -> (crate::tools::ToolExecutionOutput, std::time::Duration) {
-    let (mut question, mut options, is_multi_select) = if let Some(q_arr) = args.get("questions").and_then(|v| v.as_array()) {
-        if let Some(first_q) = q_arr.first().and_then(|v| v.as_object()) {
-            let q_str = first_q
+    let (mut question, mut options, is_multi_select) =
+        if let Some(q_arr) = args.get("questions").and_then(|v| v.as_array()) {
+            if let Some(first_q) = q_arr.first().and_then(|v| v.as_object()) {
+                let q_str = first_q
+                    .get("question")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let opts: Vec<String> = first_q
+                    .get("options")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|o| o.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let multi = first_q
+                    .get("is_multi_select")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                (q_str, opts, multi)
+            } else {
+                (String::new(), Vec::new(), false)
+            }
+        } else {
+            let q_str = args
                 .get("question")
+                .or_else(|| args.get("prompt"))
+                .or_else(|| args.get("message"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let opts: Vec<String> = first_q
+            let opts: Vec<String> = args
                 .get("options")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
@@ -1784,37 +1810,12 @@ async fn ask_user_question(
                         .collect()
                 })
                 .unwrap_or_default();
-            let multi = first_q
+            let multi = args
                 .get("is_multi_select")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             (q_str, opts, multi)
-        } else {
-            (String::new(), Vec::new(), false)
-        }
-    } else {
-        let q_str = args
-            .get("question")
-            .or_else(|| args.get("prompt"))
-            .or_else(|| args.get("message"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let opts: Vec<String> = args
-            .get("options")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|o| o.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let multi = args
-            .get("is_multi_select")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        (q_str, opts, multi)
-    };
+        };
 
     if question.trim().is_empty() {
         question = "Please confirm how to proceed:".to_string();
@@ -4222,9 +4223,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 // Name the offending action: "this action has repeated" left
                 // the model (and anyone resuming the transcript) guessing
                 // which of the round's calls the warning was about.
-                let action = loop_offender
-                    .as_deref()
-                    .unwrap_or("the last tool action");
+                let action = loop_offender.as_deref().unwrap_or("the last tool action");
                 let warning_text = format!(
                     "[Loop warning: '{action}' has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — if an edit failed to match, view a wider line range or use grep to verify exact target content.]"
                 );
@@ -4409,7 +4408,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 }
                 // Output-stagnation signal: repeated identical results
                 // (e.g. "No matches found") despite varied commands.
-                match ctx.loop_detector.record_output(loop_detect::stagnation_key(&content)) {
+                match ctx
+                    .loop_detector
+                    .record_output(loop_detect::stagnation_key(&content))
+                {
                     status @ (loop_detect::LoopStatus::Warning(n)
                     | loop_detect::LoopStatus::Abort(n)) => {
                         dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
