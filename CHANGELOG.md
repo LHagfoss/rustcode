@@ -1,7 +1,25 @@
-## [v0.11.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.2) - 2026-08-04
+## [v0.11.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.2) - 2026-08-05
 ### Features
+- **UI:** Format /help and /quota like /status with title headers, grouped sections, and bold commands ([#392](https://github.com/LHagfoss/rustcode/pull/392) / [`605563e`](https://github.com/LHagfoss/rustcode/commit/605563e))
+- **UI:** Add top and bottom vertical padding for assistant text and markdown blocks ([#385](https://github.com/LHagfoss/rustcode/pull/385) / [`7162eac`](https://github.com/LHagfoss/rustcode/commit/7162eac))
+- **UI:** Remove Resumed session and Request cancelled system messages from chat transcript and show as transient toasts ([#383](https://github.com/LHagfoss/rustcode/pull/383) / [`2eab924`](https://github.com/LHagfoss/rustcode/commit/2eab924))
 - **UI:** Convert /info and /about into structured notice blocks ([#381](https://github.com/LHagfoss/rustcode/pull/381) / [`d6c45f1`](https://github.com/LHagfoss/rustcode/commit/d6c45f1))
 - **UI:** Remove background tint boxes from diffs and render full-line green/red text for added/removed diff lines ([#380](https://github.com/LHagfoss/rustcode/pull/380) / [`361410f`](https://github.com/LHagfoss/rustcode/commit/361410f))
+
+### Fixes
+- **Tools:** Prevent manage_task polling loops on background tasks ([#395](https://github.com/LHagfoss/rustcode/pull/395) / [`8e795c3`](https://github.com/LHagfoss/rustcode/commit/8e795c3))
+- **UI:** Decouple /status from /quota and add vertical padding lines between notice blocks ([#393](https://github.com/LHagfoss/rustcode/pull/393) / [`89066f2`](https://github.com/LHagfoss/rustcode/commit/89066f2))
+- **UI:** Use exact display width of Copy badge for hover tinting and click detection ([#391](https://github.com/LHagfoss/rustcode/pull/391) / [`147b532`](https://github.com/LHagfoss/rustcode/commit/147b532))
+- **UI:** Clean up unused import in ui tests ([#390](https://github.com/LHagfoss/rustcode/pull/390) / [`cd61e67`](https://github.com/LHagfoss/rustcode/commit/cd61e67))
+- **UI:** Restrict Copy badge hover background tinting to button columns ([#389](https://github.com/LHagfoss/rustcode/pull/389) / [`95ab4a4`](https://github.com/LHagfoss/rustcode/commit/95ab4a4))
+- **UI:** Restrict CopyBadge hover target to the top-right copy button area ([#388](https://github.com/LHagfoss/rustcode/pull/388) / [`ba53799`](https://github.com/LHagfoss/rustcode/commit/ba53799))
+- **UI:** Remove dark bar under code blocks, remove background on Copy badge, and restrict Copy click target to button area ([#387](https://github.com/LHagfoss/rustcode/pull/387) / [`e3a8b1a`](https://github.com/LHagfoss/rustcode/commit/e3a8b1a))
+- **UI:** Remove extra space between tool action label and argument parentheses ([#386](https://github.com/LHagfoss/rustcode/pull/386) / [`13b0a97`](https://github.com/LHagfoss/rustcode/commit/13b0a97))
+- **UI:** Remove double-dots from system info rendering and format with clean whitespace padding ([#384](https://github.com/LHagfoss/rustcode/pull/384) / [`2b53e6f`](https://github.com/LHagfoss/rustcode/commit/2b53e6f))
+- **UI:** Remove background colors from text/code/diffs, clean up ManageTask, and fix ask_question hangs ([#382](https://github.com/LHagfoss/rustcode/pull/382) / [`c81b20f`](https://github.com/LHagfoss/rustcode/commit/c81b20f))
+
+### Chores
+- Update Cargo.lock ([#394](https://github.com/LHagfoss/rustcode/pull/394) / [`95a6d13`](https://github.com/LHagfoss/rustcode/commit/95a6d13))
 
 ## [v0.11.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.1) - 2026-08-04
 ### Features
