@@ -667,7 +667,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 KeyCode::Down => {
                                     let mut s = app_state.lock().await;
-                                    s.modal_picker_index = s.modal_picker_index.saturating_add(1).min(1); // 0 for Low, 1 for High
+                                    s.modal_picker_index =
+                                        s.modal_picker_index.saturating_add(1).min(1); // 0 for Low, 1 for High
                                 }
                                 KeyCode::Enter => {
                                     let mut s = app_state.lock().await;
@@ -1807,7 +1808,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .map(|(r, t)| (*r, t.clone()))
                                     {
                                         // Clicked a code block's header row. Only copy if click is on the right edge Copy button.
-                                        let badge_width = if s.last_copy_text.as_ref().is_some_and(|(t_text, t)| t_text == &code && t.elapsed().as_secs() < 2) {
+                                        let badge_width = if s.last_copy_text.as_ref().is_some_and(
+                                            |(t_text, t)| {
+                                                t_text == &code && t.elapsed().as_secs() < 2
+                                            },
+                                        ) {
                                             12
                                         } else {
                                             9
@@ -1819,7 +1824,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if crate::clipboard::copy_to_clipboard(&code) {
                                                 s.set_notice("Copied to clipboard");
                                             }
-                                            s.last_copy_text = Some((code.clone(), std::time::Instant::now()));
+                                            s.last_copy_text =
+                                                Some((code.clone(), std::time::Instant::now()));
                                         }
                                     }
                                 }
@@ -1928,8 +1934,6 @@ fn print_goodbye() {
     let text = fg(crate::ui::theme::color_text());
 
     let title = format!(" rustcode v{} ", env!("CARGO_PKG_VERSION"));
-    // The 👋 emoji renders as 2 cells but counts as 1 char; +1 keeps the
-    // right border aligned.
     let msg = "👋 Bye bye — happy hacking!";
     let msg_width = msg.chars().count() + 1;
     let content = msg_width.max(title.chars().count());
@@ -1943,11 +1947,9 @@ fn print_goodbye() {
     let msg_fill = " ".repeat(content - msg_width);
 
     let mut out = std::io::stdout();
-    let _ = writeln!(out);
     let _ = writeln!(out, "{border}{top}");
     let _ = writeln!(out, "{border}│ {text}{msg}{msg_fill}{border} │");
     let _ = writeln!(out, "{border}{bot}{RESET}");
-    let _ = writeln!(out);
 }
 
 #[cfg(test)]
