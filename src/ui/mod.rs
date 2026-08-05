@@ -229,8 +229,16 @@ fn render_assistant_message<'a>(
         msg_index,
         last_copy_text,
     } = options;
+    let display_content = if let Some(idx) = content.find("\n\n[harness verification:") {
+        &content[..idx]
+    } else if let Some(idx) = content.find("[harness verification:") {
+        &content[..idx]
+    } else {
+        content
+    };
+
     let mut think_content = None;
-    let mut main_content = content;
+    let mut main_content = display_content;
 
     if content.contains("<think>")
         && let Some(start_idx) = content.find("<think>")
