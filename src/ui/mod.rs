@@ -209,7 +209,7 @@ struct AssistantRenderOptions<'a> {
     show_picker: bool,
     thought_collapsed: bool,
     msg_index: Option<usize>,
-    is_copied_recently: bool,
+    last_copy_row: Option<(usize, std::time::Instant)>,
 }
 
 fn render_assistant_message<'a>(
@@ -227,7 +227,7 @@ fn render_assistant_message<'a>(
         show_picker,
         thought_collapsed,
         msg_index,
-        is_copied_recently,
+        last_copy_row,
     } = options;
     let mut think_content = None;
     let mut main_content = content;
@@ -390,6 +390,7 @@ fn render_assistant_message<'a>(
                         } else {
                             current_lang.clone()
                         };
+                        let is_copied_recently = last_copy_row.is_some_and(|(r, t)| r == lines.len() && t.elapsed().as_secs() < 2);
                         let button_badge = if is_copied_recently {
                             " Copied! 📋 "
                         } else {
@@ -1306,7 +1307,7 @@ struct ChatKey {
     width: u16,
     show_picker: bool,
     thoughts: (usize, usize),
-    copied_recently: bool,
+    copied_recently: Option<(usize, bool)>,
     theme: String,
 }
 
@@ -1327,8 +1328,9 @@ fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
             state.expanded_thoughts.iter().sum(),
         ),
         copied_recently: state
-            .last_copy_time
-            .is_some_and(|t| t.elapsed().as_secs() < 2),
+            .last_copy_row
+            .as_ref()
+            .map(|(r, t)| (*r, t.elapsed().as_secs() < 2)),
         theme: state.config.theme.clone(),
     }
 }
@@ -1784,7 +1786,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 continue;
             }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
-            let is_copied_recently = state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
             render_assistant_message(
                 &msg.content,
                 &mut lines,
@@ -1798,7 +1799,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                     thought_collapsed: collapsed,
                     msg_index: Some(msg_idx),
-                    is_copied_recently,
+                    last_copy_row: state.last_copy_row,
                 },
             );
             let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
@@ -1815,9 +1816,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     if (state.status == AppStatus::Streaming || state.status == AppStatus::Queued)
         && !state.current_response.is_empty()
     {
-        let is_copied_recently =
-            state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2);
-
         let parsed_tool = crate::tools::parse_tool_call(
             &state.current_response,
             state.active_tool_protocol(),
@@ -1843,7 +1841,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     show_picker,
                     thought_collapsed: false,
                     msg_index: None,
-                    is_copied_recently,
+                    last_copy_row: state.last_copy_row,
                 },
             );
             lines.push(Line::from(""));
@@ -2010,7 +2008,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         HoverTarget::CopyBadge(row) => {
             if row >= inner_area.y && row < inner_area.y + inner_area.height {
                 let buf = f.buffer_mut();
-                let badge_width = if state.last_copy_time.is_some_and(|t| t.elapsed().as_secs() < 2) {
+                let badge_width = if state.last_copy_row.is_some_and(|(r, t)| r == row as usize && t.elapsed().as_secs() < 2) {
                     12
                 } else {
                     9
@@ -2754,7 +2752,7 @@ mod tests {
                 show_picker: false,
                 thought_collapsed: true,
                 msg_index: None,
-                is_copied_recently: false,
+                last_copy_row: None,
             },
         );
 
@@ -2800,7 +2798,7 @@ mod tests {
                 show_picker: false,
                 thought_collapsed: true,
                 msg_index: None,
-                is_copied_recently: false,
+                last_copy_row: None,
             },
         );
 
