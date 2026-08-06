@@ -85,6 +85,9 @@ pub fn estimate_tokens(text: &str) -> usize {
 
 pub const DEFAULT_PRUNE_TOKEN_THRESHOLD: usize = 90_000;
 
+/// Tokens reclaimed by last compaction, for metrics logging.
+pub static LAST_COMPACTION_RECLAIMED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Number of most-recent messages whose tool outputs are always kept verbatim.
 /// Older tool outputs are eligible for message-count-based pruning and, on
 /// structured compaction, everything before this suffix is folded into a summary.
@@ -342,6 +345,9 @@ pub async fn force_compact_with_budget(
     let result =
         force_compact_internal(client, url, model, history, summarize_count, cancel_token).await;
     let after_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    if after_tokens < before_tokens {
+        LAST_COMPACTION_RECLAIMED.store(before_tokens - after_tokens, std::sync::atomic::Ordering::Relaxed);
+    }
     result.map(|_| (before_tokens, after_tokens))
 }
 
