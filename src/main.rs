@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("✅ [sync] Config sync complete!");
             }
             Some(cli::SyncCommands::Push) => {
-                println!("💾 [sync] Staging config.toml, skills/, and session logs...");
+                println!("💾 [sync] Staging all config files...");
                 if let Err(e) = config::sync_config_push() {
                     eprintln!("Sync push failed: {e}");
                     std::process::exit(1);
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Sync failed during pull: {e}");
                     std::process::exit(1);
                 }
-                println!("💾 [sync] Staging config.toml, skills/, and session logs...");
+                println!("💾 [sync] Staging all config files...");
                 if let Err(e) = config::sync_config_push() {
                     eprintln!("Sync failed during push: {e}");
                     std::process::exit(1);
