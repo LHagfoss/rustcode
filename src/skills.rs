@@ -122,10 +122,16 @@ fn parse_frontmatter(content: &str) -> (String, String) {
     )
 }
 
+const MAX_SKILL_CONTENT_CHARS: usize = 12_000;
+
 pub fn get_skill_content(name: &str) -> Option<SkillInfo> {
     let meta = discover_skills().into_iter().find(|s| s.name == name)?;
     let skill_md = meta.path.join("SKILL.md");
-    let content = fs::read_to_string(&skill_md).ok()?;
+    let mut content = fs::read_to_string(&skill_md).ok()?;
+    if content.len() > MAX_SKILL_CONTENT_CHARS {
+        content.truncate(MAX_SKILL_CONTENT_CHARS);
+        content.push_str("\n\n[skill content truncated to 12k chars]");
+    }
     Some(SkillInfo {
         name: meta.name,
         description: meta.description,
