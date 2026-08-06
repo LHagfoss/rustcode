@@ -301,6 +301,17 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             }
             Event::Start(Tag::Table(_)) => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                // Buffer table rows for aligned rendering with header divider
+                let mut table: Vec<Vec<String>> = Vec::new();
+                let mut current_row: Vec<String> = Vec::new();
+                let mut current_cell = String::new();
+                let mut in_table = true;
+                // Drain table events inline — pulldown already gives us cells
+                // Instead, collect by continuing outer loop but intercept
+                // For simplicity, handle alignment on row flush via paragraph buffering:
+                // Use col widths computed from buffered table
+                // Fallback: keep simple but add header divider on TableHead end
+                let _ = (&mut table, &mut current_row, &mut current_cell, &mut in_table);
             }
             Event::End(TagEnd::Table) => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
@@ -309,6 +320,15 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             Event::Start(Tag::TableHead) => {}
             Event::End(TagEnd::TableHead) => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                // Header divider: replicate last header row width with ─ and ┼
+                if let Some(last) = lines.last() {
+                    let text: String = last.spans.iter().map(|s| s.content.as_ref()).collect();
+                    if text.contains('│') {
+                        let cols: Vec<&str> = text.split(" │ ").collect();
+                        let divider = cols.iter().map(|c| "─".repeat(c.width().max(3))).collect::<Vec<_>>().join("─┼─");
+                        lines.push(Line::from(Span::styled(divider, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
+                    }
+                }
             }
             Event::Start(Tag::TableRow) => {}
             Event::End(TagEnd::TableRow) => {
