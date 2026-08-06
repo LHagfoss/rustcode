@@ -162,7 +162,10 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let mut list_depth = 0usize;
     let mut ordered_index = Vec::<Option<u64>>::new();
 
-    let mut header_widths: Vec<usize> = Vec::new();
+    let mut in_table = false;
+    let mut table_rows: Vec<(Vec<String>, bool)> = Vec::new(); // (cells, is_header)
+    let mut current_row: Vec<String> = Vec::new();
+    let mut current_cell = String::new();
     let flush = |lines: &mut Vec<Line<'static>>,
                  paragraph: &mut Vec<Span<'static>>,
                  quote_depth: usize,
@@ -173,6 +176,38 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 std::mem::take(paragraph),
                 width.saturating_sub(quote_depth * 2 + list_depth * 2),
             );
+        }
+    };
+    let flush_table = |lines: &mut Vec<Line<'static>>, rows: &[(Vec<String>, bool)], width: usize, show_picker: bool| {
+        if rows.is_empty() { return; }
+        let cols = rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0);
+        let mut col_widths = vec![3usize; cols];
+        for (cells, _) in rows { for (i, c) in cells.iter().enumerate() { col_widths[i] = col_widths[i].max(c.width().min(30)); } }
+        // Shrink if too wide
+        let total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1)*3;
+        if total > width && cols > 0 {
+            let excess = total - width;
+            let per_col = (excess / cols).max(1);
+            for w in &mut col_widths { *w = w.saturating_sub(per_col).max(5); }
+        }
+        for (idx, (cells, is_header)) in rows.iter().enumerate() {
+            let line = (0..cols).map(|i| {
+                let txt = cells.get(i).map(|s| s.as_str()).unwrap_or("");
+                let w = col_widths[i];
+                let truncated = if txt.width() > w { format!("{}…", &txt[..txt.floor_char_boundary(w.saturating_sub(1))]) } else { format!("{:<w$}", txt, w=w) };
+                truncated
+            }).collect::<Vec<_>>().join(" │ ");
+            let style = if *is_header { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker) } else { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker) };
+            let spans: Vec<Span<'static>> = line.split(" │ ").enumerate().flat_map(|(i, c)| {
+                let mut v = vec![Span::styled(c.to_string(), style)];
+                if i+1 < cols { v.push(Span::styled(" │ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))); }
+                v
+            }).collect();
+            lines.push(Line::from(spans));
+            if idx==0 && rows[0].1 {
+                let div = col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┼─");
+                lines.push(Line::from(Span::styled(div, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
+            }
         }
     };
 
@@ -256,6 +291,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             Event::Start(Tag::Link { .. }) => inline.link = true,
             Event::End(TagEnd::Link) => inline.link = false,
             Event::Text(text) | Event::InlineHtml(text) => {
+                if in_table { current_cell.push_str(&text); continue; }
                 let mut style = inline;
                 if heading.is_some() {
                     style.bold = true;
@@ -302,77 +338,28 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             }
             Event::Start(Tag::Table(_)) => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
-                // Buffer table rows for aligned rendering with header divider
-                let mut table: Vec<Vec<String>> = Vec::new();
-                let mut current_row: Vec<String> = Vec::new();
-                let mut current_cell = String::new();
-                let mut in_table = true;
-                // Drain table events inline — pulldown already gives us cells
-                // Instead, collect by continuing outer loop but intercept
-                // For simplicity, handle alignment on row flush via paragraph buffering:
-                // Use col widths computed from buffered table
-                // Fallback: keep simple but add header divider on TableHead end
-                let _ = (&mut table, &mut current_row, &mut current_cell, &mut in_table);
+                in_table = true;
+                table_rows.clear();
             }
             Event::End(TagEnd::Table) => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush_table(&mut lines, &table_rows, width, show_picker);
+                table_rows.clear();
+                in_table = false;
+                current_row.clear();
+                current_cell.clear();
                 lines.push(Line::from(""));
             }
-            Event::Start(Tag::TableHead) => {}
+            Event::Start(Tag::TableHead) => { current_row.clear(); }
             Event::End(TagEnd::TableHead) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
-                if let Some(last) = lines.last_mut() {
-                    let text: String = last.spans.iter().map(|s| s.content.as_ref()).collect();
-                    if text.contains('│') {
-                        let cols: Vec<String> = text.split(" │ ").map(|s| s.to_string()).collect();
-                        header_widths = cols.iter().map(|c| c.width()).collect();
-                        let padded = cols.iter().map(|c| format!("{:<width$}", c, width=c.width())).collect::<Vec<_>>().join(" │ ");
-                        let style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker);
-                        *last = Line::from(padded.split(" │ ").enumerate().flat_map(|(i, c)| {
-                            let mut v = vec![Span::styled(c.to_string(), style)];
-                            if i+1 < cols.len() { v.push(Span::styled(" │ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))); }
-                            v
-                        }).collect::<Vec<_>>());
-                        let divider = cols.iter().map(|c| "─".repeat(c.width().max(3))).collect::<Vec<_>>().join("─┼─");
-                        lines.push(Line::from(Span::styled(divider, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
-                    }
-                }
+                if !current_row.is_empty() { table_rows.push((std::mem::take(&mut current_row), true)); }
             }
-            Event::Start(Tag::TableRow) => {}
+            Event::Start(Tag::TableRow) => { current_row.clear(); }
             Event::End(TagEnd::TableRow) => {
-                // Pad row cells to header widths for vertical alignment
-                if !header_widths.is_empty() && !paragraph.is_empty() {
-                    let text: String = paragraph.iter().map(|s| s.content.as_ref()).collect();
-                    if text.contains('│') || paragraph.iter().any(|s| s.content.contains('│')) {
-                        // Build padded line directly instead of push_wrapped
-                        let raw: String = paragraph.iter().map(|s| s.content.as_ref()).collect::<String>();
-                        let cols: Vec<String> = raw.split(" │ ").map(|s| s.to_string()).collect();
-                        let padded = cols.iter().enumerate().map(|(i, c)| {
-                            let w = header_widths.get(i).copied().unwrap_or(c.width());
-                            let pad = w.saturating_sub(c.width());
-                            format!("{}{}", c, " ".repeat(pad))
-                        }).collect::<Vec<_>>().join(" │ ");
-                        let spans: Vec<Span<'static>> = padded.split(" │ ").enumerate().flat_map(|(i, c)| {
-                            let mut v = vec![Span::styled(c.to_string(), get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker))];
-                            if i+1 < cols.len() { v.push(Span::styled(" │ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))); }
-                            v
-                        }).collect();
-                        lines.push(Line::from(spans));
-                        paragraph.clear();
-                        continue;
-                    }
-                }
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                if !current_row.is_empty() { table_rows.push((std::mem::take(&mut current_row), false)); }
             }
-            Event::Start(Tag::TableCell) => {
-                if !paragraph.is_empty() {
-                    paragraph.push(Span::styled(
-                        " │ ",
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ));
-                }
-            }
-            Event::End(TagEnd::TableCell) => {}
+            Event::Start(Tag::TableCell) => { current_cell.clear(); }
+            Event::End(TagEnd::TableCell) => { current_row.push(std::mem::take(&mut current_cell)); }
             Event::Html(text) => paragraph.push(Span::styled(
                 text.to_string(),
                 text_style(inline, show_picker),
