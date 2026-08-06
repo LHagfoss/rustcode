@@ -277,7 +277,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
             }
             lines.push(Line::from(row_spans));
-            if idx == 0 && rows[0].1 {
+            if idx + 1 < rows.len() {
                 let div = format!("├{}┤", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┼"));
                 lines.push(Line::from(Span::styled(div, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
             }
