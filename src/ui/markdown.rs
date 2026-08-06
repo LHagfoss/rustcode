@@ -181,14 +181,29 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let flush_table = |lines: &mut Vec<Line<'static>>, rows: &[(Vec<String>, bool)], width: usize, show_picker: bool| {
         if rows.is_empty() { return; }
         let cols = rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0);
+        // Ideal widths capped per-column: ID 18, numeric cols 12-14, avoids one giant cell blowing out
+        let caps = [18usize, 6, 18, 14, 10]; // Session, Turns, Total, Completion, File Size
         let mut col_widths = vec![3usize; cols];
-        for (cells, _) in rows { for (i, c) in cells.iter().enumerate() { col_widths[i] = col_widths[i].max(c.width().min(30)); } }
-        // Shrink if too wide
+        for (cells, _) in rows { for (i, c) in cells.iter().enumerate() { let cap = caps.get(i).copied().unwrap_or(22); col_widths[i] = col_widths[i].max(c.width().min(cap)); } }
+        // Ensure headers never truncate: bump to header width
+        if let Some((hdr, true)) = rows.first() { for (i, h) in hdr.iter().enumerate() { if i < cols { col_widths[i] = col_widths[i].max(h.width()); } } }
+        // Weighted shrink: large token columns shrink first, Session last
         let total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1)*3;
         if total > width && cols > 0 {
-            let excess = total - width;
-            let per_col = (excess / cols).max(1);
-            for w in &mut col_widths { *w = w.saturating_sub(per_col).max(5); }
+            let mut excess = total.saturating_sub(width);
+            let order: Vec<usize> = {
+                let mut idxs: Vec<usize> = (0..cols).collect();
+                idxs.sort_by_key(|&i| if i==0 { 100 } else if i==2 { 0 } else { 1 }); // shrink Total first
+                idxs
+            };
+            for &i in &order {
+                if excess==0 { break; }
+                let min_w = caps.get(i).map(|_| 6).unwrap_or(5).min(col_widths[i].saturating_sub(1));
+                let can_shrink = col_widths[i].saturating_sub(min_w);
+                let take = can_shrink.min(excess);
+                col_widths[i] -= take;
+                excess -= take;
+            }
         }
         for (idx, (cells, is_header)) in rows.iter().enumerate() {
             let line = (0..cols).map(|i| {
