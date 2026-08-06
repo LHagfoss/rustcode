@@ -299,6 +299,30 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 )));
             }
+            Event::Start(Tag::Table(_)) => {
+                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+            }
+            Event::End(TagEnd::Table) => {
+                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                lines.push(Line::from(""));
+            }
+            Event::Start(Tag::TableHead) => {}
+            Event::End(TagEnd::TableHead) => {
+                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+            }
+            Event::Start(Tag::TableRow) => {}
+            Event::End(TagEnd::TableRow) => {
+                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+            }
+            Event::Start(Tag::TableCell) => {
+                if !paragraph.is_empty() {
+                    paragraph.push(Span::styled(
+                        " │ ",
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ));
+                }
+            }
+            Event::End(TagEnd::TableCell) => {}
             Event::Html(text) => paragraph.push(Span::styled(
                 text.to_string(),
                 text_style(inline, show_picker),
@@ -321,6 +345,19 @@ mod tests {
     use super::{MarkdownCache, cache_key, render_cache, render_markdown};
     use ratatui::style::Modifier;
     use ratatui::text::Line;
+
+    #[test]
+    fn renders_markdown_tables_with_column_separators() {
+        let md = "| Header 1 | Header 2 |\n|---|---|\n| Cell 1 | Cell 2 |";
+        let lines = render_markdown(md, 80, false, false);
+        assert!(!lines.is_empty());
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("Header 1 │ Header 2"));
+    }
 
     #[test]
     fn parses_nested_inline_markup() {
