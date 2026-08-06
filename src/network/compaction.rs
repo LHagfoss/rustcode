@@ -283,6 +283,19 @@ pub async fn maybe_compact(
         return false;
     }
 
+    // Tiered compaction: local ollama engines skip LLM summarization —
+    // prune+trim already reclaimed tokens, and weak local summaries lose
+    // fidelity while adding latency/cost. Gate strictly on ollama endpoint
+    // so mock/test servers (random 127.0.0.1 ports) still exercise the
+    // summary path.
+    let is_local_engine = {
+        let lower = url.to_ascii_lowercase();
+        lower.contains("11434") || lower.contains("ollama")
+    };
+    if is_local_engine {
+        return true;
+    }
+
     force_compact_internal(
         client,
         url,
