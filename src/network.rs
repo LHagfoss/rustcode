@@ -77,7 +77,7 @@ const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
 /// work. Any one signal firing is enough: a session that is genuinely
 /// healthy on every other axis but has spent 500k tokens, or ten minutes, or
 /// 40 rounds, has stopped being worth running unattended.
-const MAX_TOOL_ROUNDS: usize = 40;
+const MAX_TOOL_ROUNDS: usize = usize::MAX;
 const MAX_TURN_WALL_CLOCK: std::time::Duration = std::time::Duration::from_secs(600);
 const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
 /// A tool that reports success without changing anything (already-applied
