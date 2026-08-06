@@ -6,10 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
+mod envelope;
 mod exec;
 mod filesystem;
 mod misc;
 mod search;
+
+pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 
 pub(crate) use filesystem::edit_target_and_replacement;
 
