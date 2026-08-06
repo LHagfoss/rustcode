@@ -205,6 +205,10 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 excess -= take;
             }
         }
+        // outer borders
+        let top = format!("┌{}┐", col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┬─"));
+        let bottom = format!("└{}┘", col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┴─"));
+        lines.push(Line::from(Span::styled(top, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
         for (idx, (cells, is_header)) in rows.iter().enumerate() {
             let line = (0..cols).map(|i| {
                 let txt = cells.get(i).map(|s| s.as_str()).unwrap_or("");
@@ -213,17 +217,21 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 truncated
             }).collect::<Vec<_>>().join(" │ ");
             let style = if *is_header { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker) } else { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker) };
-            let spans: Vec<Span<'static>> = line.split(" │ ").enumerate().flat_map(|(i, c)| {
+            let inner: Vec<Span<'static>> = line.split(" │ ").enumerate().flat_map(|(i, c)| {
                 let mut v = vec![Span::styled(c.to_string(), style)];
                 if i+1 < cols { v.push(Span::styled(" │ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))); }
                 v
             }).collect();
-            lines.push(Line::from(spans));
+            let mut bordered: Vec<Span<'static>> = vec![Span::styled("│ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))];
+            bordered.extend(inner);
+            bordered.push(Span::styled(" │".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+            lines.push(Line::from(bordered));
             if idx==0 && rows[0].1 {
-                let div = col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┼─");
+                let div = format!("├{}┤", col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┼─"));
                 lines.push(Line::from(Span::styled(div, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
             }
         }
+        lines.push(Line::from(Span::styled(bottom, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
     };
 
     for event in Parser::new_ext(content, Options::all()) {
@@ -403,12 +411,9 @@ mod tests {
         let md = "| Header 1 | Header 2 |\n|---|---|\n| Cell 1 | Cell 2 |";
         let lines = render_markdown(md, 80, false, false);
         assert!(!lines.is_empty());
-        let text: String = lines[0]
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert!(text.contains("Header 1 │ Header 2"));
+        let all: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        assert!(all.contains("Header 1 │ Header 2"));
+        assert!(all.contains('┌') && all.contains('┐') && all.contains('└'));
     }
 
     #[test]
