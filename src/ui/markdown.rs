@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
@@ -28,7 +29,7 @@ fn render_cache() -> &'static Mutex<MarkdownCache> { static CACHE: OnceLock<Mute
 
 fn cache_key(content: &str, width: usize) -> u64 { let mut hasher = std::collections::hash_map::DefaultHasher::new(); content.hash(&mut hasher); width.hash(&mut hasher); hasher.finish() }
 
-fn into_static(line: Line<'_>) -> Line<'static> { Line { spans: line.spans.into_iter().map(|s| Span { content: std::borrow::Cow::Owned(s.content.into_owned()), style: s.style }).collect(), ..line } }
+fn into_static(line: Line<'_>) -> Line<'static> { Line { spans: line.spans.into_iter().map(|s| Span { content: Cow::Owned(s.content.to_string()), style: s.style }).collect(), ..line } }
 
 /// Render markdown content to styled terminal lines. Preserves caching and streaming semantics.
 pub(super) fn render_markdown<'a>(content: &str, width: usize, show_picker: bool, use_cache: bool) -> Vec<Line<'a>> { if !use_cache { return render_markdown_uncached(content, width, show_picker); } let key = cache_key(content, width); let cache = render_cache(); if let Some(lines) = cache.lock().unwrap().get(&key).cloned() { return lines; } let lines = render_markdown_uncached(content, width, show_picker); cache.lock().unwrap().insert(key.clone(), lines.clone()); lines }
