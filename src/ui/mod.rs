@@ -992,7 +992,16 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
-        let safe_end = safe_byte_index(&state.input_buffer, state.cursor_position);
+        let safe_end = state.cursor_position.min(state.input_buffer.len());
+        let safe_end = if state.input_buffer.is_char_boundary(safe_end) {
+            safe_end
+        } else {
+            state.input_buffer.char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= safe_end)
+                .last()
+                .unwrap_or(0)
+        };
         let raw_prefix = &state.input_buffer[..safe_end];
         let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 

@@ -224,6 +224,8 @@ pub struct AppConfig {
     #[serde(default)]
     #[serde(with = "serde_millis")]
     pub start_time: Option<std::time::SystemTime>,
+    #[serde(skip, default = "default_true")]
+    pub is_valid: bool,
 }
 
 fn default_false() -> bool {
@@ -314,7 +316,7 @@ impl Default for AppConfig {
             debug_verbose_network_logging: false,
             theme: default_theme(),
             start_time: None,
-
+            is_valid: true,
         }
     }
 }
@@ -390,7 +392,9 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
             } else {
                 eprintln!("Backed up malformed config to {}", backup_path.display());
             }
-            default_config
+            let mut fallback = default_config;
+            fallback.is_valid = false;
+            fallback
         }
     };
 
@@ -410,12 +414,18 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
 }
 
 pub fn save_entire_config(config: &AppConfig) {
+    if !config.is_valid {
+        return;
+    }
     if let Some(dir) = get_config_dir() {
         save_config_to(&dir, config);
     }
 }
 
 fn save_config_to(dir: &Path, config: &AppConfig) {
+    if !config.is_valid {
+        return;
+    }
     let _ = fs::create_dir_all(dir);
     if let Ok(toml_str) = toml::to_string_pretty(config) {
         let _ = fs::write(dir.join(CONFIG_FILE), toml_str);
