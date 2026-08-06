@@ -1,3 +1,15 @@
+## [v0.12.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.12.0) - 2026-08-06
+- Fix config.toml corruption and cursor alignment ([#414](https://github.com/LHagfoss/rustcode/pull/414) / [`5a7a7f7`](https://github.com/LHagfoss/rustcode/commit/5a7a7f7))
+- Stage config directory files with git add -A ([#413](https://github.com/LHagfoss/rustcode/pull/413) / [`e90ce3b`](https://github.com/LHagfoss/rustcode/commit/e90ce3b))
+- Show session duration in goodbye message ([#412](https://github.com/LHagfoss/rustcode/pull/412) / [`a700af5`](https://github.com/LHagfoss/rustcode/commit/a700af5))
+- Improve tool argument matching for parallel responses ([#411](https://github.com/LHagfoss/rustcode/pull/411) / [`bdcb85a`](https://github.com/LHagfoss/rustcode/commit/bdcb85a))
+- Single escape key cancels streaming or clears input ([#410](https://github.com/LHagfoss/rustcode/pull/410) / [`2e70976`](https://github.com/LHagfoss/rustcode/commit/2e70976))
+- Add goodbye box on exit ([`6573270`](https://github.com/LHagfoss/rustcode/commit/6573270))
+- Improve UI cursor style and chat input placeholder ([#404](https://github.com/LHagfoss/rustcode/pull/404) / [`5241bcf`](https://github.com/LHagfoss/rustcode/commit/5241bcf))
+- Strip harness verification footer from TUI rendering ([#403](https://github.com/LHagfoss/rustcode/pull/403) / [`8dec836`](https://github.com/LHagfoss/rustcode/commit/8dec836))
+- Add default Socraticode MCP server configuration ([`08b86d5`](https://github.com/LHagfoss/rustcode/commit/08b86d5))
+- Improve code block copy feedback and selection ([#400](https://github.com/LHagfoss/rustcode/pull/400) / [`28559fe`](https://github.com/LHagfoss/rustcode/commit/28559fe))
+
 ## [v0.11.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.11.3) - 2026-08-05
 ### Features
 - **UI:** Redesign /verbosity picker modal with modern theme card styling and descriptions ([#397](https://github.com/LHagfoss/rustcode/pull/397) / [`93d0942`](https://github.com/LHagfoss/rustcode/commit/93d0942))
