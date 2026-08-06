@@ -162,6 +162,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let mut list_depth = 0usize;
     let mut ordered_index = Vec::<Option<u64>>::new();
 
+    let mut header_widths: Vec<usize> = Vec::new();
     let flush = |lines: &mut Vec<Line<'static>>,
                  paragraph: &mut Vec<Span<'static>>,
                  quote_depth: usize,
@@ -320,11 +321,18 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             Event::Start(Tag::TableHead) => {}
             Event::End(TagEnd::TableHead) => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
-                // Header divider: replicate last header row width with ─ and ┼
-                if let Some(last) = lines.last() {
+                if let Some(last) = lines.last_mut() {
                     let text: String = last.spans.iter().map(|s| s.content.as_ref()).collect();
                     if text.contains('│') {
-                        let cols: Vec<&str> = text.split(" │ ").collect();
+                        let cols: Vec<String> = text.split(" │ ").map(|s| s.to_string()).collect();
+                        header_widths = cols.iter().map(|c| c.width()).collect();
+                        let padded = cols.iter().map(|c| format!("{:<width$}", c, width=c.width())).collect::<Vec<_>>().join(" │ ");
+                        let style = get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker);
+                        *last = Line::from(padded.split(" │ ").enumerate().flat_map(|(i, c)| {
+                            let mut v = vec![Span::styled(c.to_string(), style)];
+                            if i+1 < cols.len() { v.push(Span::styled(" │ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))); }
+                            v
+                        }).collect::<Vec<_>>());
                         let divider = cols.iter().map(|c| "─".repeat(c.width().max(3))).collect::<Vec<_>>().join("─┼─");
                         lines.push(Line::from(Span::styled(divider, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
                     }
@@ -332,6 +340,28 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             }
             Event::Start(Tag::TableRow) => {}
             Event::End(TagEnd::TableRow) => {
+                // Pad row cells to header widths for vertical alignment
+                if !header_widths.is_empty() && !paragraph.is_empty() {
+                    let text: String = paragraph.iter().map(|s| s.content.as_ref()).collect();
+                    if text.contains('│') || paragraph.iter().any(|s| s.content.contains('│')) {
+                        // Build padded line directly instead of push_wrapped
+                        let raw: String = paragraph.iter().map(|s| s.content.as_ref()).collect::<String>();
+                        let cols: Vec<String> = raw.split(" │ ").map(|s| s.to_string()).collect();
+                        let padded = cols.iter().enumerate().map(|(i, c)| {
+                            let w = header_widths.get(i).copied().unwrap_or(c.width());
+                            let pad = w.saturating_sub(c.width());
+                            format!("{}{}", c, " ".repeat(pad))
+                        }).collect::<Vec<_>>().join(" │ ");
+                        let spans: Vec<Span<'static>> = padded.split(" │ ").enumerate().flat_map(|(i, c)| {
+                            let mut v = vec![Span::styled(c.to_string(), get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker))];
+                            if i+1 < cols.len() { v.push(Span::styled(" │ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))); }
+                            v
+                        }).collect();
+                        lines.push(Line::from(spans));
+                        paragraph.clear();
+                        continue;
+                    }
+                }
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
             }
             Event::Start(Tag::TableCell) => {
