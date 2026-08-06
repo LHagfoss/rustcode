@@ -302,9 +302,23 @@ pub async fn force_compact(
     history: &mut Vec<ChatMessage>,
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(usize, usize), String> {
+    force_compact_with_budget(client, url, model, history, None, cancel_token).await
+}
+
+pub async fn force_compact_with_budget(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    budget: Option<usize>,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
-    prune_old_tool_outputs(history, DEFAULT_PRUNE_TOKEN_THRESHOLD);
+    let prune_threshold = budget
+        .map(|b| (b as f64 * 0.6) as usize)
+        .unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD);
+    prune_old_tool_outputs(history, prune_threshold);
 
     // Summarize all but the most recent KEEP_RECENT_TURNS messages.
     let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
