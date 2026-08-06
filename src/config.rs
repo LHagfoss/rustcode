@@ -1033,6 +1033,12 @@ pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
     }
 
+    let gitignore_path = dir.join(".gitignore");
+    if !gitignore_path.exists() {
+        let default_gitignore = "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
+        let _ = fs::write(&gitignore_path, default_gitignore);
+    }
+
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
         let init_status = std::process::Command::new("git")
@@ -1106,6 +1112,12 @@ pub fn sync_config_push() -> Result<(), String> {
     let host = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("HOST"))
         .unwrap_or_else(|_| "device".to_string());
+
+    let gitignore_path = dir.join(".gitignore");
+    if !gitignore_path.exists() {
+        let default_gitignore = "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
+        let _ = fs::write(&gitignore_path, default_gitignore);
+    }
 
     // 1. Stage all files in config directory
     let add_out = std::process::Command::new("git")
