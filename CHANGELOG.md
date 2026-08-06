@@ -1,3 +1,6 @@
+## [v0.12.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.12.1) - 2026-08-06
+- feat(sync): add default .gitignore to exclude logs, backups, and binaries from sync repo ([#415](https://github.com/LHagfoss/rustcode/pull/415) / [`2febdd0`](https://github.com/LHagfoss/rustcode/commit/2febdd0))
+
 ## [v0.12.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.12.0) - 2026-08-06
 - Fix config.toml corruption and cursor alignment ([#414](https://github.com/LHagfoss/rustcode/pull/414) / [`5a7a7f7`](https://github.com/LHagfoss/rustcode/commit/5a7a7f7))
 - Stage config directory files with git add -A ([#413](https://github.com/LHagfoss/rustcode/pull/413) / [`e90ce3b`](https://github.com/LHagfoss/rustcode/commit/e90ce3b))
