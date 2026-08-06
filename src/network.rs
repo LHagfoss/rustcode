@@ -79,7 +79,7 @@ const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
 /// 40 rounds, has stopped being worth running unattended.
 const MAX_TOOL_ROUNDS: usize = 40;
 const MAX_TURN_WALL_CLOCK: std::time::Duration = std::time::Duration::from_secs(600);
-const MAX_TURN_TOKEN_BUDGET: u64 = 500_000;
+const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
 /// A tool that reports success without changing anything (already-applied
 /// edits, no-op runs) does not count as progress, so this escalates much
 /// faster than the round budget when the agent is just spinning.
@@ -6374,12 +6374,12 @@ mod tests {
     #[test]
     fn a_genuinely_oversized_turn_trips_the_token_budget() {
         let mut ctx = TurnContext::new();
-        for _ in 0..20 {
+        for _ in 0..200 {
             ctx.tokens_used = accumulate_tokens_used(ctx.tokens_used, Some(30_000), "");
         }
         assert!(
             ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET,
-            "20 rounds of 30k tokens each must exceed the {MAX_TURN_TOKEN_BUDGET} budget"
+            "200 rounds of 30k tokens each must exceed the {MAX_TURN_TOKEN_BUDGET} budget"
         );
         match turn_budget_exceeded(&ctx) {
             Some(TurnBudgetLimit::Tokens(_)) => {}
