@@ -205,29 +205,29 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 excess -= take;
             }
         }
-        // outer borders
-        let top = format!("┌{}┐", col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┬─"));
-        let bottom = format!("└{}┘", col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┴─"));
+        // outer borders: 1 padding spaces per cell side: "─" * (w + 2)
+        let top = format!("┌{}┐", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┬"));
+        let bottom = format!("└{}┘", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┴"));
         lines.push(Line::from(Span::styled(top, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
         for (idx, (cells, is_header)) in rows.iter().enumerate() {
-            let line = (0..cols).map(|i| {
+            let style = if *is_header { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker) } else { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker) };
+            let mut row_spans = Vec::new();
+            row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+            for i in 0..cols {
                 let txt = cells.get(i).map(|s| s.as_str()).unwrap_or("");
                 let w = col_widths[i];
-                let truncated = if txt.width() > w { format!("{}…", &txt[..txt.floor_char_boundary(w.saturating_sub(1))]) } else { format!("{:<w$}", txt, w=w) };
-                truncated
-            }).collect::<Vec<_>>().join(" │ ");
-            let style = if *is_header { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker) } else { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker) };
-            let inner: Vec<Span<'static>> = line.split(" │ ").enumerate().flat_map(|(i, c)| {
-                let mut v = vec![Span::styled(c.to_string(), style)];
-                if i+1 < cols { v.push(Span::styled(" │ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))); }
-                v
-            }).collect();
-            let mut bordered: Vec<Span<'static>> = vec![Span::styled("│ ".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))];
-            bordered.extend(inner);
-            bordered.push(Span::styled(" │".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
-            lines.push(Line::from(bordered));
-            if idx==0 && rows[0].1 {
-                let div = format!("├{}┤", col_widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┼─"));
+                let formatted = if txt.width() > w {
+                    let end = txt.floor_char_boundary(w.saturating_sub(1));
+                    format!(" {}… ", &txt[..end])
+                } else {
+                    format!(" {:<w$} ", txt, w=w)
+                };
+                row_spans.push(Span::styled(formatted, style));
+                row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+            }
+            lines.push(Line::from(row_spans));
+            if idx == 0 && rows[0].1 {
+                let div = format!("├{}┤", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┼"));
                 lines.push(Line::from(Span::styled(div, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
             }
         }
