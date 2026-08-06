@@ -471,7 +471,7 @@ fn render_assistant_message<'a>(
                                     box_width,
                                     code_bg,
                                     show_picker,
-                                ));
+                                 ));
                             }
                             i = j.saturating_sub(1);
                         }
@@ -1714,6 +1714,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 (action_label, String::new())
             };
 
+            let action_len = action.len();
             let mut spans = vec![
                 Span::styled(
                     "● ",
@@ -1725,11 +1726,18 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
             ];
             if !arg.is_empty() {
+                let prefix_len = 2 + action_len; // "● " + action
+                let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len).saturating_sub(3); // "-3" for "()" + "..."
+                let display_arg = if arg.chars().count() > max_arg_len {
+                    format!("{}...", arg.chars().take(max_arg_len).collect::<String>())
+                 } else {
+                    arg.clone()
+                 };
                 spans.push(Span::styled(
-                    format!("({arg})"),
+                    format!("({display_arg})"),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-            }
+                  ));
+              }
             lines.push(Line::from(spans));
 
             if let Some((ref path, ref content)) = msg.file_preview {
@@ -1841,22 +1849,30 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                         format_pi_tool_action(&tool_call.name, &tool_call.arguments);
                     let elapsed_ms = state.generation_start_time.map(|t| t.elapsed().as_millis()).unwrap_or(0);
                     let circle = if (elapsed_ms / 350).is_multiple_of(2) { "○ " } else { "● " };
+                    let action_len = action.len();
+                    let prefix_len = 2 + action_len; /* circle + action */
+                    let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len).saturating_sub(6); /* "()" + "..." */
+                    let display_arg = if arg.chars().count() > max_arg_len {
+                        format!("{}...", arg.chars().take(max_arg_len).collect::<String>())
+                     } else {
+                        arg.clone()
+                     };
                     lines.push(Line::from(vec![
                         Span::styled(
                             circle,
                             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                        ),
+                         ),
                         Span::styled(
                             action,
                             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                        ),
+                         ),
                         Span::styled(
-                            format!("({arg})..."),
+                            format!("({display_arg})..."),
                             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-                        ),
-                    ]));
-                }
-                continue;
+                         ),
+                         ]));
+                      }
+                 continue;
             }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             render_assistant_message(
