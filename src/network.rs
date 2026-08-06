@@ -2838,6 +2838,34 @@ fn build_volatile_context_block(
     b
 }
 
+fn build_repo_map_fragment() -> Option<String> {
+    let root = std::env::current_dir().ok()?;
+    let mut entries: Vec<String> = std::fs::read_dir(&root)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with('.') || n == "target" { return None; }
+            let mut s = n;
+            if e.file_type().ok()?.is_dir() { s.push('/'); }
+            Some(s)
+        })
+        .collect();
+    entries.sort();
+    let mut out = String::from("# Repo map (top-level)\n");
+    for e in entries.iter().take(30) { out.push_str(&format!("- {e}\n")); }
+    // add src modules if present
+    if let Ok(src) = std::fs::read_dir(root.join("src")) {
+        let mut mods: Vec<String> = src.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        mods.sort();
+        if !mods.is_empty() {
+            out.push_str("\nsrc/\n");
+            for m in mods.iter().take(20) { out.push_str(&format!("- {m}\n")); }
+        }
+    }
+    Some(out)
+}
+
 fn build_dynamic_context_tail(
     context_section: String,
     read_files: &[String],
@@ -2847,6 +2875,14 @@ fn build_dynamic_context_tail(
         "environment",
         context_section,
     )];
+    // Repo map is high-value only once files/todos exist; keep the empty
+    // case (unit test: no files, no todos) returning just the env section
+    // so prefix caching and tests stay stable.
+    if !read_files.is_empty() || !todos.is_empty() {
+        if let Some(map) = build_repo_map_fragment() {
+            fragments.push(history::ContextFragment::new("repo_map", map));
+        }
+    }
 
     if !read_files.is_empty() {
         fragments.push(history::ContextFragment::new(
