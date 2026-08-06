@@ -3377,6 +3377,8 @@ async fn execute_tool_batch(
             plan_mode && !crate::tools::allowed_in_plan_mode(name)
         };
         let (executed_name, execution, diff_opt, replay_artifact, user_wait) = async move {
+            // File-cache-diff: re-reads of unchanged files replay cached output
+            // with a short prefix instead of re-sending full content.
             let is_read_only = is_read_only_tool(&name_clone);
             let mut replay_artifact = None;
 
