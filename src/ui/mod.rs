@@ -625,7 +625,7 @@ fn format_tokens_info(state: &AppState) -> (String, String) {
 }
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
-    let footer_area = chunks[3];
+    let footer_area = chunks[4];
     let show_picker = state.modal_open();
 
     let left_spans = if state.status == AppStatus::Streaming
@@ -686,11 +686,6 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 format!("  executing: {tool_name}"),
                 get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
             ));
-        } else if !state.pending_queue.is_empty() {
-            spans.push(Span::styled(
-                format!("  queued: {}", state.pending_queue.len()),
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
         } else {
             let random_statuses = [
                 "Thinking...",
@@ -742,17 +737,10 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
             ));
         }
 
-        if !state.pending_queue.is_empty() {
-            spans.push(Span::styled(
-                format!("   idle (queued: {})", state.pending_queue.len()),
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-        } else {
-            spans.push(Span::styled(
-                "   idle",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
+        spans.push(Span::styled(
+            "   idle",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
         spans
     };
 
@@ -936,15 +924,77 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
     );
 }
 
+/// Shows the most recently queued prompt on a thin line directly above the
+/// input box, padded with a blank row above and below, so a prompt typed and
+/// enqueued mid-stream doesn't vanish from view until it's actually sent.
+/// Renders nothing when the queue is empty — the caller already collapses
+/// this block to zero height in that case.
+fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
+    let Some(latest) = state.pending_queue.last() else {
+        return;
+    };
+    let block = chunks[1];
+    if block.height < 3 {
+        return;
+    }
+    let show_picker = state.modal_open();
+    let area = ratatui::layout::Rect::new(block.x, block.y + 1, block.width, 1);
+
+    let label = format!("queued ({}): ", state.pending_queue.len());
+    let hint = "press ↑ to edit";
+    let max_text_width = (area.width as usize).saturating_sub(label.len() + hint.len() + 2);
+    let preview: String = latest.chars().take(max_text_width).collect();
+    let truncated = latest.chars().count() > max_text_width;
+    let text = if truncated {
+        format!("{preview}…")
+    } else {
+        preview
+    };
+
+    let left_spans = vec![
+        Span::styled(
+            label,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+        Span::styled(
+            text,
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+    ];
+    let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
+
+    f.render_widget(
+        Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG())),
+        area,
+    );
+
+    if area.width as usize > left_width + hint.len() {
+        let hint_area = ratatui::layout::Rect::new(
+            area.x + area.width - hint.len() as u16,
+            area.y,
+            hint.len() as u16,
+            1,
+        );
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                hint,
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+            )))
+            .style(Style::default().bg(COLOR_BG())),
+            hint_area,
+        );
+    }
+}
+
 fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) -> Margin {
     let show_picker = state.modal_open();
 
     let input_split = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(chunks[1]);
+        .split(chunks[2]);
 
-    let line_chars = "▌\n".repeat(chunks[1].height as usize);
+    let line_chars = "▌\n".repeat(chunks[2].height as usize);
     let vertical_line_widget = Paragraph::new(line_chars).style(get_themed_style(
         COLOR_SECONDARY(),
         COLOR_BG(),
@@ -2164,6 +2214,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         let inner_width = f.area().width.saturating_sub(6).max(1);
         let input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
         let input_height = input_lines + 2;
+        // The queue block (blank + text + blank) only takes space when there's
+        // something queued, so idle sessions don't carry a dead gap above the
+        // input box.
+        let queue_block_height = if state.pending_queue.is_empty() { 0 } else { 3 };
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -2171,6 +2225,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             .vertical_margin(1)
             .constraints([
                 Constraint::Min(3),
+                Constraint::Length(queue_block_height),
                 Constraint::Length(input_height),
                 Constraint::Length(1),
                 Constraint::Length(1),
@@ -2178,6 +2233,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             .split(f.area());
 
         render_conversation(f, &chunks, state);
+        render_queue_line(f, &chunks, state);
         let input_margin = render_input(f, &chunks, state);
         render_footer(f, &chunks, state);
 
@@ -2194,20 +2250,20 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         };
 
         if !filtered_cmds.is_empty() {
-            let input_inner = chunks[1].inner(input_margin);
+            let input_inner = chunks[2].inner(input_margin);
             // Cap to the rows available above the input box so a long command
             // list scrolls inside the popup instead of overlapping the prompt.
             let popup_height = (filtered_cmds.len() as u16)
                 .min(MAX_POPUP_ROWS)
-                .min(chunks[1].y);
-            let popup_y = chunks[1].y.saturating_sub(popup_height);
+                .min(chunks[2].y);
+            let popup_y = chunks[2].y.saturating_sub(popup_height);
             let popup_area =
                 ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
             render_popup_menu(f, state, &filtered_cmds, popup_area);
         } else if !at_files.is_empty() {
-            let input_inner = chunks[1].inner(input_margin);
+            let input_inner = chunks[2].inner(input_margin);
             let popup_height = at_files.len().min(8) as u16;
-            let popup_y = chunks[1].y.saturating_sub(popup_height);
+            let popup_y = chunks[2].y.saturating_sub(popup_height);
             let popup_area =
                 ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
             render_at_popup_menu(f, state, &at_files, popup_area);
