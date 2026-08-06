@@ -75,10 +75,9 @@ const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
 /// the goal is to catch a runaway session (the benchmark that motivated this
 /// hit 106 rounds with no hard stop), not to cut off healthy long-running
 /// work. Any one signal firing is enough: a session that is genuinely
-/// healthy on every other axis but has spent 500k tokens, or ten minutes, or
-/// 40 rounds, has stopped being worth running unattended.
+/// healthy on every other axis but has spent 500k tokens or 40 rounds has
+/// stopped being worth running unattended.
 const MAX_TOOL_ROUNDS: usize = usize::MAX;
-const MAX_TURN_WALL_CLOCK: std::time::Duration = std::time::Duration::from_secs(600);
 const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
 /// A tool that reports success without changing anything (already-applied
 /// edits, no-op runs) does not count as progress, so this escalates much
@@ -98,7 +97,6 @@ const MAX_CONSECUTIVE_MALFORMED_CALLS: usize = 4;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TurnBudgetLimit {
     ToolRounds(usize),
-    WallClock(u64),
     Tokens(u64),
     NoProgress(usize),
     FailedMutations(usize),
@@ -110,9 +108,6 @@ impl std::fmt::Display for TurnBudgetLimit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TurnBudgetLimit::ToolRounds(n) => write!(f, "maximum tool rounds reached ({n})"),
-            TurnBudgetLimit::WallClock(secs) => {
-                write!(f, "maximum turn wall-clock time reached ({secs}s)")
-            }
             TurnBudgetLimit::Tokens(n) => write!(f, "maximum token budget reached (~{n} tokens)"),
             TurnBudgetLimit::NoProgress(n) => write!(
                 f,
@@ -154,13 +149,6 @@ fn accumulate_tokens_used(current: u64, reported_this_round: Option<u64>, conten
 fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
     if ctx.tool_rounds >= MAX_TOOL_ROUNDS {
         return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
-    }
-    let elapsed = ctx
-        .turn_started_at
-        .elapsed()
-        .saturating_sub(ctx.user_wait_duration);
-    if elapsed >= MAX_TURN_WALL_CLOCK {
-        return Some(TurnBudgetLimit::WallClock(elapsed.as_secs()));
     }
     if ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET {
         return Some(TurnBudgetLimit::Tokens(ctx.tokens_used));
@@ -6327,20 +6315,6 @@ mod tests {
         match turn_budget_exceeded(&ctx) {
             Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, MAX_TOOL_ROUNDS),
             other => panic!("expected ToolRounds limit, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn timeout_triggers_the_budget_safely() {
-        let mut ctx = TurnContext::new();
-        // Simulate elapsed wall-clock time without an actual 10-minute sleep.
-        ctx.turn_started_at =
-            std::time::Instant::now() - (MAX_TURN_WALL_CLOCK + std::time::Duration::from_secs(1));
-        match turn_budget_exceeded(&ctx) {
-            Some(TurnBudgetLimit::WallClock(secs)) => {
-                assert!(secs >= MAX_TURN_WALL_CLOCK.as_secs())
-            }
-            other => panic!("expected WallClock limit, got {other:?}"),
         }
     }
 
