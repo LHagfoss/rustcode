@@ -249,35 +249,73 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         lines.push(Line::from(Span::styled(top, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
         for (idx, (cells, is_header)) in rows.iter().enumerate() {
             let style = if *is_header { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker) } else { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker) };
-            let mut row_spans = Vec::new();
-            row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+
+            // Wrap each cell's text into lines fitting col_widths[i]
+            let mut cell_lines: Vec<Vec<String>> = Vec::new();
+            let mut max_cell_height = 1usize;
+
             for i in 0..cols {
                 let txt = cells.get(i).map(|s| s.as_str()).unwrap_or("");
                 let w = col_widths[i];
-                let formatted = if txt.width() > w {
-                    let mut end = 0;
-                    let mut current_w = 0;
-                    let target_w = w.saturating_sub(1);
-                    for ch in txt.chars() {
-                        let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                        if current_w + ch_w > target_w {
-                            break;
-                        }
-                        current_w += ch_w;
-                        end += ch.len_utf8();
-                    }
-                    let truncated = &txt[..end];
-                    let pad = w.saturating_sub(current_w + 1);
-                    format!(" {}…{:pad$} ", truncated, "", pad = pad)
+                let mut lines_for_cell = Vec::new();
+
+                if txt.is_empty() {
+                    lines_for_cell.push(String::new());
                 } else {
-                    let pad = w.saturating_sub(txt.width());
-                    format!(" {}{:pad$} ", txt, "", pad = pad)
-                };
-                row_spans.push(Span::styled(formatted, style));
-                row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+                    for word in txt.split_inclusive(|c: char| c.is_whitespace()) {
+                        if lines_for_cell.is_empty() {
+                            lines_for_cell.push(String::new());
+                        }
+                        let last_line = lines_for_cell.last_mut().unwrap();
+                        let last_w = last_line.width();
+                        let word_w = word.width();
+
+                        if last_w + word_w <= w || last_w == 0 {
+                            last_line.push_str(word);
+                        } else {
+                            lines_for_cell.push(word.trim_start().to_string());
+                        }
+                    }
+                }
+                max_cell_height = max_cell_height.max(lines_for_cell.len());
+                cell_lines.push(lines_for_cell);
             }
-            lines.push(Line::from(row_spans));
-            if idx + 1 < rows.len() {
+
+            // Render row line by line for multi-line cells
+            for line_idx in 0..max_cell_height {
+                let mut row_spans = Vec::new();
+                row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+
+                for i in 0..cols {
+                    let cell_txt = cell_lines[i].get(line_idx).map(|s| s.trim_end()).unwrap_or("");
+                    let w = col_widths[i];
+                    let formatted = if cell_txt.width() > w {
+                        let mut end = 0;
+                        let mut current_w = 0;
+                        let target_w = w.saturating_sub(1);
+                        for ch in cell_txt.chars() {
+                            let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                            if current_w + ch_w > target_w {
+                                break;
+                            }
+                            current_w += ch_w;
+                            end += ch.len_utf8();
+                        }
+                        let truncated = &cell_txt[..end];
+                        let pad = w.saturating_sub(current_w + 1);
+                        format!(" {}…{:pad$} ", truncated, "", pad = pad)
+                    } else {
+                        let pad = w.saturating_sub(cell_txt.width());
+                        format!(" {}{:pad$} ", cell_txt, "", pad = pad)
+                    };
+                    row_spans.push(Span::styled(formatted, style));
+                    row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+                }
+                lines.push(Line::from(row_spans));
+            }
+
+            // Draw divider only under header row
+            if idx == 0 && rows[0].1 {
                 let div = format!("├{}┤", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┼"));
                 lines.push(Line::from(Span::styled(div, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
             }
