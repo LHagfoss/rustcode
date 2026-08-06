@@ -221,6 +221,7 @@ pub struct AppConfig {
     pub debug_verbose_network_logging: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default)]
     #[serde(with = "serde_millis")]
     pub start_time: Option<std::time::SystemTime>,
 }
@@ -1096,9 +1097,9 @@ pub fn sync_config_push() -> Result<(), String> {
         .or_else(|_| std::env::var("HOST"))
         .unwrap_or_else(|_| "device".to_string());
 
-    // 1. Stage files (config.toml, skills/, sessions/)
+    // 1. Stage all files in config directory
     let add_out = std::process::Command::new("git")
-        .args(["add", "config.toml", "skills", "sessions"])
+        .args(["add", "-A"])
         .current_dir(&dir)
         .status()
         .map_err(|e| format!("Failed to stage files: {e}"))?;
