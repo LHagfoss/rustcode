@@ -1,3 +1,26 @@
+## [v0.13.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.13.0) - 2026-08-06
+
+### Features
+- **Context:** Make compaction budget dynamic per model ([#418](https://github.com/LHagfoss/rustcode/pull/418) / [`dfc6b90`](https://github.com/LHagfoss/rustcode/commit/dfc6b90))
+- **Context:** Add compact repo-map fragment ([#419](https://github.com/LHagfoss/rustcode/pull/419) / [`0581c8d`](https://github.com/LHagfoss/rustcode/commit/0581c8d))
+- **Context:** Tiered compaction — skip LLM summary for local Ollama ([#420](https://github.com/LHagfoss/rustcode/pull/420) / [`92daaba`](https://github.com/LHagfoss/rustcode/commit/92daaba))
+- **Context:** Document file-cache-diff replay ([#421](https://github.com/LHagfoss/rustcode/pull/421) / [`aef1eae`](https://github.com/LHagfoss/rustcode/commit/aef1eae))
+- **Context:** Cap skill content to 12k chars ([#422](https://github.com/LHagfoss/rustcode/pull/422) / [`2bfa580`](https://github.com/LHagfoss/rustcode/commit/2bfa580))
+- **Context:** Add compaction reclaim metrics ([#423](https://github.com/LHagfoss/rustcode/pull/423) / [`9690c49`](https://github.com/LHagfoss/rustcode/commit/9690c49))
+- **Agent:** Preserve structured tool calls end-to-end via envelope ([#424](https://github.com/LHagfoss/rustcode/pull/424) / [`b2f8888`](https://github.com/LHagfoss/rustcode/commit/b2f8888))
+- **UI:** Render markdown tables with styled column dividers ([#417](https://github.com/LHagfoss/rustcode/pull/417) / [`b9524df`](https://github.com/LHagfoss/rustcode/commit/b9524df))
+
+### Fixes
+- **UI:** Complete overhaul of markdown table rendering — aligned columns, outer borders, horizontal dividers, cell padding, right border alignment, and content wrapping ([#425](https://github.com/LHagfoss/rustcode/pull/425)–[#435](https://github.com/LHagfoss/rustcode/pull/435) / [`523f33a`](https://github.com/LHagfoss/rustcode/commit/523f33a))
+- **UI:** Restore themed markdown renderer, remove `tui-markdown` dependency ([`84d185b`](https://github.com/LHagfoss/rustcode/commit/84d185b))
+- **UI:** Request final redraw on turn completion and collapse thinking by default during generation ([`2730a6c`](https://github.com/LHagfoss/rustcode/commit/2730a6c))
+- **Agent:** Classify tool failures and require grounded recovery ([#426](https://github.com/LHagfoss/rustcode/pull/426) / [`fe859ba`](https://github.com/LHagfoss/rustcode/commit/fe859ba))
+- **Network:** Increase turn token budget limit from 500k to 5M tokens ([`83493ac`](https://github.com/LHagfoss/rustcode/commit/83493ac))
+- **Network:** Remove max tool rounds limit in harness ([`eb476ef`](https://github.com/LHagfoss/rustcode/commit/eb476ef))
+
+### Performance
+- Optimize dependencies in debug builds for scroll performance ([`2bac090`](https://github.com/LHagfoss/rustcode/commit/2bac090))
+
 ## [v0.12.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.12.1) - 2026-08-06
 - feat(sync): add default .gitignore to exclude logs, backups, and binaries from sync repo ([#415](https://github.com/LHagfoss/rustcode/pull/415) / [`2febdd0`](https://github.com/LHagfoss/rustcode/commit/2febdd0))
 
