@@ -1912,7 +1912,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     is_generating: true,
                     viewport_width: inner_area.width,
                     show_picker,
-                    thought_collapsed: false,
+                    thought_collapsed: true,
                     msg_index: None,
                     last_copy_text: state.last_copy_text.clone(),
                 },
