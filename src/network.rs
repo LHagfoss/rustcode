@@ -4861,6 +4861,7 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
 
         s.current_response.clear();
         s.status = AppStatus::Idle;
+        s.request_redraw();
 
         if let Some(u) = &usage {
             crate::config::track_usage(u.prompt_tokens as u64, u.completion_tokens as u64);
