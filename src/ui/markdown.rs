@@ -102,15 +102,30 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
         for word in text.split_inclusive(|c: char| c.is_whitespace()) {
             let word_width = word.width();
             if word_width > width {
-                use unicode_width::UnicodeWidthChar;
+                // Break long unspaced tokens (like path lists app/foo.rsapp/bar.rs) at '/' or '.' boundary if available
+                let mut chunk = String::new();
+                let mut chunk_w = 0;
                 for ch in word.chars() {
-                    let ch_width = ch.width().unwrap_or(1);
-                    if current_width + ch_width > width && current_width > 0 {
+                    let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                    if current_width + chunk_w + ch_w > width && (current_width > 0 || chunk_w > 0) {
+                        if !chunk.is_empty() {
+                            current.push(Span::styled(std::mem::take(&mut chunk), style));
+                        }
                         lines.push(Line::from(std::mem::take(&mut current)));
                         current_width = 0;
+                        chunk_w = 0;
                     }
-                    current.push(Span::styled(ch.to_string(), style));
-                    current_width += ch_width;
+                    chunk.push(ch);
+                    chunk_w += ch_w;
+                    if (ch == '/' || ch == '.') && current_width + chunk_w >= width / 2 {
+                        current.push(Span::styled(std::mem::take(&mut chunk), style));
+                        current_width += chunk_w;
+                        chunk_w = 0;
+                    }
+                }
+                if !chunk.is_empty() {
+                    current.push(Span::styled(chunk, style));
+                    current_width += chunk_w;
                 }
             } else {
                 if current_width > 0 && current_width + word_width > width {
@@ -181,14 +196,21 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let flush_table = |lines: &mut Vec<Line<'static>>, rows: &[(Vec<String>, bool)], width: usize, show_picker: bool| {
         if rows.is_empty() { return; }
         let cols = rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0);
-        // Ideal widths capped per-column: ID 18, numeric cols 12-14, avoids one giant cell blowing out
-        let caps = [18usize, 6, 18, 14, 10]; // Session, Turns, Total, Completion, File Size
+        // Ideal widths capped per-column: content drives width, header truncated to cap
+        let caps = [18usize, 10, 18, 14, 18]; // last col widened so "Replay or Conversation?" content-driven
         let mut col_widths = vec![3usize; cols];
-        for (cells, _) in rows { for (i, c) in cells.iter().enumerate() { let cap = caps.get(i).copied().unwrap_or(22); col_widths[i] = col_widths[i].max(c.width().min(cap)); } }
-        // Ensure headers never truncate: bump to header width
-        if let Some((hdr, true)) = rows.first() { for (i, h) in hdr.iter().enumerate() { if i < cols { col_widths[i] = col_widths[i].max(h.width()); } } }
+        // Content drives width; headers are truncated like any other cell (capped) so
+        // a long header like "Replay or Conversation?" never widens the column past
+        // the widest content cell.
+        for (cells, is_header) in rows {
+            for (i, c) in cells.iter().enumerate() {
+                let cap = caps.get(i).copied().unwrap_or(22);
+                let effective = if *is_header { c.width().min(cap) } else { c.width().min(cap) };
+                col_widths[i] = col_widths[i].max(effective);
+            }
+        }
         // Weighted shrink: large token columns shrink first, Session last
-        let total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1)*3;
+        let mut total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1)*3 + 4; // +4 outer borders
         if total > width && cols > 0 {
             let mut excess = total.saturating_sub(width);
             let order: Vec<usize> = {
@@ -204,6 +226,22 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 col_widths[i] -= take;
                 excess -= take;
             }
+            total = col_widths.iter().sum::<usize>() + cols.saturating_sub(1)*3 + 4;
+        }
+        // Expand: if table is narrower than available width, give remainder to the
+        // widest-content column so short headers like "Module"/"Purpose" don't leave
+        // 80 cols empty on the right (Core Modules case). Content drives width.
+        if total < width && cols > 0 {
+            let remainder = width.saturating_sub(total);
+            // pick column with widest uncapped content (usually Purpose/last col)
+            let mut uncapped = vec![0usize; cols];
+            for (cells, _) in rows.iter() {
+                for (i, c) in cells.iter().enumerate() {
+                    if i < cols { uncapped[i] = uncapped[i].max(c.width()); }
+                }
+            }
+            let target = uncapped.iter().enumerate().max_by_key(|&(_, &w)| w).map(|(i, _)| i).unwrap_or(cols - 1);
+            col_widths[target] += remainder;
         }
         // outer borders: 1 padding spaces per cell side: "─" * (w + 2)
         let top = format!("┌{}┐", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┬"));
@@ -217,10 +255,23 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 let txt = cells.get(i).map(|s| s.as_str()).unwrap_or("");
                 let w = col_widths[i];
                 let formatted = if txt.width() > w {
-                    let end = txt.floor_char_boundary(w.saturating_sub(1));
-                    format!(" {}… ", &txt[..end])
+                    let mut end = 0;
+                    let mut current_w = 0;
+                    let target_w = w.saturating_sub(1);
+                    for ch in txt.chars() {
+                        let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                        if current_w + ch_w > target_w {
+                            break;
+                        }
+                        current_w += ch_w;
+                        end += ch.len_utf8();
+                    }
+                    let truncated = &txt[..end];
+                    let pad = w.saturating_sub(current_w + 1);
+                    format!(" {}…{:pad$} ", truncated, "", pad = pad)
                 } else {
-                    format!(" {:<w$} ", txt, w=w)
+                    let pad = w.saturating_sub(txt.width());
+                    format!(" {}{:pad$} ", txt, "", pad = pad)
                 };
                 row_spans.push(Span::styled(formatted, style));
                 row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
@@ -314,7 +365,20 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             Event::Start(Tag::Link { .. }) => inline.link = true,
             Event::End(TagEnd::Link) => inline.link = false,
             Event::Text(text) | Event::InlineHtml(text) => {
-                if in_table { current_cell.push_str(&text); continue; }
+                if in_table {
+                    // Cap per-cell content so a 55KB curl dump doesn't become a single wide row
+                    // and blow out column widths (the "green stuff" overflow in 1786013456760).
+                    if current_cell.len() + text.len() > 400 {
+                        let remaining = 400usize.saturating_sub(current_cell.len());
+                        if remaining > 3 {
+                            current_cell.push_str(&text[..text.floor_char_boundary(remaining.saturating_sub(1))]);
+                            current_cell.push('…');
+                        }
+                    } else {
+                        current_cell.push_str(&text);
+                    }
+                    continue;
+                }
                 let mut style = inline;
                 if heading.is_some() {
                     style.bold = true;
