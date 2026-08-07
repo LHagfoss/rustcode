@@ -818,7 +818,7 @@ pub fn tool_system_prompt(
 - Run focused tests or checks after code changes unless the user says not to. When modifying algorithms, visual curves, or complex logic, verify edge/boundary conditions and add or update unit tests to prove correctness before completing the task.
 - Ask before expensive or externally visible operations.\n\
 - Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
-- Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations.\n\
+- Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations. The UI automatically appends a 'write your own answer' slot with interactive text input, so NEVER include an 'Other' or 'Write your own' option in the options array.
 - When the task is complete, output a plain-text final summary (with no tool block).\n\n\
 # Working memory & avoiding loops\n\
 - BACKGROUND TASKS & WAITING: When a background task is running (e.g. from `run_command` with `\"background\": true`), completion notifications arrive automatically when it finishes. Do NOT poll `manage_task` with action `status` or `list` in a loop while waiting for a background task — stop calling tools now so execution pauses until completion.\n\
