@@ -373,6 +373,10 @@ pub(crate) fn parse_json_bool(v: &Value) -> Option<bool> {
     }
 }
 
+/// A fully self-contained built-in tool definition. Adding a new built-in
+/// tool means writing one `pub const …: Tool` literal in the module that holds
+/// its handler and referencing it from the `TOOLS` slice below — no other
+/// tables need updating, since schema, capabilities, and safety all live here.
 pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
@@ -382,6 +386,16 @@ pub struct Tool {
     /// If true, the agent loop will pause and show a Y/N confirmation modal
     /// to the user before executing. Use for destructive tools (write, create, run).
     pub requires_confirmation: bool,
+    /// Canonical JSON Schema advertised to API-native providers. The text
+    /// protocol still uses `arguments` as compact documentation, but native
+    /// providers must receive real types, required fields, and nested item
+    /// schemas.
+    pub schema: fn() -> Value,
+    /// Runtime capabilities used to enforce agent modes and safety policy.
+    pub capabilities: &'static [ToolCapability],
+    /// Execution safety class used by the scheduler to decide which calls may
+    /// safely run concurrently.
+    pub safety: ToolSafety,
 }
 
 /// Runtime capabilities used to enforce agent modes and safety policy.
@@ -432,23 +446,13 @@ pub fn authorize_tool(
 /// callers must opt them into a mode explicitly instead of assuming safety.
 pub fn tool_capabilities(name: &str) -> &'static [ToolCapability] {
     use ToolCapability::*;
+    if let Some(tool) = TOOLS.iter().find(|t| t.name == name) {
+        return tool.capabilities;
+    }
+    // Agent tools live outside `TOOLS`; keep their capabilities here.
     match name {
-        "view_file" | "list_directory" | "grep" | "glob" | "find_symbol" | "get_project_map" => {
-            &[ReadWorkspace]
-        }
-        "get_time" => &[],
-        "search_web" => &[Network],
-        "ask_question" => &[UserInteraction],
-        "use_skill" | "todo_write" => &[SessionState],
-        "replace_file_content"
-        | "multi_replace_file_content"
-        | "write_to_file"
-        | "delete_file"
-        | "move_file"
-        | "copy_file" => &[WriteWorkspace],
-        "run_command" | "manage_task" => &[ExecuteCommands],
         "spawn_agent" | "send_agent" | "set_goal" => &[AgentDelegation, SessionState],
-        "complete_task" => &[SessionState],
+        "todo_write" => &[SessionState],
         _ => &[],
     }
 }
@@ -471,140 +475,29 @@ pub fn allowed_in_plan_mode(name: &str) -> bool {
         || name == "todo_write")
 }
 
+/// Registry of built-in tools. Each entry is a self-contained `Tool`
+/// definition colocated with its handler in the sibling module; this slice
+/// only fixes the ordering in which tools are advertised.
 pub const TOOLS: &[Tool] = &[
-    Tool {
-        name: "ask_question",
-        description: "Ask the user a multiple-choice question to clarify underspecified requirements, solicit design choices, or select an option. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands. The UI automatically appends a 'write your own answer' slot for free-form text, so never add your own 'Other' option and never pass an empty options list.",
-        arguments: r#"{"question": "The question title or description to ask", "options": ["Option 1 text", "Option 2 text", "Option 3 text"], "is_multi_select": false}"#,
-        handler: misc::ask_question,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "get_time",
-        description: "Get the current local date and time",
-        arguments: r#"{} (no arguments)"#,
-        handler: misc::get_time,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "grep",
-        description: "Recursively search file contents with regex. Respects                       .gitignore and skips hidden files. Use this to find where                       functions, classes, strings, or patterns are defined or used",
-        arguments: r#"{"pattern": "regex pattern", "path": "optional directory or file (default current dir)", "include": "optional file glob filter e.g. '*.rs'", "ignore_case": optional bool (default false)}"#,
-        handler: search::grep,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "glob",
-        description: "Find files by glob pattern (e.g. '**/*.rs', 'src/**/*.ts').                       Respects .gitignore and skips hidden files. Returns matching                       paths, sorted. Use this to discover files by name",
-        arguments: r#"{"pattern": "glob pattern", "path": "optional root directory (default current dir)"}"#,
-        handler: search::glob,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "list_directory",
-        description: "List files in a directory",
-        arguments: r#"{"path": "directory path, defaults to current dir"}"#,
-        handler: search::list_directory,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "delete_file",
-        description: "Delete a file from the filesystem",
-        arguments: r#"{"path": "file to delete"}"#,
-        handler: filesystem::delete_file,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "move_file",
-        description: "Move or rename a file or directory to a new path",
-        arguments: r#"{"src": "source path", "dest": "destination path"}"#,
-        handler: filesystem::move_file,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "copy_file",
-        description: "Copy a file to a new path",
-        arguments: r#"{"src": "source path to copy", "dest": "destination path"}"#,
-        handler: filesystem::copy_file,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "run_command",
-        description: "Run one command through the platform shell and return stdout/stderr and the exit code. The command may use normal shell syntax, including ';' or '&&' to chain commands, pipes, redirects, and environment assignments. Supports an optional working directory, environment overrides, timeout (default 120s), and background execution ('background': true). Note: Interactive 'sudo' requiring passwords is disabled; use non-privileged commands or 'sudo -n'.",
-        arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
-        handler: exec::run_command,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "manage_task",
-        description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill'). Do NOT poll 'status' or 'list' in a loop — completion notifications arrive automatically. Stop calling tools to wait for completion.",
-        arguments: r#"{"action": "list, status, or kill", "task_id": "required for status/kill"}"#,
-        handler: exec::manage_task_tool,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "search_web",
-        description: "Performs a web search to look up documentation, API details, or code patterns.",
-        arguments: r#"{"query": "search query terms", "domain": "optional domain filter e.g. 'docs.rs'"}"#,
-        handler: misc::search_web,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "find_symbol",
-        description: "Queries the codebase symbol index for matching structures, functions, enums, impls, traits, or modules. Returns definition location and signature.",
-        arguments: r#"{"query": "search query string (fuzzy matching on symbol name)"}"#,
-        handler: search::find_symbol_tool,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "get_project_map",
-        description: "Generates a compressed map of all symbols and API signatures in the codebase to understand project structure.",
-        arguments: r#"{}"#,
-        handler: search::get_project_map_tool,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "view_file",
-        description: "View the contents of a file or directory. Each call has a 250-line hard cap; request targeted follow-up ranges with start_line/end_line for more content. Supports 1-indexed line ranges and an optional byte offset.",
-        arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (each call is capped at 250 lines; request targeted follow-up ranges for more content)", "content_offset": "optional byte offset into content"}"#,
-        handler: filesystem::view_file_tool,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "replace_file_content",
-        description: "Surgically edit code in an existing file. Supports single replacement (target_content/replacement_content or old_string/new_string) or array of batch edits (edits: [{old_string, new_string}]). Line numbers are optional. This tool only replaces: to INSERT text, target an existing neighbouring line and repeat it in the replacement — to prepend, target the current first line and replace it with the new text followed by that line. An empty target is rejected, since it matches everywhere.",
-        arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (or old_string) — never empty; to insert, anchor on an adjacent line and repeat it in the replacement", "replacement_content": "complete replacement text (or new_string)", "edits": "optional array of [{old_string, new_string}] for multiple edits in 1 call"}"#,
-        handler: filesystem::replace_file_content_tool,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "multi_replace_file_content",
-        description: "Apply multiple non-contiguous edits across a single file in a single tool call.                       Specify each edit as a separate replacement chunk.",
-        arguments: r#"{"path": "absolute or relative path to file", "replacements": "array of objects, each containing: {start_line, end_line, target_content, replacement_content}"}"#,
-        handler: filesystem::multi_replace_file_content_tool,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "write_to_file",
-        description: "Create a new file or overwrite an existing file with complete content.                       Creates parent directories automatically.",
-        arguments: r#"{"path": "absolute or relative path to file", "content": "entire contents to write", "overwrite": "set true to allow overwriting an existing file (default false)"}"#,
-        handler: filesystem::write_to_file_tool,
-        requires_confirmation: true,
-    },
-    Tool {
-        name: "complete_task",
-        description: "Mark the continuous goal/task as successfully complete.",
-        arguments: r#"{"result": "summary of what was achieved and final results"}"#,
-        handler: misc::complete_task_tool,
-        requires_confirmation: false,
-    },
-    Tool {
-        name: "use_skill",
-        description: "Load a skill by name to get its instructions and available files. Control-plane call: emit it ALONE in its response — any other tool calls batched with it are dropped.",
-        arguments: r#"{"name": "skill name"}"#,
-        handler: misc::use_skill,
-        requires_confirmation: false,
-    },
+    misc::ASK_QUESTION,
+    misc::GET_TIME,
+    search::GREP,
+    search::GLOB,
+    search::LIST_DIRECTORY,
+    filesystem::DELETE_FILE,
+    filesystem::MOVE_FILE,
+    filesystem::COPY_FILE,
+    exec::RUN_COMMAND,
+    exec::MANAGE_TASK,
+    misc::SEARCH_WEB,
+    search::FIND_SYMBOL,
+    search::GET_PROJECT_MAP,
+    filesystem::VIEW_FILE,
+    filesystem::REPLACE_FILE_CONTENT,
+    filesystem::MULTI_REPLACE_FILE_CONTENT,
+    filesystem::WRITE_TO_FILE,
+    misc::COMPLETE_TASK,
+    misc::USE_SKILL,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {
@@ -629,19 +522,14 @@ pub enum ToolSafety {
 }
 
 pub fn tool_safety(name: &str) -> ToolSafety {
+    if let Some(tool) = TOOLS.iter().find(|t| t.name == name) {
+        return tool.safety;
+    }
+    // Tools that live outside `TOOLS`: the agent tools, plus the legacy
+    // `background_output`/`write_stdin` names kept for safety classification.
     match name {
-        "use_skill" => ToolSafety::ControlPlane,
-        "view_file" | "list_directory" | "grep" | "glob" | "get_time" | "find_symbol"
-        | "get_project_map" | "search_web" => ToolSafety::ReadOnly,
-        "replace_file_content"
-        | "multi_replace_file_content"
-        | "write_to_file"
-        | "delete_file"
-        | "move_file"
-        | "copy_file" => ToolSafety::WorkspaceMutation,
-        "run_command" | "background_output" | "write_stdin" => ToolSafety::ProcessControl,
-        "ask_question" => ToolSafety::Interactive,
         "spawn_agent" | "send_agent" | "set_goal" | "todo_write" => ToolSafety::Delegation,
+        "background_output" | "write_stdin" => ToolSafety::ProcessControl,
         _ => ToolSafety::Unknown,
     }
 }
@@ -832,110 +720,14 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     tools
 }
 
-/// Canonical JSON Schemas for built-in tools.
-///
-/// The text protocol still uses `Tool::arguments` as compact documentation, but
-/// native providers must receive real types, required fields, and nested item
-/// schemas. Keeping this in one place prevents the API-native contract from
-/// silently drifting away from the handlers.
+/// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
+/// definition. Unknown names fall back to an empty permissive object schema.
 fn schema_for_tool(name: &str) -> Value {
-    match name {
-        "ask_question" => serde_json::json!({
-            "type": "object",
-            "properties": {
-                "question": { "type": "string", "description": "Question to ask the user" },
-                "options": { "type": "array", "items": { "type": "string" }, "description": "Choices shown to the user" },
-                "is_multi_select": { "type": "boolean", "default": false }
-            },
-            "required": ["question", "options"]
-        }),
-        "get_time" | "get_project_map" => serde_json::json!({
-            "type": "object", "properties": {}, "additionalProperties": false
-        }),
-        "grep" => serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": { "type": "string" }, "path": { "type": "string" },
-                "include": { "type": "string" }, "ignore_case": { "type": "boolean", "default": false }
-            }, "required": ["pattern"]
-        }),
-        "glob" => serde_json::json!({
-            "type": "object", "properties": {
-                "pattern": { "type": "string" }, "path": { "type": "string" }
-            }, "required": ["pattern"]
-        }),
-        "list_directory" => serde_json::json!({
-            "type": "object", "properties": { "path": { "type": "string" } }
-        }),
-        "delete_file" => serde_json::json!({
-            "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"]
-        }),
-        "move_file" | "copy_file" => serde_json::json!({
-            "type": "object", "properties": {
-                "src": { "type": "string" }, "dest": { "type": "string" }
-            }, "required": ["src", "dest"]
-        }),
-        "run_command" => serde_json::json!({
-            "type": "object", "properties": {
-                "command": { "type": "string" }, "cwd": { "type": "string" },
-                "timeout_ms": { "type": "integer", "minimum": 1 },
-                "background": { "type": "boolean", "default": false },
-                "env": { "type": "object", "additionalProperties": { "type": "string" } }
-            }, "required": ["command"]
-        }),
-        "manage_task" => serde_json::json!({
-            "type": "object", "properties": {
-                "action": { "type": "string", "enum": ["list", "status", "kill"] },
-                "task_id": { "type": "string" }
-            }, "required": ["action"]
-        }),
-        "search_web" => serde_json::json!({
-            "type": "object", "properties": {
-                "query": { "type": "string" }, "domain": { "type": "string" }
-            }, "required": ["query"]
-        }),
-        "find_symbol" => serde_json::json!({
-            "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"]
-        }),
-        "view_file" => serde_json::json!({
-            "type": "object", "properties": {
-                "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
-                "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive end line; each call is capped at 250 lines. Request targeted follow-up ranges for more content." },
-                "content_offset": { "type": "integer", "minimum": 0 }
-            }, "required": ["path"]
-        }),
-        "replace_file_content" => serde_json::json!({
-            "type": "object", "properties": {
-                "path": { "type": "string" }, "target_content": { "type": "string" },
-                "replacement_content": { "type": "string" },
-                "edits": { "type": "array", "items": { "type": "object", "properties": {
-                    "old_string": { "type": "string" }, "new_string": { "type": "string" },
-                    "start_line": { "type": "integer" }, "end_line": { "type": "integer" }
-                }, "required": ["old_string", "new_string"] } }
-            }, "required": ["path"]
-        }),
-        "multi_replace_file_content" => serde_json::json!({
-            "type": "object", "properties": {
-                "path": { "type": "string" }, "replacements": { "type": "array", "items": { "type": "object", "properties": {
-                    "start_line": { "type": "integer" }, "end_line": { "type": "integer" },
-                    "target_content": { "type": "string" }, "replacement_content": { "type": "string" }
-                }, "required": ["start_line", "end_line", "target_content", "replacement_content"] } }
-            }, "required": ["path", "replacements"]
-        }),
-        "write_to_file" => serde_json::json!({
-            "type": "object", "properties": {
-                "path": { "type": "string" }, "content": { "type": "string" },
-                "overwrite": { "type": "boolean", "default": false }
-            }, "required": ["path", "content"]
-        }),
-        "complete_task" => serde_json::json!({
-            "type": "object", "properties": { "result": { "type": "string" } }, "required": ["result"]
-        }),
-        "use_skill" => serde_json::json!({
-            "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"]
-        }),
-        _ => schema_from_arguments("{}"),
-    }
+    TOOLS
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| (t.schema)())
+        .unwrap_or_else(|| schema_from_arguments("{}"))
 }
 
 fn schema_for_agent_tool(name: &str) -> Value {
@@ -1603,6 +1395,69 @@ pub fn needs_confirmation(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tools_have_unique_names() {
+        let mut names: Vec<&str> = TOOLS.iter().map(|t| t.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            TOOLS.len(),
+            "duplicate tool names in TOOLS registry"
+        );
+    }
+
+    #[test]
+    fn every_tool_schema_is_a_json_object() {
+        for tool in TOOLS {
+            let schema = (tool.schema)();
+            assert_eq!(
+                schema.get("type").and_then(|t| t.as_str()),
+                Some("object"),
+                "tool '{}' schema must be a JSON object with type \"object\"",
+                tool.name
+            );
+            assert!(
+                schema.get("properties").is_some(),
+                "tool '{}' schema must declare properties",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn policy_tables_match_registry() {
+        use ToolCapability::*;
+        // Representative spot-checks against the pre-refactor lookup tables.
+        assert_eq!(tool_capabilities("grep"), &[ReadWorkspace]);
+        assert_eq!(tool_safety("grep"), ToolSafety::ReadOnly);
+        assert!(!needs_confirmation("grep"));
+
+        assert_eq!(tool_capabilities("run_command"), &[ExecuteCommands]);
+        assert_eq!(tool_safety("run_command"), ToolSafety::ProcessControl);
+        assert!(needs_confirmation("run_command"));
+
+        assert_eq!(tool_capabilities("use_skill"), &[SessionState]);
+        assert_eq!(tool_safety("use_skill"), ToolSafety::ControlPlane);
+        assert!(!needs_confirmation("use_skill"));
+
+        // manage_task deliberately stays Unknown (confirmation via authorize_tool).
+        assert_eq!(tool_capabilities("manage_task"), &[ExecuteCommands]);
+        assert_eq!(tool_safety("manage_task"), ToolSafety::Unknown);
+        assert!(!needs_confirmation("manage_task"));
+
+        // Agent tools live outside TOOLS and keep their fallback arms.
+        assert_eq!(
+            tool_capabilities("spawn_agent"),
+            &[AgentDelegation, SessionState]
+        );
+        assert_eq!(tool_safety("spawn_agent"), ToolSafety::Delegation);
+        assert!(!needs_confirmation("spawn_agent"));
+        assert_eq!(tool_capabilities("todo_write"), &[SessionState]);
+        assert_eq!(tool_safety("background_output"), ToolSafety::ProcessControl);
+        assert_eq!(tool_safety("unknown_tool_xyz"), ToolSafety::Unknown);
+    }
 
     #[test]
     fn schema_from_arguments_extracts_string_props() {

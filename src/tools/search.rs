@@ -7,6 +7,99 @@ use serde_json::Value;
 pub(crate) use super::parse_json_bool;
 pub(crate) use super::resolve_tool_path;
 
+use super::{Tool, ToolCapability, ToolSafety};
+
+fn grep_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "pattern": { "type": "string" }, "path": { "type": "string" },
+            "include": { "type": "string" }, "ignore_case": { "type": "boolean", "default": false }
+        }, "required": ["pattern"]
+    })
+}
+
+pub const GREP: Tool = Tool {
+    name: "grep",
+    description: "Recursively search file contents with regex. Respects                       .gitignore and skips hidden files. Use this to find where                       functions, classes, strings, or patterns are defined or used",
+    arguments: r#"{"pattern": "regex pattern", "path": "optional directory or file (default current dir)", "include": "optional file glob filter e.g. '*.rs'", "ignore_case": optional bool (default false)}"#,
+    handler: grep,
+    requires_confirmation: false,
+    schema: grep_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn glob_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "pattern": { "type": "string" }, "path": { "type": "string" }
+        }, "required": ["pattern"]
+    })
+}
+
+pub const GLOB: Tool = Tool {
+    name: "glob",
+    description: "Find files by glob pattern (e.g. '**/*.rs', 'src/**/*.ts').                       Respects .gitignore and skips hidden files. Returns matching                       paths, sorted. Use this to discover files by name",
+    arguments: r#"{"pattern": "glob pattern", "path": "optional root directory (default current dir)"}"#,
+    handler: glob,
+    requires_confirmation: false,
+    schema: glob_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn list_directory_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": { "path": { "type": "string" } }
+    })
+}
+
+pub const LIST_DIRECTORY: Tool = Tool {
+    name: "list_directory",
+    description: "List files in a directory",
+    arguments: r#"{"path": "directory path, defaults to current dir"}"#,
+    handler: list_directory,
+    requires_confirmation: false,
+    schema: list_directory_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn find_symbol_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"]
+    })
+}
+
+pub const FIND_SYMBOL: Tool = Tool {
+    name: "find_symbol",
+    description: "Queries the codebase symbol index for matching structures, functions, enums, impls, traits, or modules. Returns definition location and signature.",
+    arguments: r#"{"query": "search query string (fuzzy matching on symbol name)"}"#,
+    handler: find_symbol_tool,
+    requires_confirmation: false,
+    schema: find_symbol_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn get_project_map_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {}, "additionalProperties": false
+    })
+}
+
+pub const GET_PROJECT_MAP: Tool = Tool {
+    name: "get_project_map",
+    description: "Generates a compressed map of all symbols and API signatures in the codebase to understand project structure.",
+    arguments: r#"{}"#,
+    handler: get_project_map_tool,
+    requires_confirmation: false,
+    schema: get_project_map_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
 const MAX_GREP_LINES: usize = 200;
 const MAX_GREP_FILES: usize = 50;
 const MAX_GLOB_RESULTS: usize = 200;
