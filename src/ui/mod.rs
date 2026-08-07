@@ -1283,12 +1283,20 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
                 .unwrap_or("");
             let clean_id = task_id.rsplit_once('/').map(|(_, r)| r).unwrap_or(task_id);
             if !clean_id.is_empty() {
-                format!("{action} ({clean_id})")
+                format!("{action} {clean_id}")
             } else {
                 action.to_string()
             }
         }
-        "background_task" => String::new(),
+        "background_task" => {
+            let task_id = args
+                .get("TaskId")
+                .or_else(|| args.get("task_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let clean_id = task_id.rsplit_once('/').map(|(_, r)| r).unwrap_or(task_id);
+            clean_id.to_string()
+        }
         _ => format_generic_tool_args(args),
     };
 
@@ -1759,9 +1767,22 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     "list_directory" | "glob" => "ListDir".to_string(),
                     "grep" => "Grep".to_string(),
                     "run_command" => "Bash".to_string(),
+                    "manage_task" => "ManageTask".to_string(),
+                    "background_task" => "TaskDone".to_string(),
                     other => to_pascal_case(other),
                 };
-                (action_label, String::new())
+                let arg = if tool_name == "background_task" {
+                    msg.content
+                        .lines()
+                        .next()
+                        .and_then(|l| l.strip_prefix("background_task: Task "))
+                        .and_then(|l| l.split_whitespace().next())
+                        .unwrap_or("")
+                        .to_string()
+                } else {
+                    String::new()
+                };
+                (action_label, arg)
             };
 
             let action_len = action.len();
@@ -3008,7 +3029,21 @@ mod tests {
             &serde_json::json!({"Action": "status", "TaskId": "task-123"}),
         );
         assert_eq!(action, "ManageTask");
-        assert_eq!(arg, "status (task-123)");
+        assert_eq!(arg, "status task-123");
+
+        let (action_list, arg_list) = format_pi_tool_action(
+            "manage_task",
+            &serde_json::json!({"Action": "list"}),
+        );
+        assert_eq!(action_list, "ManageTask");
+        assert_eq!(arg_list, "list");
+
+        let (action_bg, arg_bg) = format_pi_tool_action(
+            "background_task",
+            &serde_json::json!({"TaskId": "task-456"}),
+        );
+        assert_eq!(action_bg, "TaskDone");
+        assert_eq!(arg_bg, "task-456");
 
         let (action2, arg2) = format_pi_tool_action("get_date", &serde_json::json!({}));
         assert_eq!(action2, "GetDate");
