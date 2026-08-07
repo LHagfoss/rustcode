@@ -11,6 +11,53 @@ pub(crate) use super::parse_json_bool;
 pub(crate) use super::parse_json_number;
 pub(crate) use super::{BackgroundTaskInfo, WAKEUP_CALLBACK};
 
+use super::{Tool, ToolCapability, ToolSafety};
+
+fn run_command_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "command": { "type": "string" }, "cwd": { "type": "string" },
+            "timeout_ms": { "type": "integer", "minimum": 1 },
+            "background": { "type": "boolean", "default": false },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+        }, "required": ["command"]
+    })
+}
+
+pub const RUN_COMMAND: Tool = Tool {
+    name: "run_command",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. The command may use normal shell syntax, including ';' or '&&' to chain commands, pipes, redirects, and environment assignments. Supports an optional working directory, environment overrides, timeout (default 120s), and background execution ('background': true). Note: Interactive 'sudo' requiring passwords is disabled; use non-privileged commands or 'sudo -n'.",
+    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
+    handler: run_command,
+    requires_confirmation: true,
+    schema: run_command_schema,
+    capabilities: &[ToolCapability::ExecuteCommands],
+    safety: ToolSafety::ProcessControl,
+};
+
+fn manage_task_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "action": { "type": "string", "enum": ["list", "status", "kill"] },
+            "task_id": { "type": "string" }
+        }, "required": ["action"]
+    })
+}
+
+pub const MANAGE_TASK: Tool = Tool {
+    name: "manage_task",
+    description: "Manage background tasks spawned with run_command (action: 'list', 'status', or 'kill'). Do NOT poll 'status' or 'list' in a loop — completion notifications arrive automatically. Stop calling tools to wait for completion.",
+    arguments: r#"{"action": "list, status, or kill", "task_id": "required for status/kill"}"#,
+    handler: manage_task_tool,
+    requires_confirmation: false,
+    schema: manage_task_schema,
+    capabilities: &[ToolCapability::ExecuteCommands],
+    // NOTE: `Unknown` looks unintended (this is a process-control tool), but it
+    // preserves the pre-refactor behavior: `authorize_tool` requires
+    // confirmation for `Unknown` tools despite `requires_confirmation: false`.
+    safety: ToolSafety::Unknown,
+};
+
 const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
 

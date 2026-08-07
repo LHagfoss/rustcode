@@ -1,4 +1,100 @@
 use serde_json::Value;
+
+use super::{Tool, ToolCapability, ToolSafety};
+
+fn ask_question_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "question": { "type": "string", "description": "Question to ask the user" },
+            "options": { "type": "array", "items": { "type": "string" }, "description": "Choices shown to the user" },
+            "is_multi_select": { "type": "boolean", "default": false }
+        },
+        "required": ["question", "options"]
+    })
+}
+
+pub const ASK_QUESTION: Tool = Tool {
+    name: "ask_question",
+    description: "Ask the user a multiple-choice question to clarify underspecified requirements, solicit design choices, or select an option. Only call this when explicit user validation or decision-making is needed. Do not use for trivial yes/no or routine commands. The UI automatically appends a 'write your own answer' slot for free-form text, so never add your own 'Other' option and never pass an empty options list.",
+    arguments: r#"{"question": "The question title or description to ask", "options": ["Option 1 text", "Option 2 text", "Option 3 text"], "is_multi_select": false}"#,
+    handler: ask_question,
+    requires_confirmation: false,
+    schema: ask_question_schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+fn get_time_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {}, "additionalProperties": false
+    })
+}
+
+pub const GET_TIME: Tool = Tool {
+    name: "get_time",
+    description: "Get the current local date and time",
+    arguments: r#"{} (no arguments)"#,
+    handler: get_time,
+    requires_confirmation: false,
+    schema: get_time_schema,
+    capabilities: &[],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn search_web_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "query": { "type": "string" }, "domain": { "type": "string" }
+        }, "required": ["query"]
+    })
+}
+
+pub const SEARCH_WEB: Tool = Tool {
+    name: "search_web",
+    description: "Performs a web search to look up documentation, API details, or code patterns.",
+    arguments: r#"{"query": "search query terms", "domain": "optional domain filter e.g. 'docs.rs'"}"#,
+    handler: search_web,
+    requires_confirmation: false,
+    schema: search_web_schema,
+    capabilities: &[ToolCapability::Network],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn complete_task_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": { "result": { "type": "string" } }, "required": ["result"]
+    })
+}
+
+pub const COMPLETE_TASK: Tool = Tool {
+    name: "complete_task",
+    description: "Mark the continuous goal/task as successfully complete.",
+    arguments: r#"{"result": "summary of what was achieved and final results"}"#,
+    handler: complete_task_tool,
+    requires_confirmation: false,
+    schema: complete_task_schema,
+    capabilities: &[ToolCapability::SessionState],
+    safety: ToolSafety::Unknown,
+};
+
+fn use_skill_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"]
+    })
+}
+
+pub const USE_SKILL: Tool = Tool {
+    name: "use_skill",
+    description: "Load a skill by name to get its instructions and available files. Control-plane call: emit it ALONE in its response — any other tool calls batched with it are dropped.",
+    arguments: r#"{"name": "skill name"}"#,
+    handler: use_skill,
+    requires_confirmation: false,
+    schema: use_skill_schema,
+    capabilities: &[ToolCapability::SessionState],
+    safety: ToolSafety::ControlPlane,
+};
+
 pub fn ask_question(args: &Value) -> Result<String, String> {
     let question = args
         .get("question")
