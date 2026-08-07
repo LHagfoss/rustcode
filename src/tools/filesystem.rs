@@ -6,6 +6,150 @@ pub(crate) use super::coerce_array;
 pub(crate) use super::parse_json_number;
 pub(crate) use super::resolve_tool_path;
 
+use super::{Tool, ToolCapability, ToolSafety};
+
+fn delete_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"]
+    })
+}
+
+pub const DELETE_FILE: Tool = Tool {
+    name: "delete_file",
+    description: "Delete a file from the filesystem",
+    arguments: r#"{"path": "file to delete"}"#,
+    handler: delete_file,
+    requires_confirmation: true,
+    schema: delete_file_schema,
+    capabilities: &[ToolCapability::WriteWorkspace],
+    safety: ToolSafety::WorkspaceMutation,
+};
+
+fn move_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "src": { "type": "string" }, "dest": { "type": "string" }
+        }, "required": ["src", "dest"]
+    })
+}
+
+pub const MOVE_FILE: Tool = Tool {
+    name: "move_file",
+    description: "Move or rename a file or directory to a new path",
+    arguments: r#"{"src": "source path", "dest": "destination path"}"#,
+    handler: move_file,
+    requires_confirmation: true,
+    schema: move_file_schema,
+    capabilities: &[ToolCapability::WriteWorkspace],
+    safety: ToolSafety::WorkspaceMutation,
+};
+
+fn copy_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "src": { "type": "string" }, "dest": { "type": "string" }
+        }, "required": ["src", "dest"]
+    })
+}
+
+pub const COPY_FILE: Tool = Tool {
+    name: "copy_file",
+    description: "Copy a file to a new path",
+    arguments: r#"{"src": "source path to copy", "dest": "destination path"}"#,
+    handler: copy_file,
+    requires_confirmation: true,
+    schema: copy_file_schema,
+    capabilities: &[ToolCapability::WriteWorkspace],
+    safety: ToolSafety::WorkspaceMutation,
+};
+
+fn view_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
+            "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive end line; each call is capped at 250 lines. Request targeted follow-up ranges for more content." },
+            "content_offset": { "type": "integer", "minimum": 0 }
+        }, "required": ["path"]
+    })
+}
+
+pub const VIEW_FILE: Tool = Tool {
+    name: "view_file",
+    description: "View the contents of a file or directory. Each call has a 250-line hard cap; request targeted follow-up ranges with start_line/end_line for more content. Supports 1-indexed line ranges and an optional byte offset.",
+    arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (each call is capped at 250 lines; request targeted follow-up ranges for more content)", "content_offset": "optional byte offset into content"}"#,
+    handler: view_file_tool,
+    requires_confirmation: false,
+    schema: view_file_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn replace_file_content_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "path": { "type": "string" }, "target_content": { "type": "string" },
+            "replacement_content": { "type": "string" },
+            "edits": { "type": "array", "items": { "type": "object", "properties": {
+                "old_string": { "type": "string" }, "new_string": { "type": "string" },
+                "start_line": { "type": "integer" }, "end_line": { "type": "integer" }
+            }, "required": ["old_string", "new_string"] } }
+        }, "required": ["path"]
+    })
+}
+
+pub const REPLACE_FILE_CONTENT: Tool = Tool {
+    name: "replace_file_content",
+    description: "Surgically edit code in an existing file. Supports single replacement (target_content/replacement_content or old_string/new_string) or array of batch edits (edits: [{old_string, new_string}]). Line numbers are optional. This tool only replaces: to INSERT text, target an existing neighbouring line and repeat it in the replacement — to prepend, target the current first line and replace it with the new text followed by that line. An empty target is rejected, since it matches everywhere.",
+    arguments: r#"{"path": "absolute or relative path to file", "target_content": "precise block of code to edit (or old_string) — never empty; to insert, anchor on an adjacent line and repeat it in the replacement", "replacement_content": "complete replacement text (or new_string)", "edits": "optional array of [{old_string, new_string}] for multiple edits in 1 call"}"#,
+    handler: replace_file_content_tool,
+    requires_confirmation: true,
+    schema: replace_file_content_schema,
+    capabilities: &[ToolCapability::WriteWorkspace],
+    safety: ToolSafety::WorkspaceMutation,
+};
+
+fn multi_replace_file_content_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "path": { "type": "string" }, "replacements": { "type": "array", "items": { "type": "object", "properties": {
+                "start_line": { "type": "integer" }, "end_line": { "type": "integer" },
+                "target_content": { "type": "string" }, "replacement_content": { "type": "string" }
+            }, "required": ["start_line", "end_line", "target_content", "replacement_content"] } }
+        }, "required": ["path", "replacements"]
+    })
+}
+
+pub const MULTI_REPLACE_FILE_CONTENT: Tool = Tool {
+    name: "multi_replace_file_content",
+    description: "Apply multiple non-contiguous edits across a single file in a single tool call.                       Specify each edit as a separate replacement chunk.",
+    arguments: r#"{"path": "absolute or relative path to file", "replacements": "array of objects, each containing: {start_line, end_line, target_content, replacement_content}"}"#,
+    handler: multi_replace_file_content_tool,
+    requires_confirmation: true,
+    schema: multi_replace_file_content_schema,
+    capabilities: &[ToolCapability::WriteWorkspace],
+    safety: ToolSafety::WorkspaceMutation,
+};
+
+fn write_to_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object", "properties": {
+            "path": { "type": "string" }, "content": { "type": "string" },
+            "overwrite": { "type": "boolean", "default": false }
+        }, "required": ["path", "content"]
+    })
+}
+
+pub const WRITE_TO_FILE: Tool = Tool {
+    name: "write_to_file",
+    description: "Create a new file or overwrite an existing file with complete content.                       Creates parent directories automatically.",
+    arguments: r#"{"path": "absolute or relative path to file", "content": "entire contents to write", "overwrite": "set true to allow overwriting an existing file (default false)"}"#,
+    handler: write_to_file_tool,
+    requires_confirmation: true,
+    schema: write_to_file_schema,
+    capabilities: &[ToolCapability::WriteWorkspace],
+    safety: ToolSafety::WorkspaceMutation,
+};
+
 /// Hard cap on the number of lines a single `view_file` call can return,
 /// applied both as the default window (when the caller omits `end_line`) and
 /// as a ceiling on any explicit `end_line` the caller requests. Without this
