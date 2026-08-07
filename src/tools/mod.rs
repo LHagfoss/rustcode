@@ -1457,9 +1457,17 @@ pub fn is_code_editing_tool(name: &str) -> bool {
 pub fn is_tool_call_start(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.contains("```tool")
+        || trimmed.contains("```json")
         || trimmed.contains("[TOOL_CALLS]")
-        || (trimmed.starts_with('{')
-            && (trimmed.contains("\"name\"") || trimmed.contains("\"tool\"")))
+        || trimmed.contains("<tool_call>")
+        || trimmed.contains("<function_call>")
+        || trimmed.contains("\"tool_name\"")
+        || trimmed.contains("\"tool_call\"")
+        || (trimmed.contains('{')
+            && (trimmed.contains("\"name\"")
+                || trimmed.contains("\"tool\"")
+                || trimmed.contains("\"action\"")
+                || trimmed.contains("\"function\"")))
 }
 
 pub fn parse_tool_call(text: &str, protocol: crate::config::ToolProtocol) -> Option<ToolCall> {
@@ -1793,6 +1801,16 @@ mod tests {
         let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "replace_file_content");
+    }
+
+    #[test]
+    fn test_is_tool_call_start_detects_json_and_embedded_tool_syntax() {
+        assert!(is_tool_call_start("```tool\n{\"name\": \"run_command\"}"));
+        assert!(is_tool_call_start("```json\n{\"name\": \"run_command\"}"));
+        assert!(is_tool_call_start("[TOOL_CALLS]"));
+        assert!(is_tool_call_start("<tool_call>"));
+        assert!(is_tool_call_start("Let me execute this:\n{\"action\": \"manage_task\", \"task_id\": \"task-123\"}"));
+        assert!(!is_tool_call_start("Here is a regular markdown code block:\n```rust\nfn main() {}\n```"));
     }
 
     #[test]
