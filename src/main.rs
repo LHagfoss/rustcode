@@ -652,6 +652,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let _ = tx.send("User cancelled prompt.".to_string());
                                     }
                                     s.pending_question = None;
+                                    s.status = AppStatus::Idle;
                                 }
                                 _ => {}
                             }
