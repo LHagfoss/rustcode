@@ -1,3 +1,12 @@
+## [v0.13.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.13.1) - 2026-08-07
+
+### Fixes
+- **UI:** Truncate long tool call args to prevent line wrapping ([#443](https://github.com/LHagfoss/rustcode/pull/443) / [`a012730`](https://github.com/LHagfoss/rustcode/commit/a012730))
+- **Network:** Remove wall-clock timeout from turn budget ([#444](https://github.com/LHagfoss/rustcode/pull/444) / [`8047214`](https://github.com/LHagfoss/rustcode/commit/8047214))
+
+### UI
+- Move queue indicator above input with preview and edit hint ([#445](https://github.com/LHagfoss/rustcode/pull/445) / [`6d40e37`](https://github.com/LHagfoss/rustcode/commit/6d40e37))
+
 ## [v0.13.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.13.0) - 2026-08-06
 
 ### Features
