@@ -32,17 +32,27 @@ pub enum ToolErrorKind {
 impl ToolErrorKind {
     pub fn from_message(msg: &str) -> Self {
         let lower = msg.to_ascii_lowercase();
-        if lower.contains("missing") || lower.contains("invalid argument") { Self::InvalidArguments }
-        else if lower.contains("edit") && lower.contains("mismatch") { Self::EditMismatch }
-        else if lower.contains("permission") || lower.contains("denied") { Self::PermissionDenied }
-        else if lower.contains("compiler") || lower.contains("cargo check") { Self::CompilerFailed }
-        else if lower.contains("cancelled") { Self::Cancelled }
-        else if lower.contains("not found") || lower.contains("unavailable") { Self::UnavailableDependency }
-        else if lower.contains("exit code") { Self::CommandFailed }
-        else { Self::Unknown }
+        if lower.contains("missing") || lower.contains("invalid argument") {
+            Self::InvalidArguments
+        } else if lower.contains("edit") && lower.contains("mismatch") {
+            Self::EditMismatch
+        } else if lower.contains("permission") || lower.contains("denied") {
+            Self::PermissionDenied
+        } else if lower.contains("compiler") || lower.contains("cargo check") {
+            Self::CompilerFailed
+        } else if lower.contains("cancelled") {
+            Self::Cancelled
+        } else if lower.contains("not found") || lower.contains("unavailable") {
+            Self::UnavailableDependency
+        } else if lower.contains("exit code") {
+            Self::CommandFailed
+        } else {
+            Self::Unknown
+        }
     }
 }
 
 pub fn is_api_native(url: &str, protocol: crate::config::ToolProtocol) -> bool {
-    matches!(protocol, crate::config::ToolProtocol::ApiNative) || crate::config::provider_supports_function_calling(url)
+    matches!(protocol, crate::config::ToolProtocol::ApiNative)
+        || crate::config::provider_supports_function_calling(url)
 }

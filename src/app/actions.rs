@@ -139,9 +139,9 @@ pub async fn handle_enter(
                 let state_clone = Arc::clone(state);
                 let client_clone = client.clone();
                 let budget = {
-                        let s = state_clone.lock().await;
-                        s.get_history_token_budget() as usize
-                    };
+                    let s = state_clone.lock().await;
+                    s.get_history_token_budget() as usize
+                };
                 tokio::spawn(async move {
                     match crate::network::compaction::force_compact_with_budget(
                         &client_clone,

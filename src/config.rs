@@ -1035,7 +1035,8 @@ pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
 
     let gitignore_path = dir.join(".gitignore");
     if !gitignore_path.exists() {
-        let default_gitignore = "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
+        let default_gitignore =
+            "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
         let _ = fs::write(&gitignore_path, default_gitignore);
     }
 
@@ -1115,7 +1116,8 @@ pub fn sync_config_push() -> Result<(), String> {
 
     let gitignore_path = dir.join(".gitignore");
     if !gitignore_path.exists() {
-        let default_gitignore = "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
+        let default_gitignore =
+            "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
         let _ = fs::write(&gitignore_path, default_gitignore);
     }
 

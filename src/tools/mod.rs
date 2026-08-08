@@ -1699,8 +1699,12 @@ mod tests {
         assert!(is_tool_call_start("```json\n{\"name\": \"run_command\"}"));
         assert!(is_tool_call_start("[TOOL_CALLS]"));
         assert!(is_tool_call_start("<tool_call>"));
-        assert!(is_tool_call_start("Let me execute this:\n{\"action\": \"manage_task\", \"task_id\": \"task-123\"}"));
-        assert!(!is_tool_call_start("Here is a regular markdown code block:\n```rust\nfn main() {}\n```"));
+        assert!(is_tool_call_start(
+            "Let me execute this:\n{\"action\": \"manage_task\", \"task_id\": \"task-123\"}"
+        ));
+        assert!(!is_tool_call_start(
+            "Here is a regular markdown code block:\n```rust\nfn main() {}\n```"
+        ));
     }
 
     #[test]
