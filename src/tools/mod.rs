@@ -998,6 +998,8 @@ fn infer_tool_name_from_args(args: &Value) -> Option<&'static str> {
         Some("replace_file_content")
     } else if has("command") && obj.len() <= 2 {
         Some("run_command")
+    } else if has("result") && obj.len() == 1 {
+        Some("complete_task")
     } else {
         None
     }
