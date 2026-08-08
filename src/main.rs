@@ -1294,11 +1294,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.cursor_position = 0;
                             } else {
                                 drop(s);
-                                crate::app::handle_escape(
-                                    &app_state,
-                                    &mut current_cancel_token,
-                                )
-                                .await;
+                                crate::app::handle_escape(&app_state, &mut current_cancel_token)
+                                    .await;
                             }
                             needs_redraw = true;
                         }
@@ -1467,11 +1464,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mut s = app_state.lock().await;
                                 let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                                 const PASTE_THRESHOLD: usize = 300;
-                                let text_to_insert = if normalized.chars().count() >= PASTE_THRESHOLD {
-                                    format!("<!--PASTE:{}:{}-->", normalized.chars().count(), normalized)
-                                } else {
-                                    normalized
-                                };
+                                let text_to_insert =
+                                    if normalized.chars().count() >= PASTE_THRESHOLD {
+                                        format!(
+                                            "<!--PASTE:{}:{}-->",
+                                            normalized.chars().count(),
+                                            normalized
+                                        )
+                                    } else {
+                                        normalized
+                                    };
                                 for c in text_to_insert.chars() {
                                     s.insert_char(c);
                                 }
@@ -1921,7 +1923,9 @@ fn print_goodbye() {
     use unicode_width::UnicodeWidthStr;
 
     let (_, _, config) = crate::config::load_config();
-    let duration_seconds = config.start_time.map_or(0, |start| start.elapsed().map_or(0, |d| d.as_secs()));
+    let duration_seconds = config
+        .start_time
+        .map_or(0, |start| start.elapsed().map_or(0, |d| d.as_secs()));
 
     // Theme colors are ratatui `Color`s; convert the RGB variants to ANSI
     // true-color escapes (falls back to default fg for anything else).

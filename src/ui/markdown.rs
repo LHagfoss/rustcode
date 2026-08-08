@@ -107,7 +107,8 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
                 let mut chunk_w = 0;
                 for ch in word.chars() {
                     let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-                    if current_width + chunk_w + ch_w > width && (current_width > 0 || chunk_w > 0) {
+                    if current_width + chunk_w + ch_w > width && (current_width > 0 || chunk_w > 0)
+                    {
                         if !chunk.is_empty() {
                             current.push(Span::styled(std::mem::take(&mut chunk), style));
                         }
@@ -193,8 +194,13 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             );
         }
     };
-    let flush_table = |lines: &mut Vec<Line<'static>>, rows: &[(Vec<String>, bool)], width: usize, show_picker: bool| {
-        if rows.is_empty() { return; }
+    let flush_table = |lines: &mut Vec<Line<'static>>,
+                       rows: &[(Vec<String>, bool)],
+                       width: usize,
+                       show_picker: bool| {
+        if rows.is_empty() {
+            return;
+        }
         let cols = rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0);
         // Ideal widths capped per-column: content drives width, header truncated to cap
         let caps = [18usize, 10, 18, 14, 18]; // last col widened so "Replay or Conversation?" content-driven
@@ -205,28 +211,46 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         for (cells, is_header) in rows {
             for (i, c) in cells.iter().enumerate() {
                 let cap = caps.get(i).copied().unwrap_or(22);
-                let effective = if *is_header { c.width().min(cap) } else { c.width().min(cap) };
+                let effective = if *is_header {
+                    c.width().min(cap)
+                } else {
+                    c.width().min(cap)
+                };
                 col_widths[i] = col_widths[i].max(effective);
             }
         }
         // Weighted shrink: large token columns shrink first, Session last
-        let mut total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1)*3 + 4; // +4 outer borders
+        let mut total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 3 + 4; // +4 outer borders
         if total > width && cols > 0 {
             let mut excess = total.saturating_sub(width);
             let order: Vec<usize> = {
                 let mut idxs: Vec<usize> = (0..cols).collect();
-                idxs.sort_by_key(|&i| if i==0 { 100 } else if i==2 { 0 } else { 1 }); // shrink Total first
+                idxs.sort_by_key(|&i| {
+                    if i == 0 {
+                        100
+                    } else if i == 2 {
+                        0
+                    } else {
+                        1
+                    }
+                }); // shrink Total first
                 idxs
             };
             for &i in &order {
-                if excess==0 { break; }
-                let min_w = caps.get(i).map(|_| 6).unwrap_or(5).min(col_widths[i].saturating_sub(1));
+                if excess == 0 {
+                    break;
+                }
+                let min_w = caps
+                    .get(i)
+                    .map(|_| 6)
+                    .unwrap_or(5)
+                    .min(col_widths[i].saturating_sub(1));
                 let can_shrink = col_widths[i].saturating_sub(min_w);
                 let take = can_shrink.min(excess);
                 col_widths[i] -= take;
                 excess -= take;
             }
-            total = col_widths.iter().sum::<usize>() + cols.saturating_sub(1)*3 + 4;
+            total = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 3 + 4;
         }
         // Expand: if table is narrower than available width, give remainder to the
         // widest-content column so short headers like "Module"/"Purpose" don't leave
@@ -237,18 +261,46 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             let mut uncapped = vec![0usize; cols];
             for (cells, _) in rows.iter() {
                 for (i, c) in cells.iter().enumerate() {
-                    if i < cols { uncapped[i] = uncapped[i].max(c.width()); }
+                    if i < cols {
+                        uncapped[i] = uncapped[i].max(c.width());
+                    }
                 }
             }
-            let target = uncapped.iter().enumerate().max_by_key(|&(_, &w)| w).map(|(i, _)| i).unwrap_or(cols - 1);
+            let target = uncapped
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, &w)| w)
+                .map(|(i, _)| i)
+                .unwrap_or(cols - 1);
             col_widths[target] += remainder;
         }
         // outer borders: 1 padding spaces per cell side: "─" * (w + 2)
-        let top = format!("┌{}┐", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┬"));
-        let bottom = format!("└{}┘", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┴"));
-        lines.push(Line::from(Span::styled(top, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
+        let top = format!(
+            "┌{}┐",
+            col_widths
+                .iter()
+                .map(|w| "─".repeat(w + 2))
+                .collect::<Vec<_>>()
+                .join("┬")
+        );
+        let bottom = format!(
+            "└{}┘",
+            col_widths
+                .iter()
+                .map(|w| "─".repeat(w + 2))
+                .collect::<Vec<_>>()
+                .join("┴")
+        );
+        lines.push(Line::from(Span::styled(
+            top,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        )));
         for (idx, (cells, is_header)) in rows.iter().enumerate() {
-            let style = if *is_header { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker) } else { get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker) };
+            let style = if *is_header {
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker)
+            } else {
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)
+            };
 
             // Wrap each cell's text into lines fitting col_widths[i]
             let mut cell_lines: Vec<Vec<String>> = Vec::new();
@@ -284,10 +336,16 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             // Render row line by line for multi-line cells
             for line_idx in 0..max_cell_height {
                 let mut row_spans = Vec::new();
-                row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+                row_spans.push(Span::styled(
+                    "│".to_string(),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ));
 
                 for i in 0..cols {
-                    let cell_txt = cell_lines[i].get(line_idx).map(|s| s.trim_end()).unwrap_or("");
+                    let cell_txt = cell_lines[i]
+                        .get(line_idx)
+                        .map(|s| s.trim_end())
+                        .unwrap_or("");
                     let w = col_widths[i];
                     let formatted = if cell_txt.width() > w {
                         let mut end = 0;
@@ -309,18 +367,34 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                         format!(" {}{:pad$} ", cell_txt, "", pad = pad)
                     };
                     row_spans.push(Span::styled(formatted, style));
-                    row_spans.push(Span::styled("│".to_string(), get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)));
+                    row_spans.push(Span::styled(
+                        "│".to_string(),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ));
                 }
                 lines.push(Line::from(row_spans));
             }
 
             // Draw divider only under header row
             if idx == 0 && rows[0].1 {
-                let div = format!("├{}┤", col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┼"));
-                lines.push(Line::from(Span::styled(div, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
+                let div = format!(
+                    "├{}┤",
+                    col_widths
+                        .iter()
+                        .map(|w| "─".repeat(w + 2))
+                        .collect::<Vec<_>>()
+                        .join("┼")
+                );
+                lines.push(Line::from(Span::styled(
+                    div,
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                )));
             }
         }
-        lines.push(Line::from(Span::styled(bottom, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker))));
+        lines.push(Line::from(Span::styled(
+            bottom,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        )));
     };
 
     for event in Parser::new_ext(content, Options::all()) {
@@ -409,7 +483,9 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     if current_cell.len() + text.len() > 400 {
                         let remaining = 400usize.saturating_sub(current_cell.len());
                         if remaining > 3 {
-                            current_cell.push_str(&text[..text.floor_char_boundary(remaining.saturating_sub(1))]);
+                            current_cell.push_str(
+                                &text[..text.floor_char_boundary(remaining.saturating_sub(1))],
+                            );
                             current_cell.push('…');
                         }
                     } else {
@@ -475,16 +551,28 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 current_cell.clear();
                 lines.push(Line::from(""));
             }
-            Event::Start(Tag::TableHead) => { current_row.clear(); }
+            Event::Start(Tag::TableHead) => {
+                current_row.clear();
+            }
             Event::End(TagEnd::TableHead) => {
-                if !current_row.is_empty() { table_rows.push((std::mem::take(&mut current_row), true)); }
+                if !current_row.is_empty() {
+                    table_rows.push((std::mem::take(&mut current_row), true));
+                }
             }
-            Event::Start(Tag::TableRow) => { current_row.clear(); }
+            Event::Start(Tag::TableRow) => {
+                current_row.clear();
+            }
             Event::End(TagEnd::TableRow) => {
-                if !current_row.is_empty() { table_rows.push((std::mem::take(&mut current_row), false)); }
+                if !current_row.is_empty() {
+                    table_rows.push((std::mem::take(&mut current_row), false));
+                }
             }
-            Event::Start(Tag::TableCell) => { current_cell.clear(); }
-            Event::End(TagEnd::TableCell) => { current_row.push(std::mem::take(&mut current_cell)); }
+            Event::Start(Tag::TableCell) => {
+                current_cell.clear();
+            }
+            Event::End(TagEnd::TableCell) => {
+                current_row.push(std::mem::take(&mut current_cell));
+            }
             Event::Html(text) => paragraph.push(Span::styled(
                 text.to_string(),
                 text_style(inline, show_picker),
@@ -513,7 +601,11 @@ mod tests {
         let md = "| Header 1 | Header 2 |\n|---|---|\n| Cell 1 | Cell 2 |";
         let lines = render_markdown(md, 80, false, false);
         assert!(!lines.is_empty());
-        let all: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let all: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(all.contains("Header 1 │ Header 2"));
         assert!(all.contains('┌') && all.contains('┐') && all.contains('└'));
     }

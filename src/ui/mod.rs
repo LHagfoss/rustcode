@@ -239,7 +239,9 @@ fn collapse_image_markers(text: &str) -> String {
                             paste_n += 1;
                             if let Some((len_str, body)) = payload.split_once(':') {
                                 let len_num: usize = len_str.parse().unwrap_or(body.len());
-                                out.push_str(&format!("[Pasted Text #{paste_n} ({len_num} chars)]"));
+                                out.push_str(&format!(
+                                    "[Pasted Text #{paste_n} ({len_num} chars)]"
+                                ));
                             } else {
                                 out.push_str(&format!("[Pasted Text #{paste_n}]"));
                             }
@@ -531,7 +533,7 @@ fn render_assistant_message<'a>(
                                     box_width,
                                     code_bg,
                                     show_picker,
-                                 ));
+                                ));
                             }
                             i = j.saturating_sub(1);
                         }
@@ -1106,7 +1108,9 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let safe_end = if state.input_buffer.is_char_boundary(safe_end) {
             safe_end
         } else {
-            state.input_buffer.char_indices()
+            state
+                .input_buffer
+                .char_indices()
                 .map(|(i, _)| i)
                 .take_while(|&i| i <= safe_end)
                 .last()
@@ -3097,10 +3101,8 @@ mod tests {
         assert_eq!(action, "ManageTask");
         assert_eq!(arg, "status task-123");
 
-        let (action_list, arg_list) = format_pi_tool_action(
-            "manage_task",
-            &serde_json::json!({"Action": "list"}),
-        );
+        let (action_list, arg_list) =
+            format_pi_tool_action("manage_task", &serde_json::json!({"Action": "list"}));
         assert_eq!(action_list, "ManageTask");
         assert_eq!(arg_list, "list");
 
