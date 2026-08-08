@@ -1774,8 +1774,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     for (msg_idx, msg) in state.history.iter().enumerate() {
         msg_start_lines.push(lines.len());
         if msg.role == "system" {
-            // Hide benign intermediate loop warnings from TUI display
-            if msg.content.contains("Loop warning:") {
+            // Hide benign intermediate notices from TUI display
+            if msg.content.contains("Loop warning:")
+                || msg.content.contains("tool calls in that response were dropped")
+                || msg.content.contains("Oversized response:")
+            {
                 continue;
             }
             if lines.last().is_some_and(|l| !l.spans.is_empty()) {
