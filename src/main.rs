@@ -1466,7 +1466,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 let mut s = app_state.lock().await;
                                 let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-                                for c in normalized.chars() {
+                                const PASTE_THRESHOLD: usize = 300;
+                                let text_to_insert = if normalized.chars().count() >= PASTE_THRESHOLD {
+                                    format!("<!--PASTE:{}:{}-->", normalized.chars().count(), normalized)
+                                } else {
+                                    normalized
+                                };
+                                for c in text_to_insert.chars() {
                                     s.insert_char(c);
                                 }
                                 s.reset_suggestion_cycle();
@@ -1864,7 +1870,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     } else {
-                        for c in normalized.chars() {
+                        const PASTE_THRESHOLD: usize = 300;
+                        let text_to_insert = if normalized.chars().count() >= PASTE_THRESHOLD {
+                            format!("<!--PASTE:{}:{}-->", normalized.chars().count(), normalized)
+                        } else {
+                            normalized
+                        };
+                        for c in text_to_insert.chars() {
                             s.insert_char(c);
                         }
                         s.reset_suggestion_cycle();
