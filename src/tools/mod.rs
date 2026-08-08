@@ -763,7 +763,9 @@ pub fn tool_system_prompt(
         p.push_str("\n# Available Skills\n");
         p.push_str("Skills provide specialized instructions and workflows for specific tasks.\n");
         p.push_str(
-            "Use the 'use_skill' tool to load a skill when a task matches its description.\n\n",
+            "ALWAYS check your task intent against the available skills below at the START of a task. \
+             If a skill matches the task (such as `git-feature-workflow` for git/feature changes, or `release-automation` for releases), \
+             you MUST invoke `use_skill` immediately as your FIRST action to load its workflow.\n\n",
         );
         p.push_str("<available_skills>\n");
         for skill in &skills {
