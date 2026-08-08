@@ -161,8 +161,9 @@ thread_local! {
 }
 
 fn collapse_image_markers(text: &str) -> String {
-    const MARK: &str = "![image](file://";
-    if !text.contains(MARK) {
+    const MARK_IMG: &str = "![image](file://";
+    const MARK_PASTE: &str = "<!--PASTE:";
+    if !text.contains(MARK_IMG) && !text.contains(MARK_PASTE) {
         return text.to_string();
     }
 
@@ -177,21 +178,80 @@ fn collapse_image_markers(text: &str) -> String {
         }
         let mut out = String::new();
         let mut rest = text;
-        let mut n = 0;
-        while let Some(start) = rest.find(MARK) {
-            out.push_str(&rest[..start]);
-            let after = &rest[start + MARK.len()..];
-            if let Some(close) = after.find(')') {
-                n += 1;
-                out.push_str(&format!("[Image #{n}]"));
-                rest = &after[close + 1..];
-            } else {
-                out.push_str(&rest[start..]);
-                *cache = (hash, out.clone());
-                return out;
+        let mut img_n = 0;
+        let mut paste_n = 0;
+        while !rest.is_empty() {
+            let next_img = rest.find(MARK_IMG);
+            let next_paste = rest.find(MARK_PASTE);
+
+            match (next_img, next_paste) {
+                (None, None) => {
+                    out.push_str(rest);
+                    break;
+                }
+                (Some(idx), None) => {
+                    out.push_str(&rest[..idx]);
+                    let after = &rest[idx + MARK_IMG.len()..];
+                    if let Some(close) = after.find(')') {
+                        img_n += 1;
+                        out.push_str(&format!("[Image #{img_n}]"));
+                        rest = &after[close + 1..];
+                    } else {
+                        out.push_str(&rest[idx..]);
+                        break;
+                    }
+                }
+                (None, Some(idx)) => {
+                    out.push_str(&rest[..idx]);
+                    let after = &rest[idx + MARK_PASTE.len()..];
+                    if let Some(end) = after.find("-->") {
+                        let payload = &after[..end];
+                        paste_n += 1;
+                        if let Some((len_str, body)) = payload.split_once(':') {
+                            let len_num: usize = len_str.parse().unwrap_or(body.len());
+                            out.push_str(&format!("[Pasted Text #{paste_n} ({len_num} chars)]"));
+                        } else {
+                            out.push_str(&format!("[Pasted Text #{paste_n}]"));
+                        }
+                        rest = &after[end + 3..];
+                    } else {
+                        out.push_str(&rest[idx..]);
+                        break;
+                    }
+                }
+                (Some(img_idx), Some(paste_idx)) => {
+                    if img_idx < paste_idx {
+                        out.push_str(&rest[..img_idx]);
+                        let after = &rest[img_idx + MARK_IMG.len()..];
+                        if let Some(close) = after.find(')') {
+                            img_n += 1;
+                            out.push_str(&format!("[Image #{img_n}]"));
+                            rest = &after[close + 1..];
+                        } else {
+                            out.push_str(&rest[img_idx..]);
+                            break;
+                        }
+                    } else {
+                        out.push_str(&rest[..paste_idx]);
+                        let after = &rest[paste_idx + MARK_PASTE.len()..];
+                        if let Some(end) = after.find("-->") {
+                            let payload = &after[..end];
+                            paste_n += 1;
+                            if let Some((len_str, body)) = payload.split_once(':') {
+                                let len_num: usize = len_str.parse().unwrap_or(body.len());
+                                out.push_str(&format!("[Pasted Text #{paste_n} ({len_num} chars)]"));
+                            } else {
+                                out.push_str(&format!("[Pasted Text #{paste_n}]"));
+                            }
+                            rest = &after[end + 3..];
+                        } else {
+                            out.push_str(&rest[paste_idx..]);
+                            break;
+                        }
+                    }
+                }
             }
         }
-        out.push_str(rest);
         *cache = (hash, out.clone());
         out
     })
