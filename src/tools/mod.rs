@@ -963,15 +963,44 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
             // and strip it from the args. Only done when there is no top-level
             // `name` — otherwise an argument literally called `name` (e.g.
             // use_skill's skill name) is legitimate and must be kept.
-            let nested = args.get("name").and_then(|v| v.as_str())?.to_string();
-            if let Some(obj) = args.as_object_mut() {
-                obj.remove("name");
+            match args.get("name").and_then(|v| v.as_str()) {
+                Some(nested) => {
+                    let nested = nested.to_string();
+                    if let Some(obj) = args.as_object_mut() {
+                        obj.remove("name");
+                    }
+                    nested
+                }
+                // No `name` anywhere. Some models drop the field entirely on
+                // large-content calls. If the argument keys uniquely match one
+                // tool's required signature, infer it rather than hard-failing
+                // and forcing a retry loop the model tends not to recover from.
+                None => infer_tool_name_from_args(&args)?.to_string(),
             }
-            nested
         }
     };
 
     Some((name, args))
+}
+
+/// Best-effort recovery for tool calls that omit `name` entirely. Only
+/// returns a match when the argument keys are distinctive enough that no
+/// other tool could plausibly be meant.
+fn infer_tool_name_from_args(args: &Value) -> Option<&'static str> {
+    let obj = args.as_object()?;
+    let has = |k: &str| obj.contains_key(k);
+
+    if has("content") && has("path") {
+        Some("write_to_file")
+    } else if has("replacements") && has("path") {
+        Some("multi_replace_file_content")
+    } else if has("old_string") && has("new_string") && has("path") {
+        Some("replace_file_content")
+    } else if has("command") && obj.len() <= 2 {
+        Some("run_command")
+    } else {
+        None
+    }
 }
 
 fn repair_json(s: &str) -> String {
@@ -1131,7 +1160,11 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
             match serde_json::from_str::<Value>(&repaired) {
                 Ok(val) => {
                     let has_name = val.get("name").is_some()
-                        || val.get("arguments").and_then(|a| a.get("name")).is_some();
+                        || val.get("arguments").and_then(|a| a.get("name")).is_some()
+                        || val
+                            .get("arguments")
+                            .and_then(infer_tool_name_from_args)
+                            .is_some();
                     if !has_name {
                         let snippet: String = block.trim().chars().take(240).collect();
                         return Some(format!(

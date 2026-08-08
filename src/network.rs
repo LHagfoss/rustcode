@@ -27,8 +27,8 @@ pub(crate) use messages::{
 #[path = "network/text.rs"]
 pub(crate) mod text;
 use text::{
-    cap_diff_lines, has_intended_tool_call, is_cut_off, strip_ansi_escapes, strip_leading_think,
-    strip_think_blocks, strip_tool_call_syntax,
+    cap_diff_lines, continuation_nudge, has_intended_tool_call, is_cut_off, strip_ansi_escapes,
+    strip_leading_think, strip_think_blocks, strip_tool_call_syntax,
 };
 
 #[path = "network/stream.rs"]
@@ -2196,13 +2196,14 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let (content, _finish_reason) = match runner::collect_response(move |previous| {
             let mut current_msgs = request_msgs.clone();
             if !previous.is_empty() {
+                let nudge = continuation_nudge(&previous);
                 current_msgs.push(serde_json::json!({
                     "role": "assistant",
                     "content": previous
                 }));
                 current_msgs.push(serde_json::json!({
                     "role": "user",
-                    "content": "continue"
+                    "content": nudge
                 }));
             }
             let request_client = request_client.clone();
@@ -3919,13 +3920,14 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         match runner::collect_response(move |previous| {
             let mut current_msgs = request_msgs.clone();
             if !previous.is_empty() {
+                let nudge = continuation_nudge(&previous);
                 current_msgs.push(serde_json::json!({
                     "role": "assistant",
                     "content": previous
                 }));
                 current_msgs.push(serde_json::json!({
                     "role": "user",
-                    "content": "continue"
+                    "content": nudge
                 }));
             }
             let request_client = request_client.clone();
