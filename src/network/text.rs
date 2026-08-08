@@ -48,7 +48,58 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
         return true;
     }
 
+    // The model narrated an intended next action ("let me fix X, then Y")
+    // but emitted no tool call at all — not even a malformed one. This has
+    // real prose, so none of the checks above catch it, and the turn just
+    // stalls silently waiting on the user. Treat a stated-but-unexecuted
+    // intent as cut off so it gets nudged to actually act.
+    if !has_intended_tool_call(content) && ends_with_stated_intent(content) {
+        return true;
+    }
+
     false
+}
+
+/// True when the prose (outside `<think>` blocks) ends on language that
+/// promises an upcoming action rather than delivering one — "let me create
+/// the README", "I'll fix the bug now" — with no trailing question that
+/// would mark it as an actual final answer awaiting user input.
+fn ends_with_stated_intent(content: &str) -> bool {
+    let prose = strip_think_blocks(content);
+    let tail = prose.trim();
+    if tail.is_empty() || tail.ends_with('?') {
+        return false;
+    }
+    let lower_tail: String = tail
+        .chars()
+        .rev()
+        .take(200)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>()
+        .to_lowercase();
+    if lower_tail.contains("let me know") {
+        return false;
+    }
+    const INTENT_PHRASES: &[&str] = &[
+        "let me also",
+        "let me now",
+        "let me fix",
+        "let me create",
+        "let me write",
+        "let's fix",
+        "let's create",
+        "i'll fix",
+        "i'll create",
+        "i will fix",
+        "i will create",
+        "i need to fix",
+        "i need to create",
+        "going to fix",
+        "going to create",
+    ];
+    INTENT_PHRASES.iter().any(|p| lower_tail.contains(p))
 }
 
 /// Wrap bare `thought` markers in `<think>` spans.
@@ -181,6 +232,19 @@ pub(crate) fn is_reasoning_only(content: &str) -> bool {
     strip_think_blocks(content).trim().is_empty()
 }
 
+/// Nudge sent to resume a cut-off turn. When the model stalled on pure
+/// reasoning (replanning in `<think>` with no answer or tool call), a bare
+/// "continue" just invites another round of replanning — some models will
+/// repeat the same plan verbatim several times in a row instead of acting.
+/// Tell it explicitly to stop planning and act.
+pub(crate) fn continuation_nudge(previous: &str) -> &'static str {
+    if is_reasoning_only(previous) {
+        "Stop planning and do not restate your plan again. Call the tool now."
+    } else {
+        "continue"
+    }
+}
+
 /// Cap a diff preview at 10 lines, appending a "... (N more lines changed)"
 /// footer so long edits don't flood the status stream.
 pub(crate) fn cap_diff_lines(prev: String) -> String {
@@ -305,5 +369,17 @@ mod tests {
         let input = "\x1B[31mError\x1B[0m: compile failed \x1B[1mline 5\x1B[0m";
         let output = strip_ansi_escapes(input);
         assert_eq!(output, "Error: compile failed line 5");
+    }
+
+    #[test]
+    fn test_is_cut_off_stated_intent_without_action() {
+        let content = "<think>\nreview stuff\n</think>\n\nI need to fix some bugs in `main.js` — undefined variables (`ny`, `ny2`) in\nthe tunnel/bridge wall rendering, and simplify the finish line logic. Let me\nalso create the README.";
+        assert!(is_cut_off(content, None));
+    }
+
+    #[test]
+    fn test_is_cut_off_ignores_genuine_final_answers() {
+        let content = "<think>done</think>\n\nAll files are created and the game runs end to end. Let me know if you'd like any tweaks.";
+        assert!(!is_cut_off(content, None));
     }
 }
