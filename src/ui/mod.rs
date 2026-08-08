@@ -1797,18 +1797,20 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
             ];
             if !arg.is_empty() {
-                let prefix_len = 2 + action_len; // "● " + action
-                let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len).saturating_sub(3); // "-3" for "()" + "..."
+                // "● " (2) + action_len + "(" (1) + ")" (1) + margin/padding offset (3) = action_len + 7
+                let prefix_len = action_len + 7;
+                let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len);
                 let display_arg = if arg.chars().count() > max_arg_len {
-                    format!("{}...", arg.chars().take(max_arg_len).collect::<String>())
-                 } else {
+                    let take_len = max_arg_len.saturating_sub(3);
+                    format!("{}...", arg.chars().take(take_len).collect::<String>())
+                } else {
                     arg.clone()
-                 };
+                };
                 spans.push(Span::styled(
                     format!("({display_arg})"),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                  ));
-              }
+                ));
+            }
             lines.push(Line::from(spans));
 
             if let Some((ref path, ref content)) = msg.file_preview {
@@ -1921,27 +1923,28 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     let elapsed_ms = state.generation_start_time.map(|t| t.elapsed().as_millis()).unwrap_or(0);
                     let circle = if (elapsed_ms / 350).is_multiple_of(2) { "○ " } else { "● " };
                     let action_len = action.len();
-                    let prefix_len = 2 + action_len; /* circle + action */
-                    let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len).saturating_sub(6); /* "()" + "..." */
+                    let prefix_len = action_len + 10; // circle (2) + action + "(...)" (5) + margin offset (3)
+                    let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len);
                     let display_arg = if arg.chars().count() > max_arg_len {
-                        format!("{}...", arg.chars().take(max_arg_len).collect::<String>())
-                     } else {
+                        let take_len = max_arg_len.saturating_sub(3);
+                        format!("{}...", arg.chars().take(take_len).collect::<String>())
+                    } else {
                         arg.clone()
-                     };
+                    };
                     lines.push(Line::from(vec![
                         Span::styled(
                             circle,
                             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                         ),
+                        ),
                         Span::styled(
                             action,
                             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                         ),
+                        ),
                         Span::styled(
                             format!("({display_arg})..."),
                             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-                         ),
-                         ]));
+                        ),
+                    ]));
                       }
                  continue;
             }
@@ -2233,7 +2236,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         }
     } else {
         let inner_width = f.area().width.saturating_sub(6).max(1);
-        let input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
+        let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
+        // Cap input text height to 8 lines max (plus margins and status line = 10 total max height)
+        // so long multi-line prompts scroll within the box instead of eating the screen.
+        let input_lines = raw_input_lines.min(8);
         let input_height = input_lines + 2;
         // The queue block (blank + text + blank) only takes space when there's
         // something queued, so idle sessions don't carry a dead gap above the
