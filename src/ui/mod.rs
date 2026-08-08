@@ -1860,21 +1860,20 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
             ];
-            if !arg.is_empty() {
-                // "● " (2) + action_len + "(" (1) + ")" (1) + margin/padding offset (3) = action_len + 7
-                let prefix_len = action_len + 7;
-                let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len);
-                let display_arg = if arg.chars().count() > max_arg_len {
-                    let take_len = max_arg_len.saturating_sub(3);
-                    format!("{}...", arg.chars().take(take_len).collect::<String>())
-                } else {
-                    arg.clone()
-                };
-                spans.push(Span::styled(
-                    format!("({display_arg})"),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-            }
+            let prefix_len = action_len + 7;
+            let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len);
+            let display_arg = if arg.is_empty() {
+                String::new()
+            } else if arg.chars().count() > max_arg_len {
+                let take_len = max_arg_len.saturating_sub(3);
+                format!("{}...", arg.chars().take(take_len).collect::<String>())
+            } else {
+                arg.clone()
+            };
+            spans.push(Span::styled(
+                format!("({display_arg})"),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
             lines.push(Line::from(spans));
 
             if let Some((ref path, ref content)) = msg.file_preview {
