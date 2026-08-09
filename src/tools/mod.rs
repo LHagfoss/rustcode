@@ -968,7 +968,9 @@ fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
             match args.get("name").and_then(|v| v.as_str()) {
                 Some(nested) => {
                     let nested = nested.to_string();
-                    if let Some(obj) = args.as_object_mut() {
+                    if nested != "use_skill"
+                        && let Some(obj) = args.as_object_mut()
+                    {
                         obj.remove("name");
                     }
                     nested
