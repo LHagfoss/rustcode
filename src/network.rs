@@ -796,15 +796,12 @@ pub async fn stream_request(
     let aligned_messages = align_alternating_messages(messages.to_vec());
     let message_count = aligned_messages.len();
 
-    // Request-level temperature/max_tokens/enable_thinking always override a
-    // Modelfile's PARAMETER equivalents, so per-model tuning has to happen
-    // here, off the matching ModelProfile (matched by model id + url — the
-    // profile name isn't available this deep, only what was already resolved
-    // for the request). Falls back to the historical defaults (temperature
-    // 0.2 — low on purpose: this drives structured tool-calling and code
-    // edits, where a higher temperature makes small models incoherent and
-    // prone to token-level repetition collapse) when no profile matches or a
-    // profile leaves a field unset.
+    // max_tokens/enable_thinking override a Modelfile's PARAMETER equivalents,
+    // so per-model tuning has to happen here, off the matching ModelProfile
+    // (matched by model id + url — the profile name isn't available this
+    // deep, only what was already resolved for the request). Temperature is
+    // deliberately NOT sent here — leave it to the Modelfile's `PARAMETER
+    // temperature` so a model's own tuned sampling settings actually apply.
     let profile = {
         state
             .lock()
@@ -815,10 +812,6 @@ pub async fn stream_request(
             .find(|p| p.model == model && p.endpoint_url() == url)
             .cloned()
     };
-    let temperature = profile
-        .as_ref()
-        .and_then(|p| p.temperature)
-        .unwrap_or(crate::config::DEFAULT_REQUEST_TEMPERATURE);
     let max_tokens = profile
         .as_ref()
         .and_then(|p| p.max_tokens)
@@ -831,7 +824,6 @@ pub async fn stream_request(
         "stream_options": {
             "include_usage": true
         },
-        "temperature": temperature,
         "max_tokens": max_tokens,
     });
 

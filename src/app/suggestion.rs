@@ -148,6 +148,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "/theme",
         desc: "Show or set UI color theme (default|light|nord|dracula|tokyo-night)",
     },
+    CommandInfo {
+        name: "/thinking",
+        desc: "Show or set model thinking (on|off|default)",
+    },
 ];
 
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {

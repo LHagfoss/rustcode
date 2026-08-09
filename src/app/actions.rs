@@ -295,6 +295,47 @@ pub async fn handle_enter(
                     crate::config::save_entire_config(&s.config);
                 }
             }
+            "/thinking" => {
+                let url = s.api_base_url.clone();
+                let current = s
+                    .config
+                    .models
+                    .iter()
+                    .find(|p| p.url == url)
+                    .and_then(|p| p.enable_thinking);
+                let value = match tokens.get(1) {
+                    None => {
+                        s.modal_picker_index = match current {
+                            Some(false) => 1,
+                            _ => 0,
+                        };
+                        s.status = AppStatus::ThinkingPicker;
+                        None
+                    }
+                    Some(&"on") => Some(Some(true)),
+                    Some(&"off") => Some(Some(false)),
+                    Some(&"default") => Some(None),
+                    _ => {
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            "Invalid option. Use 'on', 'off', or 'default'.",
+                        ));
+                        None
+                    }
+                };
+                if let Some(value) = value {
+                    if let Some(profile) = s.config.models.iter_mut().find(|p| p.url == url) {
+                        profile.enable_thinking = value;
+                    }
+                    crate::config::save_entire_config(&s.config);
+                    let label = match value {
+                        Some(true) => "Thinking forced on.",
+                        Some(false) => "Thinking forced off.",
+                        None => "Thinking left at server/Modelfile default.",
+                    };
+                    s.history.push(ChatMessage::new("system", label));
+                }
+            }
             "/theme" => {
                 let themes = crate::ui::theme::load_available_themes();
                 match tokens.get(1) {
@@ -698,7 +739,6 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
                             env_key: None,
                             tool_protocol: None,
                             enable_thinking: None,
-                            temperature: None,
                             max_tokens: None,
                         });
                     }
@@ -844,7 +884,6 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
                             env_key: None,
                             tool_protocol: None,
                             enable_thinking: None,
-                            temperature: None,
                             max_tokens: None,
                         });
                     }

@@ -690,6 +690,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             continue;
                         }
+
+                        if s.status == AppStatus::ThinkingPicker {
+                            drop(s);
+                            match key.code {
+                                KeyCode::Up => {
+                                    let mut s = app_state.lock().await;
+                                    s.modal_picker_index = s.modal_picker_index.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    let mut s = app_state.lock().await;
+                                    s.modal_picker_index =
+                                        s.modal_picker_index.saturating_add(1).min(2); // 0 on, 1 off, 2 default
+                                }
+                                KeyCode::Enter => {
+                                    let mut s = app_state.lock().await;
+                                    let value = match s.modal_picker_index {
+                                        0 => Some(true),
+                                        1 => Some(false),
+                                        _ => None,
+                                    };
+                                    let url = s.api_base_url.clone();
+                                    if let Some(profile) =
+                                        s.config.models.iter_mut().find(|p| p.url == url)
+                                    {
+                                        profile.enable_thinking = value;
+                                    }
+                                    crate::config::save_entire_config(&s.config);
+                                    s.status = AppStatus::Idle;
+                                }
+                                KeyCode::Esc => {
+                                    let mut s = app_state.lock().await;
+                                    s.status = AppStatus::Idle;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
                     }
 
                     let mut s = app_state.lock().await;
