@@ -1302,6 +1302,8 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .to_string(),
         "use_skill" => args
             .get("name")
+            .or_else(|| args.get("skill"))
+            .or_else(|| args.get("skill_name"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
