@@ -1463,6 +1463,9 @@ mod protocol_tests {
             api_key: None,
             env_key: None,
             tool_protocol: Some(ToolProtocol::ApiNative),
+            enable_thinking: None,
+            temperature: None,
+            max_tokens: None,
         });
 
         assert_eq!(
