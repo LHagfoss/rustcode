@@ -92,7 +92,7 @@ pub static LAST_COMPACTION_RECLAIMED: std::sync::atomic::AtomicUsize =
 /// Number of most-recent messages whose tool outputs are always kept verbatim.
 /// Older tool outputs are eligible for message-count-based pruning and, on
 /// structured compaction, everything before this suffix is folded into a summary.
-pub const KEEP_RECENT_TURNS: usize = 6;
+pub const KEEP_RECENT_TURNS: usize = 12;
 
 /// Hard byte ceiling for the complete user prompt sent to the summarizer.
 /// 64 KiB is deliberately conservative: it leaves ample room for the pinned
@@ -792,7 +792,7 @@ mod tests {
         let big = format!("run_command: {}", "x ".repeat(3000)); // > 1000 tokens
         // A large tool output at the front, and a large one near the tail.
         let mut history = vec![tool_msg(&big)]; // index 0: will age out
-        for i in 0..7 {
+        for i in 0..(KEEP_RECENT_TURNS + 1) {
             history.push(ChatMessage::new("user", format!("pad {i}")));
         }
         let recent_idx = history.len();
@@ -815,7 +815,7 @@ mod tests {
     fn prune_historical_reports_exit_code() {
         let big = format!("run_command: {} exit code 2", "y ".repeat(3000));
         let mut history = vec![tool_msg(&big)];
-        for i in 0..8 {
+        for i in 0..(KEEP_RECENT_TURNS + 2) {
             history.push(ChatMessage::new("user", format!("m{i}")));
         }
         prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
@@ -825,7 +825,7 @@ mod tests {
     #[test]
     fn prune_historical_leaves_small_outputs_alone() {
         let mut history = vec![tool_msg("grep: match at line 4")];
-        for i in 0..8 {
+        for i in 0..(KEEP_RECENT_TURNS + 2) {
             history.push(ChatMessage::new("user", format!("m{i}")));
         }
         prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
@@ -951,7 +951,7 @@ mod tests {
     async fn manual_compaction_cancellation_interrupts_pending_summary_request() {
         let (url, request_accepted) = pending_response_server().await;
         let mut history = vec![ChatMessage::new("user", "original task")];
-        for index in 0..7 {
+        for index in 0..(KEEP_RECENT_TURNS + 4) {
             history.push(ChatMessage::new("assistant", format!("fact {index}")));
         }
         let expected: Vec<(String, String)> = history
@@ -1048,7 +1048,7 @@ mod tests {
         }))
         .await;
         let mut history = vec![ChatMessage::new("user", "original task")];
-        for i in 0..7 {
+        for i in 0..(KEEP_RECENT_TURNS + 1) {
             history.push(ChatMessage::new("assistant", format!("fact {i}")));
         }
         let expected: Vec<(String, String)> = history
