@@ -9,6 +9,7 @@ pub enum AppStatus {
     AwaitingToolConfirmation,
     AwaitingQuestion,
     VerbosityPicker,
+    ThinkingPicker,
 }
 
 #[derive(Debug, Clone)]
@@ -1464,7 +1465,6 @@ mod protocol_tests {
             env_key: None,
             tool_protocol: Some(ToolProtocol::ApiNative),
             enable_thinking: None,
-            temperature: None,
             max_tokens: None,
         });
 
