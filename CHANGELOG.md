@@ -1,3 +1,43 @@
+## [v0.14.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.14.0) - 2026-08-09
+
+### Features
+- **Config:** Add per-model profile settings for temperature, max_tokens, and enable_thinking ([#461](https://github.com/LHagfoss/rustcode/pull/461) / [`5ac11b0`](https://github.com/LHagfoss/rustcode/commit/5ac11b0))
+- **Config/UI:** Add `/thinking` picker modal, drop request-level temperature, raise max_tokens default ([#463](https://github.com/LHagfoss/rustcode/pull/463) / [`ce6f20b`](https://github.com/LHagfoss/rustcode/commit/ce6f20b))
+- **UI:** Collapse long pasted text into display chips with character counts ([#454](https://github.com/LHagfoss/rustcode/pull/454) / [`813946d`](https://github.com/LHagfoss/rustcode/commit/813946d))
+- **UI:** Fix tool argument line wrap truncation and add max input box height ([#453](https://github.com/LHagfoss/rustcode/pull/453) / [`2637dd2`](https://github.com/LHagfoss/rustcode/commit/2637dd2))
+- **Tools:** Instruct model to auto-trigger matching skills at task start ([#457](https://github.com/LHagfoss/rustcode/pull/457) / [`58a1116`](https://github.com/LHagfoss/rustcode/commit/58a1116))
+- **UI:** Render empty parentheses `()` for tool calls with empty arguments ([#458](https://github.com/LHagfoss/rustcode/pull/458) / [`e7e0aa2`](https://github.com/LHagfoss/rustcode/commit/e7e0aa2))
+- **Network/Tools:** Nudge unstuck model and infer missing tool names ([#452](https://github.com/LHagfoss/rustcode/pull/452) / [`60a6597`](https://github.com/LHagfoss/rustcode/commit/60a6597))
+
+### Fixes
+- **UI:** Hide raw compaction summary text block from TUI transcript view ([#462](https://github.com/LHagfoss/rustcode/pull/462) / [`5275956`](https://github.com/LHagfoss/rustcode/commit/5275956))
+- **UI/Tools:** Preserve skill name in `use_skill` tool call parsing and UI header ([#460](https://github.com/LHagfoss/rustcode/pull/460) / [`0dfde5b`](https://github.com/LHagfoss/rustcode/commit/0dfde5b))
+- **UI:** Hide dropped tool batch notices from TUI transcript view ([#459](https://github.com/LHagfoss/rustcode/pull/459) / [`590416f`](https://github.com/LHagfoss/rustcode/commit/590416f))
+- **Tools:** Infer `complete_task` name when missing from malformed tool calls ([#455](https://github.com/LHagfoss/rustcode/pull/455) / [`6d31645`](https://github.com/LHagfoss/rustcode/commit/6d31645))
+- Reset `AppStatus` to `Idle` on Esc modal dismiss and instruct models against duplicate write-in options ([#451](https://github.com/LHagfoss/rustcode/pull/451) / [`1fcbab4`](https://github.com/LHagfoss/rustcode/commit/1fcbab4))
+- Suppress streaming text display for JSON and embedded tool calls ([#448](https://github.com/LHagfoss/rustcode/pull/448) / [`447128e`](https://github.com/LHagfoss/rustcode/commit/447128e))
+- Improve ManageTask and TaskDone formatting in chat ([#447](https://github.com/LHagfoss/rustcode/pull/447) / [`0355036`](https://github.com/LHagfoss/rustcode/commit/0355036))
+
+### Refactor
+- Make tool registration a single self-contained definition ([`c66d431`](https://github.com/LHagfoss/rustcode/commit/c66d431))
+
+### Chores
+- Replace header.png with new image ([#449](https://github.com/LHagfoss/rustcode/pull/449) / [`6dee0f9`](https://github.com/LHagfoss/rustcode/commit/6dee0f9))
+- Apply cargo fmt to 9 source files ([#456](https://github.com/LHagfoss/rustcode/pull/456) / [`6f09e35`](https://github.com/LHagfoss/rustcode/commit/6f09e35))
+
+## [v0.13.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.13.2) - 2026-08-07
+
+### Fixes
+- Reset `AppStatus` to `Idle` on Esc modal dismiss and instruct models against duplicate write-in options ([#451](https://github.com/LHagfoss/rustcode/pull/451) / [`1fcbab4`](https://github.com/LHagfoss/rustcode/commit/1fcbab4))
+- Suppress streaming text display for JSON and embedded tool calls ([#448](https://github.com/LHagfoss/rustcode/pull/448) / [`447128e`](https://github.com/LHagfoss/rustcode/commit/447128e))
+- Improve ManageTask and TaskDone formatting in chat ([#447](https://github.com/LHagfoss/rustcode/pull/447) / [`0355036`](https://github.com/LHagfoss/rustcode/commit/0355036))
+
+### Refactor
+- Make tool registration a single self-contained definition ([`c66d431`](https://github.com/LHagfoss/rustcode/commit/c66d431))
+
+### Chores
+- Replace header.png with new image ([#449](https://github.com/LHagfoss/rustcode/pull/449) / [`6dee0f9`](https://github.com/LHagfoss/rustcode/commit/6dee0f9))
+
 ## [v0.13.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.13.1) - 2026-08-07
 
 ### Fixes
