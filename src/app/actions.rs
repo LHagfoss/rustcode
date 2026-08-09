@@ -1930,7 +1930,7 @@ mod tests {
         let mut app = AppState::new();
         app.api_base_url = url;
         app.model_name = "model".to_string();
-        app.history = (0..8)
+        app.history = (0..(crate::network::compaction::KEEP_RECENT_TURNS + 2))
             .map(|index| crate::app::ChatMessage::new("user", format!("message {index}")))
             .collect();
         app.input_buffer = "/compact".to_string();

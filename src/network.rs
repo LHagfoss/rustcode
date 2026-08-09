@@ -5248,7 +5248,7 @@ mod tests {
         for profile in &mut app.config.models {
             profile.context_window = Some(400);
         }
-        app.history = (0..12)
+        app.history = (0..(crate::network::compaction::KEEP_RECENT_TURNS + 4))
             .map(|index| {
                 ChatMessage::new(
                     if index % 2 == 0 { "user" } else { "assistant" },
