@@ -1776,10 +1776,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     for (msg_idx, msg) in state.history.iter().enumerate() {
         msg_start_lines.push(lines.len());
         if msg.role == "system" {
-            // Hide benign intermediate notices from TUI display
+            // Hide benign intermediate notices and full compaction summary text from TUI display
             if msg.content.contains("Loop warning:")
                 || msg.content.contains("tool calls in that response were dropped")
                 || msg.content.contains("Oversized response:")
+                || msg.content.starts_with(crate::network::compaction::SUMMARY_MARKER)
             {
                 continue;
             }
