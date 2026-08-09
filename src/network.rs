@@ -795,6 +795,35 @@ pub async fn stream_request(
 ) -> Result<Option<String>, String> {
     let aligned_messages = align_alternating_messages(messages.to_vec());
     let message_count = aligned_messages.len();
+
+    // Request-level temperature/max_tokens/enable_thinking always override a
+    // Modelfile's PARAMETER equivalents, so per-model tuning has to happen
+    // here, off the matching ModelProfile (matched by model id + url — the
+    // profile name isn't available this deep, only what was already resolved
+    // for the request). Falls back to the historical defaults (temperature
+    // 0.2 — low on purpose: this drives structured tool-calling and code
+    // edits, where a higher temperature makes small models incoherent and
+    // prone to token-level repetition collapse) when no profile matches or a
+    // profile leaves a field unset.
+    let profile = {
+        state
+            .lock()
+            .await
+            .config
+            .models
+            .iter()
+            .find(|p| p.model == model && p.endpoint_url() == url)
+            .cloned()
+    };
+    let temperature = profile
+        .as_ref()
+        .and_then(|p| p.temperature)
+        .unwrap_or(crate::config::DEFAULT_REQUEST_TEMPERATURE);
+    let max_tokens = profile
+        .as_ref()
+        .and_then(|p| p.max_tokens)
+        .unwrap_or(crate::config::DEFAULT_REQUEST_MAX_TOKENS);
+
     let mut payload = serde_json::json!({
         "model": model,
         "messages": aligned_messages,
@@ -802,15 +831,13 @@ pub async fn stream_request(
         "stream_options": {
             "include_usage": true
         },
-        // Low temperature for the main agent loop: this drives structured
-        // tool-calling and code edits, where 0.7 makes small models incoherent
-        // and prone to token-level repetition collapse (e.g. a regex degenerating
-        // into `.*?\n` repeated hundreds of times). This is sent explicitly
-        // because a request value overrides the model's Modelfile PARAMETER, so
-        // the server-side temperature can't be relied on. Keep it low.
-        "temperature": 0.2,
-        "max_tokens": 4096,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     });
+
+    if let Some(enable_thinking) = profile.as_ref().and_then(|p| p.enable_thinking) {
+        payload["enable_thinking"] = serde_json::json!(enable_thinking);
+    }
 
     // Guard against runaway repetition even at low temperature. Google's
     // OpenAI-compat endpoint (generativelanguage.googleapis.com) rejects

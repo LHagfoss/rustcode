@@ -34,7 +34,31 @@ pub struct ModelProfile {
     /// calling (or advertises it but gets it wrong).
     #[serde(default)]
     pub tool_protocol: Option<ToolProtocol>,
+    /// Sends Qwen3's top-level `enable_thinking` request field when set.
+    /// `Some(false)` skips `<think>` generation entirely at the chat-template
+    /// level (much faster, no reasoning trace); `Some(true)` forces it on;
+    /// `None` (default) leaves the server's own template default in place —
+    /// matches prior behavior for profiles that don't opt in.
+    #[serde(default)]
+    pub enable_thinking: Option<bool>,
+    /// Per-profile sampling temperature. `None` falls back to the same 0.2
+    /// used for every request before this field existed. A Modelfile
+    /// `PARAMETER temperature` alone has no effect — the request body always
+    /// overrides it — so tuning temperature per model has to happen here.
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Per-profile completion token cap sent as `max_tokens`. `None` falls
+    /// back to the shared default. Like `temperature`, this overrides
+    /// whatever a Modelfile's `PARAMETER num_predict` says.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
+
+/// Fallback request params used when a `ModelProfile` doesn't set its own.
+/// Kept as named constants (not inlined at the call site) so the reasoning
+/// docstring above stays next to the one place both are read.
+pub const DEFAULT_REQUEST_TEMPERATURE: f32 = 0.2;
+pub const DEFAULT_REQUEST_MAX_TOKENS: u32 = 16384;
 
 impl ModelProfile {
     pub fn endpoint_url(&self) -> String {
@@ -269,6 +293,9 @@ impl Default for AppConfig {
                     api_key: None,
                     env_key: None,
                     tool_protocol: None,
+                    enable_thinking: None,
+                    temperature: None,
+                    max_tokens: None,
                 },
                 ModelProfile {
                     name: "gemini-3.6-flash".to_string(),
@@ -279,6 +306,9 @@ impl Default for AppConfig {
                     api_key: None,
                     env_key: None,
                     tool_protocol: None,
+                    enable_thinking: None,
+                    temperature: None,
+                    max_tokens: None,
                 },
                 ModelProfile {
                     name: "gemma4:e2b-it-qat".to_string(),
@@ -289,6 +319,9 @@ impl Default for AppConfig {
                     api_key: None,
                     env_key: None,
                     tool_protocol: None,
+                    enable_thinking: None,
+                    temperature: None,
+                    max_tokens: None,
                 },
                 ModelProfile {
                     name: "tinkerer".to_string(),
@@ -299,6 +332,9 @@ impl Default for AppConfig {
                     api_key: None,
                     env_key: Some("TINKER_API_KEY".to_string()),
                     tool_protocol: None,
+                    enable_thinking: None,
+                    temperature: None,
+                    max_tokens: None,
                 },
             ],
             tool_protocol: ToolProtocol::default(),

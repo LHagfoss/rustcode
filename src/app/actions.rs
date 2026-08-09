@@ -697,6 +697,9 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
                             api_key: None,
                             env_key: None,
                             tool_protocol: None,
+                            enable_thinking: None,
+                            temperature: None,
+                            max_tokens: None,
                         });
                     }
                     s.config.default.set_big(name.clone());
@@ -840,6 +843,9 @@ Supported formats: json, native, apinative. '/protocol json|native|apinative' se
                             api_key: None,
                             env_key: None,
                             tool_protocol: None,
+                            enable_thinking: None,
+                            temperature: None,
+                            max_tokens: None,
                         });
                     }
                     s.config.default.set_big("ollama".to_string());
