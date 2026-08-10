@@ -33,7 +33,9 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
 /// calls (printing each to stdout) but still enforces plan-mode safety and runs
 /// the shared completion/finish gate, so headless runs match interactive
 /// execution without ever blocking for TUI confirmation.
-pub(crate) struct HeadlessPolicy;
+pub(crate) struct HeadlessPolicy {
+    pub(crate) quiet: bool,
+}
 
 impl crate::network::policy::TurnPolicy for HeadlessPolicy {
     fn should_approve(
@@ -43,14 +45,19 @@ impl crate::network::policy::TurnPolicy for HeadlessPolicy {
     ) -> impl std::future::Future<Output = bool> + Send {
         let calls = tool_calls.to_vec();
         let s_clone = Arc::clone(state);
+        let quiet = self.quiet;
         async move {
             let s = s_clone.lock().await;
             for call in &calls {
-                println!("\n[Headless] Executing Tool: {}", call.name);
+                if !quiet {
+                    println!("\n[Headless] Executing Tool: {}", call.name);
+                }
                 if s.agent_mode == crate::config::AgentMode::Plan
                     && !crate::tools::allowed_in_plan_mode(&call.name)
                 {
-                    println!("[Headless] Rejected: mutating tool in plan_mode");
+                    if !quiet {
+                        println!("[Headless] Rejected: mutating tool in plan_mode");
+                    }
                     return false;
                 }
             }
@@ -63,16 +70,19 @@ impl crate::network::policy::TurnPolicy for HeadlessPolicy {
     }
 }
 
-pub async fn run_round_loop(
+pub async fn run_headless_turn(
     client: &reqwest::Client,
     state_arc: Arc<Mutex<AppState>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     let cancel_token = tokio_util::sync::CancellationToken::new();
     let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
 
-    let policy = Arc::new(HeadlessPolicy);
+    let quiet = !state_arc.lock().await.raw_cli_mode;
+    let policy = Arc::new(HeadlessPolicy { quiet });
 
-    println!("Starting headless agent loop...");
+    if !quiet {
+        println!("Starting headless agent loop...");
+    }
     // Drive the prompt through the SAME shared turn lifecycle the interactive
     // orchestrator uses (TurnMachine, approval/finish gates, build verification,
     // token/history persistence). HeadlessPolicy keeps it non-interactive.
@@ -80,14 +90,12 @@ pub async fn run_round_loop(
         crate::network::run_agent_turn(client, &state_arc, &cancel_token, &policy, &stream_buffer)
             .await;
 
-    if !ctx.final_content.is_empty() {
-        let prose = crate::network::text::strip_tool_call_syntax(&ctx.final_content);
-        if !prose.trim().is_empty() {
-            println!("\nAssistant: {}", prose.trim());
-        }
+    let prose = crate::network::text::strip_tool_call_syntax(&ctx.final_content);
+    if !quiet && !prose.trim().is_empty() {
+        println!("\nAssistant: {}", prose.trim());
     }
 
-    Ok(())
+    Ok(prose.trim().to_string())
 }
 
 /// Entry point for the raw CLI agent mode.
@@ -115,7 +123,7 @@ pub async fn run_raw_cli(
 
     let state_arc = Arc::new(Mutex::new(state));
 
-    run_round_loop(&client, state_arc).await
+    run_headless_turn(&client, state_arc).await.map(|_| ())
 }
 
 #[cfg(test)]
@@ -146,7 +154,7 @@ mod tests {
         state.agent_mode = crate::config::AgentMode::Build;
         let state = Arc::new(Mutex::new(state));
 
-        let approved = HeadlessPolicy
+        let approved = HeadlessPolicy { quiet: true }
             .should_approve(&state, &[call("write_file")])
             .await;
         assert!(approved, "headless build mode must not block on approval");
@@ -158,7 +166,7 @@ mod tests {
         state.agent_mode = crate::config::AgentMode::Plan;
         let state = Arc::new(Mutex::new(state));
 
-        let approved = HeadlessPolicy
+        let approved = HeadlessPolicy { quiet: true }
             .should_approve(&state, &[call("write_file")])
             .await;
         assert!(!approved, "plan mode must reject mutating tools headlessly");
@@ -168,6 +176,6 @@ mod tests {
     fn headless_policy_verifies_completion_like_interactive() {
         // The finish gate (compiler/build verification before accepting done)
         // is driven by this flag; raw CLI must match interactive behavior.
-        assert!(HeadlessPolicy.should_verify_completion());
+        assert!(HeadlessPolicy { quiet: true }.should_verify_completion());
     }
 }

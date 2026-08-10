@@ -3522,7 +3522,7 @@ different, read another range or make an edit first; repeating this call returns
                     &args_clone,
                     &name_clone,
                     true, // bypass confirmation
-                    None,
+                    state_clone.lock().await.workspace_root.clone(),
                 )
                 .await
             };

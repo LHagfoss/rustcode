@@ -27,6 +27,10 @@ pub struct Cli {
     #[arg(long = "upgrade")]
     pub upgrade: bool,
 
+    /// Run as a headless Agent Client Protocol server over stdio
+    #[arg(long = "acp")]
+    pub acp: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -58,5 +62,11 @@ mod tests {
     fn parses_upgrade_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--upgrade"]).unwrap();
         assert!(cli.upgrade);
+    }
+
+    #[test]
+    fn parses_acp_flag() {
+        let cli = Cli::try_parse_from(["rustcode", "--acp"]).unwrap();
+        assert!(cli.acp);
     }
 }
