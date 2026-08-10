@@ -4584,6 +4584,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 };
                 // Finish gate check: verify the project builds cleanly before accepting completion
                 if ctx.made_edits {
+                    {
+                        let mut s = state.lock().await;
+                        s.status = AppStatus::Streaming;
+                    }
                     let root = ctx
                         .edit_root
                         .clone()
@@ -4753,6 +4757,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
             "Finish gate: compile-checking {} before accepting done",
             root.display()
         );
+        {
+            let mut s = state.lock().await;
+            s.status = AppStatus::Streaming;
+        }
         if let Some(errors) =
             cached_compiler_check(&root, &mut ctx.compile_dirty, &mut ctx.compile_cache).await
         {
