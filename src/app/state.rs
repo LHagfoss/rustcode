@@ -265,6 +265,25 @@ impl ChatMessage {
         self.tool_result = Some(record);
         self
     }
+
+    /// Resolves tool calls from structured `tool_calls` fields (ApiNative) if present,
+    /// or parses tool calls from text content for text protocols.
+    pub fn resolved_tool_calls(&self, protocol: crate::config::ToolProtocol) -> Vec<crate::tools::ToolCall> {
+        if !self.tool_calls.is_empty() {
+            self.tool_calls
+                .iter()
+                .filter_map(|tc| {
+                    let args = serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                    Some(crate::tools::ToolCall {
+                        name: tc.name.clone(),
+                        arguments: args,
+                    })
+                })
+                .collect()
+        } else {
+            crate::tools::parse_tool_calls(&self.content, protocol)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1536,6 +1555,39 @@ mod queue_pull_back_tests {
         // Only the wakeup entry remains — nothing more to pull.
         assert!(!s.pop_queued_prompt());
         assert_eq!(s.pending_queue, vec!["__task_wakeup__:abc123"]);
+    }
+}
+
+#[cfg(test)]
+mod chat_message_tests {
+    use super::{ChatMessage, ToolCallRef};
+    use crate::config::ToolProtocol;
+
+    #[test]
+    fn resolved_tool_calls_prefers_structured_tool_calls() {
+        let msg = ChatMessage::new("assistant", "<think>some reasoning</think>")
+            .with_tool_calls(vec![ToolCallRef {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: r#"{"path": "src/main.rs"}"#.to_string(),
+            }]);
+
+        let calls = msg.resolved_tool_calls(ToolProtocol::ApiNative);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn resolved_tool_calls_falls_back_to_parsing_content_text() {
+        let msg = ChatMessage::new(
+            "assistant",
+            "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"foo\"}}\n```",
+        );
+
+        let calls = msg.resolved_tool_calls(ToolProtocol::Json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "grep");
     }
 }
 
