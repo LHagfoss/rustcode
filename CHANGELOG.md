@@ -1,3 +1,11 @@
+## [v0.16.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.16.0) - 2026-08-10
+
+### Features
+- **Server:** Add headless ACP server for non-TUI usage ([#470](https://github.com/LHagfoss/rustcode/pull/470) / [`59b4e81`](https://github.com/LHagfoss/rustcode/commit/59b4e81))
+
+### Documentation
+- **Server:** Design acp server runtime ([`e2f2edb`](https://github.com/LHagfoss/rustcode/commit/e2f2edb))
+
 ## [v0.15.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.15.0) - 2026-08-10
 
 ### Features
