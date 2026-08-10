@@ -345,6 +345,18 @@ impl Default for AppConfig {
 }
 
 pub fn get_config_dir() -> Option<PathBuf> {
+    if let Ok(override_dir) = std::env::var("RUSTCODE_CONFIG_DIR")
+        && !override_dir.trim().is_empty()
+    {
+        let dir = PathBuf::from(override_dir);
+        let _ = fs::create_dir_all(&dir);
+        return Some(dir);
+    }
+    if cfg!(test) {
+        let dir = std::env::temp_dir().join("rustcode_test_config");
+        let _ = fs::create_dir_all(&dir);
+        return Some(dir);
+    }
     let home = std::env::var("HOME").ok()?;
     let config_root = PathBuf::from(home).join(".config");
     let dir = config_root.join("rustcode");
