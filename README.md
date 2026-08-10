@@ -56,9 +56,19 @@ rustcode --acp
 The process speaks stable ACP v1 JSON-RPC on stdin/stdout. A runtime such as
 Multica can launch it as a subprocess, create a session with `session/new`, and
 send work with `session/prompt`. The working directory supplied to
-`session/new` becomes the workspace root for rustcode's tools. Existing rustcode
-configuration and MCP servers are used by the agent internally; ACP's optional
-MCP-over-ACP transport is not required.
+`session/new` becomes the workspace root for rustcode's tools. Rustcode reads
+model profiles from `~/.config/rustcode/models.json` and runtime/MCP settings
+from `~/.config/rustcode/config.json`. Missing or invalid files fall back to
+defaults compiled into Rustcode; the deprecated `config.toml` file is ignored.
+Configured MCP servers are started by Rustcode before ACP prompts are handled;
+ACP's optional MCP-over-ACP transport is not required.
+
+### Configuration files
+
+`models.json` contains the `default` model selection and `models` array.
+`config.json` contains runtime preferences and integrations such as MCP
+servers, tool protocol, agent mode, verbosity, theme, and the active session.
+Rustcode does not create or overwrite either file during fallback loading.
 
 ### via homebrew
 

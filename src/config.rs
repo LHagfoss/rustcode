@@ -641,7 +641,7 @@ fn write_history_file(path: &Path, history: &[ChatMessage]) {
 }
 
 /// Process-wide cache of the active session id, so history saves never have to
-/// re-read and re-parse `config.toml` just to learn where to write.
+/// re-read and re-parse `config.json` just to learn where to write.
 fn active_session_cache() -> &'static Mutex<Option<String>> {
     static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -658,7 +658,7 @@ pub fn set_active_session_id(session_id: &str) {
     };
 }
 
-/// The active session id, read from `config.toml` at most once per process.
+/// The active session id, read from `config.json` at most once per process.
 fn active_session_id() -> Option<String> {
     let mut cache = lock(active_session_cache());
     if cache.is_none() {

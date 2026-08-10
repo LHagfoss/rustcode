@@ -17,6 +17,12 @@ struct AcpSession {
 type Sessions = Arc<Mutex<HashMap<String, AcpSession>>>;
 
 pub async fn run_acp() -> Result<(), Box<dyn std::error::Error>> {
+    let startup_state = crate::app::AppState::new();
+    crate::mcp::start_enabled_servers(&startup_state.config.mcp_servers, |name| async move {
+        crate::mcp::start_server_by_name(&name).await
+    })
+    .await;
+
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
     Agent
         .builder()
