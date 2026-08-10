@@ -1,3 +1,15 @@
+## [v0.15.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.15.0) - 2026-08-10
+
+### Features
+- **UI:** Add interactive `/protocol` picker modal and enforce `Verbosity::High` for tool rendering ([#467](https://github.com/LHagfoss/rustcode/pull/467) / [`6aca289`](https://github.com/LHagfoss/rustcode/commit/6aca289))
+
+### Fixes
+- **UI:** Reflow markdown soft breaks instead of forcing a new line ([#468](https://github.com/LHagfoss/rustcode/pull/468) / [`2522425`](https://github.com/LHagfoss/rustcode/commit/2522425))
+- **Network:** Maintain `AppStatus::Streaming` during finish-gate compiler checks ([#467](https://github.com/LHagfoss/rustcode/pull/467) / [`5642520`](https://github.com/LHagfoss/rustcode/commit/5642520))
+
+### Tuning
+- **Context:** Keep more recent turns verbatim before pruning kicks in ([#465](https://github.com/LHagfoss/rustcode/pull/465) / [`76cb796`](https://github.com/LHagfoss/rustcode/commit/76cb796))
+
 ## [v0.14.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.14.0) - 2026-08-09
 
 ### Features
