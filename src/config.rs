@@ -10,7 +10,8 @@ use std::time::Duration;
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 
-const CONFIG_FILE: &str = "config.toml";
+pub const MODELS_FILE: &str = "models.json";
+pub const CONFIG_FILE: &str = "config.json";
 const HISTORY_FILE: &str = "history.json";
 const SESSIONS_DIR: &str = "sessions";
 #[allow(dead_code)]
@@ -243,6 +244,33 @@ pub struct AppConfig {
     pub is_valid: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ModelsConfig {
+    default: DefaultConfig,
+    models: Vec<ModelProfile>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RuntimeConfig {
+    #[serde(default)]
+    tool_protocol: ToolProtocol,
+    #[serde(default)]
+    last_active_session_id: Option<String>,
+    #[serde(default)]
+    mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    agent_mode: AgentMode,
+    #[serde(default)]
+    verbosity: crate::app::state::Verbosity,
+    #[serde(default = "default_false")]
+    debug_verbose_network_logging: bool,
+    #[serde(default = "default_theme")]
+    theme: String,
+    #[serde(default)]
+    #[serde(with = "serde_millis")]
+    start_time: Option<std::time::SystemTime>,
+}
+
 fn default_false() -> bool {
     false
 }
@@ -401,37 +429,57 @@ pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String
 }
 
 pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
-    let default_config = AppConfig::default();
+    let defaults = AppConfig::default();
+    let mut config = defaults.clone();
+    let mut is_valid = true;
 
-    let file_path = dir.join(CONFIG_FILE);
-    if !file_path.exists() {
-        save_config_to(dir, &default_config);
-        let (url, model) = default_endpoint(&default_config);
-        return (url, model, default_config);
+    let models_path = dir.join(MODELS_FILE);
+    if models_path.exists() {
+        match fs::read_to_string(&models_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<ModelsConfig>(&content).ok())
+        {
+            Some(models) => {
+                config.default = models.default;
+                config.models = models.models;
+            }
+            None => {
+                eprintln!(
+                    "[rustcode] WARNING: Failed to parse {}. Using built-in model defaults.",
+                    models_path.display()
+                );
+                is_valid = false;
+            }
+        }
     }
 
-    let Ok(content) = fs::read_to_string(&file_path) else {
-        let (url, model) = default_endpoint(&default_config);
-        return (url, model, default_config);
-    };
-
-    let mut config = match toml::from_str::<AppConfig>(&content) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!(
-                "[rustcode] WARNING: Failed to parse config.toml ({e}). Keeping existing config on disk to prevent overwriting custom profiles."
-            );
-            let backup_path = file_path.with_extension("toml.bak");
-            if let Err(backup_err) = std::fs::copy(&file_path, &backup_path) {
-                eprintln!("Warning: could not backup config: {backup_err}");
-            } else {
-                eprintln!("Backed up malformed config to {}", backup_path.display());
+    let runtime_path = dir.join(CONFIG_FILE);
+    if runtime_path.exists() {
+        match fs::read_to_string(&runtime_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<RuntimeConfig>(&content).ok())
+        {
+            Some(runtime) => {
+                config.tool_protocol = runtime.tool_protocol;
+                config.last_active_session_id = runtime.last_active_session_id;
+                config.mcp_servers = runtime.mcp_servers;
+                config.agent_mode = runtime.agent_mode;
+                config.verbosity = runtime.verbosity;
+                config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
+                config.theme = runtime.theme;
+                config.start_time = runtime.start_time;
             }
-            let mut fallback = default_config;
-            fallback.is_valid = false;
-            fallback
+            None => {
+                eprintln!(
+                    "[rustcode] WARNING: Failed to parse {}. Using built-in runtime defaults.",
+                    runtime_path.display()
+                );
+                is_valid = false;
+            }
         }
-    };
+    }
+
+    config.is_valid = is_valid;
 
     // backfill windows for profiles saved before the context_window field
     let defaults = AppConfig::default();
@@ -462,8 +510,25 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         return;
     }
     let _ = fs::create_dir_all(dir);
-    if let Ok(toml_str) = toml::to_string_pretty(config) {
-        let _ = fs::write(dir.join(CONFIG_FILE), toml_str);
+    let models = ModelsConfig {
+        default: config.default.clone(),
+        models: config.models.clone(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&models) {
+        let _ = fs::write(dir.join(MODELS_FILE), json);
+    }
+    let runtime = RuntimeConfig {
+        tool_protocol: config.tool_protocol,
+        last_active_session_id: config.last_active_session_id.clone(),
+        mcp_servers: config.mcp_servers.clone(),
+        agent_mode: config.agent_mode,
+        verbosity: config.verbosity.clone(),
+        debug_verbose_network_logging: config.debug_verbose_network_logging,
+        theme: config.theme.clone(),
+        start_time: config.start_time,
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&runtime) {
+        let _ = fs::write(dir.join(CONFIG_FILE), json);
     }
 }
 
@@ -1434,15 +1499,16 @@ mod tests {
         assert_eq!(parsed3.default.small(), "my-small-model");
     }
 
-    use std::io::Write;
     use tempfile::TempDir;
 
     #[test]
     fn test_load_valid_config() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("config.toml");
-        let mut f = std::fs::File::create(&config_path).unwrap();
-        f.write_all(b"default = { big = \"test_model\", small = \"test_small\" }\n[[models]]\nname = \"test_model\"\nurl = \"http://test/v1/chat/completions\"\nmodel = \"test\"\n").unwrap();
+        let models = r#"{
+            "default": {"big": "test_model", "small": "test_small"},
+            "models": [{"name": "test_model", "url": "http://test/v1/chat/completions", "model": "test"}]
+        }"#;
+        fs::write(dir.path().join(MODELS_FILE), models).unwrap();
 
         let (url, model, config) = load_config_from(dir.path());
         assert_eq!(config.default.big(), "test_model");
@@ -1454,15 +1520,15 @@ mod tests {
     #[test]
     fn test_load_invalid_config_returns_default() {
         let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("config.toml");
-        let mut f = std::fs::File::create(&config_path).unwrap();
-        f.write_all(b"invalid toml content").unwrap();
+        let config_path = dir.path().join(CONFIG_FILE);
+        fs::write(&config_path, b"invalid json content").unwrap();
 
         let (_url, _model, config) = load_config_from(dir.path());
         assert_eq!(config.default.big(), AppConfig::default().default.big());
+        assert!(!config.is_valid);
 
-        let backup_path = dir.path().join("config.toml.bak");
-        assert!(backup_path.exists());
+        assert_eq!(fs::read(&config_path).unwrap(), b"invalid json content");
+        assert!(!dir.path().join("config.json.bak").exists());
     }
 
     #[test]
@@ -1471,7 +1537,125 @@ mod tests {
         let (_url, _model, config) = load_config_from(dir.path());
         assert_eq!(config.default.big(), AppConfig::default().default.big());
 
-        let config_path = dir.path().join("config.toml");
-        assert!(config_path.exists());
+        assert!(!dir.path().join("models.json").exists());
+        assert!(!dir.path().join("config.json").exists());
+        assert!(!dir.path().join("config.toml").exists());
+    }
+
+    #[test]
+    fn test_load_json_configuration_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("models.json"),
+            r#"{
+                "default": {"big": "custom", "small": "custom-small"},
+                "models": [{
+                    "name": "custom",
+                    "url": "http://custom/v1/chat/completions",
+                    "model": "custom-model"
+                }]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{
+                "theme": "nord",
+                "tool_protocol": "native"
+            }"#,
+        )
+        .unwrap();
+
+        let (url, model, config) = load_config_from(dir.path());
+
+        assert_eq!(config.default.big(), "custom");
+        assert_eq!(config.default.small(), "custom-small");
+        assert_eq!(config.models[0].name, "custom");
+        assert_eq!(config.theme, "nord");
+        assert_eq!(config.tool_protocol, ToolProtocol::Native);
+        assert_eq!(url, "http://custom/v1/chat/completions");
+        assert_eq!(model, "custom-model");
+    }
+
+    #[test]
+    fn test_malformed_json_is_preserved() {
+        let dir = TempDir::new().unwrap();
+        let malformed_models = b"{ malformed models";
+        let malformed_runtime = b"{ malformed runtime";
+        fs::write(dir.path().join("models.json"), malformed_models).unwrap();
+        fs::write(dir.path().join("config.json"), malformed_runtime).unwrap();
+
+        let (_, _, config) = load_config_from(dir.path());
+
+        let defaults = AppConfig::default();
+        assert_eq!(config.default.big(), defaults.default.big());
+        assert_eq!(config.models, defaults.models);
+        assert_eq!(config.theme, defaults.theme);
+        assert_eq!(config.tool_protocol, defaults.tool_protocol);
+        assert!(!config.is_valid);
+        assert_eq!(
+            fs::read(dir.path().join("models.json")).unwrap(),
+            malformed_models
+        );
+        assert_eq!(
+            fs::read(dir.path().join("config.json")).unwrap(),
+            malformed_runtime
+        );
+        assert!(!dir.path().join("models.json.bak").exists());
+        assert!(!dir.path().join("config.json.bak").exists());
+    }
+
+    #[test]
+    fn test_malformed_models_preserves_valid_runtime_config() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(MODELS_FILE), b"not json").unwrap();
+        fs::write(
+            dir.path().join(CONFIG_FILE),
+            r#"{"theme":"nord","tool_protocol":"native"}"#,
+        )
+        .unwrap();
+
+        let (_, _, config) = load_config_from(dir.path());
+
+        assert_eq!(config.theme, "nord");
+        assert_eq!(config.tool_protocol, ToolProtocol::Native);
+        assert_eq!(config.default.big(), AppConfig::default().default.big());
+        assert!(!config.is_valid);
+    }
+
+    #[test]
+    fn test_empty_models_use_default_endpoint() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(MODELS_FILE),
+            r#"{"default":{"big":"missing","small":"missing"},"models":[]}"#,
+        )
+        .unwrap();
+
+        let (url, model, config) = load_config_from(dir.path());
+        let defaults = AppConfig::default();
+        assert!(config.models.is_empty());
+        assert_eq!(url, defaults.models[0].url);
+        assert_eq!(model, defaults.models[0].model);
+    }
+
+    #[test]
+    fn test_config_save_writes_split_json_without_toml() {
+        let dir = TempDir::new().unwrap();
+        let mut config = AppConfig::default();
+        config.default = DefaultConfig::Simple("custom".to_string());
+        config.models[0].name = "custom".to_string();
+        config.theme = "nord".to_string();
+        config.tool_protocol = ToolProtocol::Native;
+
+        save_config_to(dir.path(), &config);
+
+        assert!(dir.path().join(MODELS_FILE).exists());
+        assert!(dir.path().join(CONFIG_FILE).exists());
+        assert!(!dir.path().join("config.toml").exists());
+        let (_, _, loaded) = load_config_from(dir.path());
+        assert_eq!(loaded.default.big(), "custom");
+        assert_eq!(loaded.theme, "nord");
+        assert_eq!(loaded.tool_protocol, ToolProtocol::Native);
     }
 }
