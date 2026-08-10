@@ -28,10 +28,7 @@ pub(crate) fn normalize_history(history: &[ChatMessage]) -> Vec<HistoryEntry> {
         .map(|message| match message.role.as_str() {
             "user" => HistoryEntry::User(message.content.clone()),
             "assistant" => {
-                let calls = crate::tools::parse_tool_calls(
-                    &message.content,
-                    crate::config::ToolProtocol::Json,
-                );
+                let calls = message.resolved_tool_calls(crate::config::ToolProtocol::Json);
                 if calls.len() == 1 {
                     HistoryEntry::ToolCall(calls.into_iter().next().expect("one call"))
                 } else {
