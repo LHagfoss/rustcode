@@ -282,18 +282,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
-    // Spawn startup initialization of enabled MCP servers
-    {
-        let s = app_state.lock().await;
-        for srv in &s.config.mcp_servers {
-            if srv.enabled {
-                let name = srv.name.clone();
-                tokio::spawn(async move {
-                    let _ = crate::mcp::start_server_by_name(&name).await;
-                });
-            }
-        }
-    }
+    // Spawn startup initialization of enabled MCP servers.
+    let mcp_servers = app_state.lock().await.config.mcp_servers.clone();
+    tokio::spawn(async move {
+        crate::mcp::start_enabled_servers(&mcp_servers, |name| async move {
+            crate::mcp::start_server_by_name(&name).await
+        })
+        .await;
+    });
 
     crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
 
