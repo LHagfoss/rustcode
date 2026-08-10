@@ -44,6 +44,22 @@ OR you can install it via `cargo install` and run it from anywhere:
  rustcode
 ```
 
+### ACP runtime
+
+For editors and agent orchestrators that support the Agent Client Protocol, run
+rustcode headlessly over stdio:
+
+```bash
+rustcode --acp
+```
+
+The process speaks stable ACP v1 JSON-RPC on stdin/stdout. A runtime such as
+Multica can launch it as a subprocess, create a session with `session/new`, and
+send work with `session/prompt`. The working directory supplied to
+`session/new` becomes the workspace root for rustcode's tools. Existing rustcode
+configuration and MCP servers are used by the agent internally; ACP's optional
+MCP-over-ACP transport is not required.
+
 ### via homebrew
 
 You can easily install it using Homebrew (Needs Apple Silicon).

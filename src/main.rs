@@ -1,5 +1,6 @@
 #[macro_use]
 mod logger;
+mod acp;
 mod app;
 mod cli;
 mod clipboard;
@@ -149,6 +150,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+        return Ok(());
+    }
+
+    if cli_args.acp {
+        crate::acp::run_acp().await?;
+        crate::config::flush_history();
         return Ok(());
     }
 
@@ -744,7 +751,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let mut s = app_state.lock().await;
                                     let (protocol, label) = match s.modal_picker_index {
                                         0 => (crate::config::ToolProtocol::Json, "JSON (```tool)"),
-                                        1 => (crate::config::ToolProtocol::Native, "Native ([TOOL_CALLS])"),
+                                        1 => (
+                                            crate::config::ToolProtocol::Native,
+                                            "Native ([TOOL_CALLS])",
+                                        ),
                                         _ => (
                                             crate::config::ToolProtocol::ApiNative,
                                             "ApiNative (schema in request `tools`, structured `tool_calls` back)",
@@ -765,7 +775,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let active_model = s.model_name.clone();
                                     s.history.push(ChatMessage::new(
                                         "system",
-                                        format!("Switched tool protocol to {} for model '{}'.", label, active_model),
+                                        format!(
+                                            "Switched tool protocol to {} for model '{}'.",
+                                            label, active_model
+                                        ),
                                     ));
                                     s.status = AppStatus::Idle;
                                 }
