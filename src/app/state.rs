@@ -10,6 +10,7 @@ pub enum AppStatus {
     AwaitingQuestion,
     VerbosityPicker,
     ThinkingPicker,
+    ProtocolPicker,
 }
 
 #[derive(Debug, Clone)]
@@ -919,6 +920,9 @@ impl AppState {
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation
             || self.status == AppStatus::AwaitingQuestion
+            || self.status == AppStatus::VerbosityPicker
+            || self.status == AppStatus::ThinkingPicker
+            || self.status == AppStatus::ProtocolPicker
     }
 
     /// Returns the auto-confirm status label for the UI footer.
