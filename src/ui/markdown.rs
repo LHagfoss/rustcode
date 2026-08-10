@@ -510,7 +510,19 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 };
                 paragraph.push(Span::styled(text.to_string(), span_style));
             }
-            Event::SoftBreak | Event::HardBreak => {
+            Event::SoftBreak => {
+                // CommonMark: a soft break is just whitespace — the paragraph
+                // keeps reflowing to the pane width via `push_wrapped`. Only a
+                // hard break forces a real line. Treating both as a hard flush
+                // (as this used to) let the model's own source-line wrapping
+                // dictate line breaks instead of the actual terminal width.
+                if let Some(last) = paragraph.last() {
+                    if !last.content.ends_with(char::is_whitespace) {
+                        paragraph.push(Span::styled(" ", text_style(inline, show_picker)));
+                    }
+                }
+            }
+            Event::HardBreak => {
                 flush(&mut lines, &mut paragraph, quote_depth, list_depth);
             }
             Event::Rule => {
@@ -639,6 +651,29 @@ mod tests {
         assert!(text.contains('•'));
         assert!(text.contains("one"));
         assert!(!text.contains("# "));
+    }
+
+    #[test]
+    fn soft_breaks_reflow_instead_of_forcing_a_new_line() {
+        // Source text hard-wrapped at ~20 cols, like a model that mimics
+        // fixed-width prose. A soft break (plain newline) must reflow to the
+        // requested width, not reproduce the source's own line breaks.
+        let md = "one two three\nfour five six\nseven eight nine";
+        let lines = render_markdown(md, 80, false, false);
+        assert_eq!(lines.len(), 1, "soft breaks must not force new lines");
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, "one two three four five six seven eight nine");
+    }
+
+    #[test]
+    fn hard_breaks_still_force_a_new_line() {
+        let md = "one two  \nthree four";
+        let lines = render_markdown(md, 80, false, false);
+        assert_eq!(lines.len(), 2, "trailing double-space is a real hard break");
     }
 
     #[test]
