@@ -1813,10 +1813,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
                 if let Some(a_idx) = assistant_idx {
                     let assistant_msg = &state.history[a_idx];
-                    let calls = crate::tools::parse_tool_calls(
-                        &assistant_msg.content,
-                        state.active_tool_protocol(),
-                    );
+                    let calls = assistant_msg.resolved_tool_calls(state.active_tool_protocol());
                     calls.get(tool_count_before_this).cloned().or_else(|| calls.first().cloned())
                 } else {
                     None
@@ -1986,9 +1983,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             ]));
             lines.push(Line::from(""));
         } else if msg.role == "assistant" {
-            if let Some(tool_call) =
-                crate::tools::parse_tool_call(&msg.content, state.active_tool_protocol())
-            {
+            let calls = msg.resolved_tool_calls(state.active_tool_protocol());
+            if let Some(tool_call) = calls.first() {
                 let has_following_tool_result = state.history.get(msg_idx + 1).is_some_and(|m| m.role == "tool");
                 if !has_following_tool_result {
                     let (action, arg) =
@@ -2018,8 +2014,27 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
                         ),
                     ]));
-                      }
-                 continue;
+                }
+                if msg.content.contains("<think>") {
+                    let collapsed = !state.expanded_thoughts.contains(&msg_idx);
+                    render_assistant_message(
+                        &msg.content,
+                        &mut lines,
+                        &mut thought_clicks,
+                        &mut copy_clicks,
+                        AssistantRenderOptions {
+                            response_time_ms: msg.response_time_ms,
+                            model_name: &model_label(state),
+                            is_generating: false,
+                            viewport_width: inner_area.width,
+                            show_picker,
+                            thought_collapsed: collapsed,
+                            msg_index: Some(msg_idx),
+                            last_copy_text: state.last_copy_text.clone(),
+                        },
+                    );
+                }
+                continue;
             }
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             render_assistant_message(
@@ -2041,7 +2056,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
                 m.role == "tool"
                     || (m.role == "assistant"
-                        && crate::tools::parse_tool_call(&m.content, state.active_tool_protocol()).is_some())
+                        && !m.resolved_tool_calls(state.active_tool_protocol()).is_empty())
             });
             if !next_is_tool {
                 lines.push(Line::from(""));
