@@ -1471,7 +1471,43 @@ mod tests {
         let (_url, _model, config) = load_config_from(dir.path());
         assert_eq!(config.default.big(), AppConfig::default().default.big());
 
-        let config_path = dir.path().join("config.toml");
-        assert!(config_path.exists());
+        assert!(!dir.path().join("models.json").exists());
+        assert!(!dir.path().join("config.json").exists());
+        assert!(!dir.path().join("config.toml").exists());
+    }
+
+    #[test]
+    fn test_load_json_configuration_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("models.json"),
+            r#"{
+                "default": {"big": "custom", "small": "custom-small"},
+                "models": [{
+                    "name": "custom",
+                    "url": "http://custom/v1/chat/completions",
+                    "model": "custom-model"
+                }]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{
+                "theme": "nord",
+                "tool_protocol": "native"
+            }"#,
+        )
+        .unwrap();
+
+        let (url, model, config) = load_config_from(dir.path());
+
+        assert_eq!(config.default.big(), "custom");
+        assert_eq!(config.default.small(), "custom-small");
+        assert_eq!(config.models[0].name, "custom");
+        assert_eq!(config.theme, "nord");
+        assert_eq!(config.tool_protocol, ToolProtocol::Native);
+        assert_eq!(url, "http://custom/v1/chat/completions");
+        assert_eq!(model, "custom-model");
     }
 }
