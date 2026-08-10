@@ -593,29 +593,12 @@ pub async fn handle_enter(
             "/protocol" | "/parser" => {
                 if tokens.len() < 2 {
                     let active = s.active_tool_protocol();
-                    let url = s.api_base_url.clone();
-                    let source = if s
-                        .config
-                        .models
-                        .iter()
-                        .any(|profile| profile.url == url && profile.tool_protocol.is_some())
-                    {
-                        "set for this model"
-                    } else if crate::config::provider_supports_function_calling(&url) {
-                        "known provider with function calling"
-                    } else {
-                        match s.function_calling_support.get(&url) {
-                            Some(true) => "probed: this endpoint accepts tool schemas",
-                            Some(false) => "probed: this endpoint rejects tool schemas",
-                            None => "not probed yet — send a message first",
-                        }
+                    s.modal_picker_index = match active {
+                        crate::config::ToolProtocol::Json => 0,
+                        crate::config::ToolProtocol::Native => 1,
+                        crate::config::ToolProtocol::ApiNative => 2,
                     };
-                    let msg = format!(
-                        "Tool protocol for this model: {active:?} ({source})\n\
-Supported formats: json, native, apinative. '/protocol json|native|apinative' sets it for this model.\n\
-(apinative = tool schema in the request's `tools` field, structured `tool_calls` back. Preferred wherever it works: a call returned as data cannot be confused with prose describing a call.)"
-                    );
-                    s.history.push(ChatMessage::new("system", msg));
+                    s.status = AppStatus::ProtocolPicker;
                 } else {
                     let chosen = match tokens[1].to_lowercase().as_str() {
                         "json" => Some((crate::config::ToolProtocol::Json, "JSON (```tool)")),

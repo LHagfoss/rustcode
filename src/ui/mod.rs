@@ -13,7 +13,7 @@ pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
-    render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_question_modal,
+    render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_protocol_picker_modal, render_question_modal,
     render_theme_picker_modal, render_thinking_picker_modal, render_tool_confirmation_modal,
     render_verbosity_picker_modal,
     render_welcome_screen,
@@ -1793,6 +1793,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 lines.push(Line::from(""));
             }
         } else if msg.role == "tool" {
+            if matches!(state.verbosity, crate::app::Verbosity::High) {
+                continue;
+            }
             let prev_tool_info = if msg_idx > 0 {
                 // Walk backward past consecutive tool messages to find the preceding assistant message
                 let mut assistant_idx = None;
@@ -2401,6 +2404,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     if state.status == AppStatus::ThinkingPicker {
         render_thinking_picker_modal(f, state);
+    }
+
+    if state.status == AppStatus::ProtocolPicker {
+        render_protocol_picker_modal(f, state);
     }
 
     // Painted last so it sits on top of everything, like a native selection.

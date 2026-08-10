@@ -683,6 +683,107 @@ pub(super) fn render_thinking_picker_modal(f: &mut Frame, state: &AppState) {
     );
 }
 
+pub(super) fn render_protocol_picker_modal(f: &mut Frame, state: &AppState) {
+    let p = crate::ui::theme::get_palette(&state.config.theme);
+    let modal_area = centered_rect_fixed(78, 9, f.area());
+
+    f.render_widget(Clear, modal_area);
+
+    let modal_block = Block::default().style(Style::default().bg(p.panel));
+    f.render_widget(modal_block, modal_area);
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // Options list
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    let header_line = Line::from(vec![
+        Span::styled(
+            "Select Tool Protocol",
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ".repeat(inner_area.width.saturating_sub(23) as usize),
+            Style::default(),
+        ),
+        Span::styled("esc", Style::default().fg(p.muted)),
+    ]);
+    f.render_widget(
+        Paragraph::new(header_line).style(Style::default().bg(p.panel)),
+        modal_chunks[0],
+    );
+
+    let current = state.active_tool_protocol();
+
+    let choices = [
+        (
+            "Json",
+            crate::config::ToolProtocol::Json,
+            "Standard JSON markdown (```tool)",
+        ),
+        (
+            "Native",
+            crate::config::ToolProtocol::Native,
+            "Bracketed format ([TOOL_CALLS])",
+        ),
+        (
+            "ApiNative",
+            crate::config::ToolProtocol::ApiNative,
+            "Structured API schema (`tools` field + `tool_calls` output)",
+        ),
+    ];
+
+    let selected_idx = state
+        .modal_picker_index
+        .min(choices.len().saturating_sub(1));
+
+    let mut list_lines = Vec::new();
+    for (idx, (name, val, desc)) in choices.iter().enumerate() {
+        let is_selected = selected_idx == idx;
+        let is_current = current == *val;
+        let active_badge = if is_current { " [active]" } else { "" };
+        let line = if is_selected {
+            let text = format!(" ● {:<10} — {}{}", name, desc, active_badge);
+            let padding = (inner_area.width as usize).saturating_sub(text.len());
+            Line::from(vec![Span::styled(
+                format!("{}{}", text, " ".repeat(padding)),
+                Style::default()
+                    .fg(p.primary)
+                    .bg(p.bg)
+                    .add_modifier(Modifier::BOLD),
+            )])
+        } else {
+            let text = format!("   {:<10} — {}{}", name, desc, active_badge);
+            Line::from(vec![Span::styled(text, Style::default().fg(p.muted))])
+        };
+        list_lines.push(line);
+    }
+
+    f.render_widget(
+        Paragraph::new(list_lines).style(Style::default().bg(p.panel)),
+        modal_chunks[2],
+    );
+
+    let footer_line = Line::from(vec![Span::styled(
+        "↑/↓ Navigate  ·  Enter Select  ·  Esc Close",
+        Style::default().fg(p.muted),
+    )]);
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(p.panel)),
+        modal_chunks[3],
+    );
+}
+
 /// Render the model picker modal overlay.
 pub(super) fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
     let filtered_items = get_filtered_picker_items(state);
