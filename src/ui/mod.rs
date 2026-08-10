@@ -13,9 +13,9 @@ pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
 use modals::{
     render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
-    render_mcp_config_modal, render_model_picker_modal, render_popup_menu, render_protocol_picker_modal, render_question_modal,
-    render_theme_picker_modal, render_thinking_picker_modal, render_tool_confirmation_modal,
-    render_verbosity_picker_modal,
+    render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
+    render_protocol_picker_modal, render_question_modal, render_theme_picker_modal,
+    render_thinking_picker_modal, render_tool_confirmation_modal, render_verbosity_picker_modal,
     render_welcome_screen,
 };
 use tool_result::{render_file_preview, render_tool_result};
@@ -276,6 +276,34 @@ struct AssistantRenderOptions<'a> {
     last_copy_text: Option<(String, std::time::Instant)>,
 }
 
+fn strip_rendered_tool_blocks(content: &str) -> String {
+    let mut output = content.to_string();
+
+    for fence in ["```tool", "```json"] {
+        let mut search_from = 0;
+        while let Some(relative_start) = output[search_from..].find(fence) {
+            let start = search_from + relative_start;
+            let block_start = start + fence.len();
+            let Some(relative_end) = output[block_start..].find("```") else {
+                break;
+            };
+            let end = block_start + relative_end + 3;
+            let block = &output[block_start..block_start + relative_end];
+            let is_tool_call =
+                crate::tools::parse_tool_call(block, crate::config::ToolProtocol::Json).is_some();
+
+            if is_tool_call {
+                output.replace_range(start..end, "");
+                search_from = start;
+            } else {
+                search_from = end;
+            }
+        }
+    }
+
+    output
+}
+
 fn render_assistant_message<'a>(
     content: &'a str,
     lines: &mut Vec<Line<'a>>,
@@ -370,6 +398,7 @@ fn render_assistant_message<'a>(
         lines.push(Line::from(""));
     }
 
+    let main_content = strip_rendered_tool_blocks(main_content);
     if !main_content.trim().is_empty() || is_generating {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
@@ -3092,6 +3121,46 @@ mod tests {
         assert!(!rendered.contains("/dev/null"));
         assert!(!rendered.contains("@@ -1,2"));
         assert!(rendered.contains("removed"));
+    }
+
+    #[test]
+    fn thinking_with_tool_calls_hides_serialized_tool_blocks() {
+        use super::{AssistantRenderOptions, render_assistant_message};
+
+        let content = concat!(
+            "<think>Planning the next command.</think>\n\n",
+            "```tool\n",
+            r#"{"name":"run_command","arguments":{"command":"git status"}}"#,
+            "\n```"
+        );
+        let mut lines = Vec::new();
+        let mut clicks = Vec::new();
+        let mut copies = Vec::new();
+        render_assistant_message(
+            content,
+            &mut lines,
+            &mut clicks,
+            &mut copies,
+            AssistantRenderOptions {
+                response_time_ms: None,
+                model_name: "model",
+                is_generating: false,
+                viewport_width: 80,
+                show_picker: false,
+                thought_collapsed: false,
+                msg_index: None,
+                last_copy_text: None,
+            },
+        );
+
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(rendered.contains("Planning the next command."));
+        assert!(!rendered.contains("run_command"));
+        assert!(!rendered.contains("git status"));
     }
 
     #[test]
