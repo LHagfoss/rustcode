@@ -3515,6 +3515,7 @@ different, read another range or make an edit first; repeating this call returns
                     std::time::Duration::ZERO,
                 )
             } else {
+                let workspace_root = { state_clone.lock().await.workspace_root.clone() };
                 confirm_and_execute(
                     &state_clone,
                     &cancel_token_clone,
@@ -3522,7 +3523,7 @@ different, read another range or make an edit first; repeating this call returns
                     &args_clone,
                     &name_clone,
                     true, // bypass confirmation
-                    state_clone.lock().await.workspace_root.clone(),
+                    workspace_root,
                 )
                 .await
             };
@@ -6780,6 +6781,21 @@ mod tests {
         .await;
         assert!(targeted.metadata.success);
         assert!(!targeted.metadata.truncated);
+    }
+
+    #[tokio::test]
+    async fn control_plane_tool_does_not_stall_while_reading_workspace_root() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_one_tool(test_tool_call(
+                "use_skill",
+                serde_json::json!({"name": "release-automation"}),
+            )),
+        )
+        .await
+        .expect("use_skill execution stalled while resolving workspace root");
+
+        assert!(result.metadata.success, "got: {}", result.content);
     }
 
     #[tokio::test]
