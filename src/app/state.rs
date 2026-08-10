@@ -605,6 +605,8 @@ pub struct AppState {
     pub config: crate::config::AppConfig,
 
     pub cwd_and_branch: String,
+    /// Workspace root supplied by an external frontend such as ACP.
+    pub workspace_root: Option<std::path::PathBuf>,
 
     pub update_check: crate::update::UpdateState,
 
@@ -830,6 +832,7 @@ impl AppState {
             model_name,
             config,
             cwd_and_branch,
+            workspace_root: None,
             update_check: crate::update::UpdateState::Unknown,
             active_suggestion_index: None,
             show_model_picker: false,
