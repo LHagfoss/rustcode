@@ -17,7 +17,7 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
             );
         } else {
             println!(
-                "Warning: Model profile '{}' not found in config.toml. Using default.",
+                "Warning: Model profile '{}' not found in models.json. Using default.",
                 m_name
             );
         }

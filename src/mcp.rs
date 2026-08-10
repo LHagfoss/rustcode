@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::future::Future;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -36,6 +37,23 @@ pub fn mcp_generation() -> u64 {
 /// Signal that the MCP tool set changed, invalidating any cached prompt/schema.
 pub fn bump_mcp_generation() {
     MCP_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Start each enabled MCP server, keeping one server's failure from blocking
+/// the remaining configured servers.
+pub async fn start_enabled_servers<F, Fut>(
+    servers: &[crate::config::McpServerConfig],
+    mut launcher: F,
+) where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    for server in servers.iter().filter(|server| server.enabled) {
+        let name = server.name.clone();
+        if let Err(error) = launcher(name.clone()).await {
+            eprintln!("[mcp] failed to start server {name}: {error}");
+        }
+    }
 }
 
 impl McpClient {
@@ -257,6 +275,53 @@ pub async fn shutdown_server(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn startup_helper_visits_enabled_servers_and_continues_after_failure() {
+        let servers = vec![
+            crate::config::McpServerConfig {
+                name: "enabled-one".to_string(),
+                command: "not-used".to_string(),
+                args: Vec::new(),
+                env: HashMap::new(),
+                enabled: true,
+            },
+            crate::config::McpServerConfig {
+                name: "disabled".to_string(),
+                command: "not-used".to_string(),
+                args: Vec::new(),
+                env: HashMap::new(),
+                enabled: false,
+            },
+            crate::config::McpServerConfig {
+                name: "enabled-two".to_string(),
+                command: "not-used".to_string(),
+                args: Vec::new(),
+                env: HashMap::new(),
+                enabled: true,
+            },
+        ];
+        let started = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&started);
+
+        start_enabled_servers(&servers, move |name| {
+            let observed = Arc::clone(&observed);
+            async move {
+                observed.lock().unwrap().push(name.clone());
+                if name == "enabled-one" {
+                    Err("injected startup failure".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(
+            started.lock().unwrap().as_slice(),
+            ["enabled-one", "enabled-two"]
+        );
+    }
 
     #[tokio::test]
     async fn test_mcp_client_handshake() {
