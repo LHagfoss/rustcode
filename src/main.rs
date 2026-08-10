@@ -727,6 +727,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             continue;
                         }
+
+                        if s.status == AppStatus::ProtocolPicker {
+                            drop(s);
+                            match key.code {
+                                KeyCode::Up => {
+                                    let mut s = app_state.lock().await;
+                                    s.modal_picker_index = s.modal_picker_index.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    let mut s = app_state.lock().await;
+                                    s.modal_picker_index =
+                                        s.modal_picker_index.saturating_add(1).min(2); // 0 json, 1 native, 2 apinative
+                                }
+                                KeyCode::Enter => {
+                                    let mut s = app_state.lock().await;
+                                    let (protocol, label) = match s.modal_picker_index {
+                                        0 => (crate::config::ToolProtocol::Json, "JSON (```tool)"),
+                                        1 => (crate::config::ToolProtocol::Native, "Native ([TOOL_CALLS])"),
+                                        _ => (
+                                            crate::config::ToolProtocol::ApiNative,
+                                            "ApiNative (schema in request `tools`, structured `tool_calls` back)",
+                                        ),
+                                    };
+                                    let url = s.api_base_url.clone();
+                                    let scoped = s
+                                        .config
+                                        .models
+                                        .iter_mut()
+                                        .find(|profile| profile.url == url);
+                                    if let Some(profile) = scoped {
+                                        profile.tool_protocol = Some(protocol);
+                                    } else {
+                                        s.config.tool_protocol = protocol;
+                                    }
+                                    crate::config::save_entire_config(&s.config);
+                                    let active_model = s.model_name.clone();
+                                    s.history.push(ChatMessage::new(
+                                        "system",
+                                        format!("Switched tool protocol to {} for model '{}'.", label, active_model),
+                                    ));
+                                    s.status = AppStatus::Idle;
+                                }
+                                KeyCode::Esc => {
+                                    let mut s = app_state.lock().await;
+                                    s.status = AppStatus::Idle;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
                     }
 
                     let mut s = app_state.lock().await;
