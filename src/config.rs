@@ -9,6 +9,7 @@ use std::time::Duration;
 
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 40;
 
 pub const MODELS_FILE: &str = "models.json";
 pub const CONFIG_FILE: &str = "config.json";
@@ -234,6 +235,8 @@ pub struct AppConfig {
     pub vision_model: Option<String>,
     #[serde(default)]
     pub tool_protocol: ToolProtocol,
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: usize,
     #[serde(default)]
     pub last_active_session_id: Option<String>,
     #[serde(default)]
@@ -271,6 +274,8 @@ struct ModelsConfig {
 struct RuntimeConfig {
     #[serde(default)]
     tool_protocol: ToolProtocol,
+    #[serde(default = "default_max_tool_rounds")]
+    max_tool_rounds: usize,
     #[serde(default)]
     last_active_session_id: Option<String>,
     #[serde(default)]
@@ -290,6 +295,10 @@ struct RuntimeConfig {
 
 fn default_false() -> bool {
     false
+}
+
+fn default_max_tool_rounds() -> usize {
+    DEFAULT_MAX_TOOL_ROUNDS
 }
 
 fn default_theme() -> String {
@@ -374,6 +383,7 @@ impl Default for AppConfig {
                 },
             ],
             tool_protocol: ToolProtocol::default(),
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
             mcp_servers: vec![McpServerConfig {
@@ -484,6 +494,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
         {
             Some(runtime) => {
                 config.tool_protocol = runtime.tool_protocol;
+                config.max_tool_rounds = runtime.max_tool_rounds;
                 config.last_active_session_id = runtime.last_active_session_id;
                 config.mcp_servers = runtime.mcp_servers;
                 config.agent_mode = runtime.agent_mode;
@@ -543,6 +554,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
     }
     let runtime = RuntimeConfig {
         tool_protocol: config.tool_protocol,
+        max_tool_rounds: config.max_tool_rounds,
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: config.mcp_servers.clone(),
         agent_mode: config.agent_mode,
@@ -1367,6 +1379,17 @@ mod tests {
                 .context_window,
             Some(4096)
         );
+    }
+
+    #[test]
+    fn tool_round_limit_round_trips_through_runtime_config() {
+        let dir = temp_dir("tool_round_limit");
+        let mut config = AppConfig::default();
+        config.max_tool_rounds = 17;
+        save_config_to(&dir, &config);
+
+        let (_, _, loaded) = load_config_from(&dir);
+        assert_eq!(loaded.max_tool_rounds, 17);
     }
 
     #[test]
