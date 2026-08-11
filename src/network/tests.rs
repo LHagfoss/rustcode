@@ -1323,7 +1323,7 @@
         let enriched = compiler_diagnostics_with_snippets(diagnostics);
         assert!(enriched.contains(diagnostics));
         assert!(enriched.contains("[compiler context: src/network.rs:1:1]"));
-        assert!(enriched.contains("use regex::Regex;"));
+        assert!(enriched.contains("use crate::app::{AppState"));
     }
 
     #[test]
