@@ -270,6 +270,12 @@ fn mutation_made_progress(success: bool, content: &str) -> bool {
     !lower.starts_with("error") && !lower.contains("already applied")
 }
 
+fn failure_replan_message(tool: &str, category: &str, repeats: usize) -> String {
+    format!(
+        "[Replan required: {repeats} equivalent mutation attempts for '{tool}' ({category}) failed. These failed attempts changed no files. Do not retry the same edit. Inspect the current workspace, give a concise status, and ask the user for a decision if the requested change still cannot be applied safely.]"
+    )
+}
+
 /// True when a tool result has already been reduced to a stub (nothing left to prune).
 fn is_fully_stubbed(m: &ChatMessage) -> bool {
     let rest = m
@@ -4055,6 +4061,7 @@ pub struct TurnContext {
     pub tool_calls: usize,
     pub malformed_calls: usize,
     pub no_progress_results: usize,
+    pub failure_replans: usize,
     pub provider_errors: usize,
     pub provider_429s: usize,
     pub changed_paths: std::collections::BTreeSet<String>,
@@ -4102,6 +4109,7 @@ impl TurnContext {
             tool_calls: 0,
             malformed_calls: 0,
             no_progress_results: 0,
+            failure_replans: 0,
             provider_errors: 0,
             provider_429s: 0,
             changed_paths: std::collections::BTreeSet::new(),
@@ -4117,6 +4125,7 @@ impl TurnContext {
             "tokens_used": self.tokens_used,
             "malformed_calls": self.malformed_calls,
             "no_progress_results": self.no_progress_results,
+            "failure_replans": self.failure_replans,
             "compiler_diagnostic_streak": self.consecutive_compiler_diagnostics,
             "provider_errors": self.provider_errors,
             "provider_429s": self.provider_429s,
@@ -4702,6 +4711,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             s.status = AppStatus::Streaming;
             let mut completed = false;
             let mut stagnation = loop_detect::LoopStatus::Ok;
+            let mut failure_replan = None;
             let executed = results.len();
             for (position, result) in results.into_iter().enumerate() {
                 let call = tool_calls.get(position);
@@ -4749,6 +4759,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     if failed {
                         ctx.failed_mutations += 1;
                         ctx.consecutive_failed_mutations += 1;
+                        if let Some(call) = call {
+                            let (exact, category) =
+                                loop_detect::signatures(&call.name, &call.arguments);
+                            if let loop_detect::LoopStatus::Abort(repeats) =
+                                ctx.loop_detector.record_failed_tool(&exact, &category)
+                            {
+                                failure_replan =
+                                    Some(failure_replan_message(&call.name, &category, repeats));
+                            }
+                        }
                     } else {
                         ctx.made_edits = true;
                         ctx.consecutive_failed_mutations = 0;
@@ -4830,6 +4850,18 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         "[Loop warning: the last {n} tool results were identical in kind (e.g. repeated \"no matches\"). Re-phrasing the same search is not progress — the answer is not where you are looking. View the relevant file directly or change approach.]"
                     ),
                 );
+            }
+
+            if let Some(replan) = failure_replan {
+                ctx.failure_replans += 1;
+                ctx.stop_reason = Some("failure_replan".to_string());
+                s.history.push(ChatMessage::new("system", replan));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                drop(s);
+                ctx.force_final = true;
+                ctx.turn_machine.finish_tools_if_executing();
+                return true;
             }
 
             // Completion gate: every edit this task attempted failed, so
@@ -6350,6 +6382,27 @@ mod tests {
         assert!(!mutation_made_progress(
             true,
             "ALREADY APPLIED: no-op, file unchanged"
+        ));
+    }
+
+    #[test]
+    fn failure_replan_message_preserves_workspace_safety_and_requests_decision() {
+        let message = failure_replan_message("replace_file_content", "edit:src/GameScene.ts", 2);
+        assert!(message.contains("2 equivalent mutation attempts"));
+        assert!(message.contains("changed no files"));
+        assert!(message.contains("Do not retry the same edit"));
+        assert!(message.contains("ask the user for a decision"));
+    }
+
+    #[test]
+    fn benchmark_summary_includes_failure_replan_metric() {
+        let mut ctx = TurnContext::new();
+        ctx.failure_replans = 1;
+        let summary = ctx.benchmark_summary();
+        assert_eq!(summary["failure_replans"], 1);
+        assert!(mutation_made_progress(
+            true,
+            "Applied edit to src/GameScene.ts"
         ));
     }
 
