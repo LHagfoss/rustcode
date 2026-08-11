@@ -20,7 +20,7 @@ use modals::{
 };
 use tool_result::{render_file_preview, render_tool_result};
 
-use crate::app::{AppState, AppStatus, HoverTarget, NoticeKind};
+use crate::app::{AppState, AppStatus, ChatMessage, HoverTarget, NoticeKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin},
@@ -1570,6 +1570,22 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
     lines.push(Line::from(""));
 }
 
+fn is_hidden_system_notice(content: &str) -> bool {
+    content.contains("Loop warning:")
+        || content.contains("tool calls in that response were dropped")
+        || content.contains("Oversized response:")
+        || content.starts_with(crate::network::compaction::SUMMARY_MARKER)
+        || content.starts_with("[harness: stopped after ")
+}
+
+fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool {
+    history
+        .iter()
+        .skip(assistant_index + 1)
+        .take_while(|message| message.role == "system" && is_hidden_system_notice(&message.content))
+        .any(|message| message.role == "tool")
+}
+
 fn render_status_panel<'a>(
     content: &str,
     _width: u16,
@@ -1773,11 +1789,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         msg_start_lines.push(lines.len());
         if msg.role == "system" {
             // Hide benign intermediate notices and full compaction summary text from TUI display
-            if msg.content.contains("Loop warning:")
-                || msg.content.contains("tool calls in that response were dropped")
-                || msg.content.contains("Oversized response:")
-                || msg.content.starts_with(crate::network::compaction::SUMMARY_MARKER)
-            {
+            if is_hidden_system_notice(&msg.content) {
                 continue;
             }
             if lines.last().is_some_and(|l| !l.spans.is_empty()) {
@@ -1799,6 +1811,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     } else if state.history[i].role == "assistant" {
                         assistant_idx = Some(i);
                         break;
+                    } else if state.history[i].role == "system"
+                        && is_hidden_system_notice(&state.history[i].content)
+                    {
+                        continue;
                     } else {
                         break;
                     }
@@ -1985,7 +2001,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         } else if msg.role == "assistant" {
             let calls = msg.resolved_tool_calls(state.active_tool_protocol());
             if let Some(tool_call) = calls.first() {
-                let has_following_tool_result = state.history.get(msg_idx + 1).is_some_and(|m| m.role == "tool");
+                let has_following_tool_result = tool_result_follows(&state.history, msg_idx);
                 if !has_following_tool_result {
                     let (action, arg) =
                         format_pi_tool_action(&tool_call.name, &tool_call.arguments);
@@ -3155,6 +3171,16 @@ mod tests {
 
         assert_eq!(notice_lines.len(), 1, "ordinary notice panel skips header");
         assert!(notice_lines[0].spans[0].content.contains("  "));
+    }
+
+    #[test]
+    fn harness_recovery_notices_are_hidden_from_transcript() {
+        assert!(super::is_hidden_system_notice(
+            "[harness: stopped after 10 tool round(s) — 4 consecutive malformed tool-call blocks the harness could not parse. The task is NOT complete. Review the transcript above; if the remaining work is still valid, resume it in a new turn.]"
+        ));
+        assert!(!super::is_hidden_system_notice(
+            "Notice: background task finished"
+        ));
     }
 
     #[test]
