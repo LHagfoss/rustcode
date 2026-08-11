@@ -1,3 +1,12 @@
+## [v0.16.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.16.1) - 2026-08-11
+
+### Fixes
+- **UI:** Hide serialized tool calls from TUI transcript view ([`8a9331b`](https://github.com/LHagfoss/rustcode/commit/8a9331b))
+- **MCP:** Initialize MCP servers in ACP mode ([`e765a86`](https://github.com/LHagfoss/rustcode/commit/e765a86))
+- **Config:** Isolate test config directory to prevent mutating user config ([#472](https://github.com/LHagfoss/rustcode/pull/472) / [`80fd96b`](https://github.com/LHagfoss/rustcode/commit/80fd96b))
+- **UI:** Resolve ApiNative tool calls in UI and preserve thinking block rendering ([#471](https://github.com/LHagfoss/rustcode/pull/471) / [`5a96883`](https://github.com/LHagfoss/rustcode/commit/5a96883))
+- **Tools:** Release state lock before tool execution to prevent stalls ([`5d713f2`](https://github.com/LHagfoss/rustcode/commit/5d713f2))
+
 ## [v0.16.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.16.0) - 2026-08-10
 
 ### Features
