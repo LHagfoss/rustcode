@@ -3,8 +3,6 @@ use crate::config::ModelProfile;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 const IMAGE_MARKER: &str = "![image](file://";
@@ -78,6 +76,29 @@ where
     Ok(())
 }
 
+pub async fn prepare_history_for_model<F, Fut>(
+    history: &[ChatMessage],
+    active_profile: &ModelProfile,
+    vision_profile: &ModelProfile,
+    cache: &mut HashMap<String, String>,
+    request: F,
+) -> Result<Vec<ChatMessage>, String>
+where
+    F: FnMut(&ModelProfile, Vec<u8>) -> Fut,
+    Fut: Future<Output = Result<String, String>>,
+{
+    let mut prepared = history.to_vec();
+    preprocess_history_with(
+        &mut prepared,
+        active_profile,
+        vision_profile,
+        cache,
+        request,
+    )
+    .await?;
+    Ok(prepared)
+}
+
 fn image_hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -88,66 +109,7 @@ fn format_analysis(number: usize, analysis: &str) -> String {
 
 pub const VISION_PROMPT: &str = "Analyze this image for a coding agent. Return concise, information-dense structured text, not a generic caption. Extract exact visible text when readable; UI structure and hierarchy; layout and relative positioning; errors, stack traces, terminal output, code, filenames, buttons, labels, and state; diagrams and relationships; and visual details relevant to reproducing or debugging it. Mark uncertain or unreadable text explicitly. Use short labeled sections such as Visible text, Layout and visual structure, Important details, and Relevant errors/code/UI state.";
 
-pub async fn preprocess_history(
-    client: &reqwest::Client,
-    state: &Arc<Mutex<crate::app::AppState>>,
-    cancel_token: &CancellationToken,
-) -> Result<(), String> {
-    let (active, captured_history, mut cache) = {
-        let s = state.lock().await;
-        (
-            s.active_model_profile(),
-            s.history.clone(),
-            s.image_analysis_cache.clone(),
-        )
-    };
-    if !captured_history
-        .iter()
-        .any(|m| m.role == "user" && m.content.contains(IMAGE_MARKER))
-    {
-        return Ok(());
-    }
-    let active = active.ok_or_else(|| {
-        "image analysis failed: active model profile is not configured".to_string()
-    })?;
-    if active.image_input_supported() == Some(true) {
-        return Ok(());
-    }
-    let vision = {
-        let s = state.lock().await;
-        s.vision_model_profile().ok_or_else(|| {
-            "image analysis failed: configure a dedicated vision_model profile".to_string()
-        })?
-    };
-
-    let mut working_history = captured_history.clone();
-    preprocess_history_with(
-        &mut working_history,
-        &active,
-        &vision,
-        &mut cache,
-        |profile, bytes| {
-            let profile = profile.clone();
-            let client = client.clone();
-            let cancel_token = cancel_token.clone();
-            async move { request_vision_analysis(&client, &profile, bytes, &cancel_token).await }
-        },
-    )
-    .await?;
-
-    let mut s = state.lock().await;
-    if s.history != captured_history {
-        return Err(
-            "image analysis failed: conversation changed while the image was being analyzed"
-                .to_string(),
-        );
-    }
-    s.history = working_history;
-    s.image_analysis_cache = cache;
-    Ok(())
-}
-
-async fn request_vision_analysis(
+pub(crate) async fn request_vision_analysis(
     client: &reqwest::Client,
     profile: &ModelProfile,
     bytes: Vec<u8>,
@@ -296,6 +258,28 @@ mod tests {
         assert!(history[0].content.contains("Please inspect"));
         assert!(history[0].content.contains("Thanks"));
         assert!(!history[0].content.contains("file://"));
+    }
+
+    #[tokio::test]
+    async fn request_preparation_rewrites_a_snapshot_without_replacing_display_history() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "one.png", b"one");
+        let source = vec![ChatMessage::new("user", format!("Look at {marker}"))];
+        let mut cache = HashMap::new();
+
+        let prepared = prepare_history_for_model(
+            &source,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| async { Ok("snapshot analysis".to_string()) },
+        )
+        .await
+        .unwrap();
+
+        assert!(source[0].content.contains("![image](file://"));
+        assert!(prepared[0].content.contains("snapshot analysis"));
+        assert!(!prepared[0].content.contains("file://"));
     }
 
     #[tokio::test]
