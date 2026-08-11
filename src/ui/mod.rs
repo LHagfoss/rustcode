@@ -20,6 +20,7 @@ use modals::{
 };
 use tool_result::{render_file_preview, render_tool_result};
 
+use crate::app::activity::{ActivityKind, animation_cells, classify_activity};
 use crate::app::{AppState, AppStatus, ChatMessage, HoverTarget, NoticeKind};
 use ratatui::{
     Frame,
@@ -408,12 +409,10 @@ fn render_assistant_message<'a>(
                 if let Some(idx) = msg_index {
                     click_registry.push((lines.len(), idx));
                 }
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {preview}"),
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {preview}"),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+                )]));
             }
         } else {
             for raw_line in think.lines() {
@@ -720,122 +719,86 @@ fn format_tokens_info(state: &AppState) -> (String, String) {
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
     let footer_area = chunks[4];
     let show_picker = state.modal_open();
+    let activity = classify_activity(&state.status, &state.running_tools);
+    let animation_frame = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+        / 100;
+    let cells = animation_cells(animation_frame, 12);
+    let action_detail = state
+        .pending_tool_confirmation
+        .as_ref()
+        .and_then(|confirmations| confirmations.first())
+        .map(|confirmation| format!("approve {}", confirmation.tool_name))
+        .or_else(|| {
+            state
+                .pending_question
+                .as_ref()
+                .map(|_| "answer question".to_string())
+        });
 
-    let left_spans = if state.status == AppStatus::Streaming
-        || state.status == AppStatus::Queued
-        || !state.running_tools.is_empty()
+    let mut left_spans = Vec::new();
+    for active in &cells {
+        let (symbol, color) = match activity.kind {
+            ActivityKind::ActionRequired => ("!", Color::Yellow),
+            ActivityKind::Ready => ("░", Color::Rgb(40, 48, 54)),
+            _ if *active => ("█", COLOR_PRIMARY()),
+            _ => ("░", Color::Rgb(40, 48, 54)),
+        };
+        left_spans.push(Span::styled(
+            symbol,
+            get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+
+    let mut status_text = activity.label.clone();
+    let detail = if activity.kind == ActivityKind::ActionRequired {
+        action_detail
+    } else {
+        activity.detail.clone()
+    };
+    if let Some(detail) = detail {
+        status_text.push_str(" · ");
+        status_text.push_str(&detail);
+    }
+    if matches!(
+        activity.kind,
+        ActivityKind::Working | ActivityKind::RunningTool
+    ) && let Some(started) = state.generation_start_time
     {
-        let millis = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
+        status_text.push_str(&format!(" · {}s", started.elapsed().as_secs()));
+    }
 
-        let step_duration_ms = 80.0; // Duration of each discrete step in milliseconds
-        let num_dots = 6;
-        let pulse_centers_f = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0, 1.0];
-        let num_cycle_steps = pulse_centers_f.len();
+    left_spans.push(Span::styled(
+        format!("  {status_text}"),
+        get_themed_style(
+            if activity.kind == ActivityKind::ActionRequired {
+                Color::Yellow
+            } else if activity.kind == ActivityKind::Ready {
+                COLOR_MUTED()
+            } else {
+                COLOR_PRIMARY()
+            },
+            COLOR_BG(),
+            Modifier::BOLD,
+            show_picker,
+        ),
+    ));
 
-        // Calculate a continuous step value
-        let step_float = (millis as f64 / step_duration_ms) % num_cycle_steps as f64;
-
-        // Interpolate the pulse center value
-        let current_pulse_center_idx = step_float.floor() as usize;
-        let next_pulse_center_idx = (current_pulse_center_idx + 1) % num_cycle_steps;
-        let fraction = step_float - step_float.floor();
-
-        let pulse_center_val = pulse_centers_f[current_pulse_center_idx] * (1.0 - fraction)
-            + pulse_centers_f[next_pulse_center_idx] * fraction;
-
-        let colors = [
-            Color::Rgb(25, 29, 32), // Darkest
-            Color::Rgb(34, 40, 45),
-            Color::Rgb(43, 51, 57),
-            Color::Rgb(52, 62, 70),
-            Color::Rgb(60, 88, 101),
-            Color::Rgb(120, 160, 180), // Brightest
-        ];
-
-        let mut spans = Vec::new();
-
-        for i in 0..num_dots {
-            let dist_float = (i as f64 - pulse_center_val).abs();
-            let level_float = 3.0 - dist_float; // Max level is 3.0 at the center
-
-            // Clamp level_float to [0.0, 3.0]
-            let clamped_level_float = level_float.clamp(0.0, 3.0);
-
-            // Map clamped_level_float (0.0-3.0) to color index (0-5)
-            let color_index =
-                (clamped_level_float / 3.0 * (colors.len() - 1) as f64).round() as usize;
-            let color = colors[color_index];
-            spans.push(Span::styled(
-                "■",
-                get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-
-        if let Some(tool_name) = state.running_tools.first() {
-            spans.push(Span::styled(
-                format!("  executing: {tool_name}"),
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-        } else {
-            let random_statuses = [
-                "Thinking...",
-                "Analyzing code...",
-                "Consulting the oracle...",
-                "Brewing coffee...",
-                "Refactoring reality...",
-                "Checking documentation...",
-                "Optimizing loops...",
-                "Debugging the universe...",
-                "Synthesizing solutions...",
-                "Querying knowledge base...",
-            ];
-            let elapsed_secs = state
-                .generation_start_time
-                .map(|t| t.elapsed().as_secs())
-                .unwrap_or(0);
-            let status_msg = random_statuses[(elapsed_secs as usize / 3) % random_statuses.len()];
-            spans.push(Span::styled(
-                format!("  {status_msg}"),
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-            if let Some(t) = state.generation_start_time {
-                let secs = t.elapsed().as_secs();
-                spans.push(Span::styled(
-                    format!(" · {}s", secs),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-            }
-        }
-
-        spans.push(Span::styled(
-            "   ..... esc ",
+    if matches!(
+        activity.kind,
+        ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool
+    ) {
+        left_spans.push(Span::styled(
+            "   esc ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
-        spans.push(Span::styled(
+        left_spans.push(Span::styled(
             "interrupt",
             get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
-        spans
-    } else {
-        let static_color = Color::Rgb(40, 48, 54);
-        let mut spans = Vec::new();
-
-        for _ in 0..6 {
-            spans.push(Span::styled(
-                "■",
-                get_themed_style(static_color, COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-
-        spans.push(Span::styled(
-            "   idle",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        spans
-    };
+    }
 
     let right_spans = if state.history.is_empty() {
         vec![
@@ -974,7 +937,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(22),
+            Constraint::Length(28),
             Constraint::Fill(1),
         ])
         .split(footer_area);
@@ -3176,7 +3139,8 @@ mod tests {
         use super::{AssistantRenderOptions, render_assistant_message};
         use crate::app::TokenUsage;
 
-        let content = "<think>\nUnderstanding the history issue.\nTracing line by line.\n</think>\nDone";
+        let content =
+            "<think>\nUnderstanding the history issue.\nTracing line by line.\n</think>\nDone";
         let mut lines = Vec::new();
         let mut clicks = Vec::new();
         let mut copies = Vec::new();
@@ -3203,7 +3167,10 @@ mod tests {
         );
 
         assert_eq!(lines[0].spans[1].content, "Thought for 3s, 1.4k tokens");
-        assert_eq!(lines[1].spans[0].content, "  Understanding the history issue.");
+        assert_eq!(
+            lines[1].spans[0].content,
+            "  Understanding the history issue."
+        );
     }
 
     #[test]
