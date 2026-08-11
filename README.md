@@ -67,7 +67,9 @@ ACP's optional MCP-over-ACP transport is not required.
 
 `models.json` contains the `default` model selection and `models` array.
 `config.json` contains runtime preferences and integrations such as MCP
-servers, tool protocol, agent mode, verbosity, theme, and the active session.
+servers, tool protocol, agent mode, verbosity, theme, the active session, and
+the per-turn `max_tool_rounds` safety backstop. It defaults to 40 rounds and is
+only a final limit after semantic loop and failure guards.
 Rustcode does not create or overwrite either file during fallback loading.
 
 ### via homebrew
