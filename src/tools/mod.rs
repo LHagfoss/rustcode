@@ -14,6 +14,8 @@ mod search;
 
 pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 
+pub(crate) use exec::{command_confirmation_preview, command_requires_confirmation};
+
 pub(crate) use filesystem::edit_target_and_replacement;
 
 /// A parsed tool request emitted by a model.
@@ -480,15 +482,31 @@ pub fn authorize_tool(
     auto_confirm: bool,
     bypass_confirmation: bool,
 ) -> AuthorizationDecision {
+    authorize_tool_with_args(name, &Value::Null, mode, auto_confirm, bypass_confirmation)
+}
+
+pub fn authorize_tool_with_args(
+    name: &str,
+    args: &Value,
+    mode: crate::config::AgentMode,
+    auto_confirm: bool,
+    bypass_confirmation: bool,
+) -> AuthorizationDecision {
     if mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(name) {
         return AuthorizationDecision::Deny(
             "Plan mode blocks workspace mutation, command execution, delegation, and unknown tools"
                 .to_string(),
         );
     }
+    let command_is_destructive = name == "run_command" && command_requires_confirmation(args);
+    let requires_confirmation = if name == "run_command" {
+        command_is_destructive
+    } else {
+        needs_confirmation(name)
+    };
     if !bypass_confirmation
         && !auto_confirm
-        && (needs_confirmation(name) || matches!(tool_safety(name), ToolSafety::Unknown))
+        && (requires_confirmation || matches!(tool_safety(name), ToolSafety::Unknown))
     {
         return AuthorizationDecision::RequireConfirmation;
     }
@@ -2426,6 +2444,30 @@ mod tests {
         assert_eq!(
             authorize_tool("grep", crate::config::AgentMode::Build, false, false),
             AuthorizationDecision::Allow
+        );
+    }
+
+    #[test]
+    fn command_authorization_distinguishes_git_inspection_from_recovery() {
+        assert_eq!(
+            authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": "git status --short"}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            AuthorizationDecision::Allow
+        );
+        assert_eq!(
+            authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": "git restore -- src/GameScene.ts"}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            AuthorizationDecision::RequireConfirmation
         );
     }
 

@@ -117,6 +117,94 @@ fn split_command_segments(cmd: &str) -> Vec<String> {
     segments
 }
 
+fn git_subcommand<'a>(tokens: &'a [&'a str]) -> Option<(&'a str, usize)> {
+    let first = tokens.first()?.rsplit(['/', '\\']).next()?;
+    if first != "git" {
+        return None;
+    }
+
+    let mut index = 1;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if token == "--" {
+            return tokens
+                .get(index + 1)
+                .copied()
+                .map(|subcommand| (subcommand, index + 1));
+        }
+        if !token.starts_with('-') {
+            return Some((token, index));
+        }
+        if matches!(
+            token,
+            "-C" | "-c"
+                | "--git-dir"
+                | "--work-tree"
+                | "--namespace"
+                | "--exec-path"
+                | "--config"
+                | "--super-prefix"
+        ) && !token.contains('=')
+        {
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    None
+}
+
+fn has_force_flag(tokens: &[&str]) -> bool {
+    tokens.iter().any(|token| {
+        *token == "-f" || *token == "-ff" || *token == "-D" || token.starts_with("--force")
+    })
+}
+
+fn destructive_git_scope(segment: &str) -> Option<String> {
+    let tokens = segment.split_whitespace().collect::<Vec<_>>();
+    let (subcommand, subcommand_index) = git_subcommand(&tokens)?;
+    let arguments = &tokens[subcommand_index + 1..];
+    if has_force_flag(arguments) {
+        return Some(format!("git {subcommand} force operation"));
+    }
+
+    let scope = match subcommand {
+        "restore" => "working-tree or index paths",
+        "checkout" => "checked-out paths or branch state",
+        "reset" => "HEAD, index, and possibly working-tree paths",
+        "clean" => "untracked files and directories",
+        "branch"
+            if arguments
+                .iter()
+                .any(|arg| *arg == "-d" || *arg == "--delete") =>
+        {
+            "deleted local branch"
+        }
+        _ => return None,
+    };
+    Some(format!("git {subcommand}: {scope}"))
+}
+
+pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
+    let scopes = split_command_segments(command)
+        .iter()
+        .filter_map(|segment| destructive_git_scope(segment))
+        .collect::<Vec<_>>();
+    (!scopes.is_empty()).then(|| scopes.join("; "))
+}
+
+pub(crate) fn command_requires_confirmation(args: &Value) -> bool {
+    args.get("command")
+        .and_then(Value::as_str)
+        .map(|command| command_confirmation_scope(command).is_some())
+        .unwrap_or(true)
+}
+
+pub(crate) fn command_confirmation_preview(command: &str) -> String {
+    let scope = command_confirmation_scope(command).unwrap_or("command execution".to_string());
+    format!("resolved command: {command}\nscope: {scope}")
+}
+
 fn is_sudo_binary(token: &str) -> bool {
     token
         .rsplit(['/', '\\'])
@@ -612,7 +700,10 @@ fn truncate_bytes(bytes: &[u8], max: usize, keep_tail_priority: bool) -> String 
 
 #[cfg(test)]
 mod tests {
-    use super::{has_interactive_sudo, reject_broad_git_stage, run_command};
+    use super::{
+        command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
+        has_interactive_sudo, reject_broad_git_stage, run_command,
+    };
 
     #[test]
     fn broad_git_staging_is_rejected() {
@@ -650,6 +741,69 @@ mod tests {
         .expect("shell command should succeed");
 
         assert!(result.contains("firstsecond"));
+    }
+
+    #[test]
+    fn destructive_git_recovery_commands_require_confirmation() {
+        for command in [
+            "git restore -- src/GameScene.ts",
+            "git checkout -- src/GameScene.ts",
+            "git reset --hard HEAD",
+            "git clean -fd",
+            "git branch -D old-feature",
+            "git push --force origin main",
+        ] {
+            assert!(
+                command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must confirm: {command}"
+            );
+            assert!(
+                command_confirmation_scope(command).is_some(),
+                "must name scope: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn chained_git_commands_are_checked_per_segment() {
+        assert!(!command_requires_confirmation(
+            &serde_json::json!({"command": "git status --short; git diff --stat; git log -1"})
+        ));
+        let command = "git status --short; git restore -- src/GameScene.ts";
+        let scope = command_confirmation_scope(command).expect("restore segment is destructive");
+        assert!(scope.contains("git restore"), "scope: {scope}");
+        let preview = command_confirmation_preview(command);
+        assert!(
+            preview.contains("resolved command: git status"),
+            "preview: {preview}"
+        );
+        assert!(preview.contains("scope: git restore"), "preview: {preview}");
+    }
+
+    #[test]
+    fn git_options_before_subcommand_do_not_hide_destructive_scope() {
+        assert!(command_requires_confirmation(&serde_json::json!({
+            "command": "git -C /tmp/project --work-tree=/tmp/project restore -- file.ts"
+        })));
+        assert!(command_requires_confirmation(&serde_json::json!({
+            "command": "git -c core.autocrlf=false checkout -- file.ts"
+        })));
+    }
+
+    #[test]
+    fn read_only_git_inspection_stays_non_blocking() {
+        for command in [
+            "git status --short",
+            "git diff -- src/GameScene.ts",
+            "git log -5 --oneline",
+            "git show HEAD:src/GameScene.ts",
+            "git rev-parse --show-toplevel",
+        ] {
+            assert!(
+                !command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must not confirm: {command}"
+            );
+        }
     }
 
     #[test]

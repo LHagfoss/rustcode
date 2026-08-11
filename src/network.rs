@@ -1912,7 +1912,7 @@ async fn confirm_and_execute(
         (s.agent_mode, s.auto_confirm)
     };
     if let crate::tools::AuthorizationDecision::Deny(reason) =
-        crate::tools::authorize_tool(name, agent_mode, auto_confirm, bypass_confirm)
+        crate::tools::authorize_tool_with_args(name, args, agent_mode, auto_confirm, bypass_confirm)
     {
         return (
             crate::tools::ToolExecutionOutput::failure(format!("error: {reason}")),
@@ -1941,7 +1941,13 @@ async fn confirm_and_execute(
     let diff_opt = get_diff_preview(name, args);
 
     let needs_confirm = matches!(
-        crate::tools::authorize_tool(name, agent_mode, auto_confirm, bypass_confirm),
+        crate::tools::authorize_tool_with_args(
+            name,
+            args,
+            agent_mode,
+            auto_confirm,
+            bypass_confirm,
+        ),
         crate::tools::AuthorizationDecision::RequireConfirmation
     );
     let mut user_wait_dur = std::time::Duration::ZERO;
@@ -2000,9 +2006,20 @@ async fn confirm_and_execute(
         let (preview, content_bytes) = if let Some(ref d) = diff_opt {
             (d.clone(), d.len())
         } else {
-            let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
-            let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
-            (preview, content.len())
+            if name == "run_command" {
+                let command = args
+                    .get("command")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                (
+                    crate::tools::command_confirmation_preview(command),
+                    command.len(),
+                )
+            } else {
+                let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                let preview = content.lines().take(6).collect::<Vec<_>>().join("\n");
+                (preview, content.len())
+            }
         };
         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
         {
