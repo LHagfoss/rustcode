@@ -621,6 +621,8 @@ pub struct AppState {
     /// per endpoint per run; a negative result is also written back to the
     /// profile so later runs skip the probe.
     pub function_calling_support: std::collections::HashMap<String, bool>,
+    /// Successful image analyses keyed by the image bytes' stable hash.
+    pub image_analysis_cache: std::collections::HashMap<String, String>,
     pub config: crate::config::AppConfig,
 
     pub cwd_and_branch: String,
@@ -848,6 +850,7 @@ impl AppState {
             input_history: Vec::new(),
             api_base_url,
             function_calling_support: std::collections::HashMap::new(),
+            image_analysis_cache: std::collections::HashMap::new(),
             model_name,
             config,
             cwd_and_branch,
@@ -966,6 +969,32 @@ impl AppState {
             })
             .and_then(|p| p.context_window)
             .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW)
+    }
+
+    pub fn active_model_profile(&self) -> Option<crate::config::ModelProfile> {
+        self.config
+            .models
+            .iter()
+            .find(|p| {
+                p.url == self.api_base_url
+                    && (p.model == self.model_name || p.name == self.model_name)
+            })
+            .or_else(|| {
+                self.config
+                    .models
+                    .iter()
+                    .find(|p| p.model == self.model_name || p.name == self.model_name)
+            })
+            .cloned()
+    }
+
+    pub fn vision_model_profile(&self) -> Option<crate::config::ModelProfile> {
+        let name = self.config.vision_model.as_deref()?;
+        self.config
+            .models
+            .iter()
+            .find(|p| p.name == name || p.model == name)
+            .cloned()
     }
 
     pub fn get_history_token_budget(&self) -> u32 {
@@ -1492,6 +1521,7 @@ mod protocol_tests {
             tool_protocol: Some(ToolProtocol::ApiNative),
             enable_thinking: None,
             max_tokens: None,
+            supports_vision: None,
         });
 
         assert_eq!(
