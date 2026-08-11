@@ -78,6 +78,18 @@ pub(crate) use subagents::handle_agent_tool;
 #[allow(unused_imports)]
 pub(crate) use subagents::{run_subagent, set_subagent_status};
 
+#[path = "network/title.rs"]
+pub(crate) mod title;
+pub use title::generate_title;
+pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
+
+#[path = "network/context_tail.rs"]
+pub(crate) mod context_tail;
+pub(crate) use context_tail::{
+    build_dynamic_context_tail, build_volatile_context_block,
+    format_read_file_context_entry,
+};
+
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
 /// summary instead of a silently aborted session. Ported from opencode's
@@ -565,7 +577,7 @@ pub(crate) fn is_mutating_tool(name: &str) -> bool {
 /// True only if we have read this file before AND its mtime is unchanged since.
 /// A re-read is allowed whenever the file is new, missing, or modified on disk —
 /// so the agent can always refresh after a (possibly partial) edit.
-fn view_file_unchanged_since_last_read(
+pub(crate) fn view_file_unchanged_since_last_read(
     stored: Option<std::time::SystemTime>,
     current: Option<std::time::SystemTime>,
 ) -> bool {
@@ -1974,267 +1986,6 @@ fn push_status_line(s: &mut AppState, text: String) {
     crate::config::save_history(&s.history);
 }
 
-
-
-/// Generate a title from the first user message using the small model.
-/// Returns None if the message starts with '/' (slash command).
-pub async fn generate_title(
-    client: &reqwest::Client,
-    config: &crate::config::AppConfig,
-    first_message: &str,
-) -> Option<String> {
-    if first_message.trim().starts_with('/') {
-        return None;
-    }
-
-    let small_model_name = config.default.small();
-    let (url, model) = crate::config::resolve_model_endpoint(config, small_model_name);
-
-    let first_line = first_message.lines().next()?;
-    let prompt = format!(
-        "Generate a short, concise title (max 5 words) summarizing this user's coding request/intent. Do not use quotes, punctuation, or any introductory text. Return only the title itself.\n\nIntent: {}",
-        first_line.trim()
-    );
-
-    let messages = vec![serde_json::json!({
-        "role": "user",
-        "content": prompt
-    })];
-
-    let payload = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "max_tokens": 30,
-        "temperature": 0.3,
-    });
-
-    let res = client.post(&url).json(&payload).send().await.ok()?;
-
-    if !res.status().is_success() {
-        return None;
-    }
-
-    let json: serde_json::Value = res.json().await.ok()?;
-    let title = json
-        .get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("content")?
-        .as_str()?;
-
-    let cleaned_title = title.trim().trim_matches('"').trim().to_string();
-    if cleaned_title.is_empty() {
-        None
-    } else {
-        Some(cleaned_title)
-    }
-}
-
-/// Push the incoming prompt (user message, or a background-task wakeup system
-/// note) onto history, persist it, and reset the per-response scratch fields.
-async fn record_prompt_to_history(
-    state: &Arc<Mutex<AppState>>,
-    is_wakeup: bool,
-    next_prompt: &str,
-) {
-    let mut s = state.lock().await;
-    if is_wakeup {
-        let task_id = next_prompt.strip_prefix("__task_wakeup__:").unwrap_or("");
-        s.history.push(ChatMessage::new(
-            "system",
-            format!("Task {task_id} has finished running in the background."),
-        ));
-    } else {
-        s.history
-            .push(ChatMessage::new("user", next_prompt.to_string()));
-    }
-    let active_id = s.active_session_id.clone();
-    crate::config::save_session_history(&active_id, &s.history);
-    s.current_response.clear();
-    s.current_token_usage = None;
-    s.response_time = None;
-}
-
-/// Fire-and-forget: generate a session title from the first user message.
-async fn spawn_title_generation(
-    client: &reqwest::Client,
-    state: &Arc<Mutex<AppState>>,
-    first_msg: String,
-) {
-    let client_clone = client.clone();
-    // Captured before spawn so title reflects the session as of this prompt.
-    let (config_clone, session_id) = {
-        let s = state.lock().await;
-        (s.config.clone(), s.active_session_id.clone())
-    };
-    let state_clone = Arc::clone(state);
-    tokio::spawn(async move {
-        if let Some(title) = generate_title(&client_clone, &config_clone, &first_msg).await {
-            crate::config::save_session_title(&session_id, &title);
-            let mut s = state_clone.lock().await;
-            s.invalidate_session_title_cache();
-            s.request_redraw();
-        }
-    });
-}
-
-#[allow(unused_assignments)]
-/// Assemble the turn-varying context tail appended to the last message. Kept
-/// separate from the static system prefix so the provider prompt cache stays
-/// warm: this lists the files already in context (so the agent doesn't re-read
-/// them) and re-injects the persistent task plan so work continues across turns
-/// instead of re-planning from scratch.
-/// Render the volatile runtime block — the "cache divider" that must sit at the
-/// very end of the request payload, after the static (cacheable) prefix and the
-/// conversation. Everything here changes turn-to-turn (clock, cwd, quota), so
-/// keeping it strictly at the tail lets the provider's implicit prefix cache
-/// cover the entire static prefix plus the stable conversation history.
-fn build_volatile_context_block(
-    token_usage: Option<&crate::app::TokenUsage>,
-    quota_remaining: Option<f32>,
-    context_window: u32,
-) -> String {
-    let now = chrono::Local::now();
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "(unknown)".to_string());
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "(unknown)".to_string());
-
-    let mut b = String::from("# Runtime Context (volatile — do not rely on this being cached)\n");
-    b.push_str(&format!(
-        "- Current date/time: {}\n",
-        now.format("%A %Y-%m-%d %H:%M:%S %Z")
-    ));
-    b.push_str(&format!("- Working directory: {cwd}\n"));
-    b.push_str(&format!(
-        "- Platform: {} {}\n",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    ));
-    b.push_str(&format!("- Shell: {shell}\n"));
-    b.push_str(&format!("- Context window: {context_window} tokens\n"));
-    if let Some(u) = token_usage {
-        b.push_str(&format!(
-            "- Last-turn token usage: prompt {} / completion {} / total {}",
-            u.prompt_tokens, u.completion_tokens, u.total_tokens
-        ));
-        if let Some(cached) = u.cached_tokens {
-            b.push_str(&format!(" (cached {cached})"));
-        }
-        b.push('\n');
-    }
-    if let Some(q) = quota_remaining {
-        b.push_str(&format!("- Model quota remaining: {q:.1}%\n"));
-    }
-    b
-}
-
-fn build_repo_map_fragment() -> Option<String> {
-    let root = std::env::current_dir().ok()?;
-    let mut entries: Vec<String> = std::fs::read_dir(&root)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let n = e.file_name().to_string_lossy().to_string();
-            if n.starts_with('.') || n == "target" {
-                return None;
-            }
-            let mut s = n;
-            if e.file_type().ok()?.is_dir() {
-                s.push('/');
-            }
-            Some(s)
-        })
-        .collect();
-    entries.sort();
-    let mut out = String::from("# Repo map (top-level)\n");
-    for e in entries.iter().take(30) {
-        out.push_str(&format!("- {e}\n"));
-    }
-    // add src modules if present
-    if let Ok(src) = std::fs::read_dir(root.join("src")) {
-        let mut mods: Vec<String> = src
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        mods.sort();
-        if !mods.is_empty() {
-            out.push_str("\nsrc/\n");
-            for m in mods.iter().take(20) {
-                out.push_str(&format!("- {m}\n"));
-            }
-        }
-    }
-    Some(out)
-}
-
-fn format_read_file_context_entry(
-    path: &str,
-    snapshot_mtime: Option<std::time::SystemTime>,
-    current_mtime: Option<std::time::SystemTime>,
-) -> String {
-    let status = if view_file_unchanged_since_last_read(snapshot_mtime, current_mtime) {
-        "snapshot current"
-    } else {
-        "STALE — changed on disk; re-read before editing"
-    };
-    format!("{path} ({status})")
-}
-
-fn build_dynamic_context_tail(
-    context_section: String,
-    read_files: &[String],
-    todos: &[crate::app::TodoItem],
-) -> String {
-    let mut fragments = vec![history::ContextFragment::new(
-        "environment",
-        context_section,
-    )];
-    // Repo map is high-value only once files/todos exist; keep the empty
-    // case (unit test: no files, no todos) returning just the env section
-    // so prefix caching and tests stay stable.
-    if !read_files.is_empty() || !todos.is_empty() {
-        if let Some(map) = build_repo_map_fragment() {
-            fragments.push(history::ContextFragment::new("repo_map", map));
-        }
-    }
-
-    if !read_files.is_empty() {
-        fragments.push(history::ContextFragment::new(
-            "files",
-            format!(
-                "# Files already in context (re-read files marked stale or named by compiler diagnostics before editing)\n{}",
-                read_files
-                    .iter()
-                    .map(|f| format!("- {f}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
-        ));
-    }
-
-    if !todos.is_empty() {
-        let mut plan =
-            String::from("# Your current task plan (execute in order; update via todo_write)\n");
-        for (i, t) in todos.iter().enumerate() {
-            let mark = match t.status.as_str() {
-                "completed" => "[x]",
-                "in_progress" => "[~]",
-                _ => "[ ]",
-            };
-            plan.push_str(&format!(
-                "{}. {} {} ({})\n",
-                i + 1,
-                mark,
-                t.content,
-                t.priority
-            ));
-        }
-        fragments.push(history::ContextFragment::new("task plan", plan));
-    }
-
-    history::render_context_fragments(&fragments)
-}
 
 /// Assemble the full provider request for one agent turn.
 ///
