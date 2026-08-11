@@ -266,6 +266,7 @@ fn model_label(state: &AppState) -> String {
 }
 
 struct AssistantRenderOptions {
+    token_usage: Option<crate::app::TokenUsage>,
     response_time_ms: Option<u64>,
     is_generating: bool,
     viewport_width: u16,
@@ -311,6 +312,7 @@ fn render_assistant_message<'a>(
     options: AssistantRenderOptions,
 ) {
     let AssistantRenderOptions {
+        token_usage,
         response_time_ms,
         is_generating,
         viewport_width,
@@ -347,23 +349,45 @@ fn render_assistant_message<'a>(
     }
 
     if let Some(think) = think_content {
-        let label = if let Some(ms) = response_time_ms {
+        let time_str = response_time_ms.map(|ms| {
             if ms >= 1000 {
-                format!("Thinking ({:.1}s)", ms as f32 / 1000.0)
+                let sec = ms as f32 / 1000.0;
+                if (sec * 10.0).fract() == 0.0 || sec >= 10.0 {
+                    format!("{:.0}s", sec)
+                } else {
+                    format!("{:.1}s", sec)
+                }
             } else {
-                format!("Thinking ({}ms)", ms)
+                format!("{}ms", ms)
             }
-        } else {
-            "Thinking".to_string()
+        });
+        let tokens_str = token_usage.as_ref().map(|u| {
+            if u.total_tokens >= 1000 {
+                format!("{:.1}k tokens", u.total_tokens as f32 / 1000.0)
+            } else {
+                format!("{} tokens", u.total_tokens)
+            }
+        });
+
+        let thought_meta = match (time_str, tokens_str) {
+            (Some(t), Some(k)) => format!("Thought for {t}, {k}"),
+            (Some(t), None) => format!("Thought for {t}"),
+            (None, Some(k)) => format!("Thought for {k}"),
+            (None, None) => "Thought".to_string(),
         };
+
         let toggle = if thought_collapsed { "+ " } else { "− " };
         if let Some(idx) = msg_index {
             click_registry.push((lines.len(), idx));
         }
 
-        let first_line = think.lines().next().unwrap_or(&label);
-        let preview = if first_line.len() > 65 {
-            format!("{}...", &first_line[..65])
+        let first_line = think
+            .lines()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or("");
+        let preview = if first_line.chars().count() > 70 {
+            format!("{}...", first_line.chars().take(67).collect::<String>())
         } else {
             first_line.to_string()
         };
@@ -374,12 +398,24 @@ fn render_assistant_message<'a>(
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
             Span::styled(
-                format!("{label}: {preview}"),
+                thought_meta,
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
         ]));
 
-        if !thought_collapsed {
+        if thought_collapsed {
+            if !preview.is_empty() {
+                if let Some(idx) = msg_index {
+                    click_registry.push((lines.len(), idx));
+                }
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {preview}"),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+                    ),
+                ]));
+            }
+        } else {
             for raw_line in think.lines() {
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -2041,6 +2077,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 &mut thought_clicks,
                 &mut copy_clicks,
                 AssistantRenderOptions {
+                    token_usage: msg.token_usage.clone(),
                     response_time_ms: msg.response_time_ms,
                     is_generating: false,
                     viewport_width: inner_area.width,
@@ -2077,13 +2114,15 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         };
 
         if !should_hide_stream {
+            let live_ms = state.generation_start_time.map(|t| t.elapsed().as_millis() as u64);
             render_assistant_message(
                 &state.current_response,
                 &mut lines,
                 &mut thought_clicks,
                 &mut copy_clicks,
                 AssistantRenderOptions {
-                    response_time_ms: None,
+                    token_usage: None,
+                    response_time_ms: live_ms,
                     is_generating: true,
                     viewport_width: inner_area.width,
                     show_picker,
@@ -3023,6 +3062,7 @@ mod tests {
             &mut clicks,
             &mut copies,
             AssistantRenderOptions {
+                token_usage: None,
                 response_time_ms: None,
                 is_generating: false,
                 viewport_width: width,
@@ -3068,6 +3108,7 @@ mod tests {
             &mut clicks,
             &mut copies,
             AssistantRenderOptions {
+                token_usage: None,
                 response_time_ms: None,
                 is_generating: false,
                 viewport_width: 80,
@@ -3108,6 +3149,7 @@ mod tests {
             &mut clicks,
             &mut copies,
             AssistantRenderOptions {
+                token_usage: None,
                 response_time_ms: None,
                 is_generating: false,
                 viewport_width: 80,
@@ -3123,10 +3165,46 @@ mod tests {
             .flat_map(|line| line.spans.iter())
             .map(|span| span.content.as_ref())
             .collect();
+        assert!(rendered.contains("Thought"));
         assert!(rendered.contains("Planning the next command."));
         assert!(!rendered.contains("run_command"));
         assert!(!rendered.contains("git status"));
         assert!(!rendered.contains("Build"));
+    }
+
+    #[test]
+    fn test_thinking_renders_metadata_and_summary() {
+        use super::{AssistantRenderOptions, render_assistant_message};
+        use crate::app::TokenUsage;
+
+        let content = "<think>\nUnderstanding the history issue.\nTracing line by line.\n</think>\nDone";
+        let mut lines = Vec::new();
+        let mut clicks = Vec::new();
+        let mut copies = Vec::new();
+        render_assistant_message(
+            content,
+            &mut lines,
+            &mut clicks,
+            &mut copies,
+            AssistantRenderOptions {
+                token_usage: Some(TokenUsage {
+                    prompt_tokens: 1000,
+                    completion_tokens: 400,
+                    total_tokens: 1400,
+                    cached_tokens: None,
+                }),
+                response_time_ms: Some(3000),
+                is_generating: false,
+                viewport_width: 80,
+                show_picker: false,
+                thought_collapsed: true,
+                msg_index: Some(1),
+                last_copy_text: None,
+            },
+        );
+
+        assert_eq!(lines[0].spans[1].content, "Thought for 3s, 1.4k tokens");
+        assert_eq!(lines[1].spans[0].content, "  Understanding the history issue.");
     }
 
     #[test]
