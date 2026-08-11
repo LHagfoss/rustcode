@@ -44,6 +44,9 @@ pub(crate) use output::truncate_tool_output_for_message;
 pub(crate) mod events;
 pub(crate) use events::{ToolResult, ToolResultMetadata};
 
+#[path = "network/lifecycle.rs"]
+pub(crate) mod lifecycle;
+
 #[path = "network/history.rs"]
 pub(crate) mod history;
 
@@ -194,7 +197,7 @@ fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
 /// completion, leave the transcript intact, and explain exactly which limit
 /// was hit so the user can decide whether to resume.
 async fn stop_turn_for_budget(
-    state: &Arc<Mutex<AppState>>,
+    _state: &Arc<Mutex<AppState>>,
     ctx: &mut TurnContext,
     limit: TurnBudgetLimit,
 ) -> bool {
@@ -217,8 +220,8 @@ async fn stop_turn_for_budget(
     ctx.final_content = summary;
     ctx.task_completed = false;
     ctx.budget_stopped = Some(limit.to_string());
-    ctx.stop_reason = Some(format!("budget:{limit}"));
-    let mut s = state.lock().await;
+    ctx.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
+    let mut s = _state.lock().await;
     s.continuous_mode = false;
     s.status = AppStatus::Idle;
     drop(s);
@@ -3904,9 +3907,9 @@ fn record_provider_error(ctx: &mut TurnContext, error: &str) {
         error.contains("429") || error.to_ascii_lowercase().contains("too many requests");
     if is_quota {
         ctx.provider_429s += 1;
-        ctx.stop_reason = Some("provider_error:429".to_string());
+        ctx.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
     } else if ctx.stop_reason.is_none() {
-        ctx.stop_reason = Some("provider_error".to_string());
+        ctx.stop_reason = Some(lifecycle::StopReason::ProviderError(None));
     }
 }
 
@@ -4054,7 +4057,7 @@ pub struct TurnContext {
     pub provider_429s: usize,
     pub changed_paths: std::collections::BTreeSet<String>,
     pub phase_checkpoint: Option<String>,
-    pub stop_reason: Option<String>,
+    pub stop_reason: Option<lifecycle::StopReason>,
 }
 
 impl TurnContext {
@@ -4119,7 +4122,7 @@ impl TurnContext {
             "provider_429s": self.provider_429s,
             "changed_paths": self.changed_paths.iter().collect::<Vec<_>>(),
             "phase_checkpoint": self.phase_checkpoint,
-            "stop_reason": self.stop_reason,
+            "stop_reason": self.stop_reason.as_ref().map(ToString::to_string),
         })
     }
 }
@@ -4143,6 +4146,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         && let Some(limit) = turn_budget_exceeded(ctx)
     {
         return stop_turn_for_budget(state, ctx, limit).await;
+    }
+
+    if !ctx.force_final {
+        ctx.stop_reason = None;
     }
 
     // Resolve tool-call support before the prompt is built: the two
@@ -4171,16 +4178,18 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         Err(error) => {
             dbg_log!("Image fallback failed: {error}");
             let mut s = state.lock().await;
+            ctx.stop_reason = Some(if error == "cancelled" {
+                lifecycle::StopReason::Cancelled
+            } else {
+                lifecycle::StopReason::RecoveryFailed
+            });
             let notice = if error == "cancelled" {
                 "Request cancelled by user".to_string()
             } else {
                 format!("Image analysis unavailable: {error}")
             };
             s.history.push(ChatMessage::new("system", notice));
-            crate::config::save_history(&s.history);
-            s.current_response.clear();
             s.current_token_usage = None;
-            s.status = AppStatus::Idle;
             return false;
         }
     };
@@ -4252,7 +4261,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             Err(e) => {
                 ctx.turn_machine.recover_error();
                 dbg_log!("Stream request failed: {}", e);
-                record_provider_error(ctx, &e);
+                if e == "cancelled" {
+                    ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
+                } else {
+                    record_provider_error(ctx, &e);
+                }
                 let mut s = state.lock().await;
                 let notice = if e == "cancelled" {
                     "Request cancelled by user".to_string()
@@ -4260,10 +4273,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     format!("Error from LLM Provider: {e}")
                 };
                 s.history.push(ChatMessage::new("system", notice));
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
                 s.current_token_usage = None;
-                s.status = AppStatus::Idle;
                 return false;
             }
         };
@@ -4302,7 +4312,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     }
 
     if cancel_token.is_cancelled() {
-        ctx.stop_reason = Some("cancelled".to_string());
+        ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
         ctx.turn_machine.cancel();
         return false;
     }
@@ -4310,7 +4320,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     ctx.final_content = accumulated_content;
     let (native_tool_calls, streamed_call_ids) = {
         let buffer = stream_buffer.lock().await;
-        (buffer.native_tool_calls.clone(), buffer.tool_call_ids.clone())
+        (
+            buffer.native_tool_calls.clone(),
+            buffer.tool_call_ids.clone(),
+        )
     };
     ctx.streamed_call_ids = if native_tool_calls.is_empty() {
         streamed_call_ids
@@ -4328,7 +4341,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     if ctx.final_content.is_empty() && native_tool_calls.is_empty() {
         dbg_log!("Stream returned empty content, finishing");
         let mut s = state.lock().await;
-        s.status = AppStatus::Idle;
         s.current_token_usage = None;
         return false;
     }
@@ -4360,15 +4372,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         } else {
             clean_prose.trim().to_string()
         };
-        let mut s = state.lock().await;
-        let mut msg = ChatMessage::new("assistant", &answer);
-        msg.response_time_ms = Some(turn_response_time_ms);
-        msg.token_usage = turn_token_usage.clone();
-        s.history.push(msg);
-        crate::config::save_history(&s.history);
-        s.current_response.clear();
-        s.continuous_mode = false;
-        s.status = AppStatus::Idle;
+        ctx.final_content = answer;
         return false;
     }
 
@@ -4432,6 +4436,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     }
     let oversized_batch = dropped_calls > 0;
     if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls) {
+        if lifecycle::is_unavailable_tool_error(&reason) {
+            ctx.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
+        }
         dbg_log!("Tool-call validation rejected response: {}", reason);
         let mut s = state.lock().await;
         // `ctx.final_content` was already replaced with a shape-only
@@ -4584,6 +4591,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.current_response.clear();
                         drop(s);
                         ctx.turn_machine.abandon_tool_phase();
+                        ctx.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
                         ctx.force_final = true;
                         return true;
                     }
@@ -4699,6 +4707,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 
             if cancel_token.is_cancelled() {
                 dbg_log!("Orchestrator: Cancelled during tool execution");
+                ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
                 let mut s = state.lock().await;
                 // The assistant message announcing these calls is already
                 // in history; leaving them unanswered would break the next
@@ -4715,8 +4724,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     s.history
                         .push(ChatMessage::new("system", "Request cancelled by user"));
                 }
-                crate::config::save_history(&s.history);
-                s.status = AppStatus::Idle;
                 ctx.turn_machine.finish_tools_if_executing();
                 return false;
             }
@@ -4868,7 +4875,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 
             if let Some(replan) = failure_replan {
                 ctx.failure_replans += 1;
-                ctx.stop_reason = Some("failure_replan".to_string());
+                ctx.stop_reason = Some(lifecycle::StopReason::RecoveryFailed);
                 s.history.push(ChatMessage::new("system", replan));
                 crate::config::save_history(&s.history);
                 s.current_response.clear();
@@ -4911,6 +4918,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             }
 
             if completed {
+                ctx.stop_reason = Some(lifecycle::StopReason::Completed);
                 if ctx.made_edits
                     && !ctx.verification.has_fresh_successful_verification()
                     && ctx.verification_blocks < MAX_VERIFICATION_BLOCKS
@@ -4993,11 +5001,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     }
                 }
 
-                dbg_log!(
-                    "complete_task called, turning off continuous mode and breaking loop immediately"
-                );
-                s.continuous_mode = false;
-                s.status = AppStatus::Idle;
+                dbg_log!("complete_task accepted; finalizing the turn");
                 // Extract task result text from the complete_task call
                 let task_result_summary = tool_calls
                     .iter()
@@ -5035,8 +5039,6 @@ nothing in this summary was written to disk by this task]",
                     }
                     s.history.push(ChatMessage::new("assistant", summary_text));
                 }
-                crate::config::save_history(&s.history);
-                s.current_response.clear();
                 drop(s);
                 ctx.task_completed = true;
                 ctx.turn_machine.finish_tools_if_executing();
@@ -5202,6 +5204,7 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
 ) -> TurnContext {
     let prompt_start_time = std::time::Instant::now();
+    let mut turn_lifecycle = lifecycle::TurnLifecycle::new();
 
     let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
     let mut ctx = TurnContext::with_max_tool_rounds(max_tool_rounds);
@@ -5209,10 +5212,25 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
 
     if ctx.stop_reason.is_none() {
         ctx.stop_reason = Some(if ctx.task_completed {
-            "completed".to_string()
+            lifecycle::StopReason::Completed
         } else {
-            "stopped".to_string()
+            lifecycle::StopReason::RecoveryFailed
         });
+    }
+    let stop_reason = ctx
+        .stop_reason
+        .clone()
+        .expect("turn finalization always assigns a stop reason");
+    if !turn_lifecycle.mark_finalized() {
+        return ctx;
+    }
+    let had_final_content = !ctx.final_content.trim().is_empty();
+    let final_transcript =
+        lifecycle::final_transcript_content(ctx.task_completed, &ctx.final_content, &stop_reason);
+    if let Some(content) = final_transcript.as_ref()
+        && !had_final_content
+    {
+        ctx.final_content = content.clone();
     }
     crate::logger::operational_event(
         "turn.summary",
@@ -5222,8 +5240,8 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
         }),
     );
 
-    if !ctx.final_content.is_empty() {
-        dbg_log!("Finishing agent loop, writing final assistant reply");
+    {
+        dbg_log!("Finishing agent loop, writing final transcript");
         crate::logger::operational_event(
             "turn.finish",
             serde_json::json!({
@@ -5240,8 +5258,13 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
         s.response_time = Some(prompt_start_time.elapsed());
         // On the complete_task path the summary was already appended; only
         // record token usage / notify below, don't duplicate the reply.
-        if !ctx.task_completed {
-            let mut msg = ChatMessage::new("assistant", ctx.final_content.clone());
+        if let Some(content) = final_transcript {
+            let role = if had_final_content {
+                "assistant"
+            } else {
+                "system"
+            };
+            let mut msg = ChatMessage::new(role, content);
             msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
             s.history.push(msg);
         }
@@ -5291,9 +5314,12 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
             fetch_model_quota(&client_quota, &state_quota).await;
         });
 
-        // Notify the user that the agent loop completed successfully.
-        let _ =
-            crate::notifications::notify_finished(crate::notifications::FinishedStatus::Success);
+        let notification = if matches!(stop_reason, lifecycle::StopReason::Cancelled) {
+            crate::notifications::FinishedStatus::Cancelled
+        } else {
+            crate::notifications::FinishedStatus::Success
+        };
+        let _ = crate::notifications::notify_finished(notification);
     }
 
     ctx
@@ -5352,10 +5378,6 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
 
         if cancel_token.is_cancelled() {
             dbg_log!("Cancel token is cancelled, exiting orchestrator loop");
-            // Best-effort: notify the user that a cancellation happened.
-            let _ = crate::notifications::notify_finished(
-                crate::notifications::FinishedStatus::Cancelled,
-            );
             break;
         }
     }
@@ -6461,7 +6483,7 @@ mod tests {
         ctx.provider_429s = 1;
         ctx.changed_paths.insert("src/GameScene.ts".to_string());
         ctx.phase_checkpoint = Some("Phase 3: verify placement".to_string());
-        ctx.stop_reason = Some("provider_error:429".to_string());
+        ctx.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
 
         let summary = ctx.benchmark_summary();
         assert_eq!(summary["tool_rounds"], 7);
@@ -6480,7 +6502,10 @@ mod tests {
         record_provider_error(&mut ctx, "502 Bad Gateway");
         assert_eq!(ctx.provider_errors, 2);
         assert_eq!(ctx.provider_429s, 1);
-        assert_eq!(ctx.stop_reason.as_deref(), Some("provider_error:429"));
+        assert_eq!(
+            ctx.stop_reason.as_ref().map(ToString::to_string).as_deref(),
+            Some("provider_error:429")
+        );
     }
 
     #[test]
