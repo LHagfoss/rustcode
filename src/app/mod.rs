@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod activity;
 pub mod state;
 pub use state::Verbosity;
 pub mod suggestion;
