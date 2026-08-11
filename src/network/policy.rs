@@ -22,7 +22,13 @@ impl TurnPolicy for InteractivePolicy {
         if !auto_confirm {
             for call in tool_calls {
                 let mode = { state.lock().await.agent_mode };
-                let decision = tools::authorize_tool(&call.name, mode, false, false);
+                let decision = tools::authorize_tool_with_args(
+                    &call.name,
+                    &call.arguments,
+                    mode,
+                    false,
+                    false,
+                );
                 if matches!(decision, tools::AuthorizationDecision::RequireConfirmation)
                     && !tools::is_agent_tool(&call.name)
                 {
@@ -42,7 +48,15 @@ impl TurnPolicy for InteractivePolicy {
                     };
 
                     let diff_opt = crate::network::get_diff_preview(&call.name, &call.arguments);
-                    let (preview, content_bytes) = if let Some(ref d) = diff_opt {
+                    let (preview, content_bytes) = if call.name == "run_command" {
+                        let command = call
+                            .arguments
+                            .get("command")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("");
+                        let preview = tools::command_confirmation_preview(command);
+                        (preview, command.len())
+                    } else if let Some(ref d) = diff_opt {
                         (d.clone(), d.len())
                     } else {
                         let content = call
