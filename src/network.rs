@@ -80,7 +80,6 @@ const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
 /// work. Any one signal firing is enough: a session that is genuinely
 /// healthy on every other axis but has spent 500k tokens or 40 rounds has
 /// stopped being worth running unattended.
-const MAX_TOOL_ROUNDS: usize = usize::MAX;
 const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
 /// A tool that reports success without changing anything (already-applied
 /// edits, no-op runs) does not count as progress, so this escalates much
@@ -150,7 +149,7 @@ fn accumulate_tokens_used(current: u64, reported_this_round: Option<u64>, conten
 /// exceeded, if any. Order matters only for which reason is reported when
 /// several trip on the same round — all are equally terminal.
 fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
-    if ctx.tool_rounds >= MAX_TOOL_ROUNDS {
+    if ctx.tool_rounds >= ctx.max_tool_rounds {
         return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
     }
     if ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET {
@@ -3846,6 +3845,9 @@ impl ToolFenceCounter {
 
 pub struct TurnContext {
     pub tool_rounds: usize,
+    /// Configured hard backstop for a single agent turn. Semantic progress
+    /// and failure budgets should stop unhealthy work before this limit.
+    pub max_tool_rounds: usize,
     pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
     pub loop_recovery_attempts: u8,
@@ -3898,8 +3900,13 @@ pub struct TurnContext {
 
 impl TurnContext {
     pub fn new() -> Self {
+        Self::with_max_tool_rounds(crate::config::DEFAULT_MAX_TOOL_ROUNDS)
+    }
+
+    pub fn with_max_tool_rounds(max_tool_rounds: usize) -> Self {
         Self {
             tool_rounds: 0,
+            max_tool_rounds: max_tool_rounds.max(1),
             oversized_batch_rejections: 0,
             loop_detector: loop_detect::LoopDetector::new(6),
             loop_recovery_attempts: 0,
@@ -4931,7 +4938,8 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
 ) -> TurnContext {
     let prompt_start_time = std::time::Instant::now();
 
-    let mut ctx = TurnContext::new();
+    let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
+    let mut ctx = TurnContext::with_max_tool_rounds(max_tool_rounds);
     while run_single_turn(client, state, cancel_token, policy, stream_buffer, &mut ctx).await {}
 
     if !ctx.final_content.is_empty() {
@@ -6475,10 +6483,20 @@ mod tests {
     #[test]
     fn max_tool_rounds_triggers_the_budget() {
         let mut ctx = TurnContext::new();
-        ctx.tool_rounds = MAX_TOOL_ROUNDS;
+        ctx.tool_rounds = ctx.max_tool_rounds;
         match turn_budget_exceeded(&ctx) {
-            Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, MAX_TOOL_ROUNDS),
+            Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, ctx.max_tool_rounds),
             other => panic!("expected ToolRounds limit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_tool_round_limit_triggers_at_the_configured_round() {
+        let mut ctx = TurnContext::with_max_tool_rounds(3);
+        ctx.tool_rounds = 3;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, 3),
+            other => panic!("expected configured ToolRounds limit, got {other:?}"),
         }
     }
 
@@ -6610,7 +6628,7 @@ mod tests {
     async fn stopping_for_budget_never_falsely_reports_completion() {
         let state = Arc::new(Mutex::new(AppState::new()));
         let mut ctx = TurnContext::new();
-        ctx.tool_rounds = MAX_TOOL_ROUNDS;
+        ctx.tool_rounds = ctx.max_tool_rounds;
         ctx.task_completed = false;
 
         let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
@@ -6681,7 +6699,7 @@ mod tests {
         let cancel_token = tokio_util::sync::CancellationToken::new();
         cancel_token.cancel();
         let mut ctx = TurnContext::new();
-        ctx.tool_rounds = MAX_TOOL_ROUNDS;
+        ctx.tool_rounds = ctx.max_tool_rounds;
 
         let budget_should_fire =
             !cancel_token.is_cancelled() && turn_budget_exceeded(&ctx).is_some();
