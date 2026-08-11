@@ -181,6 +181,41 @@ pub(crate) fn normalize_response(
     }
 }
 
+/// Adapt provider-native calls into the common event contract without looking
+/// at the response text. The text is retained for history and diagnostics,
+/// but it cannot create a second call or turn a fenced decoy into execution.
+pub(crate) fn native_response(
+    content: &str,
+    provider_finish_reason: Option<&str>,
+    tool_calls: Vec<ToolCall>,
+) -> ModelResponse {
+    let has_tool_calls = !tool_calls.is_empty();
+    let mut events = tool_calls
+        .into_iter()
+        .map(AgentEvent::ToolCall)
+        .collect::<Vec<_>>();
+
+    if !has_tool_calls {
+        events.push(AgentEvent::TextDelta(content.to_string()));
+    }
+
+    events.push(AgentEvent::Finished(if has_tool_calls {
+        FinishReason::ToolCalls
+    } else {
+        FinishReason::from_provider(provider_finish_reason)
+    }));
+
+    ModelResponse {
+        raw_content: content.to_string(),
+        source: response_source(
+            content,
+            crate::config::ToolProtocol::ApiNative,
+            has_tool_calls,
+        ),
+        events,
+    }
+}
+
 impl FinishReason {
     pub fn from_provider(value: Option<&str>) -> Self {
         match value {
@@ -393,10 +428,13 @@ mod tests {
 
     #[test]
     fn api_native_responses_are_marked_native() {
-        let response = normalize_response(
-            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"x\"}}\n```",
+        let response = native_response(
+            "provider text with a fenced decoy: ```tool {\"name\":\"write\"} ```",
             Some("tool_calls"),
-            crate::config::ToolProtocol::ApiNative,
+            vec![ToolCall {
+                name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "x"}),
+            }],
         );
         assert_eq!(response.source, ResponseSource::Native);
         assert!(
@@ -404,6 +442,41 @@ mod tests {
                 .events
                 .iter()
                 .any(|event| matches!(event, AgentEvent::ToolCall(_)))
+        );
+        assert_eq!(
+            response
+                .events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::ToolCall(_)))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            &response.events[0],
+            AgentEvent::ToolCall(ToolCall { name, .. }) if name == "grep"
+        ));
+    }
+
+    #[test]
+    fn native_response_does_not_parse_fenced_text_without_structured_calls() {
+        let response = native_response(
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"decoy\"}}\n```",
+            Some("stop"),
+            Vec::new(),
+        );
+
+        assert_eq!(response.source, ResponseSource::PlainText);
+        assert!(matches!(
+            response.events.first(),
+            Some(AgentEvent::TextDelta(content)) if content.contains("decoy")
+        ));
+        assert!(!response
+            .events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ToolCall(_))));
+        assert_eq!(
+            response.events.last(),
+            Some(&AgentEvent::Finished(FinishReason::Stop))
         );
     }
 
