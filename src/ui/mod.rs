@@ -429,7 +429,6 @@ fn render_assistant_message<'a>(
                 ]));
             }
         }
-        lines.push(Line::from(""));
     }
 
     let main_content = strip_rendered_tool_blocks(main_content);
@@ -1961,7 +1960,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             if state
                 .history
                 .get(msg_idx + 1)
-                .is_none_or(|next| next.role != "tool")
+                .is_some_and(|next| next.role == "user")
             {
                 lines.push(Line::from(""));
             }
