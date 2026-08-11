@@ -136,6 +136,9 @@ const FUNCTION_CALLING_HOSTS: &[&str] = &[
     "api.fireworks.ai",
     "api.cerebras.ai",
     "openai.azure.com",
+    "open.bigmodel.cn",
+    "api.z.ai",
+    "z.ai",
 ];
 
 /// Whether `url` is a provider already known to implement function calling.
@@ -1693,5 +1696,11 @@ mod tests {
         assert_eq!(loaded.default.big(), "custom");
         assert_eq!(loaded.theme, "nord");
         assert_eq!(loaded.tool_protocol, ToolProtocol::Native);
+    }
+
+    #[test]
+    fn test_provider_supports_function_calling_includes_zai() {
+        assert!(provider_supports_function_calling("https://open.bigmodel.cn/api/paas/v4/chat/completions"));
+        assert!(provider_supports_function_calling("https://api.z.ai/v1/chat/completions"));
     }
 }
