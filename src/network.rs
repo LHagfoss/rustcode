@@ -5700,7 +5700,7 @@ mod tests {
         release_response
             .send(())
             .expect("release automatic compaction response");
-        tokio::time::timeout(Duration::from_secs(10), task)
+        let _ = tokio::time::timeout(Duration::from_secs(10), task)
             .await
             .expect("automatic compaction must finish")
             .expect("automatic compaction task must not panic");
