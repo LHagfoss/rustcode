@@ -2957,7 +2957,7 @@ async fn prepare_turn_request(
     state: &Arc<Mutex<AppState>>,
     tool_rounds: usize,
     cancel_token: &tokio_util::sync::CancellationToken,
-) -> Vec<serde_json::Value> {
+) -> Result<Vec<serde_json::Value>, String> {
     // Try AI-driven compaction if history is long enough.
     //
     // The summarizer is a network round-trip, so the AppState mutex must NOT be
@@ -3047,18 +3047,12 @@ async fn prepare_turn_request(
         volatile_window,
         context_section,
         system_prompt,
+        active_profile,
+        vision_profile,
+        mut image_cache,
     ) = {
         let mut s = state.lock().await;
-        let history_snapshot: Vec<ChatMessage> = s
-            .history
-            .iter()
-            .filter(|m| {
-                matches!(m.role.as_str(), "user" | "assistant" | "tool")
-                    && !m.content.starts_with('/')
-                    || is_model_directed_note(m)
-            })
-            .cloned()
-            .collect();
+        let history_snapshot = s.history.clone();
         let budget_token_limit = s.get_history_token_budget();
         let mut read_files: Vec<String> = s.read_file_mtimes.keys().cloned().collect();
         read_files.sort();
@@ -3093,10 +3087,61 @@ async fn prepare_turn_request(
             volatile_window,
             context_section,
             system_prompt,
+            s.active_model_profile(),
+            s.vision_model_profile(),
+            s.image_analysis_cache.clone(),
         )
     };
 
     compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
+
+    if history_snapshot
+        .iter()
+        .any(|m| m.role == "user" && m.content.contains("![image](file://"))
+    {
+        let active_profile = active_profile.ok_or_else(|| {
+            "image analysis failed: active model profile is not configured".to_string()
+        })?;
+        if active_profile.image_input_supported() != Some(true) {
+            let vision_profile = vision_profile.ok_or_else(|| {
+                "image analysis failed: configure a dedicated vision_model profile".to_string()
+            })?;
+            let request_client = client.clone();
+            let request_cancel = cancel_token.clone();
+            history_snapshot = image_fallback::prepare_history_for_model(
+                &history_snapshot,
+                &active_profile,
+                &vision_profile,
+                &mut image_cache,
+                |profile, bytes| {
+                    let profile = profile.clone();
+                    let request_client = request_client.clone();
+                    let request_cancel = request_cancel.clone();
+                    async move {
+                        image_fallback::request_vision_analysis(
+                            &request_client,
+                            &profile,
+                            bytes,
+                            &request_cancel,
+                        )
+                        .await
+                    }
+                },
+            )
+            .await?;
+            state
+                .lock()
+                .await
+                .image_analysis_cache
+                .extend(image_cache);
+        }
+    }
+
+    history_snapshot.retain(|m| {
+        (matches!(m.role.as_str(), "user" | "assistant" | "tool")
+            && !m.content.starts_with('/'))
+            || is_model_directed_note(m)
+    });
 
     // The system prompt is kept STATIC across turns (it only depends on the
     // tool protocol and agent mode, which don't change mid-task). A stable
@@ -3152,7 +3197,7 @@ async fn prepare_turn_request(
         }
     }
 
-    msgs
+    Ok(msgs)
 }
 
 /// Execute a batch of tool calls and return `(name, result, diff)` per call.
@@ -3927,23 +3972,24 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         );
     }
 
-    if let Err(error) = image_fallback::preprocess_history(client, state, cancel_token).await {
-        dbg_log!("Image fallback failed: {error}");
-        let mut s = state.lock().await;
-        let notice = if error == "cancelled" {
-            "Request cancelled by user".to_string()
-        } else {
-            format!("Image analysis unavailable: {error}")
-        };
-        s.history.push(ChatMessage::new("system", notice));
-        crate::config::save_history(&s.history);
-        s.current_response.clear();
-        s.current_token_usage = None;
-        s.status = AppStatus::Idle;
-        return false;
-    }
-
-    let msgs = prepare_turn_request(client, state, ctx.tool_rounds, cancel_token).await;
+    let msgs = match prepare_turn_request(client, state, ctx.tool_rounds, cancel_token).await {
+        Ok(msgs) => msgs,
+        Err(error) => {
+            dbg_log!("Image fallback failed: {error}");
+            let mut s = state.lock().await;
+            let notice = if error == "cancelled" {
+                "Request cancelled by user".to_string()
+            } else {
+                format!("Image analysis unavailable: {error}")
+            };
+            s.history.push(ChatMessage::new("system", notice));
+            crate::config::save_history(&s.history);
+            s.current_response.clear();
+            s.current_token_usage = None;
+            s.status = AppStatus::Idle;
+            return false;
+        }
+    };
 
     state.lock().await.current_response.clear();
     stream_buffer.lock().await.reset();
