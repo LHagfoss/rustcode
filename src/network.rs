@@ -4521,7 +4521,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.status = AppStatus::Streaming;
                         s.stream_tracker = Some(StreamTracker::new());
                         drop(s);
-                        ctx.turn_machine.finish_tools_if_executing();
+                        ctx.turn_machine.abandon_tool_phase();
                         ctx.tool_rounds += 1;
                         return true;
                     }
@@ -4543,6 +4543,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         crate::config::save_history(&s.history);
                         s.current_response.clear();
                         drop(s);
+                        ctx.turn_machine.abandon_tool_phase();
                         ctx.force_final = true;
                         return true;
                     }
@@ -7184,6 +7185,335 @@ mod tests {
     async fn run_one_tool(call: crate::tools::ToolCall) -> ToolResult {
         let state = Arc::new(Mutex::new(AppState::new()));
         run_one_tool_with_state(&state, call).await
+    }
+
+    #[derive(Debug, Clone)]
+    struct ReplayCall {
+        id: &'static str,
+        call: crate::tools::ToolCall,
+    }
+
+    #[derive(Debug, Clone)]
+    struct ReplayStep {
+        label: &'static str,
+        calls: Vec<ReplayCall>,
+    }
+
+    #[derive(Debug, Default)]
+    struct ReplayReport {
+        tool_order: Vec<String>,
+        paired_results: Vec<(String, String, bool)>,
+        lifecycle: Vec<events::TurnState>,
+        warnings: Vec<String>,
+        changed_paths: std::collections::BTreeSet<String>,
+        recovery_attempts: u8,
+        forced_stop: bool,
+        termination_reason: String,
+    }
+
+    fn replay_call(id: &'static str, name: &str, arguments: serde_json::Value) -> ReplayCall {
+        ReplayCall {
+            id,
+            call: test_tool_call(name, arguments),
+        }
+    }
+
+    fn replay_step(label: &'static str, calls: Vec<ReplayCall>) -> ReplayStep {
+        ReplayStep { label, calls }
+    }
+
+    /// Drive the real local tool executor with scripted model steps. This is
+    /// deliberately below the provider request layer: replay tests exercise
+    /// tool ordering, result pairing, loop recovery, and workspace effects
+    /// without opening a socket or depending on a model response format.
+    async fn replay_steps(root: &std::path::Path, steps: &[ReplayStep]) -> ReplayReport {
+        let mut app = AppState::new();
+        app.workspace_root = Some(root.to_path_buf());
+        let state = Arc::new(Mutex::new(app));
+        let client = reqwest::Client::new();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let mut machine = events::TurnMachine::new();
+        let mut detector = loop_detect::LoopDetector::new(4);
+        let mut report = ReplayReport {
+            lifecycle: vec![machine.state()],
+            ..Default::default()
+        };
+        let mut compile_dirty = false;
+        let mut compile_cache = None;
+        let mut user_wait = std::time::Duration::ZERO;
+
+        'steps: for step in steps {
+            if step.calls.is_empty() {
+                machine
+                    .model_finished(false, false, false, false)
+                    .unwrap_or_else(|error| panic!("{}: {error}", step.label));
+                report.lifecycle.push(machine.state());
+                report.termination_reason = "completed".to_string();
+                break;
+            }
+
+            machine
+                .model_finished(false, false, true, false)
+                .unwrap_or_else(|error| panic!("{}: {error}", step.label));
+            report.lifecycle.push(machine.state());
+
+            for scripted in &step.calls {
+                let (exact, category) =
+                    loop_detect::signatures(&scripted.call.name, &scripted.call.arguments);
+                let status = detector.check_tool(&scripted.call.name, &exact, &category);
+                match status {
+                    loop_detect::LoopStatus::Warning(repeats) => {
+                        report.warnings.push(format!(
+                            "{}: {} warning at repeat {repeats}",
+                            step.label, scripted.call.name
+                        ));
+                    }
+                    loop_detect::LoopStatus::Abort(repeats) => {
+                        report.warnings.push(format!(
+                            "{}: {} abort at repeat {repeats}",
+                            step.label, scripted.call.name
+                        ));
+                        machine.abandon_tool_phase();
+                        if report.recovery_attempts < 1 {
+                            report.recovery_attempts += 1;
+                            detector.reset();
+                            report.warnings.push(format!(
+                                "{}: bounded recovery attempt {}",
+                                step.label, report.recovery_attempts
+                            ));
+                            continue 'steps;
+                        }
+                        report.forced_stop = true;
+                        report.termination_reason = "forced_loop_stop".to_string();
+                        machine
+                            .model_finished(false, true, false, false)
+                            .unwrap_or_else(|error| panic!("forced wrap-up: {error}"));
+                        report.lifecycle.push(machine.state());
+                        break 'steps;
+                    }
+                    loop_detect::LoopStatus::Ok => {}
+                }
+            }
+
+            machine
+                .approval_granted()
+                .unwrap_or_else(|error| panic!("{} approval: {error}", step.label));
+            report.lifecycle.push(machine.state());
+
+            let calls = step
+                .calls
+                .iter()
+                .map(|scripted| scripted.call.clone())
+                .collect::<Vec<_>>();
+            let mut results = execute_tool_batch(
+                &client,
+                &state,
+                &cancel_token,
+                &calls,
+                true,
+                &Some(root.to_path_buf()),
+                &mut compile_dirty,
+                &mut compile_cache,
+                &mut user_wait,
+                None,
+            )
+            .await;
+            if results.len() != step.calls.len() {
+                panic!(
+                    "{}: expected {} results, got {}",
+                    step.label,
+                    step.calls.len(),
+                    results.len()
+                );
+            }
+            for (scripted, result) in step.calls.iter().zip(results.drain(..)) {
+                if result.tool_name != scripted.call.name {
+                    panic!(
+                        "{}: result for {} was paired with {}",
+                        step.label, scripted.call.name, result.tool_name
+                    );
+                }
+                report.tool_order.push(result.tool_name.clone());
+                report.paired_results.push((
+                    scripted.id.to_string(),
+                    result.tool_name,
+                    result.metadata.success,
+                ));
+                report.changed_paths.extend(result.metadata.changed_paths);
+            }
+            machine
+                .tools_finished()
+                .unwrap_or_else(|error| panic!("{} tools: {error}", step.label));
+            report.lifecycle.push(machine.state());
+        }
+
+        report
+    }
+
+    #[tokio::test]
+    async fn failed_session_replay_is_bounded_and_keeps_workspace_safe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.ts");
+        let original = "const status = 'idle';\n";
+        std::fs::write(&file, original).expect("write fixture");
+        let path = file.to_string_lossy().to_string();
+        let failed_edit = || {
+            replay_call(
+                "failed-edit",
+                "replace_file_content",
+                serde_json::json!({
+                    "path": path,
+                    "old_string": "const missing = true;",
+                    "new_string": "const missing = false;",
+                }),
+            )
+        };
+        let read = || {
+            replay_call(
+                "read-state",
+                "view_file",
+                serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+            )
+        };
+        let steps = vec![
+            replay_step("failed edit", vec![failed_edit()]),
+            replay_step(
+                "state edit",
+                vec![replay_call(
+                    "state-edit",
+                    "replace_file_content",
+                    serde_json::json!({
+                        "path": path,
+                        "old_string": "const status = 'idle';",
+                        "new_string": "const status = 'active';",
+                    }),
+                )],
+            ),
+            replay_step(
+                "restore state",
+                vec![replay_call(
+                    "restore-state",
+                    "replace_file_content",
+                    serde_json::json!({
+                        "path": path,
+                        "old_string": "const status = 'active';",
+                        "new_string": "const status = 'idle';",
+                    }),
+                )],
+            ),
+            replay_step("repeated read one", vec![read()]),
+            replay_step("repeated read two", vec![read()]),
+            replay_step("failed retry one", vec![failed_edit()]),
+            replay_step("failed retry two", vec![failed_edit()]),
+            replay_step("failed retry three", vec![failed_edit()]),
+            replay_step("failed retry four", vec![failed_edit()]),
+            replay_step("failed retry five", vec![failed_edit()]),
+            replay_step("failed retry six", vec![failed_edit()]),
+        ];
+
+        let report = replay_steps(dir.path(), &steps).await;
+        assert!(report.forced_stop, "replay did not stop: {report:?}");
+        assert_eq!(report.termination_reason, "forced_loop_stop");
+        assert_eq!(report.recovery_attempts, 1, "report: {report:?}");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("repeated read two")),
+            "replay warnings lacked the read loop: {report:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read fixture"),
+            original,
+            "failed edits and restore loop must not leave a workspace mutation"
+        );
+        assert_eq!(
+            report.tool_order.first().map(String::as_str),
+            Some("replace_file_content")
+        );
+        assert_eq!(
+            report.tool_order.last().map(String::as_str),
+            Some("replace_file_content")
+        );
+        assert_eq!(report.tool_order.len(), report.paired_results.len());
+        assert_eq!(
+            report.lifecycle.first(),
+            Some(&events::TurnState::AwaitingModel)
+        );
+        assert_eq!(
+            report.lifecycle.last(),
+            Some(&events::TurnState::Completed),
+            "forced wrap-up must complete the lifecycle: {report:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_session_replay_pairs_tools_and_records_real_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("state.ts");
+        std::fs::write(&file, "const status = 'idle';\n").expect("write fixture");
+        let path = file.to_string_lossy().to_string();
+        let steps = vec![
+            replay_step(
+                "activate state",
+                vec![replay_call(
+                    "activate",
+                    "replace_file_content",
+                    serde_json::json!({
+                        "path": path,
+                        "old_string": "const status = 'idle';",
+                        "new_string": "const status = 'active';",
+                    }),
+                )],
+            ),
+            replay_step(
+                "verify state",
+                vec![replay_call(
+                    "verify",
+                    "view_file",
+                    serde_json::json!({"path": path, "start_line": 1, "end_line": 1}),
+                )],
+            ),
+            replay_step(
+                "finish state",
+                vec![replay_call(
+                    "finish",
+                    "replace_file_content",
+                    serde_json::json!({
+                        "path": path,
+                        "old_string": "const status = 'active';",
+                        "new_string": "const status = 'ready';",
+                    }),
+                )],
+            ),
+            replay_step("final response", Vec::new()),
+        ];
+
+        let report = replay_steps(dir.path(), &steps).await;
+        assert_eq!(report.termination_reason, "completed", "report: {report:?}");
+        assert!(!report.forced_stop, "report: {report:?}");
+        assert_eq!(
+            report
+                .paired_results
+                .iter()
+                .map(|(id, _, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["activate", "verify", "finish"]
+        );
+        assert!(
+            report.paired_results.iter().all(|(_, _, success)| *success),
+            "successful replay had a failed result: {report:?}"
+        );
+        assert!(!report.changed_paths.is_empty(), "report: {report:?}");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read fixture"),
+            "const status = 'ready';\n"
+        );
+        assert_eq!(
+            report.lifecycle.last(),
+            Some(&events::TurnState::Completed),
+            "successful replay did not reach a terminal state: {report:?}"
+        );
     }
 
     #[tokio::test]
