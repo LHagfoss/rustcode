@@ -3999,6 +3999,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         (s.api_base_url.clone(), s.model_name.clone())
     };
 
+    let turn_start_time = std::time::Instant::now();
+
     dbg_log!(
         "Sending request to {} for model {}",
         api_base_url,
@@ -4079,6 +4081,21 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             "content_bytes": accumulated_content.len(),
         }),
     );
+    let turn_response_time_ms = turn_start_time.elapsed().as_millis() as u64;
+
+    let turn_token_usage = {
+        let s = state.lock().await;
+        if s.current_token_usage.is_some() {
+            s.current_token_usage.clone()
+        } else {
+            drop(s);
+            let est = estimate_token_usage(&ctx.last_sent_messages, &accumulated_content).await;
+            let mut s = state.lock().await;
+            s.current_token_usage = est.clone();
+            est
+        }
+    };
+
     {
         let mut s = state.lock().await;
         s.current_response = accumulated_content.clone();
@@ -4137,7 +4154,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             clean_prose.trim().to_string()
         };
         let mut s = state.lock().await;
-        s.history.push(ChatMessage::new("assistant", &answer));
+        let mut msg = ChatMessage::new("assistant", &answer);
+        msg.response_time_ms = Some(turn_response_time_ms);
+        msg.token_usage = turn_token_usage.clone();
+        s.history.push(msg);
         crate::config::save_history(&s.history);
         s.current_response.clear();
         s.continuous_mode = false;
@@ -4196,10 +4216,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         // summary when the batch was truncated, so a rejection here can
         // never replay the fabricated prose that came with it.
         let rejected_refs = call_refs_for(&parsed_tool_calls, &ctx.streamed_call_ids);
-        s.history.push(
-            ChatMessage::new("assistant", ctx.final_content.clone())
-                .with_tool_calls(rejected_refs.clone()),
-        );
+        let mut msg = ChatMessage::new("assistant", ctx.final_content.clone())
+            .with_tool_calls(rejected_refs.clone());
+        msg.response_time_ms = Some(turn_response_time_ms);
+        msg.token_usage = turn_token_usage.clone();
+        s.history.push(msg);
         // The model learns which call was rejected from the call's own
         // result, not just from a system note it may skim past.
         for message in unanswered_call_results(&rejected_refs, &reason) {
@@ -4307,8 +4328,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             n
                         );
                         let mut s = state.lock().await;
-                        s.history
-                            .push(ChatMessage::new("assistant", &ctx.final_content));
+                        let mut msg = ChatMessage::new("assistant", &ctx.final_content);
+                        msg.response_time_ms = Some(turn_response_time_ms);
+                        msg.token_usage = turn_token_usage.clone();
+                        s.history.push(msg);
                         s.history
                             .push(ChatMessage::new("system", LOOP_RECOVERY_PROMPT));
                         crate::config::save_history(&s.history);
@@ -4329,8 +4352,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         // a directive that disables tools and demands a prose
                         // summary, and run exactly one more turn (`ctx.force_final`).
                         let mut s = state.lock().await;
-                        s.history
-                            .push(ChatMessage::new("assistant", &ctx.final_content));
+                        let mut msg = ChatMessage::new("assistant", &ctx.final_content);
+                        msg.response_time_ms = Some(turn_response_time_ms);
+                        msg.token_usage = turn_token_usage.clone();
+                        s.history.push(msg);
                         s.history
                             .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
                         crate::config::save_history(&s.history);
@@ -4368,10 +4393,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 s.pending_tool_confirmation = None;
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
-                s.history.push(
-                    ChatMessage::new("assistant", &ctx.final_content)
-                        .with_tool_calls(call_refs.clone()),
-                );
+                let mut msg = ChatMessage::new("assistant", &ctx.final_content)
+                    .with_tool_calls(call_refs.clone());
+                msg.response_time_ms = Some(turn_response_time_ms);
+                msg.token_usage = turn_token_usage.clone();
+                s.history.push(msg);
                 if dropped_calls > 0 {
                     s.history.push(ChatMessage::new(
                                 "system",
@@ -4761,8 +4787,10 @@ nothing in this summary was written to disk by this task]",
         ctx.tool_rounds += 1;
         ctx.consecutive_malformed_calls += 1;
         let mut s = state.lock().await;
-        s.history
-            .push(ChatMessage::new("assistant", &ctx.final_content));
+        let mut msg = ChatMessage::new("assistant", &ctx.final_content);
+        msg.response_time_ms = Some(turn_response_time_ms);
+        msg.token_usage = turn_token_usage.clone();
+        s.history.push(msg);
 
         let reason = crate::tools::diagnose_failed_tool_call(&ctx.final_content)
             .map(|r| format!("{r}\n\n"))
@@ -4850,8 +4878,10 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                     MAX_FINISH_GATE_RETRIES
                 );
                 let mut s = state.lock().await;
-                s.history
-                    .push(ChatMessage::new("assistant", ctx.final_content.clone()));
+                let mut msg = ChatMessage::new("assistant", ctx.final_content.clone());
+                msg.response_time_ms = Some(turn_response_time_ms);
+                msg.token_usage = turn_token_usage.clone();
+                s.history.push(msg);
                 s.history.push(ChatMessage::new(
                             "system",
                             format!(
@@ -4944,7 +4974,9 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
 
         let mut s = state.lock().await;
         if let Some(msg) = s.history.iter_mut().rev().find(|m| m.role == "assistant") {
-            msg.token_usage = usage.clone();
+            if msg.token_usage.is_none() {
+                msg.token_usage = usage.clone();
+            }
         }
 
         let active_id = s.active_session_id.clone();
