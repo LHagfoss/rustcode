@@ -150,7 +150,7 @@ pub fn validate_tool_calls(calls: &[ToolCall]) -> Result<(), String> {
         if let Err(reason) = validate_value_against_schema(&call.arguments, &schema, "$") {
             let guidance = tool_argument_guidance(&call.name).unwrap_or_default();
             return Err(format!(
-                "invalid arguments for '{}': {reason}.{guidance}",
+                "invalid arguments for '{}'. Schema path: {reason}.{guidance}",
                 call.name
             ));
         }
@@ -1746,6 +1746,25 @@ mod tests {
             diag.contains("Example"),
             "must include a minimal valid example: {diag}"
         );
+    }
+
+    #[test]
+    fn validation_error_names_schema_path_and_valid_example() {
+        let error = validate_tool_calls(&[ToolCall {
+            name: "replace_file_content".to_string(),
+            arguments: serde_json::json!({
+                "path": "src/store.ts",
+                "edits": "[]"
+            }),
+        }])
+        .expect_err("a stringified edits array must remain invalid");
+
+        assert!(
+            error.contains("Schema path: $.edits must be array"),
+            "{error}"
+        );
+        assert!(error.contains("Expected arguments"), "{error}");
+        assert!(error.contains("Example"), "{error}");
     }
 
     #[test]
