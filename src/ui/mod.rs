@@ -265,9 +265,8 @@ fn model_label(state: &AppState) -> String {
     state.config.default.big().to_string()
 }
 
-struct AssistantRenderOptions<'a> {
+struct AssistantRenderOptions {
     response_time_ms: Option<u64>,
-    model_name: &'a str,
     is_generating: bool,
     viewport_width: u16,
     show_picker: bool,
@@ -309,11 +308,10 @@ fn render_assistant_message<'a>(
     lines: &mut Vec<Line<'a>>,
     click_registry: &mut Vec<(usize, usize)>,
     copy_registry: &mut Vec<(usize, String)>,
-    options: AssistantRenderOptions<'_>,
+    options: AssistantRenderOptions,
 ) {
     let AssistantRenderOptions {
         response_time_ms,
-        model_name,
         is_generating,
         viewport_width,
         show_picker,
@@ -647,38 +645,6 @@ fn render_assistant_message<'a>(
             }
         }
         lines.push(Line::from(""));
-    }
-
-    if !is_generating {
-        let mut status_spans = vec![
-            Span::styled(
-                "■ ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-            Span::styled(
-                "Build",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ),
-            Span::styled(
-                " · ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-        ];
-
-        status_spans.push(Span::styled(
-            model_name.to_string(),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-
-        if let Some(ms) = response_time_ms {
-            let secs = ms as f32 / 1000.0;
-            status_spans.push(Span::styled(
-                format!(" · {:.1}s", secs),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-
-        lines.push(Line::from(status_spans));
     }
 }
 
@@ -1940,6 +1906,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     ));
                 }
             }
+            if state
+                .history
+                .get(msg_idx + 1)
+                .is_none_or(|next| next.role != "tool")
+            {
+                lines.push(Line::from(""));
+            }
 
         } else if msg.role == "user" {
             if msg_idx > 0 {
@@ -2051,7 +2024,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                         &mut copy_clicks,
                         AssistantRenderOptions {
                             response_time_ms: msg.response_time_ms,
-                            model_name: &model_label(state),
                             is_generating: false,
                             viewport_width: inner_area.width,
                             show_picker,
@@ -2071,7 +2043,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 &mut copy_clicks,
                 AssistantRenderOptions {
                     response_time_ms: msg.response_time_ms,
-                    model_name: &model_label(state),
                     is_generating: false,
                     viewport_width: inner_area.width,
                     show_picker,
@@ -2113,7 +2084,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 &mut copy_clicks,
                 AssistantRenderOptions {
                     response_time_ms: None,
-                    model_name: &model_label(state),
                     is_generating: true,
                     viewport_width: inner_area.width,
                     show_picker,
@@ -3054,7 +3024,6 @@ mod tests {
             &mut copies,
             AssistantRenderOptions {
                 response_time_ms: None,
-                model_name: "model",
                 is_generating: false,
                 viewport_width: width,
                 show_picker: false,
@@ -3100,7 +3069,6 @@ mod tests {
             &mut copies,
             AssistantRenderOptions {
                 response_time_ms: None,
-                model_name: "model",
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
@@ -3141,7 +3109,6 @@ mod tests {
             &mut copies,
             AssistantRenderOptions {
                 response_time_ms: None,
-                model_name: "model",
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
@@ -3159,6 +3126,7 @@ mod tests {
         assert!(rendered.contains("Planning the next command."));
         assert!(!rendered.contains("run_command"));
         assert!(!rendered.contains("git status"));
+        assert!(!rendered.contains("Build"));
     }
 
     #[test]
