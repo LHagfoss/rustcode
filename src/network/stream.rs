@@ -10,6 +10,9 @@ pub(crate) struct StreamBuffer {
     /// it answers; without them a tool result is just another message and the
     /// model is free to misattribute it.
     pub tool_call_ids: Vec<String>,
+    /// Structured native calls kept separate from display text. ApiNative
+    /// responses must not be serialized into fenced Markdown and parsed back.
+    pub native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
 }
 
 impl StreamBuffer {
@@ -17,6 +20,7 @@ impl StreamBuffer {
         Self {
             content: String::new(),
             tool_call_ids: Vec::new(),
+            native_tool_calls: Vec::new(),
         }
     }
 
@@ -24,5 +28,27 @@ impl StreamBuffer {
     pub fn reset(&mut self) {
         self.content.clear();
         self.tool_call_ids.clear();
+        self.native_tool_calls.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_clears_typed_native_calls_and_provider_ids() {
+        let mut buffer = StreamBuffer::new();
+        buffer.tool_call_ids.push("call-1".to_string());
+        buffer.native_tool_calls.push(crate::tools::ToolCallEnvelope {
+            call_id: "call-1".to_string(),
+            tool_name: "grep".to_string(),
+            arguments: serde_json::json!({"pattern": "x"}),
+        });
+
+        buffer.reset();
+
+        assert!(buffer.tool_call_ids.is_empty());
+        assert!(buffer.native_tool_calls.is_empty());
     }
 }
