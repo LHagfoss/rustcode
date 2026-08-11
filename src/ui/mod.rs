@@ -1582,8 +1582,8 @@ fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool 
     history
         .iter()
         .skip(assistant_index + 1)
-        .take_while(|message| message.role == "system" && is_hidden_system_notice(&message.content))
-        .any(|message| message.role == "tool")
+        .find(|message| !(message.role == "system" && is_hidden_system_notice(&message.content)))
+        .map_or(false, |message| message.role == "tool")
 }
 
 fn render_status_panel<'a>(
@@ -2000,8 +2000,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             lines.push(Line::from(""));
         } else if msg.role == "assistant" {
             let calls = msg.resolved_tool_calls(state.active_tool_protocol());
+            let has_following_tool_result = tool_result_follows(&state.history, msg_idx);
+
             if let Some(tool_call) = calls.first() {
-                let has_following_tool_result = tool_result_follows(&state.history, msg_idx);
                 if !has_following_tool_result {
                     let (action, arg) =
                         format_pi_tool_action(&tool_call.name, &tool_call.arguments);
@@ -2031,26 +2032,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                         ),
                     ]));
                 }
-                if msg.content.contains("<think>") {
-                    let collapsed = !state.expanded_thoughts.contains(&msg_idx);
-                    render_assistant_message(
-                        &msg.content,
-                        &mut lines,
-                        &mut thought_clicks,
-                        &mut copy_clicks,
-                        AssistantRenderOptions {
-                            response_time_ms: msg.response_time_ms,
-                            is_generating: false,
-                            viewport_width: inner_area.width,
-                            show_picker,
-                            thought_collapsed: collapsed,
-                            msg_index: Some(msg_idx),
-                            last_copy_text: state.last_copy_text.clone(),
-                        },
-                    );
-                }
-                continue;
             }
+
             let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             render_assistant_message(
                 &msg.content,
@@ -2067,6 +2050,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     last_copy_text: state.last_copy_text.clone(),
                 },
             );
+
             let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
                 m.role == "tool"
                     || (m.role == "assistant"
@@ -3143,6 +3127,31 @@ mod tests {
         assert!(!rendered.contains("run_command"));
         assert!(!rendered.contains("git status"));
         assert!(!rendered.contains("Build"));
+    }
+
+    #[test]
+    fn test_tool_result_follows_skips_hidden_notices() {
+        use super::tool_result_follows;
+        use crate::app::ChatMessage;
+
+        let history = vec![
+            ChatMessage::new("assistant", "calling tool"),
+            ChatMessage::new("system", "[harness: stopped after 13 tool round(s)]"),
+            ChatMessage::new("tool", "tool output"),
+        ];
+        assert!(tool_result_follows(&history, 0));
+
+        let history_direct = vec![
+            ChatMessage::new("assistant", "calling tool"),
+            ChatMessage::new("tool", "tool output"),
+        ];
+        assert!(tool_result_follows(&history_direct, 0));
+
+        let history_no_tool = vec![
+            ChatMessage::new("assistant", "calling tool"),
+            ChatMessage::new("user", "hello"),
+        ];
+        assert!(!tool_result_follows(&history_no_tool, 0));
     }
 
     #[test]
