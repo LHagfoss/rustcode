@@ -2953,6 +2953,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_millis",
+ "sha2",
  "similar",
  "streaming-iterator",
  "syntect",

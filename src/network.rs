@@ -55,6 +55,9 @@ pub(crate) mod policy;
 #[path = "network/verification.rs"]
 pub(crate) mod verification;
 
+#[path = "network/image_fallback.rs"]
+pub(crate) mod image_fallback;
+
 /// Injected as a system directive for the final wrap-up turn after a loop is
 /// detected. Disables tools and forces a prose answer so the user gets a
 /// summary instead of a silently aborted session. Ported from opencode's
@@ -3922,6 +3925,22 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             s.tool_protocol_for(&url),
             supported
         );
+    }
+
+    if let Err(error) = image_fallback::preprocess_history(client, state, cancel_token).await {
+        dbg_log!("Image fallback failed: {error}");
+        let mut s = state.lock().await;
+        let notice = if error == "cancelled" {
+            "Request cancelled by user".to_string()
+        } else {
+            format!("Image analysis unavailable: {error}")
+        };
+        s.history.push(ChatMessage::new("system", notice));
+        crate::config::save_history(&s.history);
+        s.current_response.clear();
+        s.current_token_usage = None;
+        s.status = AppStatus::Idle;
+        return false;
     }
 
     let msgs = prepare_turn_request(client, state, ctx.tool_rounds, cancel_token).await;
