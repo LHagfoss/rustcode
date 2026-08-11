@@ -4,6 +4,7 @@ use std::future::Future;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
@@ -41,8 +42,17 @@ pub fn bump_mcp_generation() {
 
 /// Start each enabled MCP server, keeping one server's failure from blocking
 /// the remaining configured servers.
-pub async fn start_enabled_servers<F, Fut>(
+pub async fn start_enabled_servers<F, Fut>(servers: &[crate::config::McpServerConfig], launcher: F)
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    start_enabled_servers_with_timeout(servers, Duration::from_secs(10), launcher).await;
+}
+
+async fn start_enabled_servers_with_timeout<F, Fut>(
     servers: &[crate::config::McpServerConfig],
+    startup_timeout: Duration,
     mut launcher: F,
 ) where
     F: FnMut(String) -> Fut,
@@ -50,8 +60,17 @@ pub async fn start_enabled_servers<F, Fut>(
 {
     for server in servers.iter().filter(|server| server.enabled) {
         let name = server.name.clone();
-        if let Err(error) = launcher(name.clone()).await {
-            eprintln!("[mcp] failed to start server {name}: {error}");
+        match tokio::time::timeout(startup_timeout, launcher(name.clone())).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                eprintln!("[mcp] failed to start server {name}: {error}");
+            }
+            Err(_) => {
+                eprintln!(
+                    "[mcp] timed out starting server {name} after {:.1}s; continuing",
+                    startup_timeout.as_secs_f64()
+                );
+            }
         }
     }
 }
@@ -321,6 +340,47 @@ mod tests {
             started.lock().unwrap().as_slice(),
             ["enabled-one", "enabled-two"]
         );
+    }
+
+    #[tokio::test]
+    async fn startup_helper_does_not_wait_forever_for_a_hanging_server() {
+        let servers = vec![
+            crate::config::McpServerConfig {
+                name: "hanging".to_string(),
+                command: "not-used".to_string(),
+                args: Vec::new(),
+                env: HashMap::new(),
+                enabled: true,
+            },
+            crate::config::McpServerConfig {
+                name: "reachable".to_string(),
+                command: "not-used".to_string(),
+                args: Vec::new(),
+                env: HashMap::new(),
+                enabled: true,
+            },
+        ];
+        let started = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&started);
+
+        let completed = tokio::time::timeout(
+            Duration::from_millis(100),
+            start_enabled_servers_with_timeout(&servers, Duration::from_millis(10), move |name| {
+                let observed = Arc::clone(&observed);
+                async move {
+                    observed.lock().unwrap().push(name.clone());
+                    if name == "hanging" {
+                        std::future::pending().await
+                    } else {
+                        Ok(())
+                    }
+                }
+            }),
+        )
+        .await;
+
+        assert!(completed.is_ok(), "startup must be bounded per server");
+        assert_eq!(started.lock().unwrap().as_slice(), ["hanging", "reachable"]);
     }
 
     #[tokio::test]
