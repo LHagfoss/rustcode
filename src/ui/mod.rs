@@ -92,7 +92,7 @@ pub fn COLOR_SELECTION() -> Color {
 pub fn COLOR_TIP() -> Color {
     theme::color_tip()
 }
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[inline]
 pub fn COLOR_STATUS_BORDER() -> Color {
     theme::color_status_border()
@@ -112,7 +112,7 @@ pub fn COLOR_NOTICE_BG() -> Color {
 pub fn COLOR_HOVER_BG() -> Color {
     theme::color_hover_bg()
 }
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[inline]
 pub fn COLOR_DIFF_ADD_BG() -> Color {
     theme::color_diff_add_bg()
@@ -122,7 +122,7 @@ pub fn COLOR_DIFF_ADD_BG() -> Color {
 pub fn COLOR_DIFF_ADD_FG() -> Color {
     theme::color_diff_add_fg()
 }
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[inline]
 pub fn COLOR_DIFF_REMOVE_BG() -> Color {
     theme::color_diff_remove_bg()
@@ -132,7 +132,7 @@ pub fn COLOR_DIFF_REMOVE_BG() -> Color {
 pub fn COLOR_DIFF_REMOVE_FG() -> Color {
     theme::color_diff_remove_fg()
 }
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[inline]
 pub fn COLOR_DIFF_ABSENT_BG() -> Color {
     theme::color_diff_absent_bg()
