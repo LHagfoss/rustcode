@@ -356,27 +356,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if should_draw {
             let mut guard = app_state.lock().await;
 
-            // Update terminal title based on session state
-            let title_display = if guard.history.is_empty() {
-                "rustcode".to_string()
-            } else {
-                // Check for custom title first (cached; disk is only touched
-                // when the active session changes or the title is rewritten)
-                let custom_title = guard.cached_session_title().or_else(|| {
-                    guard
-                        .history
-                        .iter()
-                        .find(|m| m.role == "user" && !m.content.starts_with('/'))
-                        .map(|m| m.content.lines().next().unwrap_or("").trim().to_string())
-                });
-                match custom_title {
-                    Some(title) if !title.is_empty() && !title.starts_with('/') => {
-                        let display_title = title.replace('|', "\\|").replace('\x07', "");
-                        format!("rustcode · {}", display_title)
-                    }
-                    _ => "rustcode".to_string(),
-                }
-            };
+            // Update terminal title based on the same activity snapshot used by
+            // the footer, so state and animation stay synchronized.
+            let custom_title = guard.cached_session_title().or_else(|| {
+                guard
+                    .history
+                    .iter()
+                    .find(|m| m.role == "user" && !m.content.starts_with('/'))
+                    .map(|m| m.content.lines().next().unwrap_or("").trim().to_string())
+            });
+            let session_name = custom_title
+                .filter(|title| !title.is_empty() && !title.starts_with('/'))
+                .unwrap_or_else(|| "session".to_string());
+            let activity =
+                crate::app::activity::classify_activity(&guard.status, &guard.running_tools);
+            let animation_frame = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64
+                / 100;
+            let title_display = crate::app::activity::format_terminal_title(
+                activity.kind,
+                &session_name,
+                animation_frame,
+            );
 
             // Only update if the title changed to avoid unnecessary OSC sequences
             let old_title = guard.current_terminal_title.clone();
