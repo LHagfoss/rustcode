@@ -1244,8 +1244,8 @@ pub async fn stream_request(
         }
     }
 
-    let mut translation = String::new();
     let mut streamed_call_ids: Vec<String> = Vec::new();
+    let mut native_tool_calls: Vec<crate::tools::ToolCallEnvelope> = Vec::new();
     for (position, acc) in accumulators.iter().enumerate() {
         if acc.name.is_empty() {
             continue;
@@ -1253,42 +1253,30 @@ pub async fn stream_request(
 
         let args_json = parse_native_tool_arguments(&acc.arguments);
 
-        let tool_call_obj = serde_json::json!({
-            "name": acc.name,
-            "arguments": args_json
-        });
-
         // Providers that omit the id still need one to pair results with calls;
         // position within the response is stable enough to stand in.
-        streamed_call_ids.push(if acc.id.is_empty() {
+        let call_id = if acc.id.is_empty() {
             format!("call_{position}")
         } else {
             acc.id.clone()
+        };
+        streamed_call_ids.push(call_id.clone());
+        native_tool_calls.push(crate::tools::ToolCallEnvelope {
+            call_id,
+            tool_name: acc.name.clone(),
+            arguments: args_json,
         });
-
-        translation.push_str("\n\n```tool\n");
-        translation.push_str(&serde_json::to_string(&tool_call_obj).unwrap_or_default());
-        translation.push_str("\n```\n");
     }
 
-    if !translation.is_empty() {
+    if !native_tool_calls.is_empty() {
         dbg_log!(
-            "stream_request: Translating and appending native tool call: {}",
-            translation
+            "stream_request: preserving {} native tool call envelope(s)",
+            native_tool_calls.len()
         );
         {
             let mut buf = buffer.lock().await;
-            buf.content.push_str(&translation);
             buf.tool_call_ids = streamed_call_ids;
-        }
-        if !quiet {
-            let mut s = state.lock().await;
-            s.current_response.push_str(&translation);
-            if s.raw_cli_mode {
-                use std::io::Write;
-                print!("{translation}");
-                let _ = std::io::stdout().flush();
-            }
+            buf.native_tool_calls = native_tool_calls;
         }
     }
 
@@ -4320,13 +4308,24 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     }
 
     ctx.final_content = accumulated_content;
-    ctx.streamed_call_ids = stream_buffer.lock().await.tool_call_ids.clone();
+    let (native_tool_calls, streamed_call_ids) = {
+        let buffer = stream_buffer.lock().await;
+        (buffer.native_tool_calls.clone(), buffer.tool_call_ids.clone())
+    };
+    ctx.streamed_call_ids = if native_tool_calls.is_empty() {
+        streamed_call_ids
+    } else {
+        native_tool_calls
+            .iter()
+            .map(|call| call.call_id.clone())
+            .collect()
+    };
     dbg_log!(
         "Stream completed successfully. Content length: {} chars",
         ctx.final_content.len()
     );
 
-    if ctx.final_content.is_empty() {
+    if ctx.final_content.is_empty() && native_tool_calls.is_empty() {
         dbg_log!("Stream returned empty content, finishing");
         let mut s = state.lock().await;
         s.status = AppStatus::Idle;
@@ -4374,11 +4373,26 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     }
 
     let protocol = { state.lock().await.active_tool_protocol() };
-    let model_response = events::normalize_response(
-        &ctx.final_content,
-        response_finish_reason.as_deref(),
-        protocol,
-    );
+    let model_response = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+        let typed_calls = native_tool_calls
+            .into_iter()
+            .map(|call| crate::tools::ToolCall {
+                name: call.tool_name,
+                arguments: call.arguments,
+            })
+            .collect();
+        events::native_response(
+            &ctx.final_content,
+            response_finish_reason.as_deref(),
+            typed_calls,
+        )
+    } else {
+        events::normalize_response(
+            &ctx.final_content,
+            response_finish_reason.as_deref(),
+            protocol,
+        )
+    };
     dbg_log!(
         "Model response normalized from {:?}; raw length={} chars",
         model_response.source,
