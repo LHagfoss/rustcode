@@ -281,6 +281,8 @@ impl LoopStatus {
 pub struct LoopDetector {
     exact: ConsecutiveTracker,
     category: ConsecutiveTracker,
+    failed_exact: ConsecutiveTracker,
+    failed_category: ConsecutiveTracker,
     output: HashTracker,
     frequency: FrequencyTracker,
     warn: usize,
@@ -294,6 +296,8 @@ impl LoopDetector {
         Self {
             exact: ConsecutiveTracker::default(),
             category: ConsecutiveTracker::default(),
+            failed_exact: ConsecutiveTracker::default(),
+            failed_category: ConsecutiveTracker::default(),
             output: HashTracker::default(),
             frequency: FrequencyTracker::new(abort * 2),
             warn: abort.div_ceil(2),
@@ -329,6 +333,21 @@ impl LoopDetector {
         status
     }
 
+    /// Record a failed mutation independently from ordinary call repetition.
+    /// Two equivalent failures are enough to require a replan: retrying the
+    /// same failed edit is unlikely to discover new workspace facts, even when
+    /// the model changes cosmetic arguments between attempts.
+    pub fn record_failed_tool(&mut self, exact: &str, category: &str) -> LoopStatus {
+        let exact_count = self.failed_exact.record(exact);
+        let category_count = self.failed_category.record(category);
+        let repeats = exact_count.max(category_count);
+        if repeats >= 2 {
+            LoopStatus::Abort(repeats)
+        } else {
+            LoopStatus::Ok
+        }
+    }
+
     /// Clear all repetition state. Called when the agent makes real progress —
     /// a successful mutating tool — so post-edit re-reads start from a clean
     /// slate instead of inheriting the pre-edit read history that would
@@ -336,6 +355,8 @@ impl LoopDetector {
     pub fn reset(&mut self) {
         self.exact = ConsecutiveTracker::default();
         self.category = ConsecutiveTracker::default();
+        self.failed_exact = ConsecutiveTracker::default();
+        self.failed_category = ConsecutiveTracker::default();
         self.output = HashTracker::default();
         self.frequency = FrequencyTracker::new(self.abort * 2);
     }
@@ -526,6 +547,24 @@ mod tests {
             last = d.check_tool("write_to_file", "write_to_file:x", "write_to_file:x");
         }
         assert_eq!(last, LoopStatus::Abort(4));
+    }
+
+    #[test]
+    fn equivalent_failed_mutations_escalate_and_progress_resets_them() {
+        let mut detector = LoopDetector::new(4);
+        let first = detector.record_failed_tool("edit:a:1", "edit:src/state.ts");
+        assert_eq!(first, LoopStatus::Ok);
+        assert_eq!(
+            detector.record_failed_tool("edit:a:2", "edit:src/state.ts"),
+            LoopStatus::Abort(2)
+        );
+
+        detector.reset();
+        assert_eq!(
+            detector.record_failed_tool("edit:a:3", "edit:src/state.ts"),
+            LoopStatus::Ok,
+            "a successful mutation reset must clear the failed streak"
+        );
     }
 
     #[test]
