@@ -339,6 +339,21 @@ impl TurnMachine {
         }
     }
 
+    /// Return to the next model turn when a tool batch is abandoned before
+    /// approval or while it is executing. Loop recovery runs after the model
+    /// response has entered `AwaitingApproval`, so finishing only an executing
+    /// phase would strand the machine and make the recovery response look like
+    /// an illegal transition.
+    pub(crate) fn abandon_tool_phase(&mut self) {
+        match self.state {
+            TurnState::AwaitingApproval => {
+                let _ = self.approval_denied();
+            }
+            TurnState::ExecutingTools => self.finish_tools_if_executing(),
+            _ => {}
+        }
+    }
+
     pub(crate) fn recover_error(&mut self) -> TurnAction {
         // Recovery must never crash user-facing error handling; if the machine
         // is already terminal we simply leave it there.
@@ -668,6 +683,20 @@ mod tests {
         assert_eq!(machine.state(), TurnState::AwaitingModel);
         // Second call is a safe no-op.
         machine.finish_tools_if_executing();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+    }
+
+    #[test]
+    fn abandoning_a_pending_tool_phase_rewinds_before_execution() {
+        let mut machine = TurnMachine::new();
+        machine.model_finished(false, false, true, false).unwrap();
+        assert_eq!(machine.state(), TurnState::AwaitingApproval);
+        machine.abandon_tool_phase();
+        assert_eq!(machine.state(), TurnState::AwaitingModel);
+
+        machine.model_finished(false, false, true, false).unwrap();
+        machine.approval_granted().unwrap();
+        machine.abandon_tool_phase();
         assert_eq!(machine.state(), TurnState::AwaitingModel);
     }
 
