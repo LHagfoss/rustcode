@@ -87,6 +87,7 @@ const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
 const MAX_CONSECUTIVE_NO_PROGRESS: usize = 8;
 const MAX_CONSECUTIVE_FAILED_MUTATIONS: usize = 5;
 const MAX_CONSECUTIVE_COMPILER_ERROR_GATES: usize = 5;
+const MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS: usize = 4;
 /// A malformed tool-call block is a protocol error, not a failed mutation —
 /// the model tried to call a tool and produced text the harness couldn't
 /// parse at all. Retrying blindly forever wastes rounds and tokens on a
@@ -103,6 +104,7 @@ enum TurnBudgetLimit {
     NoProgress(usize),
     FailedMutations(usize),
     CompilerErrorGates(usize),
+    CompilerDiagnostics(usize),
     MalformedCalls(usize),
 }
 
@@ -122,6 +124,12 @@ impl std::fmt::Display for TurnBudgetLimit {
                 write!(
                     f,
                     "{n} consecutive completion attempts with the build still broken"
+                )
+            }
+            TurnBudgetLimit::CompilerDiagnostics(n) => {
+                write!(
+                    f,
+                    "{n} consecutive edits left the same compiler diagnostics unchanged"
                 )
             }
             TurnBudgetLimit::MalformedCalls(n) => {
@@ -166,6 +174,11 @@ fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
     if ctx.consecutive_compiler_error_gates >= MAX_CONSECUTIVE_COMPILER_ERROR_GATES {
         return Some(TurnBudgetLimit::CompilerErrorGates(
             ctx.consecutive_compiler_error_gates,
+        ));
+    }
+    if ctx.consecutive_compiler_diagnostics >= MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+        return Some(TurnBudgetLimit::CompilerDiagnostics(
+            ctx.consecutive_compiler_diagnostics,
         ));
     }
     if ctx.consecutive_malformed_calls >= MAX_CONSECUTIVE_MALFORMED_CALLS {
@@ -3221,6 +3234,36 @@ fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: &str) {
     result.content.push_str(diagnostics);
 }
 
+const COMPILER_DIAGNOSTIC_MARKER: &str = "LSP/Compiler errors detected in workspace, please fix:";
+
+fn compiler_diagnostic_fingerprint(content: &str) -> Option<String> {
+    let diagnostics = content.split_once(COMPILER_DIAGNOSTIC_MARKER)?.1.trim();
+    if diagnostics.is_empty() {
+        return None;
+    }
+    let normalized = diagnostics.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn update_compiler_diagnostic_streak(ctx: &mut TurnContext, fingerprint: Option<String>) {
+    match fingerprint {
+        Some(fingerprint)
+            if ctx.last_compiler_diagnostic_fingerprint.as_deref()
+                == Some(fingerprint.as_str()) =>
+        {
+            ctx.consecutive_compiler_diagnostics += 1;
+        }
+        Some(fingerprint) => {
+            ctx.last_compiler_diagnostic_fingerprint = Some(fingerprint);
+            ctx.consecutive_compiler_diagnostics = 1;
+        }
+        None => {
+            ctx.last_compiler_diagnostic_fingerprint = None;
+            ctx.consecutive_compiler_diagnostics = 0;
+        }
+    }
+}
+
 fn tool_result_from_execution(
     tool_name: &str,
     args: &serde_json::Value,
@@ -3887,6 +3930,10 @@ pub struct TurnContext {
     /// Consecutive complete_task attempts blocked by the build still not
     /// compiling. Reset whenever the build passes.
     pub consecutive_compiler_error_gates: usize,
+    /// Consecutive mutation batches that leave the same compiler diagnostics
+    /// unchanged. A clean check or a changed diagnostic set resets this.
+    pub consecutive_compiler_diagnostics: usize,
+    pub last_compiler_diagnostic_fingerprint: Option<String>,
     /// Consecutive tool-call blocks the harness could not parse at all
     /// (distinct from a parsed call that executed and failed). Reset the
     /// moment a well-formed batch reaches execution.
@@ -3930,6 +3977,8 @@ impl TurnContext {
             consecutive_no_progress: 0,
             consecutive_failed_mutations: 0,
             consecutive_compiler_error_gates: 0,
+            consecutive_compiler_diagnostics: 0,
+            last_compiler_diagnostic_fingerprint: None,
             consecutive_malformed_calls: 0,
             budget_stopped: None,
             user_wait_duration: std::time::Duration::ZERO,
@@ -4457,6 +4506,18 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 deferred_notice,
             )
             .await;
+
+            let mutation_batch = results
+                .iter()
+                .any(|result| is_mutating_tool(&result.tool_name));
+            if mutation_batch {
+                let diagnostics = results
+                    .iter()
+                    .find_map(|result| compiler_diagnostic_fingerprint(&result.content));
+                if diagnostics.is_some() || !ctx.compile_dirty {
+                    update_compiler_diagnostic_streak(ctx, diagnostics);
+                }
+            }
 
             crate::logger::operational_event(
                 "tools.batch.finish",
@@ -6116,6 +6177,35 @@ mod tests {
             true,
             "ALREADY APPLIED: no-op, file unchanged"
         ));
+    }
+
+    #[test]
+    fn repeated_compiler_diagnostics_increment_and_reset_their_streak() {
+        let mut ctx = TurnContext::new();
+        let first = "edit applied\n\nLSP/Compiler errors detected in workspace, please fix:\nsrc/GameScene.ts(89,5): error TS2554: Expected 1 arguments, but got 2.";
+        let changed = "edit applied\n\nLSP/Compiler errors detected in workspace, please fix:\nsrc/GameScene.ts(95,5): error TS2339: Property 'unsubscribe' does not exist.";
+
+        update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(first));
+        assert_eq!(ctx.consecutive_compiler_diagnostics, 1);
+        update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(first));
+        assert_eq!(ctx.consecutive_compiler_diagnostics, 2);
+        update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(changed));
+        assert_eq!(ctx.consecutive_compiler_diagnostics, 1);
+        update_compiler_diagnostic_streak(&mut ctx, None);
+        assert_eq!(ctx.consecutive_compiler_diagnostics, 0);
+        assert!(ctx.last_compiler_diagnostic_fingerprint.is_none());
+    }
+
+    #[test]
+    fn repeated_compiler_diagnostics_trigger_the_budget() {
+        let mut ctx = TurnContext::new();
+        ctx.consecutive_compiler_diagnostics = MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS;
+        match turn_budget_exceeded(&ctx) {
+            Some(TurnBudgetLimit::CompilerDiagnostics(n)) => {
+                assert_eq!(n, MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS)
+            }
+            other => panic!("expected CompilerDiagnostics limit, got {other:?}"),
+        }
     }
 
     #[test]
