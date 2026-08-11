@@ -47,12 +47,21 @@ pub struct ModelProfile {
     /// `PARAMETER num_predict` says.
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Whether this model accepts image input. `None` means unsupported until
+    /// the profile is explicitly configured, avoiding a provider failure as a
+    /// capability probe.
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
 }
 
 /// Fallback `max_tokens` used when a `ModelProfile` doesn't set its own.
 pub const DEFAULT_REQUEST_MAX_TOKENS: u32 = 32768;
 
 impl ModelProfile {
+    pub fn image_input_supported(&self) -> Option<bool> {
+        self.supports_vision
+    }
+
     pub fn endpoint_url(&self) -> String {
         let trimmed = self.url.trim_end_matches('/');
         if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
@@ -217,6 +226,9 @@ impl DefaultConfig {
 pub struct AppConfig {
     pub default: DefaultConfig,
     pub models: Vec<ModelProfile>,
+    /// Profile name (or model id) used for image analysis fallback requests.
+    #[serde(default)]
+    pub vision_model: Option<String>,
     #[serde(default)]
     pub tool_protocol: ToolProtocol,
     #[serde(default)]
@@ -248,6 +260,8 @@ pub struct AppConfig {
 struct ModelsConfig {
     default: DefaultConfig,
     models: Vec<ModelProfile>,
+    #[serde(default)]
+    vision_model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -314,6 +328,7 @@ impl Default for AppConfig {
                     tool_protocol: None,
                     enable_thinking: None,
                     max_tokens: None,
+                    supports_vision: Some(false),
                 },
                 ModelProfile {
                     name: "gemini-3.6-flash".to_string(),
@@ -326,6 +341,7 @@ impl Default for AppConfig {
                     tool_protocol: None,
                     enable_thinking: None,
                     max_tokens: None,
+                    supports_vision: Some(true),
                 },
                 ModelProfile {
                     name: "gemma4:e2b-it-qat".to_string(),
@@ -338,6 +354,7 @@ impl Default for AppConfig {
                     tool_protocol: None,
                     enable_thinking: None,
                     max_tokens: None,
+                    supports_vision: Some(true),
                 },
                 ModelProfile {
                     name: "tinkerer".to_string(),
@@ -350,9 +367,11 @@ impl Default for AppConfig {
                     tool_protocol: None,
                     enable_thinking: None,
                     max_tokens: None,
+                    supports_vision: Some(false),
                 },
             ],
             tool_protocol: ToolProtocol::default(),
+            vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
             mcp_servers: vec![McpServerConfig {
                 name: "socraticode".to_string(),
@@ -442,6 +461,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
             Some(models) => {
                 config.default = models.default;
                 config.models = models.models;
+                config.vision_model = models.vision_model.or(config.vision_model);
             }
             None => {
                 eprintln!(
@@ -513,6 +533,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
     let models = ModelsConfig {
         default: config.default.clone(),
         models: config.models.clone(),
+        vision_model: config.vision_model.clone(),
     };
     if let Ok(json) = serde_json::to_string_pretty(&models) {
         let _ = fs::write(dir.join(MODELS_FILE), json);
@@ -1343,6 +1364,21 @@ mod tests {
                 .context_window,
             Some(4096)
         );
+    }
+
+    #[test]
+    fn image_input_capability_is_explicit_and_vision_profile_is_configurable() {
+        let mut profile = AppConfig::default().models[0].clone();
+        assert_eq!(profile.image_input_supported(), Some(false));
+
+        profile.supports_vision = Some(true);
+        assert_eq!(profile.image_input_supported(), Some(true));
+
+        let mut config = AppConfig::default();
+        config.vision_model = Some("vision-helper".to_string());
+        let json = serde_json::to_string(&config).unwrap();
+        let decoded: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.vision_model.as_deref(), Some("vision-helper"));
     }
 
     #[test]
