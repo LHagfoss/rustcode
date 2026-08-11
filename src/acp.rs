@@ -73,35 +73,55 @@ pub async fn run_acp() -> Result<(), Box<dyn std::error::Error>> {
                             .data(format!("unknown ACP session: {session_id}")));
                     };
 
-                    crate::tools::set_active_session_id(Some(session_id.clone()));
-                    crate::tools::set_active_workspace_root(Some(cwd));
-                    state
-                        .lock()
-                        .await
-                        .history
-                        .push(crate::app::ChatMessage::new("user", text));
+                    // Request handlers run on ACP's dispatch loop. A model turn can
+                    // perform many network and tool operations, so awaiting it here
+                    // prevents the connection from processing any other messages.
+                    let task_connection = connection.clone();
+                    connection.spawn(async move {
+                        let result = async {
+                            crate::tools::set_active_session_id(Some(session_id.clone()));
+                            crate::tools::set_active_workspace_root(Some(cwd));
+                            state
+                                .lock()
+                                .await
+                                .history
+                                .push(crate::app::ChatMessage::new("user", text));
 
-                    let client = reqwest::Client::builder()
-                        .connect_timeout(std::time::Duration::from_secs(10))
-                        .build()
-                        .map_err(|error| {
-                            agent_client_protocol::Error::internal_error().data(error.to_string())
-                        })?;
-                    let prose = crate::raw_cli::run_headless_turn(&client, state)
-                        .await
-                        .map_err(|error| {
-                            agent_client_protocol::Error::internal_error().data(error.to_string())
-                        })?;
+                            let client = reqwest::Client::builder()
+                                .connect_timeout(std::time::Duration::from_secs(10))
+                                .build()
+                                .map_err(|error| {
+                                    agent_client_protocol::Error::internal_error()
+                                        .data(error.to_string())
+                                })?;
+                            crate::raw_cli::run_headless_turn(&client, state)
+                                .await
+                                .map_err(|error| {
+                                    agent_client_protocol::Error::internal_error()
+                                        .data(error.to_string())
+                                })
+                        }
+                        .await;
 
-                    if !prose.is_empty() {
-                        connection.send_notification(SessionNotification::new(
-                            session_id,
-                            SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                                ContentBlock::Text(TextContent::new(prose)),
-                            )),
-                        ))?;
-                    }
-                    responder.respond(PromptResponse::new(StopReason::EndTurn))
+                        match result {
+                            Ok(prose) => {
+                                if !prose.is_empty() {
+                                    task_connection.send_notification(SessionNotification::new(
+                                        session_id,
+                                        SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                            ContentBlock::Text(TextContent::new(prose)),
+                                        )),
+                                    ))?;
+                                }
+                                responder.respond(PromptResponse::new(StopReason::EndTurn))?;
+                            }
+                            Err(error) => {
+                                responder.respond_with_error(error)?;
+                            }
+                        }
+                        Ok(())
+                    })?;
+                    Ok(())
                 }
             },
             agent_client_protocol::on_receive_request!(),
