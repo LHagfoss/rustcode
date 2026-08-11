@@ -1,3 +1,9 @@
+## [v0.16.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.16.2) - 2026-08-11
+
+### Fixes
+- **UI:** Keep tool pills visible at high verbosity ([#478](https://github.com/LHagfoss/rustcode/pull/478) / [`a8582ac`](https://github.com/LHagfoss/rustcode/commit/a8582ac))
+- **UI:** Tighten transcript spacing ([#480](https://github.com/LHagfoss/rustcode/pull/480) / [`523695c`](https://github.com/LHagfoss/rustcode/commit/523695c))
+
 ## [v0.16.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.16.1) - 2026-08-11
 
 ### Fixes
