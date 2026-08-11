@@ -86,7 +86,7 @@ pub const VIEW_FILE: Tool = Tool {
 
 fn replace_file_content_schema() -> Value {
     serde_json::json!({
-        "type": "object", "properties": {
+        "type": "object", "additionalProperties": false, "properties": {
             "path": { "type": "string" }, "target_content": { "type": "string" },
             "replacement_content": { "type": "string" },
             "edits": { "type": "array", "items": { "type": "object", "properties": {

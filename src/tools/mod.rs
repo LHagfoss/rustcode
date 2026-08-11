@@ -145,7 +145,11 @@ pub fn validate_tool_calls(calls: &[ToolCall]) -> Result<(), String> {
         };
 
         if let Err(reason) = validate_value_against_schema(&call.arguments, &schema, "$") {
-            return Err(format!("invalid arguments for '{}': {reason}", call.name));
+            let guidance = tool_argument_guidance(&call.name).unwrap_or_default();
+            return Err(format!(
+                "invalid arguments for '{}': {reason}.{guidance}",
+                call.name
+            ));
         }
     }
 
@@ -163,6 +167,56 @@ fn registered_tool_schema(name: &str) -> Option<Value> {
         return Some(schema_for_agent_tool(name));
     }
     None
+}
+
+fn example_value_for_schema(schema: &Value) -> Value {
+    match schema.get("type").and_then(Value::as_str) {
+        Some("object") => {
+            let mut object = serde_json::Map::new();
+            if let Some(properties) = schema.get("properties").and_then(Value::as_object)
+                && let Some(required) = schema.get("required").and_then(Value::as_array)
+            {
+                for field in required.iter().filter_map(Value::as_str) {
+                    if let Some(property) = properties.get(field) {
+                        object.insert(field.to_string(), example_value_for_schema(property));
+                    }
+                }
+            }
+            Value::Object(object)
+        }
+        Some("array") => schema
+            .get("items")
+            .map(example_value_for_schema)
+            .map(|item| Value::Array(vec![item]))
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+        Some("boolean") => Value::Bool(false),
+        Some("integer") => Value::from(1),
+        Some("number") => Value::from(1),
+        Some("string") => Value::String("...".to_string()),
+        _ => Value::Null,
+    }
+}
+
+fn tool_argument_guidance(name: &str) -> Option<String> {
+    let schema = registered_tool_schema(name)?;
+    let properties = schema.get("properties").and_then(Value::as_object)?;
+    let keys = properties
+        .keys()
+        .map(|key| format!("\"{key}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let example = if name == "replace_file_content" {
+        serde_json::json!({
+            "path": "src/example.ts",
+            "edits": [{"old_string": "old", "new_string": "new"}]
+        })
+    } else {
+        example_value_for_schema(&schema)
+    };
+    let example = serde_json::to_string(&example).unwrap_or_else(|_| "{}".to_string());
+    Some(format!(
+        " Expected arguments for '{name}' use these keys: [{keys}]. Example: {example}"
+    ))
 }
 
 fn validate_value_against_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
@@ -1654,6 +1708,39 @@ mod tests {
     }
 
     #[test]
+    fn diagnose_reports_schema_guidance_for_an_invalid_edit_shape() {
+        let text = "```tool\n{\"name\": \"replace_file_content\", \"arguments\": {\"path\": \"src/store.ts\", \"replacements\": []}}\n```";
+        let diag = diagnose_failed_tool_call(text).expect("should diagnose invalid arguments");
+        assert!(
+            diag.contains("replacements"),
+            "must identify the invalid field: {diag}"
+        );
+        assert!(
+            diag.contains("Expected arguments"),
+            "must show the expected shape: {diag}"
+        );
+        assert!(
+            diag.contains("\"edits\""),
+            "must name the valid batch field: {diag}"
+        );
+        assert!(
+            diag.contains("Example"),
+            "must include a minimal valid example: {diag}"
+        );
+    }
+
+    #[test]
+    fn diagnose_reports_unknown_tool_as_unavailable() {
+        let text = "```tool\n{\"name\": \"not_a_real_tool\", \"arguments\": {}}\n```";
+        let diag = diagnose_failed_tool_call(text).expect("should diagnose unknown tool");
+        assert!(diag.contains("unknown or unavailable tool"), "got: {diag}");
+        assert!(
+            diag.contains("not_a_real_tool"),
+            "must name the unknown tool: {diag}"
+        );
+    }
+
+    #[test]
     fn test_parse_tool_calls_tag() {
         let text1 = "Let me check...[TOOL_CALLS]glob[ARGS]{\"pattern\": \"**/*.rs\"}";
         let calls1 = parse_tool_calls(text1, crate::config::ToolProtocol::Json);
@@ -2270,6 +2357,16 @@ mod tests {
             arguments: serde_json::json!({"pattern": "TODO"}),
         };
         assert!(validate_tool_calls(std::slice::from_ref(&valid)).is_ok());
+        assert!(
+            validate_tool_calls(&[ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/store.ts",
+                    "edits": [{"old_string": "old", "new_string": "new"}]
+                }),
+            }])
+            .is_ok()
+        );
         assert!(validate_tool_calls(&[valid.clone(), valid]).is_err());
         assert!(
             validate_tool_calls(&[ToolCall {
