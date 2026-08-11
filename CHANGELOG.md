@@ -1,3 +1,13 @@
+## [v0.17.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.17.0) - 2026-08-11
+
+### Features
+- **UI:** Format thinking blocks with duration, token count, and summary preview ([#486](https://github.com/LHagfoss/rustcode/pull/486) / [`7232af5`](https://github.com/LHagfoss/rustcode/commit/7232af5))
+- **Vision:** Add image vision fallback and preserve pasted image chips ([#482](https://github.com/LHagfoss/rustcode/pull/482) / [`3c9da74`](https://github.com/LHagfoss/rustcode/commit/3c9da74))
+
+### Fixes
+- **UI:** Eliminate duplicate in-flight tool call lines and fix double line gaps ([#485](https://github.com/LHagfoss/rustcode/pull/485) / [`2885fe4`](https://github.com/LHagfoss/rustcode/commit/2885fe4))
+- **UI:** Hide harness recovery notices from transcript UI ([#484](https://github.com/LHagfoss/rustcode/pull/484) / [`996828e`](https://github.com/LHagfoss/rustcode/commit/996828e))
+
 ## [v0.16.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.16.2) - 2026-08-11
 
 ### Fixes
