@@ -217,6 +217,7 @@ async fn stop_turn_for_budget(
     ctx.final_content = summary;
     ctx.task_completed = false;
     ctx.budget_stopped = Some(limit.to_string());
+    ctx.stop_reason = Some(format!("budget:{limit}"));
     let mut s = state.lock().await;
     s.continuous_mode = false;
     s.status = AppStatus::Idle;
@@ -3886,6 +3887,25 @@ fn completion_claims_unapplied_work(made_edits: bool, failed: usize, blocks: u8)
     !made_edits && failed > 0 && blocks < MAX_COMPLETION_BLOCKS
 }
 
+fn record_provider_error(ctx: &mut TurnContext, error: &str) {
+    ctx.provider_errors += 1;
+    let is_quota =
+        error.contains("429") || error.to_ascii_lowercase().contains("too many requests");
+    if is_quota {
+        ctx.provider_429s += 1;
+        ctx.stop_reason = Some("provider_error:429".to_string());
+    } else if ctx.stop_reason.is_none() {
+        ctx.stop_reason = Some("provider_error".to_string());
+    }
+}
+
+fn active_todo_checkpoint(todos: &[crate::app::TodoItem]) -> Option<String> {
+    todos
+        .iter()
+        .find(|todo| todo.status == "in_progress")
+        .map(|todo| todo.content.clone())
+}
+
 /// Pair calls with the ids the provider assigned them, by position. Yields
 /// nothing under the text protocols, where calls are prose without identity.
 fn call_refs_for(calls: &[crate::tools::ToolCall], ids: &[String]) -> Vec<crate::app::ToolCallRef> {
@@ -4014,6 +4034,15 @@ pub struct TurnContext {
     pub budget_stopped: Option<String>,
     /// Accumulated duration spent waiting for interactive user response (ask_question / confirmation).
     pub user_wait_duration: std::time::Duration,
+    /// Benchmark counters and terminal facts retained for the final run summary.
+    pub tool_calls: usize,
+    pub malformed_calls: usize,
+    pub no_progress_results: usize,
+    pub provider_errors: usize,
+    pub provider_429s: usize,
+    pub changed_paths: std::collections::BTreeSet<String>,
+    pub phase_checkpoint: Option<String>,
+    pub stop_reason: Option<String>,
 }
 
 impl TurnContext {
@@ -4053,7 +4082,31 @@ impl TurnContext {
             consecutive_malformed_calls: 0,
             budget_stopped: None,
             user_wait_duration: std::time::Duration::ZERO,
+            tool_calls: 0,
+            malformed_calls: 0,
+            no_progress_results: 0,
+            provider_errors: 0,
+            provider_429s: 0,
+            changed_paths: std::collections::BTreeSet::new(),
+            phase_checkpoint: None,
+            stop_reason: None,
         }
+    }
+
+    pub fn benchmark_summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "tool_rounds": self.tool_rounds,
+            "tool_calls": self.tool_calls,
+            "tokens_used": self.tokens_used,
+            "malformed_calls": self.malformed_calls,
+            "no_progress_results": self.no_progress_results,
+            "compiler_diagnostic_streak": self.consecutive_compiler_diagnostics,
+            "provider_errors": self.provider_errors,
+            "provider_429s": self.provider_429s,
+            "changed_paths": self.changed_paths.iter().collect::<Vec<_>>(),
+            "phase_checkpoint": self.phase_checkpoint,
+            "stop_reason": self.stop_reason,
+        })
     }
 }
 
@@ -4185,6 +4238,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             Err(e) => {
                 ctx.turn_machine.recover_error();
                 dbg_log!("Stream request failed: {}", e);
+                record_provider_error(ctx, &e);
                 let mut s = state.lock().await;
                 let notice = if e == "cancelled" {
                     "Request cancelled by user".to_string()
@@ -4234,6 +4288,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     }
 
     if cancel_token.is_cancelled() {
+        ctx.stop_reason = Some("cancelled".to_string());
         ctx.turn_machine.cancel();
         return false;
     }
@@ -4578,6 +4633,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             )
             .await;
 
+            ctx.tool_calls += results.len();
             let mutation_batch = results
                 .iter()
                 .any(|result| is_mutating_tool(&result.tool_name));
@@ -4651,6 +4707,17 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 if name == "complete_task" {
                     completed = true;
                 }
+                ctx.changed_paths
+                    .extend(metadata.changed_paths.iter().cloned());
+                if name == "todo_write" && metadata.success {
+                    ctx.phase_checkpoint = active_todo_checkpoint(&s.todos);
+                    if let Some(phase) = ctx.phase_checkpoint.as_deref() {
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("[phase checkpoint: {phase}]"),
+                        ));
+                    }
+                }
                 // An edit counts once the tool reports it applied. A tool
                 // that returned an error changed nothing, however much the
                 // model's prose says otherwise.
@@ -4681,6 +4748,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         ctx.consecutive_no_progress = 0;
                     } else {
                         ctx.consecutive_no_progress += 1;
+                        ctx.no_progress_results += 1;
                     }
                     // Progress resets the loop detector: a successful,
                     // change-making mutating tool means the agent moved the
@@ -4925,6 +4993,7 @@ nothing in this summary was written to disk by this task]",
         dbg_log!("Orchestrator: Detected malformed tool call, auto-correcting and retrying...");
         ctx.tool_rounds += 1;
         ctx.consecutive_malformed_calls += 1;
+        ctx.malformed_calls += 1;
         let mut s = state.lock().await;
         let mut msg = ChatMessage::new("assistant", &ctx.final_content);
         msg.response_time_ms = Some(turn_response_time_ms);
@@ -5074,6 +5143,21 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
     let mut ctx = TurnContext::with_max_tool_rounds(max_tool_rounds);
     while run_single_turn(client, state, cancel_token, policy, stream_buffer, &mut ctx).await {}
 
+    if ctx.stop_reason.is_none() {
+        ctx.stop_reason = Some(if ctx.task_completed {
+            "completed".to_string()
+        } else {
+            "stopped".to_string()
+        });
+    }
+    crate::logger::operational_event(
+        "turn.summary",
+        serde_json::json!({
+            "completed_task": ctx.task_completed,
+            "metrics": ctx.benchmark_summary(),
+        }),
+    );
+
     if !ctx.final_content.is_empty() {
         dbg_log!("Finishing agent loop, writing final assistant reply");
         crate::logger::operational_event(
@@ -5083,6 +5167,7 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
                 "tool_rounds": ctx.tool_rounds,
                 "content_bytes": ctx.final_content.len(),
                 "cancelled": cancel_token.is_cancelled(),
+                "metrics": ctx.benchmark_summary(),
             }),
         );
 
@@ -6277,6 +6362,60 @@ mod tests {
             }
             other => panic!("expected CompilerDiagnostics limit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn benchmark_summary_contains_metrics_and_stop_reason() {
+        let mut ctx = TurnContext::new();
+        ctx.tool_rounds = 7;
+        ctx.tokens_used = 1234;
+        ctx.tool_calls = 9;
+        ctx.malformed_calls = 2;
+        ctx.no_progress_results = 3;
+        ctx.provider_errors = 1;
+        ctx.provider_429s = 1;
+        ctx.changed_paths.insert("src/GameScene.ts".to_string());
+        ctx.phase_checkpoint = Some("Phase 3: verify placement".to_string());
+        ctx.stop_reason = Some("provider_error:429".to_string());
+
+        let summary = ctx.benchmark_summary();
+        assert_eq!(summary["tool_rounds"], 7);
+        assert_eq!(summary["tokens_used"], 1234);
+        assert_eq!(summary["tool_calls"], 9);
+        assert_eq!(summary["provider_429s"], 1);
+        assert_eq!(summary["changed_paths"][0], "src/GameScene.ts");
+        assert_eq!(summary["phase_checkpoint"], "Phase 3: verify placement");
+        assert_eq!(summary["stop_reason"], "provider_error:429");
+    }
+
+    #[test]
+    fn provider_error_metrics_distinguish_quota_exhaustion() {
+        let mut ctx = TurnContext::new();
+        record_provider_error(&mut ctx, "429 Too Many Requests");
+        record_provider_error(&mut ctx, "502 Bad Gateway");
+        assert_eq!(ctx.provider_errors, 2);
+        assert_eq!(ctx.provider_429s, 1);
+        assert_eq!(ctx.stop_reason.as_deref(), Some("provider_error:429"));
+    }
+
+    #[test]
+    fn active_todo_is_the_current_phase_checkpoint() {
+        let todos = vec![
+            crate::app::TodoItem {
+                content: "Scaffold".to_string(),
+                status: "completed".to_string(),
+                priority: "high".to_string(),
+            },
+            crate::app::TodoItem {
+                content: "Verify placement".to_string(),
+                status: "in_progress".to_string(),
+                priority: "high".to_string(),
+            },
+        ];
+        assert_eq!(
+            active_todo_checkpoint(&todos).as_deref(),
+            Some("Verify placement")
+        );
     }
 
     #[test]
