@@ -7,6 +7,7 @@ pub struct ToolCallEnvelope {
     pub arguments: serde_json::Value,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolResultEnvelope {
     pub call_id: String,
@@ -17,6 +18,7 @@ pub struct ToolResultEnvelope {
     pub truncated: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolErrorKind {
     InvalidArguments,
@@ -30,6 +32,7 @@ pub enum ToolErrorKind {
 }
 
 impl ToolErrorKind {
+    #[allow(dead_code)]
     pub fn from_message(msg: &str) -> Self {
         let lower = msg.to_ascii_lowercase();
         if lower.contains("missing") || lower.contains("invalid argument") {
@@ -52,6 +55,7 @@ impl ToolErrorKind {
     }
 }
 
+#[allow(dead_code)]
 pub fn is_api_native(url: &str, protocol: crate::config::ToolProtocol) -> bool {
     matches!(protocol, crate::config::ToolProtocol::ApiNative)
         || crate::config::provider_supports_function_calling(url)

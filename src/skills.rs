@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 pub struct SkillInfo {
     pub name: String,
+    #[allow(dead_code)]
     pub description: String,
     pub path: PathBuf,
     pub content: String,

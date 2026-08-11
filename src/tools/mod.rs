@@ -12,6 +12,7 @@ mod filesystem;
 mod misc;
 mod search;
 
+#[allow(unused_imports)]
 pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 
 pub(crate) use exec::{command_confirmation_preview, command_requires_confirmation};

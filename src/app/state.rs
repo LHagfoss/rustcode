@@ -731,6 +731,7 @@ pub struct AppState {
     pub code_copy_rows: Vec<(u16, String)>,
 
     /// Timestamp of the last escape key press (for double-esc detection)
+    #[allow(dead_code)]
     pub last_escape_time: Option<std::time::Instant>,
 
     pub raw_cli_mode: bool,
