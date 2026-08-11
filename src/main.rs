@@ -303,7 +303,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut needs_redraw = true;
     let mut last_draw = std::time::Instant::now();
-    let animation_clock = std::time::Instant::now();
     let mut was_responding = false;
     let mut terminal_focused = true;
     // Scroll coalescing: batch rapid scroll events
@@ -369,11 +368,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let session_name = custom_title
                 .filter(|title| !title.is_empty() && !title.starts_with('/'))
                 .unwrap_or_else(|| "session".to_string());
-            let activity = crate::app::activity::classify_activity(
-                &guard.status,
-                &guard.running_tools,
-            );
-            let animation_frame = (animation_clock.elapsed().as_millis() / 100) as u64;
+            let activity =
+                crate::app::activity::classify_activity(&guard.status, &guard.running_tools);
+            let animation_frame = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64
+                / 100;
             let title_display = crate::app::activity::format_terminal_title(
                 activity.kind,
                 &session_name,
