@@ -1,6 +1,7 @@
 use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker, TokenUsage, ToolConfirmation};
 use futures_util::StreamExt;
-use std::sync::Arc;
+use regex::Regex;
+use std::sync::{Arc, LazyLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
@@ -2900,6 +2901,19 @@ fn build_repo_map_fragment() -> Option<String> {
     Some(out)
 }
 
+fn format_read_file_context_entry(
+    path: &str,
+    snapshot_mtime: Option<std::time::SystemTime>,
+    current_mtime: Option<std::time::SystemTime>,
+) -> String {
+    let status = if view_file_unchanged_since_last_read(snapshot_mtime, current_mtime) {
+        "snapshot current"
+    } else {
+        "STALE — changed on disk; re-read before editing"
+    };
+    format!("{path} ({status})")
+}
+
 fn build_dynamic_context_tail(
     context_section: String,
     read_files: &[String],
@@ -2922,7 +2936,7 @@ fn build_dynamic_context_tail(
         fragments.push(history::ContextFragment::new(
             "files",
             format!(
-                "# Files already in context (do NOT re-read these unless they changed on disk)\n{}",
+                "# Files already in context (re-read files marked stale or named by compiler diagnostics before editing)\n{}",
                 read_files
                     .iter()
                     .map(|f| format!("- {f}"))
@@ -3066,7 +3080,13 @@ async fn prepare_turn_request(
         let mut s = state.lock().await;
         let history_snapshot = s.history.clone();
         let budget_token_limit = s.get_history_token_budget();
-        let mut read_files: Vec<String> = s.read_file_mtimes.keys().cloned().collect();
+        let mut read_files: Vec<String> = s
+            .read_file_mtimes
+            .iter()
+            .map(|(path, snapshot_mtime)| {
+                format_read_file_context_entry(path, Some(*snapshot_mtime), path_mtime(path))
+            })
+            .collect();
         read_files.sort();
         let todos = s.todos.clone();
         let volatile_usage = s.current_token_usage.clone();
@@ -3231,7 +3251,58 @@ fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: &str) {
     result
         .content
         .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
-    result.content.push_str(diagnostics);
+    result
+        .content
+        .push_str(&compiler_diagnostics_with_snippets(diagnostics));
+}
+
+fn compiler_diagnostic_locations(diagnostics: &str) -> Vec<(String, usize, usize)> {
+    static TYPESCRIPT_LOCATION: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(\S+)\((\d+),(\d+)\):").unwrap());
+    static RUST_LOCATION: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*-->\s+(\S+):(\d+):(\d+)").unwrap());
+
+    diagnostics
+        .lines()
+        .filter_map(|line| {
+            let captures = TYPESCRIPT_LOCATION
+                .captures(line)
+                .or_else(|| RUST_LOCATION.captures(line))?;
+            Some((
+                captures.get(1)?.as_str().to_string(),
+                captures.get(2)?.as_str().parse().ok()?,
+                captures.get(3)?.as_str().parse().ok()?,
+            ))
+        })
+        .collect()
+}
+
+fn compiler_diagnostics_with_snippets(diagnostics: &str) -> String {
+    let mut enriched = diagnostics.to_string();
+    let mut seen = std::collections::BTreeSet::new();
+    for (path, line, column) in compiler_diagnostic_locations(diagnostics)
+        .into_iter()
+        .take(4)
+    {
+        if line == 0 || !seen.insert((path.clone(), line, column)) {
+            continue;
+        }
+        let resolved = crate::tools::resolve_tool_path(&path);
+        let Ok(source) = std::fs::read_to_string(resolved) else {
+            continue;
+        };
+        let lines = source.lines().collect::<Vec<_>>();
+        if line > lines.len() {
+            continue;
+        }
+        let start = line.saturating_sub(2).max(1);
+        let end = (line + 2).min(lines.len());
+        enriched.push_str(&format!("\n\n[compiler context: {path}:{line}:{column}]\n"));
+        for number in start..=end {
+            enriched.push_str(&format!("{number}: {}\n", lines[number - 1]));
+        }
+    }
+    enriched
 }
 
 const COMPILER_DIAGNOSTIC_MARKER: &str = "LSP/Compiler errors detected in workspace, please fix:";
@@ -6534,6 +6605,7 @@ mod tests {
             &[],
         );
         assert!(with_files.contains("# Files already in context"));
+        assert!(with_files.contains("re-read files marked stale"));
         assert!(with_files.contains("- src/a.rs"));
         assert!(with_files.contains("- src/b.rs"));
 
@@ -6551,6 +6623,33 @@ mod tests {
         assert!(with_todos.contains("1. [x] done thing (high)"));
         assert!(with_todos.contains("2. [~] active thing (high)"));
         assert!(with_todos.contains("3. [ ] later thing (high)"));
+    }
+
+    #[test]
+    fn file_context_marks_fresh_and_stale_snapshots() {
+        let snapshot = std::time::SystemTime::UNIX_EPOCH;
+        let fresh = format_read_file_context_entry("src/a.rs", Some(snapshot), Some(snapshot));
+        assert!(fresh.contains("snapshot current"));
+
+        let changed = snapshot + std::time::Duration::from_secs(1);
+        let stale = format_read_file_context_entry("src/a.rs", Some(snapshot), Some(changed));
+        assert!(stale.contains("STALE"));
+        assert!(stale.contains("re-read before editing"));
+    }
+
+    #[test]
+    fn compiler_diagnostics_include_bounded_source_context_for_known_locations() {
+        let diagnostics = "src/network.rs(1,1): error TS2554: Expected 1 arguments, but got 2.";
+        let enriched = compiler_diagnostics_with_snippets(diagnostics);
+        assert!(enriched.contains(diagnostics));
+        assert!(enriched.contains("[compiler context: src/network.rs:1:1]"));
+        assert!(enriched.contains("use regex::Regex;"));
+    }
+
+    #[test]
+    fn compiler_diagnostics_preserve_missing_file_output() {
+        let diagnostics = "src/does-not-exist.ts(4,2): error TS2339: Missing property";
+        assert_eq!(compiler_diagnostics_with_snippets(diagnostics), diagnostics);
     }
 
     // Regression: the benchmark session ran 106 tool rounds with no hard
