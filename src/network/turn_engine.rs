@@ -14,13 +14,13 @@ use super::title::{record_prompt_to_history, spawn_title_generation};
 use super::tool_exec::{execute_tool_batch, get_tool_project_root, tool_result_history_message};
 use super::verification;
 use super::{
-    accumulate_tokens_used, active_todo_checkpoint, call_refs_for, cached_compiler_check,
-    compiler_diagnostic_fingerprint, completion_block_message, completion_claims_unapplied_work,
-    failure_replan_message, fetch_model_quota, is_mutating_tool, loop_recovery_action,
-    mutation_made_progress, prepare_turn_request, probe_function_calling,
-    push_or_replace_loop_warning, record_provider_error, stop_turn_for_budget,
-    truncated_batch_summary, turn_budget_exceeded, unanswered_call_results,
-    update_compiler_diagnostic_streak, FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction,
+    FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction, accumulate_tokens_used,
+    active_todo_checkpoint, cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
+    completion_block_message, completion_claims_unapplied_work, failure_replan_message,
+    fetch_model_quota, is_mutating_tool, loop_recovery_action, mutation_made_progress,
+    prepare_turn_request, probe_function_calling, push_or_replace_loop_warning,
+    record_provider_error, stop_turn_for_budget, truncated_batch_summary, turn_budget_exceeded,
+    unanswered_call_results, update_compiler_diagnostic_streak,
 };
 
 /// Tracks fence depth while streaming text so an incomplete ````tool block
@@ -80,6 +80,7 @@ pub struct TurnContext {
     pub consecutive_compiler_diagnostics: usize,
     pub last_compiler_diagnostic_fingerprint: Option<String>,
     pub consecutive_malformed_calls: usize,
+    pub last_malformed_call: Option<String>,
     pub budget_stopped: Option<String>,
     pub user_wait_duration: std::time::Duration,
     pub tool_calls: usize,
@@ -128,6 +129,7 @@ impl TurnContext {
             consecutive_compiler_diagnostics: 0,
             last_compiler_diagnostic_fingerprint: None,
             consecutive_malformed_calls: 0,
+            last_malformed_call: None,
             budget_stopped: None,
             user_wait_duration: std::time::Duration::ZERO,
             tool_calls: 0,
@@ -158,6 +160,37 @@ impl TurnContext {
             "stop_reason": self.stop_reason.as_ref().map(ToString::to_string),
         })
     }
+}
+
+/// Record a tool-call protocol failure and return whether it is identical to
+/// the immediately preceding malformed request. Parsed calls use a stable
+/// name/arguments fingerprint; unparseable fences fall back to their bounded
+/// raw text so they still consume the same recovery budget.
+pub(crate) fn record_malformed_call(
+    ctx: &mut TurnContext,
+    raw_content: &str,
+    calls: &[crate::tools::ToolCall],
+) -> bool {
+    let fingerprint = if calls.is_empty() {
+        raw_content.trim().to_string()
+    } else {
+        serde_json::to_string(
+            &calls
+                .iter()
+                .map(|call| serde_json::json!({"name": call.name, "arguments": call.arguments}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| raw_content.trim().to_string())
+    };
+    let repeated = ctx.last_malformed_call.as_deref() == Some(fingerprint.as_str());
+    ctx.consecutive_malformed_calls = if repeated {
+        ctx.consecutive_malformed_calls.saturating_add(1)
+    } else {
+        1
+    };
+    ctx.last_malformed_call = Some(fingerprint);
+    ctx.malformed_calls = ctx.malformed_calls.saturating_add(1);
+    repeated
 }
 
 pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
@@ -451,6 +484,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
         }
+        let raw_content = ctx.final_content.clone();
+        let repeated_malformed = record_malformed_call(ctx, &raw_content, &parsed_tool_calls);
         dbg_log!("Tool-call validation rejected response: {}", reason);
         let mut s = state.lock().await;
         let rejected_refs = call_refs_for(&parsed_tool_calls, &ctx.streamed_call_ids);
@@ -476,10 +511,18 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             ctx.oversized_batch_rejections = 0;
             String::new()
         };
+        let repeat_guidance = if repeated_malformed {
+            format!(
+                " This is the same invalid tool request repeated {} times. Stop retrying this exact shape; re-read the schema and re-plan, or respond with text explaining what remains.",
+                ctx.consecutive_malformed_calls
+            )
+        } else {
+            String::new()
+        };
         s.history.push(ChatMessage::new(
                     "system",
                     format!(
-                        "[Tool call rejected before execution: {reason}] Emit one corrected tool call.{guidance}"
+                        "[Tool call rejected before execution: {reason}] Emit one corrected tool call.{guidance}{repeat_guidance}"
                     ),
                 ));
         crate::config::save_history(&s.history);
@@ -517,6 +560,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     }
     if matches!(turn_action, events::TurnAction::ExecuteTools) {
         ctx.consecutive_malformed_calls = 0;
+        ctx.last_malformed_call = None;
         dbg_log!("Parsed {} tool call requests", tool_calls.len());
 
         let mut loop_status = loop_detect::LoopStatus::Ok;
@@ -987,8 +1031,8 @@ nothing in this summary was written to disk by this task]",
     } else if has_intended_tool_call(&ctx.final_content) {
         dbg_log!("Orchestrator: Detected malformed tool call, auto-correcting and retrying...");
         ctx.tool_rounds += 1;
-        ctx.consecutive_malformed_calls += 1;
-        ctx.malformed_calls += 1;
+        let raw_content = ctx.final_content.clone();
+        let repeated_malformed = record_malformed_call(ctx, &raw_content, &[]);
         let mut s = state.lock().await;
         let mut msg = ChatMessage::new("assistant", &ctx.final_content);
         msg.response_time_ms = Some(turn_response_time_ms);
@@ -1004,7 +1048,15 @@ Please output a single, complete, valid tool call block inside a ```tool fenced 
 ```tool\n\
 {{\"name\": \"tool_name\", \"arguments\": {{...}}}}\n\
 ```\n\n\
-Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans."
+Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans.{}",
+            if repeated_malformed {
+                format!(
+                    " This malformed request has repeated {} times; stop emitting the same block and re-plan or answer with text.",
+                    ctx.consecutive_malformed_calls
+                )
+            } else {
+                String::new()
+            }
         );
 
         s.history.push(ChatMessage::new("tool", feedback));

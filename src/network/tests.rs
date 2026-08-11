@@ -1451,6 +1451,37 @@
     }
 
     #[test]
+    fn identical_malformed_tool_calls_are_counted_as_repeats() {
+        let mut ctx = TurnContext::new();
+        let call = crate::tools::ToolCall {
+            name: "replace_file_content".to_string(),
+            arguments: serde_json::json!({"path":"src/store.ts","edits":"[]"}),
+        };
+
+        assert!(!super::turn_engine::record_malformed_call(
+            &mut ctx,
+            "ignored for parsed calls",
+            std::slice::from_ref(&call)
+        ));
+        assert!(super::turn_engine::record_malformed_call(
+            &mut ctx,
+            "ignored for parsed calls",
+            std::slice::from_ref(&call)
+        ));
+        assert_eq!(ctx.consecutive_malformed_calls, 2);
+        assert_eq!(ctx.malformed_calls, 2);
+        assert!(!super::turn_engine::record_malformed_call(
+            &mut ctx,
+            "ignored for parsed calls",
+            &[crate::tools::ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({"path":"src/other.ts","edits":"[]"}),
+            }]
+        ));
+        assert_eq!(ctx.consecutive_malformed_calls, 1);
+    }
+
+    #[test]
     fn below_the_malformed_call_budget_does_not_trip() {
         let mut ctx = TurnContext::new();
         ctx.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS - 1;
