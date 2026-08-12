@@ -17,6 +17,14 @@ pub struct ActivitySnapshot {
     pub animated: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationCell {
+    Empty,
+    Tail,
+    Middle,
+    Lead,
+}
+
 pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> ActivitySnapshot {
     let action_required = matches!(
         status,
@@ -94,19 +102,38 @@ pub fn sanitize_session_name(raw: &str, max_chars: usize) -> String {
     }
 }
 
-pub fn animation_cells(frame: u64, width: usize) -> Vec<bool> {
+pub fn animation_trail(frame: u64, width: usize) -> Vec<AnimationCell> {
     if width == 0 {
         return Vec::new();
     }
 
-    let center = (frame as usize) % (width * 2).saturating_sub(2).max(1);
-    let reflected = if center >= width {
-        width * 2 - 2 - center
+    let period = width.saturating_mul(2).saturating_sub(2).max(1);
+    let phase = (frame as usize) % period;
+    let reflected = if phase >= width {
+        width * 2 - 2 - phase
     } else {
-        center
+        phase
     };
+    let trail_direction = if reflected == 0 {
+        1isize
+    } else if reflected + 1 >= width {
+        -1
+    } else if phase < width.saturating_sub(1) {
+        -1
+    } else {
+        1
+    };
+
     (0..width)
-        .map(|index| index.abs_diff(reflected) <= 1)
+        .map(|index| {
+            let offset = index as isize - reflected as isize;
+            match offset * trail_direction {
+                0 => AnimationCell::Lead,
+                1 => AnimationCell::Middle,
+                2 => AnimationCell::Tail,
+                _ => AnimationCell::Empty,
+            }
+        })
         .collect()
 }
 
@@ -128,7 +155,8 @@ pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64)
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivityKind, animation_cells, classify_activity, format_terminal_title,
+        ActivityKind, AnimationCell, animation_trail, classify_activity,
+        format_terminal_title,
         sanitize_session_name,
     };
     use crate::app::AppStatus;
@@ -167,12 +195,47 @@ mod tests {
     }
 
     #[test]
-    fn animation_cells_reach_both_edges() {
-        let first = animation_cells(0, 12);
-        let later = animation_cells(8, 12);
-        assert!(first.iter().any(|cell| *cell));
-        assert!(later.iter().any(|cell| *cell));
-        assert_ne!(first, later);
+    fn animation_trail_marks_lead_middle_and_tail() {
+        assert_eq!(
+            animation_trail(2, 6),
+            vec![
+                AnimationCell::Tail,
+                AnimationCell::Middle,
+                AnimationCell::Lead,
+                AnimationCell::Empty,
+                AnimationCell::Empty,
+                AnimationCell::Empty,
+            ]
+        );
+    }
+
+    #[test]
+    fn animation_trail_keeps_three_roles_visible_at_bounce_edges() {
+        let left = animation_trail(0, 6);
+        let right = animation_trail(5, 6);
+
+        assert_eq!(
+            left,
+            vec![
+                AnimationCell::Lead,
+                AnimationCell::Middle,
+                AnimationCell::Tail,
+                AnimationCell::Empty,
+                AnimationCell::Empty,
+                AnimationCell::Empty,
+            ]
+        );
+        assert_eq!(
+            right,
+            vec![
+                AnimationCell::Empty,
+                AnimationCell::Empty,
+                AnimationCell::Empty,
+                AnimationCell::Tail,
+                AnimationCell::Middle,
+                AnimationCell::Lead,
+            ]
+        );
     }
 
     #[test]

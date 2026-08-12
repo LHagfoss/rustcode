@@ -19,7 +19,9 @@ use modals::{
 };
 use tool_result::{render_file_preview, render_tool_result};
 
-use crate::app::activity::{ActivityKind, animation_cells, classify_activity};
+use crate::app::activity::{
+    ActivityKind, AnimationCell, animation_trail, classify_activity,
+};
 use crate::app::{AppState, AppStatus, ChatMessage, HoverTarget, NoticeKind};
 use ratatui::{
     Frame,
@@ -714,7 +716,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         .unwrap_or_default()
         .as_millis() as u64
         / 100;
-    let cells = animation_cells(animation_frame, 6);
+    let cells = animation_trail(animation_frame, 6);
     let action_detail = state
         .pending_tool_confirmation
         .as_ref()
@@ -728,16 +730,20 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         });
 
     let mut left_spans = Vec::new();
-    for active in &cells {
-        let (symbol, color) = match activity.kind {
-            ActivityKind::ActionRequired => ("!", Color::Yellow),
-            ActivityKind::Ready => ("◦", COLOR_MUTED()),
-            _ if *active => ("●", COLOR_PRIMARY()),
-            _ => ("◦", COLOR_MUTED()),
+    for cell in &cells {
+        let (symbol, color, modifier) = match activity.kind {
+            ActivityKind::ActionRequired => ("!", Color::Yellow, Modifier::empty()),
+            ActivityKind::Ready => ("◦", COLOR_MUTED(), Modifier::empty()),
+            _ => match cell {
+                AnimationCell::Lead => ("●", COLOR_PRIMARY(), Modifier::empty()),
+                AnimationCell::Middle => ("●", COLOR_PRIMARY(), Modifier::DIM),
+                AnimationCell::Tail => ("○", COLOR_MUTED(), Modifier::empty()),
+                AnimationCell::Empty => ("◦", COLOR_MUTED(), Modifier::empty()),
+            },
         };
         left_spans.push(Span::styled(
             symbol,
-            get_themed_style(color, COLOR_BG(), Modifier::empty(), show_picker),
+            get_themed_style(color, COLOR_BG(), modifier, show_picker),
         ));
     }
 
@@ -1054,8 +1060,14 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     ]);
 
     let title_right = Line::from(vec![
-        Span::styled(format!("[{mode_label_str}] "), Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("[{model_str}] "), Style::default().fg(COLOR_MUTED())),
+        Span::styled(
+            format!(" {mode_label_str} "),
+            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("[{model_str}] "),
+            Style::default().fg(COLOR_MUTED()),
+        ),
     ]);
 
     let footer_hints = Line::from(vec![
