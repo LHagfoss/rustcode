@@ -1401,6 +1401,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             ));
                                         }
                                         "/clear" => {
+                                            s.history_display_start = s.history.len();
                                             s.current_response.clear();
                                             s.current_token_usage = None;
                                             s.status = crate::app::AppStatus::Idle;
