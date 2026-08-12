@@ -21,6 +21,9 @@ impl ColorSpec {
 
 fn parse_hex_color(hex: &str) -> Option<Color> {
     let s = hex.trim_start_matches('#');
+    if s.eq_ignore_ascii_case("reset") || s.eq_ignore_ascii_case("none") || s.eq_ignore_ascii_case("transparent") {
+        return Some(Color::Reset);
+    }
     if s.len() == 6 {
         let r = u8::from_str_radix(&s[0..2], 16).ok()?;
         let g = u8::from_str_radix(&s[2..4], 16).ok()?;
@@ -99,7 +102,7 @@ static BUILTIN_THEMES: &[(&str, &str)] = &[
         "default.toml",
         r##"name = "default"
 description = "Default dark palette"
-bg = "#15171a"
+bg = "reset"
 panel = "#1a1d20"
 element = "#22262a"
 text = "#f0e5de"
