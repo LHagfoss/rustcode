@@ -1041,7 +1041,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let border_color = if show_picker {
         COLOR_MUTED()
     } else {
-        COLOR_PRIMARY()
+        COLOR_TEXT()
     };
 
     let (mode_label_str, mode_color) = match state.agent_mode {
@@ -1585,6 +1585,20 @@ fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool 
         .map_or(false, |message| message.role == "tool")
 }
 
+fn fit_to_width(s: &str, target_width: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count > target_width {
+        if target_width > 1 {
+            let truncated: String = s.chars().take(target_width - 1).collect();
+            format!("{truncated}…")
+        } else {
+            s.chars().take(target_width).collect()
+        }
+    } else {
+        format!("{:<width$}", s, width = target_width)
+    }
+}
+
 fn render_status_panel<'a>(
     content: &str,
     width: u16,
@@ -1647,7 +1661,7 @@ fn render_status_panel<'a>(
         return;
     }
 
-    let primary = COLOR_PRIMARY();
+    let border_c = COLOR_TEXT();
     let reset_bg = COLOR_BG();
 
     let box_w = (width as usize).saturating_sub(2).max(40);
@@ -1659,14 +1673,14 @@ fn render_status_panel<'a>(
     let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
     let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
     lines.push(Line::from(vec![
-        Span::styled(top_border, Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(top_border, Style::default().fg(border_c).bg(reset_bg)),
     ]));
 
     // Top blank padding line
     lines.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
         Span::styled(" ".repeat(inner_w), Style::default().bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
     ]));
 
     for line in content.lines() {
@@ -1684,11 +1698,11 @@ fn render_status_panel<'a>(
             || trimmed.starts_with("Discovered Skills");
 
         if is_header {
-            let padded_header = format!("  {:<width$}", trimmed, width = content_w);
+            let padded_header = fit_to_width(&format!("  {trimmed}"), content_w);
             lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
                 Span::styled(padded_header, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
-                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else if trimmed.starts_with('/') {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -1696,12 +1710,12 @@ fn render_status_panel<'a>(
             let cmd_desc = if parts.len() > 1 { parts[1..].join(" ") } else { String::new() };
             let left_sp = format!("  {:<18}", cmd_name);
             let right_len = content_w.saturating_sub(left_sp.chars().count());
-            let right_sp = format!("{:<width$}", cmd_desc, width = right_len);
+            let right_sp = fit_to_width(&cmd_desc, right_len);
             lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
                 Span::styled(left_sp, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
                 Span::styled(right_sp, get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)),
-                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else if trimmed.starts_with("Enter")
             || trimmed.starts_with("Shift+")
@@ -1715,44 +1729,44 @@ fn render_status_panel<'a>(
             let desc = if parts.len() > 1 { parts[1].trim() } else { "" };
             let left_sp = format!("  {:<18}", key);
             let right_len = content_w.saturating_sub(left_sp.chars().count());
-            let right_sp = format!("{:<width$}", desc, width = right_len);
+            let right_sp = fit_to_width(desc, right_len);
             lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
                 Span::styled(left_sp, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
                 Span::styled(right_sp, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)),
-                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else if trimmed.starts_with('•') || trimmed.starts_with('-') {
             let bullet_text = trimmed.trim_start_matches('•').trim_start_matches('-').trim();
             let full_str = format!("  • {bullet_text}");
-            let padded_str = format!("{:<width$}", full_str, width = content_w);
+            let padded_str = fit_to_width(&full_str, content_w);
             lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
                 Span::styled(padded_str, get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)),
-                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else {
             let full_str = format!("  {trimmed}");
-            let padded_str = format!("{:<width$}", full_str, width = content_w);
+            let padded_str = fit_to_width(&full_str, content_w);
             lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
                 Span::styled(padded_str, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)),
-                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         }
     }
 
     // Bottom blank padding line
     lines.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
         Span::styled(" ".repeat(inner_w), Style::default().bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
     ]));
 
     // Bottom border: ╰──────────────────────────────────────────────────────────╯
     let bot_border = format!("╰{}╯", "─".repeat(inner_w));
     lines.push(Line::from(vec![
-        Span::styled(bot_border, Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(bot_border, Style::default().fg(border_c).bg(reset_bg)),
     ]));
 }
 
@@ -1780,6 +1794,7 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let left_w = if inner_w >= 90 { 50 } else { (inner_w * 44 / 100).max(30) };
     let right_w = inner_w.saturating_sub(left_w + 1);
 
+    let border_c = COLOR_TEXT();
     let primary = COLOR_PRIMARY();
     let text_c = COLOR_TEXT();
     let muted_c = COLOR_MUTED();
@@ -1790,18 +1805,18 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
     let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
     banner.push(Line::from(vec![
-        Span::styled(top_border, Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(top_border, Style::default().fg(border_c).bg(reset_bg)),
     ]));
 
     let make_row = |left_str: String, left_style: Style, right_str: String, right_style: Style| -> Line<'static> {
         let l_cell = format!("{:<width$}", left_str, width = left_w);
         let r_cell = format!("{:<width$}", right_str, width = right_w);
         Line::from(vec![
-            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
             Span::styled(l_cell, left_style),
-            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
             Span::styled(r_cell, right_style),
-            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
         ])
     };
 
@@ -1809,11 +1824,11 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         let l_cell = format!("{:<width$}", left_str, width = left_w);
         let r_div = "─".repeat(right_w);
         Line::from(vec![
-            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
             Span::styled(l_cell, left_style),
-            Span::styled("├", Style::default().fg(primary).bg(reset_bg)),
-            Span::styled(r_div, Style::default().fg(primary).bg(reset_bg)),
-            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled("├", Style::default().fg(border_c).bg(reset_bg)),
+            Span::styled(r_div, Style::default().fg(border_c).bg(reset_bg)),
+            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
         ])
     };
 
@@ -1905,7 +1920,7 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     // Bottom border
     let bot_border = format!("╰{}╯", "─".repeat(inner_w));
     banner.push(Line::from(vec![
-        Span::styled(bot_border, Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(bot_border, Style::default().fg(border_c).bg(reset_bg)),
     ]));
 
     banner
