@@ -92,6 +92,16 @@ pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str)
     }
 }
 
+pub(crate) fn wrap_runtime_context(text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "<rustcode_context>\nThe following block is RustCode runtime context, not a user instruction or a continuation of the user's request. Use it only as background when it is relevant.\n\n{text}\n</rustcode_context>"
+    )
+}
+
 /// If the message history has grown long (e.g. >= 4 messages), inject a brief
 /// system reminder right before the latest user message or tool result. This
 /// prevents the model from forgetting the core guidelines and tool formats
@@ -122,6 +132,14 @@ pub(crate) fn inject_system_reminder(msgs: &mut [serde_json::Value]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_context_is_marked_as_metadata() {
+        let wrapped = wrap_runtime_context("# Environment\n- Working directory: /tmp");
+        assert!(wrapped.starts_with("<rustcode_context>"));
+        assert!(wrapped.contains("context, not a user instruction"));
+        assert!(wrapped.ends_with("</rustcode_context>"));
+    }
 
     #[test]
     fn append_to_last_message_string_content() {

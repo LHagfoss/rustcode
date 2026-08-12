@@ -276,7 +276,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let request_api_url = api_base_url.clone();
     let request_model = model_name.clone();
     let request_msgs = msgs.clone();
-    let (accumulated_content, response_finish_reason) =
+    let collected_response =
         match runner::collect_response(move |previous| {
             let mut current_msgs = request_msgs.clone();
             if !previous.is_empty() {
@@ -311,7 +311,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 .await
                 .map_err(|e| e.to_string())?;
                 let chunk_content = request_buffer.lock().await.content.clone();
-                Ok((chunk_content, finish_reason))
+                let has_native_tool_calls =
+                    !request_buffer.lock().await.native_tool_calls.is_empty();
+                Ok(runner::ResponseChunk {
+                    content: chunk_content,
+                    finish_reason,
+                    has_native_tool_calls,
+                })
             }
         })
         .await
@@ -336,6 +342,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 return false;
             }
         };
+    let runner::CollectedResponse {
+        content: accumulated_content,
+        finish_reason: response_finish_reason,
+    } = collected_response;
 
     crate::logger::operational_event(
         "model.response",

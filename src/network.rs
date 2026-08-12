@@ -19,6 +19,7 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 pub(crate) mod messages;
 pub(crate) use messages::{
     RESPONSE_RESERVE_TOKENS, append_to_last_message, inject_system_reminder, trim_msgs_to_budget,
+    wrap_runtime_context,
 };
 
 #[path = "network/text.rs"]
@@ -1029,7 +1030,7 @@ pub(crate) async fn prepare_turn_request(
     // Attach turn-varying context to the tail so the static system prefix
     // stays cache-stable. Done before budget trimming so its size counts
     // toward the budget.
-    append_to_last_message(&mut msgs, &dynamic_context);
+    append_to_last_message(&mut msgs, &wrap_runtime_context(&dynamic_context));
 
     let budget = volatile_window
         .saturating_sub(RESPONSE_RESERVE_TOKENS)
