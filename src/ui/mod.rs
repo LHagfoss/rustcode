@@ -734,9 +734,9 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
     for active in &cells {
         let (symbol, color) = match activity.kind {
             ActivityKind::ActionRequired => ("!", Color::Yellow),
-            ActivityKind::Ready => ("░", Color::Rgb(40, 48, 54)),
-            _ if *active => ("█", COLOR_PRIMARY()),
-            _ => ("░", Color::Rgb(40, 48, 54)),
+            ActivityKind::Ready => ("◦", COLOR_MUTED()),
+            _ if *active => ("●", COLOR_PRIMARY()),
+            _ => ("◦", COLOR_MUTED()),
         };
         left_spans.push(Span::styled(
             symbol,
@@ -1745,6 +1745,139 @@ fn render_status_panel<'a>(
     }
 }
 
+fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line<'static>> {
+    let mut banner = Vec::new();
+    let version = env!("CARGO_PKG_VERSION");
+    let model_name = model_label(state);
+    let cwd_branch = if state.cwd_and_branch.is_empty() {
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "rustcode".to_string())
+    } else {
+        state.cwd_and_branch.clone()
+    };
+
+    let box_w = total_width.saturating_sub(2).clamp(50, 110);
+    let inner_w = box_w.saturating_sub(2);
+    let left_w = (inner_w * 40 / 100).max(24);
+    let right_w = inner_w.saturating_sub(left_w + 1);
+
+    let primary = COLOR_PRIMARY();
+    let text_c = COLOR_TEXT();
+    let muted_c = COLOR_MUTED();
+    let reset_bg = COLOR_BG();
+
+    // Top border
+    let title_str = format!("RustCode v{version}");
+    let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
+    let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
+    banner.push(Line::from(vec![
+        Span::styled(top_border, Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 1: Left: "Welcome back!" | Right: "Tips for getting started"
+    let left1 = format!("  {:<width$}", "Welcome back!", width = left_w.saturating_sub(2));
+    let right1 = format!(" {:<width$}", "Tips for getting started", width = right_w.saturating_sub(1));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left1, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right1, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 2: Left: "      ▄     ▄" | Right: "Run /help to view all slash commands"
+    let left2 = format!("  {:<width$}", "      ▄     ▄", width = left_w.saturating_sub(2));
+    let right2 = format!(" {:<width$}", "Run /help to view all slash commands", width = right_w.saturating_sub(1));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left2, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right2, Style::default().fg(text_c).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 3: Left: "     ▐██   ██▌" | Right: "Type @ to mention and link project files"
+    let left3 = format!("  {:<width$}", "     ▐██   ██▌", width = left_w.saturating_sub(2));
+    let right3 = format!(" {:<width$}", "Type @ to mention and link project files", width = right_w.saturating_sub(1));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left3, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right3, Style::default().fg(text_c).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 4: Left: "    ▄█████████▄" | Right: "──────────────────────────────────────"
+    let left4 = format!("  {:<width$}", "    ▄█████████▄", width = left_w.saturating_sub(2));
+    let right4 = format!(" {}", "─".repeat(right_w.saturating_sub(1)));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left4, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("├", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right4, Style::default().fg(primary).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 5: Left: "   ▐█ ▀█████▀ █▌" | Right: "Shortcuts & Features"
+    let left5 = format!("  {:<width$}", "   ▐█ ▀█████▀ █▌", width = left_w.saturating_sub(2));
+    let right5 = format!(" {:<width$}", "Shortcuts & Features", width = right_w.saturating_sub(1));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left5, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right5, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 6: Left: "    ▀ ▄▀ ▀ ▀▄ ▀" | Right: "/model select model · /theme switch theme"
+    let left6 = format!("  {:<width$}", "    ▀ ▄▀ ▀ ▀▄ ▀", width = left_w.saturating_sub(2));
+    let right6 = format!(" {:<width$}", "/model select model · /theme switch theme", width = right_w.saturating_sub(1));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left6, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right6, Style::default().fg(muted_c).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 7: Left: "<model> · <mode>" | Right: "Tab autocomplete · Shift+Enter newline"
+    let mode_str = match state.agent_mode {
+        crate::config::AgentMode::Build => "build",
+        crate::config::AgentMode::Plan => "plan",
+    };
+    let info_left = format!("{model_name} · {mode_str}");
+    let left7 = format!("  {:<width$}", info_left, width = left_w.saturating_sub(2));
+    let right7 = format!(" {:<width$}", "Tab autocomplete · Shift+Enter newline", width = right_w.saturating_sub(1));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left7, Style::default().fg(muted_c).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right7, Style::default().fg(muted_c).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Row 8: Left: "<cwd_branch>" | Right: "Built-in MCP tools, search & execution"
+    let left8_raw = cwd_branch.chars().take(left_w.saturating_sub(3)).collect::<String>();
+    let left8 = format!("  {:<width$}", left8_raw, width = left_w.saturating_sub(2));
+    let right8 = format!(" {:<width$}", "Built-in MCP tools, search & execution", width = right_w.saturating_sub(1));
+    banner.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(left8, Style::default().fg(muted_c).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(right8, Style::default().fg(muted_c).bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Bottom border
+    let bot_border = format!("╰{}╯", "─".repeat(inner_w));
+    banner.push(Line::from(vec![
+        Span::styled(bot_border, Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    banner
+}
+
 fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
     let inner_area = chunks[0].inner(Margin {
         vertical: 0,
@@ -1783,24 +1916,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 
     if state.history.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("✦ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-            Span::styled("RustCode AI Assistant", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
-        ]));
-        lines.push(Line::from(Span::styled(
-            "Ask anything or type / for commands...",
-            Style::default().fg(COLOR_MUTED()).add_modifier(Modifier::ITALIC),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Shortcuts: ", Style::default().fg(COLOR_MUTED())),
-            Span::styled(" /model ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-            Span::styled("models  · ", Style::default().fg(COLOR_MUTED())),
-            Span::styled(" /theme ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-            Span::styled("themes  · ", Style::default().fg(COLOR_MUTED())),
-            Span::styled(" /help ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-            Span::styled("commands", Style::default().fg(COLOR_MUTED())),
-        ]));
+        lines.extend(build_claude_startup_banner(state, inner_area.width as usize));
         lines.push(Line::from(""));
     }
 
