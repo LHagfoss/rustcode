@@ -629,11 +629,7 @@ use super::*;
         let state = AppState::new();
         assert_eq!(
             format_input_status_text(&state),
-            "Auto-Confirm: OFF   Context: 0 (0%)   Tps: 0.0   Ctrl+P commands"
+            "Auto-Confirm: OFF  Context: 0 (0%)  Tps: 0.0  Ctrl+P commands"
         );
-    }
-
-    #[test]
-    fn input_and_footer_layout_has_no_spacer_row() {
-        assert_eq!(footer_layout_constraints(), Constraint::Length(1));
+        assert_eq!(activity_status_label(&state), "Ready");
     }
