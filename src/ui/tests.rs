@@ -625,6 +625,15 @@ use super::*;
     }
 
     #[test]
+    fn input_bar_contains_live_status_and_command_hint() {
+        let state = AppState::new();
+        assert_eq!(
+            format_input_status_text(&state),
+            "Auto-Confirm: OFF   Context: 0 (0%)   Tps: 0.0   Ctrl+P commands"
+        );
+    }
+
+    #[test]
     fn input_and_footer_layout_has_no_spacer_row() {
         assert_eq!(footer_layout_constraints(), Constraint::Length(1));
     }

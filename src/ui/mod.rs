@@ -768,6 +768,40 @@ fn input_footer_hint_text() -> &'static str {
     "Ctrl+P commands"
 }
 
+fn context_usage(state: &AppState) -> (u32, Option<u32>) {
+    if let Some(usage) = &state.current_token_usage {
+        return (usage.total_tokens, usage.cached_tokens);
+    }
+
+    if let Some(usage) = state
+        .history
+        .iter()
+        .rev()
+        .find_map(|message| message.token_usage.as_ref())
+    {
+        return (usage.total_tokens, usage.cached_tokens);
+    }
+
+    let chars: usize = state.history.iter().map(|message| message.content.len()).sum();
+    ((chars / 4) as u32, None)
+}
+
+fn format_input_status_text(state: &AppState) -> String {
+    let (total_tokens, cached_tokens) = context_usage(state);
+    let mut status = vec![
+        format!("Auto-Confirm: {}", state.auto_confirm_status_text()),
+        format_context_info(total_tokens, state.active_context_window(), cached_tokens),
+        format_tps_info(current_tps(state)),
+    ];
+
+    if let Some(quota) = state.model_quota_remaining {
+        status.push(format!("Quota: {quota:.0}%"));
+    }
+
+    status.push(input_footer_hint_text().to_string());
+    status.join("   ")
+}
+
 fn footer_layout_constraints() -> Constraint {
     Constraint::Length(1)
 }
@@ -860,93 +894,9 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         ));
     }
 
-    let (total_tokens, cached_tokens) = if let Some(usage) = &state.current_token_usage {
-        (usage.total_tokens, usage.cached_tokens)
-    } else {
-        let last_usage = state
-            .history
-            .iter()
-            .rev()
-            .find_map(|m| m.token_usage.as_ref());
-        if let Some(u) = last_usage {
-            (u.total_tokens, u.cached_tokens)
-        } else {
-            let chars: usize = state.history.iter().map(|m| m.content.len()).sum();
-            ((chars / 4) as u32, None)
-        }
-    };
-
-    let mut right_spans = Vec::new();
-    right_spans.push(Span::styled(
-        "   Auto-Confirm: ",
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ));
-    right_spans.push(Span::styled(
-        state.auto_confirm_status_text(),
-        get_themed_style(
-            if state.auto_confirm { COLOR_PRIMARY() } else { COLOR_MUTED() },
-            COLOR_BG(),
-            if state.auto_confirm { Modifier::BOLD } else { Modifier::empty() },
-            show_picker,
-        ),
-    ));
-    right_spans.push(Span::styled(
-        format!(
-            "   {}",
-            format_context_info(total_tokens, state.active_context_window(), cached_tokens)
-        ),
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ));
-    right_spans.push(Span::styled(
-        format!("   {}", format_tps_info(current_tps(state))),
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ));
-
-    if let Some(quota) = state.model_quota_remaining {
-        let color = if quota > 50.0 {
-            COLOR_PRIMARY()
-        } else if quota > 20.0 {
-            Color::Yellow
-        } else {
-            Color::Red
-        };
-        right_spans.push(Span::styled(
-            "   Quota: ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        right_spans.push(Span::styled(
-            format!("{quota:.0}%"),
-            get_themed_style(color, COLOR_BG(), Modifier::BOLD, show_picker),
-        ));
-    }
-
-    right_spans.push(Span::styled("   ", Style::default()));
-    right_spans.push(Span::styled(
-        "ctrl+p",
-        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-    ));
-    right_spans.push(Span::styled(
-        " commands",
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ));
-
-    let footer_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Fill(1),
-        ])
-        .split(footer_area);
-
     f.render_widget(
         Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG())),
-        footer_chunks[0],
-    );
-    f.render_widget(
-        Paragraph::new(Line::from(right_spans))
-            .alignment(ratatui::layout::Alignment::Right)
-            .style(Style::default().bg(COLOR_BG())),
-        footer_chunks[1],
+        footer_area,
     );
 }
 
@@ -1045,12 +995,10 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         ),
     ]);
 
-    let footer_hints = Line::from(vec![
-        Span::styled(
-            input_footer_hint_text(),
-            Style::default().fg(COLOR_MUTED()),
-        ),
-    ]);
+    let footer_hints = Line::from(vec![Span::styled(
+        format_input_status_text(state),
+        Style::default().fg(COLOR_MUTED()),
+    )]);
 
     let block = Block::default()
         .borders(Borders::ALL)
