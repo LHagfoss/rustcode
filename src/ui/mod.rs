@@ -1762,13 +1762,12 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         state.cwd_and_branch.clone()
     };
 
-    let box_w = total_width.saturating_sub(4).clamp(65, 120);
+    let box_w = total_width.saturating_sub(2).max(65);
     let inner_w = box_w.saturating_sub(2);
     let left_w = if inner_w >= 90 { 50 } else { (inner_w * 44 / 100).max(30) };
     let right_w = inner_w.saturating_sub(left_w + 1);
 
     let primary = COLOR_PRIMARY();
-    let secondary = COLOR_SECONDARY();
     let text_c = COLOR_TEXT();
     let muted_c = COLOR_MUTED();
     let reset_bg = COLOR_BG();
@@ -1795,7 +1794,7 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
 
     let make_divider_row = |left_str: String, left_style: Style| -> Line<'static> {
         let l_cell = format!("{:<width$}", left_str, width = left_w);
-        let r_div = format!(" {}", "─".repeat(right_w.saturating_sub(1)));
+        let r_div = "─".repeat(right_w);
         Line::from(vec![
             Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
             Span::styled(l_cell, left_style),
@@ -1826,34 +1825,34 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         "  Run /help to view all slash commands".to_string(), Style::default().fg(text_c).bg(reset_bg),
     ));
 
-    // Rows 3..6: 4-line RustCode logo on Left
+    // Rows 3..6: 4-line RustCode logo on Left in WHITE
     let logo_width = 45;
     let logo_pad = left_w.saturating_sub(logo_width) / 2;
 
     // Row 3: Logo line 0 | Right: "  Type @ to mention and link project files"
     let l_line0 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[0]) } else { "  rustcode".to_string() };
     banner.push(make_row(
-        l_line0, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        l_line0, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
         "  Type @ to mention and link project files".to_string(), Style::default().fg(text_c).bg(reset_bg),
     ));
 
-    // Row 4: Logo line 1 | Right: Divider Line ──────
+    // Row 4: Logo line 1 | Right: Divider Line ────────────────
     let l_line1 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[1]) } else { "".to_string() };
     banner.push(make_divider_row(
-        l_line1, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        l_line1, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
     ));
 
     // Row 5: Logo line 2 | Right: "  Shortcuts & Options"
     let l_line2 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[2]) } else { "".to_string() };
     banner.push(make_row(
-        l_line2, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        l_line2, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
         "  Shortcuts & Options".to_string(), Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD),
     ));
 
     // Row 6: Logo line 3 | Right: "  /model select model  ·  /theme switch theme"
     let l_line3 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[3]) } else { "".to_string() };
     banner.push(make_row(
-        l_line3, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        l_line3, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
         "  /model select model  ·  /theme switch theme".to_string(), Style::default().fg(muted_c).bg(reset_bg),
     ));
 
