@@ -725,7 +725,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         .unwrap_or_default()
         .as_millis() as u64
         / 100;
-    let cells = animation_cells(animation_frame, 12);
+    let cells = animation_cells(animation_frame, 6);
     let action_detail = state
         .pending_tool_confirmation
         .as_ref()
@@ -1977,7 +1977,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
                 Span::styled(
                     " ".repeat(content_width + 4),
-                    get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ]));
 
@@ -1990,7 +1990,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     ),
                     Span::styled(
                         format!("  {padded_text}  "),
-                        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
+                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                     ),
                 ]));
             }
@@ -2003,7 +2003,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 ),
                 Span::styled(
                     " ".repeat(content_width + 4),
-                    get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
             ]));
             lines.push(Line::from(""));
@@ -2317,7 +2317,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             Vec::new()
         };
 
-    if state.history.is_empty() {
+    let input_box_area = if state.history.is_empty() {
         let (prompt_box_area, inner_area) = render_welcome_screen(f, state);
 
         if !filtered_cmds.is_empty() {
@@ -2331,6 +2331,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
                 ratatui::layout::Rect::new(inner_area.x, popup_y, inner_area.width, popup_height);
             render_popup_menu(f, state, &filtered_cmds, popup_area);
         }
+        prompt_box_area
     } else {
         let inner_width = f.area().width.saturating_sub(6).max(1);
         let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
@@ -2392,46 +2393,48 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
                 ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
             render_at_popup_menu(f, state, &at_files, popup_area);
         }
-    }
+
+        chunks[2]
+    };
 
     if state.show_model_picker {
-        render_model_picker_modal(f, state);
+        render_model_picker_modal(f, state, input_box_area);
     }
 
     if state.show_theme_picker {
-        render_theme_picker_modal(f, state);
+        render_theme_picker_modal(f, state, input_box_area);
     }
 
     if state.show_command_picker {
-        render_command_picker_modal(f, state);
+        render_command_picker_modal(f, state, input_box_area);
     }
 
     if state.show_history_picker {
-        render_history_picker_modal(f, state);
+        render_history_picker_modal(f, state, input_box_area);
     }
 
     if state.show_mcp_config {
-        render_mcp_config_modal(f, state);
+        render_mcp_config_modal(f, state, input_box_area);
     }
 
     if state.status == AppStatus::AwaitingToolConfirmation {
-        render_tool_confirmation_modal(f, state);
+        render_tool_confirmation_modal(f, state, input_box_area);
     }
 
     if state.status == AppStatus::AwaitingQuestion {
-        render_question_modal(f, state);
+        render_question_modal(f, state, input_box_area);
     }
 
     if state.status == AppStatus::VerbosityPicker {
-        render_verbosity_picker_modal(f, state);
+        render_verbosity_picker_modal(f, state, input_box_area);
     }
 
     if state.status == AppStatus::ThinkingPicker {
-        render_thinking_picker_modal(f, state);
+        render_thinking_picker_modal(f, state, input_box_area);
     }
 
     if state.status == AppStatus::ProtocolPicker {
-        render_protocol_picker_modal(f, state);
+        render_protocol_picker_modal(f, state, input_box_area);
     }
 
     // Painted last so it sits on top of everything, like a native selection.
