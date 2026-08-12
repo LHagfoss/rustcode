@@ -631,5 +631,14 @@ use super::*;
             format_input_status_text(&state),
             "Auto-Confirm: OFF  Context: 0 (0%)  Tps: 0.0  Ctrl+P commands"
         );
-        assert_eq!(activity_status_label(&state), "Ready");
+        assert_eq!(activity_status_label(&state), "Idle");
+        assert_eq!(activity_status_line(&state, false).spans.last().unwrap().content, " ");
+    }
+
+    #[test]
+    fn streaming_status_words_rotate_every_three_seconds() {
+        assert_eq!(streaming_status_word(0), "Thinking...");
+        assert_eq!(streaming_status_word(2), "Thinking...");
+        assert_eq!(streaming_status_word(3), "Analyzing code...");
+        assert_eq!(streaming_status_word(27), "Querying knowledge base...");
     }
