@@ -565,6 +565,24 @@ use super::*;
     }
 
     #[test]
+    fn new_chat_separator_spans_width_and_centers_label() {
+        use super::push_new_chat_separator;
+        use unicode_width::UnicodeWidthStr;
+
+        let mut lines = Vec::new();
+        push_new_chat_separator(&mut lines, 40, false);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].width(), 40);
+        assert_eq!(lines[0].spans[1].content, " ✨ NEW CHAT ");
+        assert_eq!(lines[1].width(), 0);
+
+        let left = lines[0].spans[0].content.width();
+        let right = lines[0].spans[2].content.width();
+        assert!((left as isize - right as isize).abs() <= 1);
+    }
+
+    #[test]
     fn harness_recovery_notices_are_hidden_from_transcript() {
         assert!(super::is_hidden_system_notice(
             "[harness: stopped after 10 tool round(s) — 4 consecutive malformed tool-call blocks the harness could not parse. The task is NOT complete. Review the transcript above; if the remaining work is still valid, resume it in a new turn.]"
