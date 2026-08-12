@@ -1090,6 +1090,8 @@ pub fn start_new_session(s: &mut AppState) {
     if crate::config::session_has_content(&s.history) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
+    s.history
+        .push(ChatMessage::new("system", "✨ New chat started"));
 }
 
 /// Fill in the active profile's context window from the provider when the
@@ -2048,7 +2050,13 @@ mod tests {
         assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
         {
             let s = state.lock().await;
-            assert!(s.history == original_history);
+            assert_eq!(s.history.len(), original_history.len() + 1);
+            for (actual, expected) in s.history.iter().zip(&original_history) {
+                assert_eq!(actual.role, expected.role);
+                assert_eq!(actual.content, expected.content);
+            }
+            assert_eq!(s.history.last().unwrap().role, "system");
+            assert!(s.history.last().unwrap().content.contains("New chat"));
             assert_eq!(s.history_display_start, 0);
         }
     }
