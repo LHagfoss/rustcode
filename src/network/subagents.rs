@@ -160,13 +160,13 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-                let chunk_content = request_buffer.lock().await.content.clone();
-                let has_native_tool_calls =
-                    !request_buffer.lock().await.native_tool_calls.is_empty();
+                let buffer = request_buffer.lock().await;
                 Ok(super::runner::ResponseChunk {
-                    content: chunk_content,
+                    content: buffer.content.clone(),
                     finish_reason,
-                    has_native_tool_calls,
+                    has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
+                    thought_time_ms: buffer.thought_time_ms,
+                    thought_tokens: buffer.thought_tokens,
                 })
             }
         })
