@@ -68,7 +68,7 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
         },
         AppStatus::Idle => ActivitySnapshot {
             kind: ActivityKind::Ready,
-            label: "Ready".to_string(),
+            label: "Idle".to_string(),
             detail: None,
             animated: false,
         },
@@ -140,7 +140,7 @@ pub fn animation_trail(frame: u64, width: usize) -> Vec<AnimationCell> {
 pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64) -> String {
     let session = sanitize_session_name(session_name, 32);
     let prefix = match kind {
-        ActivityKind::Ready => "rustcode · Ready".to_string(),
+        ActivityKind::Ready => "rustcode · Idle".to_string(),
         ActivityKind::Queued => "[>] Queued".to_string(),
         ActivityKind::Working => {
             let marker = ["·", "••", "••", "•••", "••", "·"][(frame as usize) % 6];
@@ -250,7 +250,12 @@ mod tests {
         );
         assert_eq!(
             format_terminal_title(ActivityKind::Ready, "bench", 0),
-            "rustcode · Ready · bench"
+            "rustcode · Idle · bench"
         );
+    }
+
+    #[test]
+    fn idle_activity_is_labeled_idle() {
+        assert_eq!(classify_activity(&AppStatus::Idle, &[]).label, "Idle");
     }
 }
