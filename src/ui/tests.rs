@@ -355,6 +355,23 @@ use super::*;
     }
 
     #[test]
+    fn thought_parser_collapses_multiple_blocks() {
+        let (answer, preview) = split_thought_blocks(
+            "<think>First useful thought\nmore detail</think>answer\n<think>Second thought</think>",
+        );
+        assert_eq!(answer, "answer");
+        assert_eq!(preview.as_deref(), Some("First useful thought"));
+    }
+
+    #[test]
+    fn thought_parser_drops_unclosed_block_from_answer() {
+        let (answer, preview) =
+            split_thought_blocks("before\n<think>Planning the next action");
+        assert_eq!(answer, "before");
+        assert_eq!(preview.as_deref(), Some("Planning the next action"));
+    }
+
+    #[test]
     fn thought_preview_keeps_short_text_unchanged() {
         assert_eq!(
             truncate_thought_preview("Analyzing Paste Events", 24),
