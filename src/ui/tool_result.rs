@@ -11,13 +11,6 @@ use super::{
     render_unified_diff, wrap_code_spans,
 };
 
-/// Read, search and generic results are chatty and easy to re-request, so they
-/// stay tightly capped in the transcript.
-const MAX_RENDERED_TOOL_LINES: usize = 5;
-/// Command output is the one result the user usually has to audit themselves
-/// (a build log, a test run), so it gets a much larger budget.
-const MAX_RENDERED_COMMAND_LINES: usize = 24;
-
 fn language_for_path(path: &str) -> &str {
     Path::new(path)
         .extension()
@@ -86,74 +79,7 @@ pub(super) fn render_tool_result<'a>(
         _ => render_generic_result(result, show_picker),
     };
 
-    let is_diff_result = matches!(
-        tool_name,
-        "replace_file_content"
-            | "multi_replace_file_content"
-            | "write_to_file"
-            | "delete_file"
-            | "move_file"
-            | "copy_file"
-    ) && result.contains("```diff");
-    if is_diff_result {
-        return lines;
-    }
-
-    if tool_name == "run_command" {
-        // A failed command puts the useful part (the compiler error, the failing
-        // assertion) at the bottom, so keep the tail and pin the status row.
-        let failed = command_exit_code(result).is_some_and(|code| code != 0);
-        let pinned = usize::from(failed && !lines.is_empty());
-        collapse(
-            lines,
-            MAX_RENDERED_COMMAND_LINES,
-            pinned,
-            failed,
-            show_picker,
-        )
-    } else {
-        collapse(lines, MAX_RENDERED_TOOL_LINES, 0, false, show_picker)
-    }
-}
-
-/// Trim `lines` to `cap` rows plus an elision notice. The first `pinned` rows
-/// always survive; `keep_tail` decides whether the surviving remainder is taken
-/// from the start or the end of the body.
-fn collapse<'a>(
-    mut lines: Vec<Line<'a>>,
-    cap: usize,
-    pinned: usize,
-    keep_tail: bool,
-    show_picker: bool,
-) -> Vec<Line<'a>> {
-    if lines.len() <= cap {
-        return lines;
-    }
-    let body_budget = cap.saturating_sub(pinned);
-    let hidden = lines.len() - pinned - body_budget;
-    let notice = Line::from(Span::styled(
-        format!("  … {hidden} more lines"),
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-    ));
-
-    if keep_tail {
-        let body = lines.split_off(lines.len() - body_budget);
-        lines.truncate(pinned);
-        lines.push(notice);
-        lines.extend(body);
-        lines
-    } else {
-        lines.truncate(pinned + body_budget);
-        lines.push(notice);
-        lines
-    }
-}
-
-fn command_exit_code(result: &str) -> Option<i32> {
-    result
-        .lines()
-        .find_map(|raw| raw.strip_prefix("exit code: "))
-        .and_then(|code| code.trim().parse::<i32>().ok())
+    lines
 }
 
 fn render_mutation_result<'a>(result: &str, width: usize, show_picker: bool) -> Vec<Line<'a>> {
@@ -396,10 +322,7 @@ fn render_search_result<'a>(result: &str, _width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        COLOR_MUTED, MAX_RENDERED_COMMAND_LINES, MAX_RENDERED_TOOL_LINES, render_file_preview,
-        render_tool_result,
-    };
+    use super::{COLOR_MUTED, render_file_preview, render_tool_result};
     use ratatui::style::Color;
 
     fn text_of(line: &ratatui::text::Line<'_>) -> String {
@@ -603,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn large_results_are_collapsed_for_transcript_rendering() {
+    fn large_results_keep_all_stored_lines_for_transcript_rendering() {
         let result = (0..350)
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
@@ -616,16 +539,12 @@ mod tests {
             false,
         );
 
-        assert_eq!(lines.len(), MAX_RENDERED_TOOL_LINES + 1);
-        assert!(
-            lines.last().unwrap().spans[0]
-                .content
-                .contains("345 more lines")
-        );
+        assert!(lines.iter().any(|line| text_of(line).contains("line 349")));
+        assert!(!lines.iter().any(|line| text_of(line).contains("more lines")));
     }
 
     #[test]
-    fn command_results_get_a_larger_line_budget_than_read_results() {
+    fn command_and_generic_results_keep_complete_line_counts() {
         let result = (0..350)
             .map(|index| format!("line {index}"))
             .collect::<Vec<_>>()
@@ -645,13 +564,27 @@ mod tests {
             false,
         );
 
-        assert_eq!(command.len(), MAX_RENDERED_COMMAND_LINES + 1);
-        assert!(command.len() > generic.len());
-        assert!(
-            command.last().unwrap().spans[0]
-                .content
-                .contains("326 more lines")
+        assert_eq!(command.len(), generic.len());
+        assert!(command.iter().any(|line| text_of(line).contains("line 349")));
+        assert!(generic.iter().any(|line| text_of(line).contains("line 349")));
+    }
+
+    #[test]
+    fn long_command_results_keep_all_stored_lines() {
+        let result = (0..350)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = render_tool_result(
+            "run_command",
+            &result,
+            80,
+            &crate::app::Verbosity::Low,
+            false,
         );
+
+        assert!(lines.iter().any(|line| text_of(line).contains("line 349")));
+        assert!(!lines.iter().any(|line| text_of(line).contains("more lines")));
     }
 
     #[test]
@@ -669,26 +602,10 @@ mod tests {
             false,
         );
 
-        assert_eq!(lines.len(), MAX_RENDERED_COMMAND_LINES + 1);
         assert!(text_of(&lines[0]).contains("✗ exit 101"));
-        assert!(text_of(&lines[1]).contains("more lines"));
-        // The tail carries the failure reason; the head is boilerplate.
+        assert!(lines.iter().any(|line| text_of(line).contains("line 0")));
+        assert!(lines.iter().any(|line| text_of(line).contains("line 199")));
         assert!(text_of(lines.last().unwrap()).contains("error: build failed"));
-        assert!(!lines.iter().any(|line| text_of(line).contains("line 0")));
-    }
-
-    #[test]
-    fn truncation_notice_has_no_model_directed_instructions() {
-        let result = (0..40)
-            .map(|index| format!("line {index}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let lines = render_tool_result("grep", &result, 80, &crate::app::Verbosity::Low, false);
-        let notice = text_of(lines.last().unwrap());
-
-        assert_eq!(notice.trim(), "… 35 more lines");
-        assert!(!notice.contains("rerun"));
-        assert!(!notice.contains("tool result"));
     }
 
     #[test]
@@ -752,7 +669,7 @@ mod tests {
             false,
         );
 
-        assert!(lines.len() > MAX_RENDERED_TOOL_LINES);
+        assert!(lines.len() > 5);
         assert!(
             !lines
                 .iter()
