@@ -437,11 +437,10 @@ use super::*;
         let mut lines = Vec::new();
         render_status_panel("Session status: 5 messages", 80, false, &mut lines);
 
-        assert_eq!(lines.len(), 2, "info status panel includes header");
+        assert_eq!(lines.len(), 5, "boxed info status panel includes top/bottom borders & padding");
         assert!(lines[0].spans[0].content.contains(">_ RustCode"));
-        assert!(lines[1].spans[0].content.contains("  "));
         assert!(
-            lines[1].spans[1]
+            lines[2].spans[1]
                 .content
                 .contains("Session status: 5 messages")
         );
