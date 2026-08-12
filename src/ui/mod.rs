@@ -1406,6 +1406,7 @@ struct ChatKey {
     hist_len: usize,
     total_len: usize,
     last_len: usize,
+    history_display_start: usize,
     width: u16,
     show_picker: bool,
     copied_recently: Option<(String, bool)>,
@@ -1422,6 +1423,7 @@ fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
         hist_len: state.history.len(),
         total_len: state.history.iter().map(|m| m.content.len()).sum(),
         last_len: state.history.last().map_or(0, |m| m.content.len()),
+        history_display_start: state.history_display_start,
         width,
         show_picker,
         copied_recently: state
@@ -1524,11 +1526,18 @@ fn is_hidden_system_notice(content: &str) -> bool {
 }
 
 fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool {
+    next_visible_message(history, assistant_index).is_some_and(|message| message.role == "tool")
+}
+
+fn next_visible_message(history: &[ChatMessage], index: usize) -> Option<&ChatMessage> {
     history
         .iter()
-        .skip(assistant_index + 1)
+        .skip(index + 1)
         .find(|message| !(message.role == "system" && is_hidden_system_notice(&message.content)))
-        .map_or(false, |message| message.role == "tool")
+}
+
+fn tool_result_needs_assistant_gap(history: &[ChatMessage], tool_index: usize) -> bool {
+    next_visible_message(history, tool_index).is_some_and(|message| message.role == "assistant")
 }
 
 fn fit_to_width(s: &str, target_width: usize) -> String {
@@ -1919,7 +1928,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     let mut lines: Vec<Line> = Vec::new();
     let mut copy_clicks: Vec<(usize, String)> = Vec::new();
 
-    if state.history.is_empty() {
+    let display_start = state.history_display_start.min(state.history.len());
+
+    if display_start == 0 && state.history.is_empty() {
         lines.push(Line::from(""));
         lines.extend(build_claude_startup_banner(state, inner_area.width as usize));
         lines.push(Line::from(""));
@@ -1929,7 +1940,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     // nothing produce a duplicate index; deduped below.
     let mut msg_start_lines: Vec<usize> = Vec::new();
 
-    for (msg_idx, msg) in state.history.iter().enumerate() {
+    for (msg_idx, msg) in state.history.iter().enumerate().skip(display_start) {
         msg_start_lines.push(lines.len());
         if msg.role == "system" {
             // Hide benign intermediate notices and full compaction summary text from TUI display
@@ -2066,11 +2077,11 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     ));
                 }
             }
-            if state
+            let next_is_user = state
                 .history
                 .get(msg_idx + 1)
-                .is_some_and(|next| next.role == "user")
-            {
+                .is_some_and(|next| next.role == "user");
+            if tool_result_needs_assistant_gap(&state.history, msg_idx) || next_is_user {
                 lines.push(Line::from(""));
             }
 
@@ -2192,7 +2203,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         }
     }
 
-    if (state.status == AppStatus::Streaming || state.status == AppStatus::Queued)
+    if display_start < state.history.len()
+        && (state.status == AppStatus::Streaming || state.status == AppStatus::Queued)
         && !state.current_response.is_empty()
     {
         let parsed_tool = crate::tools::parse_tool_call(

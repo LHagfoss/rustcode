@@ -97,9 +97,9 @@ pub async fn handle_enter(
                 check_memory_usage(&mut s);
             }
             "/clear" => {
-                // Visual wipe only: clear streamed response and token usage.
-                // History, cancel-token, session state all stay intact — the
-                // LLM still sees the same chat on next message.
+                // Hide the existing transcript without deleting it. The model
+                // still receives the full history on the next message.
+                s.history_display_start = s.history.len();
                 s.current_response.clear();
                 s.current_token_usage = None;
             }
@@ -226,6 +226,7 @@ pub async fn handle_enter(
                 if let Some(dir) = crate::config::get_active_session_dir(&session_id) {
                     std::fs::remove_dir_all(&dir).ok();
                 }
+                s.history.clear();
                 start_new_session(&mut s);
             }
 
@@ -1066,7 +1067,6 @@ pub fn start_new_session(s: &mut AppState) {
     if crate::config::session_has_content(&s.history) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
-    s.history.clear();
     s.pending_queue.clear();
     s.current_response.clear();
     s.current_token_usage = None;
@@ -1083,9 +1083,13 @@ pub fn start_new_session(s: &mut AppState) {
     s.recent_read_calls.clear();
     s.continuous_mode = false;
     s.tip_index = crate::app::random_tip_index();
+    s.history_display_start = 0;
 
     // Switch to a new active session ID
     s.active_session_id = crate::config::create_new_session(&mut s.config);
+    if crate::config::session_has_content(&s.history) {
+        crate::config::save_session_history(&s.active_session_id, &s.history);
+    }
 }
 
 /// Fill in the active profile's context window from the provider when the
@@ -1207,6 +1211,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     }
 
     s.history = loaded;
+    s.history_display_start = 0;
     s.pending_queue.clear();
     s.current_response.clear();
     s.current_token_usage = None;
@@ -2006,6 +2011,45 @@ mod tests {
                     .contains("Continuous autoloop mode is active")
             );
             assert!(s.input_buffer.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_and_new_preserve_history() {
+        use crate::app::ChatMessage;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let state = Arc::new(Mutex::new(crate::app::state::AppState::new()));
+        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+        let original_history = vec![
+            ChatMessage::new("user", "original prompt"),
+            ChatMessage::new("assistant", "original answer"),
+        ];
+
+        {
+            let mut s = state.lock().await;
+            s.history = original_history.clone();
+            s.input_buffer = "/clear".to_string();
+        }
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        {
+            let s = state.lock().await;
+            assert!(s.history == original_history);
+            assert_eq!(s.history_display_start, s.history.len());
+        }
+
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/new".to_string();
+        }
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        {
+            let s = state.lock().await;
+            assert!(s.history == original_history);
+            assert_eq!(s.history_display_start, 0);
         }
     }
 
