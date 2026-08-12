@@ -1587,7 +1587,7 @@ fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool 
 
 fn render_status_panel<'a>(
     content: &str,
-    _width: u16,
+    width: u16,
     show_picker: bool,
     lines: &mut Vec<Line<'a>>,
 ) {
@@ -1613,134 +1613,147 @@ fn render_status_panel<'a>(
             .iter()
             .any(|word| lower.contains(word));
 
-    if is_info_notice {
-        lines.push(Line::from(vec![
-            Span::styled(
-                ">_ RustCode ",
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ),
-            Span::styled(
-                format!("(v{})", version),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-        ]));
+    if !is_info_notice {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                lines.push(Line::from(""));
+                continue;
+            }
+            if is_warning {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "! ",
+                        get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::BOLD, show_picker),
+                    ),
+                    Span::styled(
+                        trimmed.to_string(),
+                        get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "  ",
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ),
+                    Span::styled(
+                        trimmed.to_string(),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ),
+                ]));
+            }
+        }
+        return;
     }
+
+    let primary = COLOR_PRIMARY();
+    let reset_bg = COLOR_BG();
+
+    let box_w = (width as usize).saturating_sub(2).max(40);
+    let inner_w = box_w.saturating_sub(2);
+    let content_w = inner_w.saturating_sub(4);
+
+    // Top border: ╭─ >_ RustCode v0.17.0 ──────────────────────────────────────────╮
+    let title_str = format!(">_ RustCode v{version}");
+    let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
+    let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
+    lines.push(Line::from(vec![
+        Span::styled(top_border, Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Top blank padding line
+    lines.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(" ".repeat(inner_w), Style::default().bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
 
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if is_info_notice {
-                lines.push(Line::from(""));
-            }
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("rustcode info") {
             continue;
         }
 
-        if is_info_notice && trimmed.eq_ignore_ascii_case("rustcode info") {
-            continue;
-        }
+        let is_header = trimmed.ends_with(':')
+            || trimmed.starts_with("📊")
+            || trimmed.starts_with("📦")
+            || trimmed.starts_with("🎨")
+            || trimmed.starts_with("Core & Session")
+            || trimmed.starts_with("Help & Commands")
+            || trimmed.starts_with("Discovered Skills");
 
-        if is_info_notice
-            && (trimmed.ends_with(':')
-                || trimmed.starts_with("📊")
-                || trimmed.starts_with("📦")
-                || trimmed.starts_with("🎨"))
-        {
+        if is_header {
+            let padded_header = format!("  {:<width$}", trimmed, width = content_w);
             lines.push(Line::from(vec![
-                Span::styled(
-                    "  ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    trimmed.to_string(),
-                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
+                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(padded_header, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
+                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
             ]));
-        } else if is_info_notice && trimmed.starts_with('/') {
+        } else if trimmed.starts_with('/') {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             let cmd_name = parts.first().copied().unwrap_or("");
-            let cmd_desc = if parts.len() > 1 {
-                parts[1..].join(" ")
-            } else {
-                String::new()
-            };
+            let cmd_desc = if parts.len() > 1 { parts[1..].join(" ") } else { String::new() };
+            let left_sp = format!("  {:<18}", cmd_name);
+            let right_len = content_w.saturating_sub(left_sp.chars().count());
+            let right_sp = format!("{:<width$}", cmd_desc, width = right_len);
             lines.push(Line::from(vec![
-                Span::styled(
-                    "  ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    format!("{:<18}", cmd_name),
-                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    cmd_desc,
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
+                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(left_sp, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
+                Span::styled(right_sp, get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
             ]));
-        } else if is_info_notice
-            && (trimmed.starts_with("Enter")
-                || trimmed.starts_with("Shift+")
-                || trimmed.starts_with("Esc")
-                || trimmed.starts_with("Up/Down")
-                || trimmed.starts_with("Ctrl+")
-                || trimmed.starts_with("Alt+"))
+        } else if trimmed.starts_with("Enter")
+            || trimmed.starts_with("Shift+")
+            || trimmed.starts_with("Esc")
+            || trimmed.starts_with("Up/Down")
+            || trimmed.starts_with("Ctrl+")
+            || trimmed.starts_with("Alt+")
         {
             let parts: Vec<&str> = trimmed.splitn(2, "  ").collect();
             let key = parts.first().copied().unwrap_or("").trim();
             let desc = if parts.len() > 1 { parts[1].trim() } else { "" };
+            let left_sp = format!("  {:<18}", key);
+            let right_len = content_w.saturating_sub(left_sp.chars().count());
+            let right_sp = format!("{:<width$}", desc, width = right_len);
             lines.push(Line::from(vec![
-                Span::styled(
-                    "  ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    format!("{:<18}", key),
-                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    desc.to_string(),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
+                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(left_sp, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
+                Span::styled(right_sp, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
             ]));
-        } else if is_info_notice && (trimmed.starts_with('•') || trimmed.starts_with('-')) {
+        } else if trimmed.starts_with('•') || trimmed.starts_with('-') {
+            let bullet_text = trimmed.trim_start_matches('•').trim_start_matches('-').trim();
+            let full_str = format!("  • {bullet_text}");
+            let padded_str = format!("{:<width$}", full_str, width = content_w);
             lines.push(Line::from(vec![
-                Span::styled(
-                    "  • ",
-                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    trimmed
-                        .trim_start_matches('•')
-                        .trim_start_matches('-')
-                        .trim()
-                        .to_string(),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-            ]));
-        } else if is_warning {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "! ",
-                    get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    trimmed.to_string(),
-                    get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
+                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(padded_str, get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
             ]));
         } else {
+            let full_str = format!("  {trimmed}");
+            let padded_str = format!("{:<width$}", full_str, width = content_w);
             lines.push(Line::from(vec![
-                Span::styled(
-                    "  ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    trimmed.to_string(),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
+                Span::styled("│ ", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(padded_str, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(" │", Style::default().fg(primary).bg(reset_bg)),
             ]));
         }
     }
+
+    // Bottom blank padding line
+    lines.push(Line::from(vec![
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(" ".repeat(inner_w), Style::default().bg(reset_bg)),
+        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+    ]));
+
+    // Bottom border: ╰──────────────────────────────────────────────────────────╯
+    let bot_border = format!("╰{}╯", "─".repeat(inner_w));
+    lines.push(Line::from(vec![
+        Span::styled(bot_border, Style::default().fg(primary).bg(reset_bg)),
+    ]));
 }
 
 const RUSTCODE_LOGO: &[&str] = &[
