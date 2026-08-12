@@ -35,7 +35,7 @@ Add assertions equivalent to:
 assert_eq!(streaming_status_word(0), "Thinking...");
 assert_eq!(streaming_status_word(2), "Thinking...");
 assert_eq!(streaming_status_word(3), "Analyzing code...");
-assert_eq!(streaming_status_word(30), "Querying knowledge base...");
+assert_eq!(streaming_status_word(27), "Querying knowledge base...");
 assert_eq!(classify_activity(&AppStatus::Idle, &[]).label, "Idle");
 ```
 
