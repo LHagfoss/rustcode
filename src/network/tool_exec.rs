@@ -8,8 +8,8 @@ use super::output::truncate_tool_output_for_message;
 use super::subagents::handle_agent_tool;
 use super::text::cap_diff_lines;
 use super::{
-    is_mutating_tool, is_read_only_tool, path_mtime, tool_signature,
-    view_file_unchanged_since_last_read, REPLAYABLE_READ_LIMIT,
+    REPLAYABLE_READ_LIMIT, is_mutating_tool, is_read_only_tool, path_mtime, tool_signature,
+    view_file_unchanged_since_last_read,
 };
 
 pub(crate) fn get_diff_preview(name: &str, args: &serde_json::Value) -> Option<String> {
@@ -327,14 +327,11 @@ pub(crate) async fn ask_user_question(
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     {
         let mut s = state.lock().await;
-        s.pending_question = Some(crate::app::PendingQuestion {
+        s.pending_question = Some(crate::app::PendingQuestion::new(
             question,
-            chosen: vec![false; options.len()],
             options,
             is_multi_select,
-            selected: 0,
-            custom_input: None,
-        });
+        ));
         s.question_response = Some(tx);
         s.status = AppStatus::AwaitingQuestion;
     }
@@ -657,12 +654,18 @@ pub(crate) fn finalize_tool_result_for_prefix(
     result
 }
 
-pub(crate) fn finalize_tool_result(result: ToolResult, deferred_notice: Option<&str>) -> ToolResult {
+pub(crate) fn finalize_tool_result(
+    result: ToolResult,
+    deferred_notice: Option<&str>,
+) -> ToolResult {
     let prefix = format!("{}: ", result.tool_name);
     finalize_tool_result_for_prefix(result, deferred_notice, &prefix)
 }
 
-pub(crate) fn tool_result_history_message(result: ToolResult, answered_call: Option<String>) -> ChatMessage {
+pub(crate) fn tool_result_history_message(
+    result: ToolResult,
+    answered_call: Option<String>,
+) -> ChatMessage {
     let prefix = format!("{}: ", result.tool_name);
     tool_result_history_message_with_prefix(result, &prefix, answered_call)
 }

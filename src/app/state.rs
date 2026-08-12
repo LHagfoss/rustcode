@@ -36,6 +36,189 @@ pub struct PendingQuestion {
     /// When `Some`, the user is typing a freeform answer (the "write your own"
     /// slot is active); the string is the in-progress text.
     pub custom_input: Option<String>,
+    pub custom_cursor: usize,
+}
+
+impl PendingQuestion {
+    pub fn new(question: String, options: Vec<String>, is_multi_select: bool) -> Self {
+        let chosen = vec![false; options.len()];
+        Self {
+            question,
+            options,
+            is_multi_select,
+            selected: 0,
+            chosen,
+            custom_input: None,
+            custom_cursor: 0,
+        }
+    }
+
+    pub fn activate_custom_input(&mut self) {
+        if self.custom_input.is_none() {
+            self.custom_input = Some(String::new());
+            self.custom_cursor = 0;
+        }
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        self.clamp_cursor();
+        let cursor = self.custom_cursor;
+        let buf = self.custom_input.get_or_insert_with(String::new);
+        buf.insert(cursor, c);
+        self.custom_cursor = cursor + c.len_utf8();
+    }
+
+    pub fn insert_str(&mut self, s: &str) {
+        for c in s.chars() {
+            if c != '\n' && c != '\r' {
+                self.insert_char(c);
+            }
+        }
+    }
+
+    pub fn delete_char_before(&mut self) {
+        self.clamp_cursor();
+        let cursor = self.custom_cursor;
+        if cursor > 0 {
+            let prev = self
+                .custom_input
+                .as_ref()
+                .and_then(|buf| buf[..cursor].chars().next_back())
+                .map_or(1, |c| c.len_utf8());
+            self.custom_cursor = cursor - prev;
+            if let Some(buf) = self.custom_input.as_mut() {
+                buf.remove(self.custom_cursor);
+            }
+        }
+    }
+
+    pub fn delete_char_after(&mut self) {
+        self.clamp_cursor();
+        let cursor = self.custom_cursor;
+        let has_char_after = self
+            .custom_input
+            .as_ref()
+            .is_some_and(|buf| cursor < buf.len());
+        if has_char_after {
+            if let Some(buf) = self.custom_input.as_mut() {
+                buf.remove(cursor);
+            }
+        }
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        self.clamp_cursor();
+        if let Some(buf) = self.custom_input.as_ref() {
+            if self.custom_cursor > 0 {
+                let prev = buf[..self.custom_cursor]
+                    .chars()
+                    .next_back()
+                    .map_or(1, |c| c.len_utf8());
+                self.custom_cursor -= prev;
+            }
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        self.clamp_cursor();
+        if let Some(buf) = self.custom_input.as_ref() {
+            if self.custom_cursor < buf.len() {
+                let next = buf[self.custom_cursor..]
+                    .chars()
+                    .next()
+                    .map_or(1, |c| c.len_utf8());
+                self.custom_cursor += next;
+            }
+        }
+    }
+
+    pub fn move_cursor_home(&mut self) {
+        self.custom_cursor = 0;
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        if let Some(buf) = self.custom_input.as_ref() {
+            self.custom_cursor = buf.len();
+        }
+    }
+
+    pub fn delete_word_before(&mut self) {
+        self.clamp_cursor();
+        let start = self.custom_cursor;
+        self.move_cursor_word_left();
+        let end = self.custom_cursor;
+        if start > end {
+            if let Some(buf) = self.custom_input.as_mut() {
+                buf.drain(end..start);
+            }
+        }
+    }
+
+    pub fn move_cursor_word_left(&mut self) {
+        self.clamp_cursor();
+        if let Some(buf) = self.custom_input.as_ref() {
+            let mut char_indices: Vec<(usize, char)> =
+                buf[..self.custom_cursor].char_indices().collect();
+            while let Some((_, c)) = char_indices.last() {
+                if c.is_whitespace() {
+                    char_indices.pop();
+                } else {
+                    break;
+                }
+            }
+            while let Some((idx, c)) = char_indices.last() {
+                if !c.is_whitespace() {
+                    self.custom_cursor = *idx;
+                    char_indices.pop();
+                } else {
+                    break;
+                }
+            }
+            if char_indices.is_empty() {
+                self.custom_cursor = 0;
+            }
+        }
+    }
+
+    pub fn move_cursor_word_right(&mut self) {
+        self.clamp_cursor();
+        if let Some(buf) = self.custom_input.as_ref() {
+            let mut cursor = self.custom_cursor;
+            while cursor < buf.len() {
+                let Some(c) = buf[cursor..].chars().next() else {
+                    break;
+                };
+                if c.is_whitespace() {
+                    break;
+                }
+                cursor += c.len_utf8();
+            }
+            while cursor < buf.len() {
+                let Some(c) = buf[cursor..].chars().next() else {
+                    break;
+                };
+                if !c.is_whitespace() {
+                    break;
+                }
+                cursor += c.len_utf8();
+            }
+            self.custom_cursor = cursor;
+        }
+    }
+
+    fn clamp_cursor(&mut self) {
+        if let Some(buf) = self.custom_input.as_ref() {
+            self.custom_cursor = self.custom_cursor.min(buf.len());
+            while !buf.is_char_boundary(self.custom_cursor) {
+                if self.custom_cursor == 0 {
+                    break;
+                }
+                self.custom_cursor -= 1;
+            }
+        } else {
+            self.custom_cursor = 0;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -268,12 +451,16 @@ impl ChatMessage {
 
     /// Resolves tool calls from structured `tool_calls` fields (ApiNative) if present,
     /// or parses tool calls from text content for text protocols.
-    pub fn resolved_tool_calls(&self, protocol: crate::config::ToolProtocol) -> Vec<crate::tools::ToolCall> {
+    pub fn resolved_tool_calls(
+        &self,
+        protocol: crate::config::ToolProtocol,
+    ) -> Vec<crate::tools::ToolCall> {
         if !self.tool_calls.is_empty() {
             self.tool_calls
                 .iter()
                 .filter_map(|tc| {
-                    let args = serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                    let args =
+                        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
                     Some(crate::tools::ToolCall {
                         name: tc.name.clone(),
                         arguments: args,
@@ -1451,7 +1638,7 @@ impl AppState {
 
 #[cfg(test)]
 mod protocol_tests {
-    use super::{AppState, NoticeKind};
+    use super::{AppState, NoticeKind, PendingQuestion};
     use crate::config::ToolProtocol;
 
     #[test]
@@ -1462,6 +1649,77 @@ mod protocol_tests {
 
         state.set_notice("Execution error occurred");
         assert_eq!(state.notice.as_ref().unwrap().kind, NoticeKind::Warning);
+    }
+
+    #[test]
+    fn pending_question_starts_with_empty_custom_input() {
+        let question = PendingQuestion::new(
+            "How should we proceed?".to_string(),
+            vec!["Continue".to_string(), "Stop".to_string()],
+            false,
+        );
+
+        assert_eq!(question.selected, 0);
+        assert_eq!(question.chosen, vec![false, false]);
+        assert_eq!(question.custom_input, None);
+        assert_eq!(question.custom_cursor, 0);
+    }
+
+    #[test]
+    fn pending_question_editing_preserves_utf8_boundaries() {
+        let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
+        question.activate_custom_input();
+        question.insert_str("héllo");
+        question.move_cursor_home();
+        question.move_cursor_right();
+        question.delete_char_after();
+
+        assert_eq!(question.custom_input.as_deref(), Some("hllo"));
+        assert_eq!(question.custom_cursor, "h".len());
+    }
+
+    #[test]
+    fn pending_question_word_navigation_and_deletion_use_cursor_position() {
+        let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
+        question.activate_custom_input();
+        question.insert_str("one two three");
+        question.move_cursor_word_left();
+        assert_eq!(question.custom_cursor, "one two ".len());
+
+        question.delete_word_before();
+        assert_eq!(question.custom_input.as_deref(), Some("one three"));
+        assert_eq!(question.custom_cursor, "one ".len());
+
+        question.move_cursor_word_right();
+        assert_eq!(question.custom_cursor, "one three".len());
+    }
+
+    #[test]
+    fn pending_question_paste_ignores_line_breaks() {
+        let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
+        question.activate_custom_input();
+        question.insert_str("first\r\nsecond\nthird");
+
+        assert_eq!(question.custom_input.as_deref(), Some("firstsecondthird"));
+        assert_eq!(question.custom_cursor, "firstsecondthird".len());
+    }
+
+    #[test]
+    fn pending_question_word_navigation_preserves_multibyte_boundaries() {
+        let mut question = PendingQuestion::new("Q".to_string(), vec![], false);
+        question.activate_custom_input();
+        question.insert_str("one  😀");
+        question.move_cursor_home();
+        question.move_cursor_word_right();
+
+        assert_eq!(question.custom_cursor, "one  ".len());
+        assert!(question
+            .custom_input
+            .as_ref()
+            .is_some_and(|text| text.is_char_boundary(question.custom_cursor)));
+
+        question.move_cursor_word_right();
+        assert_eq!(question.custom_cursor, "one  😀".len());
     }
 
     #[test]
@@ -1596,12 +1854,14 @@ mod chat_message_tests {
 
     #[test]
     fn resolved_tool_calls_prefers_structured_tool_calls() {
-        let msg = ChatMessage::new("assistant", "<think>some reasoning</think>")
-            .with_tool_calls(vec![ToolCallRef {
-                id: "call_1".to_string(),
-                name: "read_file".to_string(),
-                arguments: r#"{"path": "src/main.rs"}"#.to_string(),
-            }]);
+        let msg =
+            ChatMessage::new("assistant", "<think>some reasoning</think>").with_tool_calls(vec![
+                ToolCallRef {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path": "src/main.rs"}"#.to_string(),
+                },
+            ]);
 
         let calls = msg.resolved_tool_calls(ToolProtocol::ApiNative);
         assert_eq!(calls.len(), 1);
