@@ -612,3 +612,19 @@ use super::*;
         assert!(pulse_centers_f.contains(&(num_dots as f64 - 1.0)));
         assert_eq!(pulse_centers_f[5], 5.0);
     }
+
+    #[test]
+    fn compact_status_formats_empty_context_and_idle_tps() {
+        assert_eq!(format_context_info(0, 0, None), "Context: 0 (0%)");
+        assert_eq!(format_tps_info(0.0), "Tps: 0.0");
+    }
+
+    #[test]
+    fn input_footer_only_advertises_command_palette() {
+        assert_eq!(input_footer_hint_text(), "Ctrl+P commands");
+    }
+
+    #[test]
+    fn input_and_footer_layout_has_no_spacer_row() {
+        assert_eq!(footer_layout_constraints(), Constraint::Length(1));
+    }
