@@ -104,6 +104,7 @@ pub(super) fn highlight_code_block(
         .collect()
 }
 
+#[allow(dead_code)]
 pub(super) fn pad_to_width(s: &str, width: usize) -> String {
     let current = s.width();
     if current < width {
