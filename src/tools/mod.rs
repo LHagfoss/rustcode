@@ -2492,6 +2492,30 @@ mod tests {
     }
 
     #[test]
+    fn command_authorization_distinguishes_safe_and_unknown_shell_commands() {
+        assert_eq!(
+            authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": "gh issue list --repo lhagfoss/rustcode"}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            AuthorizationDecision::Allow
+        );
+        assert_eq!(
+            authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": "gh issue close 1 --repo lhagfoss/rustcode"}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            AuthorizationDecision::RequireConfirmation
+        );
+    }
+
+    #[test]
     fn prompt_makes_delegation_explicitly_opt_in() {
         let prompt = tool_system_prompt(
             false,
