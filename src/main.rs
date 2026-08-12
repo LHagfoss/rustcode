@@ -2025,7 +2025,7 @@ fn print_goodbye() {
     }
     const RESET: &str = "\x1b[0m";
 
-    let border = fg(crate::ui::theme::color_primary());
+    let border = fg(crate::ui::theme::color_text());
     let text = fg(crate::ui::theme::color_text());
 
     let title = format!(" rustcode v{} ", env!("CARGO_PKG_VERSION"));
@@ -2044,9 +2044,11 @@ fn print_goodbye() {
     let msg_fill = " ".repeat(content_width - msg_width);
 
     let mut out = std::io::stdout();
+    let _ = writeln!(out);
     let _ = writeln!(out, "{border}{top}");
     let _ = writeln!(out, "{border}│ {text}{msg}{msg_fill}{border} │");
     let _ = writeln!(out, "{border}{bot}{RESET}");
+    let _ = writeln!(out);
 }
 
 #[cfg(test)]
