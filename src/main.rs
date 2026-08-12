@@ -2025,7 +2025,7 @@ fn print_goodbye() {
     }
     const RESET: &str = "\x1b[0m";
 
-    let border = fg(crate::ui::theme::color_text());
+    let border = fg(crate::ui::theme::color_primary());
     let text = fg(crate::ui::theme::color_text());
 
     let title = format!(" rustcode v{} ", env!("CARGO_PKG_VERSION"));
