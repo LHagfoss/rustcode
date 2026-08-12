@@ -16,7 +16,6 @@ use modals::{
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
     render_protocol_picker_modal, render_question_modal, render_theme_picker_modal,
     render_thinking_picker_modal, render_tool_confirmation_modal, render_verbosity_picker_modal,
-    render_welcome_screen,
 };
 use tool_result::{render_file_preview, render_tool_result};
 
@@ -137,13 +136,6 @@ pub fn COLOR_DIFF_REMOVE_FG() -> Color {
 pub fn COLOR_DIFF_ABSENT_BG() -> Color {
     theme::color_diff_absent_bg()
 }
-
-const LOGO: &[&str] = &[
-    "                  ▄                   █      ",
-    "▄▀▀▀ █   █ ▄▀▀▀▀ ▀█▀▀ ▄▀▀▀▀ ▄▀▀▀▄ ▄▀▀▀█ ▄▀▀▀▄",
-    "█    █   █  ▀▀▀▄  █   █     █   █ █   █ █▀▀▀▀",
-    "▀     ▀▀▀  ▀▀▀▀    ▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀",
-];
 
 pub use crate::app::suggestion::{COMMANDS, CommandInfo};
 
@@ -1786,9 +1778,31 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         hit
     } else {
     let mut lines: Vec<Line> = Vec::new();
-
     let mut thought_clicks: Vec<(usize, usize)> = Vec::new();
     let mut copy_clicks: Vec<(usize, String)> = Vec::new();
+
+    if state.history.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("✦ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+            Span::styled("RustCode AI Assistant", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "Ask anything or type / for commands...",
+            Style::default().fg(COLOR_MUTED()).add_modifier(Modifier::ITALIC),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Shortcuts: ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" /model ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+            Span::styled("models  · ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" /theme ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+            Span::styled("themes  · ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" /help ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+            Span::styled("commands", Style::default().fg(COLOR_MUTED())),
+        ]));
+        lines.push(Line::from(""));
+    }
 
     // Line index where each message's block starts. Messages that render
     // nothing produce a duplicate index; deduped below.
@@ -2302,11 +2316,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
 pub fn render(f: &mut Frame, state: &mut AppState) {
     theme::set_active_theme(&state.config.theme);
 
-    f.render_widget(
-        Block::default().style(Style::default().bg(COLOR_BG())),
-        f.area(),
-    );
-
     let filtered_cmds: Vec<&CommandInfo> =
         if state.input_buffer.starts_with('/') && !state.input_buffer.contains(' ') {
             COMMANDS
@@ -2317,85 +2326,61 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             Vec::new()
         };
 
-    let input_box_area = if state.history.is_empty() {
-        let (prompt_box_area, inner_area) = render_welcome_screen(f, state);
+    let inner_width = f.area().width.saturating_sub(6).max(1);
+    let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
+    let input_lines = raw_input_lines.min(8);
+    let input_height = input_lines + 2;
+    let queue_block_height = if state.pending_queue.is_empty() { 0 } else { 3 };
 
-        if !filtered_cmds.is_empty() {
-            // Cap to the rows available above the prompt so a long command list
-            // scrolls inside the popup instead of painting over the input.
-            let popup_height = (filtered_cmds.len() as u16)
-                .min(MAX_POPUP_ROWS)
-                .min(prompt_box_area.y);
-            let popup_y = prompt_box_area.y.saturating_sub(popup_height);
-            let popup_area =
-                ratatui::layout::Rect::new(inner_area.x, popup_y, inner_area.width, popup_height);
-            render_popup_menu(f, state, &filtered_cmds, popup_area);
-        }
-        prompt_box_area
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .horizontal_margin(3)
+        .vertical_margin(1)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(queue_block_height),
+            Constraint::Length(input_height),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(f.area());
+
+    render_conversation(f, &chunks, state);
+    render_queue_line(f, &chunks, state);
+    let input_margin = render_input(f, &chunks, state);
+    render_footer(f, &chunks, state);
+
+    let (_, at_query) =
+        crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
+            .unwrap_or((0, String::new()));
+    let at_files = if !at_query.is_empty()
+        || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
+            .ends_with('@')
+    {
+        crate::app::list_project_file_paths(&at_query)
     } else {
-        let inner_width = f.area().width.saturating_sub(6).max(1);
-        let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
-        // Cap input text height to 8 lines max (plus margins and status line = 10 total max height)
-        // so long multi-line prompts scroll within the box instead of eating the screen.
-        let input_lines = raw_input_lines.min(8);
-        let input_height = input_lines + 2;
-        // The queue block (blank + text + blank) only takes space when there's
-        // something queued, so idle sessions don't carry a dead gap above the
-        // input box.
-        let queue_block_height = if state.pending_queue.is_empty() { 0 } else { 3 };
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .horizontal_margin(3)
-            .vertical_margin(1)
-            .constraints([
-                Constraint::Min(3),
-                Constraint::Length(queue_block_height),
-                Constraint::Length(input_height),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .split(f.area());
-
-        render_conversation(f, &chunks, state);
-        render_queue_line(f, &chunks, state);
-        let input_margin = render_input(f, &chunks, state);
-        render_footer(f, &chunks, state);
-
-        let (_, at_query) =
-            crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
-                .unwrap_or((0, String::new()));
-        let at_files = if !at_query.is_empty()
-            || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
-                .ends_with('@')
-        {
-            crate::app::list_project_file_paths(&at_query)
-        } else {
-            Vec::new()
-        };
-
-        if !filtered_cmds.is_empty() {
-            let input_inner = chunks[2].inner(input_margin);
-            // Cap to the rows available above the input box so a long command
-            // list scrolls inside the popup instead of overlapping the prompt.
-            let popup_height = (filtered_cmds.len() as u16)
-                .min(MAX_POPUP_ROWS)
-                .min(chunks[2].y);
-            let popup_y = chunks[2].y.saturating_sub(popup_height);
-            let popup_area =
-                ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
-            render_popup_menu(f, state, &filtered_cmds, popup_area);
-        } else if !at_files.is_empty() {
-            let input_inner = chunks[2].inner(input_margin);
-            let popup_height = at_files.len().min(8) as u16;
-            let popup_y = chunks[2].y.saturating_sub(popup_height);
-            let popup_area =
-                ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
-            render_at_popup_menu(f, state, &at_files, popup_area);
-        }
-
-        chunks[2]
+        Vec::new()
     };
+
+    if !filtered_cmds.is_empty() {
+        let input_inner = chunks[2].inner(input_margin);
+        let popup_height = (filtered_cmds.len() as u16)
+            .min(MAX_POPUP_ROWS)
+            .min(chunks[2].y);
+        let popup_y = chunks[2].y.saturating_sub(popup_height);
+        let popup_area =
+            ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
+        render_popup_menu(f, state, &filtered_cmds, popup_area);
+    } else if !at_files.is_empty() {
+        let input_inner = chunks[2].inner(input_margin);
+        let popup_height = at_files.len().min(8) as u16;
+        let popup_y = chunks[2].y.saturating_sub(popup_height);
+        let popup_area =
+            ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
+        render_at_popup_menu(f, state, &at_files, popup_area);
+    }
+
+    let input_box_area = chunks[2];
 
     if state.show_model_picker {
         render_model_picker_modal(f, state, input_box_area);
@@ -2529,7 +2514,7 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
     };
 
     let text: String = notice.text.chars().take(60).collect();
-    let bg = COLOR_PANEL();
+    let bg = COLOR_BG();
     let para = Paragraph::new(Line::from(vec![
         Span::styled("▌", Style::default().fg(accent).bg(bg)),
         Span::styled(

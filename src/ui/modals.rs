@@ -62,19 +62,19 @@ pub(super) fn render_popup_menu(
             Line::from(vec![
                 Span::styled(
                     left_text,
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_BG()),
                 ),
                 Span::styled(
                     desc_text,
-                    Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+                    Style::default().fg(COLOR_MUTED()).bg(COLOR_BG()),
                 ),
-                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
+                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
             ])
         };
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
         area,
     );
 }
@@ -85,13 +85,19 @@ pub(super) fn render_at_popup_menu(
     file_matches: &[String],
     area: ratatui::layout::Rect,
 ) {
-    let mut popup_lines = Vec::new();
-    for (idx, file) in file_matches.iter().enumerate() {
-        let is_selected = state
-            .active_suggestion_index
-            .map(|i| i == idx)
-            .unwrap_or(false);
+    let max_rows = (area.height as usize).max(1);
+    let selected = state.active_suggestion_index.unwrap_or(0);
+    let offset = if selected >= max_rows {
+        selected + 1 - max_rows
+    } else {
+        0
+    };
 
+    f.render_widget(Clear, area);
+
+    let mut popup_lines = Vec::new();
+    for (i, file) in file_matches.iter().skip(offset).take(max_rows).enumerate() {
+        let is_selected = selected == (offset + i);
         let line = if is_selected {
             let left_text = format!("📄 {:<35}", file);
             let total_len = left_text.len();
@@ -112,338 +118,17 @@ pub(super) fn render_at_popup_menu(
             Line::from(vec![
                 Span::styled(
                     left_text,
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_BG()),
                 ),
-                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
+                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
             ])
         };
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
         area,
     );
-}
-
-pub(super) fn render_welcome_screen(
-    f: &mut Frame,
-    state: &AppState,
-) -> (ratatui::layout::Rect, ratatui::layout::Rect) {
-    let width = f.area().width;
-    let height = f.area().height;
-
-    let show_picker = state.modal_open();
-
-    let box_width = 80u16.min(width.saturating_sub(6));
-    let inner_width = box_width.saturating_sub(5).max(1);
-
-    let display_buffer = collapse_image_markers(&state.input_buffer);
-    let input_lines = if state.input_buffer.is_empty() {
-        1
-    } else {
-        count_input_lines(&display_buffer, inner_width as usize)
-    };
-    let prompt_box_height = input_lines + 4;
-
-    let logo_start_y = height.saturating_sub(17).saturating_sub(input_lines - 1) / 2;
-
-    let welcome_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(logo_start_y),
-            Constraint::Length(4),
-            Constraint::Length(3),
-            Constraint::Length(prompt_box_height),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Min(0),
-        ])
-        .split(f.area());
-
-    let logo_area = welcome_chunks[1];
-    let padding_left = (logo_area.width.saturating_sub(45) / 2) as usize;
-    let mut logo_lines = Vec::new();
-
-    for line in LOGO {
-        let chars: Vec<char> = line.chars().collect();
-        if chars.len() >= 22 {
-            let part1: String = chars[0..22].iter().collect();
-            let part2: String = chars[22..].iter().collect();
-
-            logo_lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{}{}", " ".repeat(padding_left), part1),
-                    get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-                Span::styled(
-                    part2,
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-            ]));
-        } else {
-            logo_lines.push(Line::from(Span::styled(
-                format!("{}{}", " ".repeat(padding_left), line),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            )));
-        }
-    }
-    f.render_widget(
-        Paragraph::new(logo_lines).style(Style::default().bg(COLOR_BG())),
-        logo_area,
-    );
-
-    let box_padding = width.saturating_sub(box_width) / 2;
-    let box_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(box_padding),
-            Constraint::Length(box_width),
-            Constraint::Min(0),
-        ])
-        .split(welcome_chunks[3]);
-
-    let prompt_box_area = box_chunks[1];
-
-    let (mode_label_str, mode_color) = match state.agent_mode {
-        crate::config::AgentMode::Build => ("build", COLOR_PRIMARY()),
-        crate::config::AgentMode::Plan => ("plan", Color::Rgb(229, 192, 123)),
-    };
-    let model_str = model_label(state);
-
-    let title_left = Line::from(vec![
-        Span::styled(" ✦ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("rustcode", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
-        Span::raw(" "),
-    ]);
-
-    let title_right = Line::from(vec![
-        Span::styled(format!("[{mode_label_str}] "), Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("[{model_str}] "), Style::default().fg(COLOR_MUTED())),
-    ]);
-
-    let footer_hints = Line::from(vec![
-        Span::styled(" Tab ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("autocomplete · ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("Shift+Enter ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("newline · ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("/ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("commands · ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("Ctrl+O ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("model ", Style::default().fg(COLOR_MUTED())),
-    ]);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if show_picker { COLOR_MUTED() } else { COLOR_PRIMARY() }))
-        .title(title_left)
-        .title(title_right.alignment(ratatui::layout::Alignment::Right))
-        .title_bottom(footer_hints.alignment(ratatui::layout::Alignment::Right));
-
-    f.render_widget(block, prompt_box_area);
-
-    let inner = prompt_box_area.inner(Margin {
-        vertical: 1,
-        horizontal: 2,
-    });
-
-    let prompt_span = Span::styled(
-        "❯ ",
-        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-    );
-
-    let mut box_lines = Vec::new();
-    let mut cursor_dx = 0u16;
-    let mut cursor_dy = 0u16;
-
-    if state.input_buffer.is_empty() {
-        box_lines.push(Line::from(vec![
-            prompt_span,
-            Span::styled(
-                "Ask anything... \"Fix a TODO in the codebase\"",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-            ),
-        ]));
-    } else {
-        let text_style = if state.input_buffer.starts_with('/') {
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)
-        } else {
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)
-        };
-
-        let mut styled_chars: Vec<(char, Style)> =
-            display_buffer.chars().map(|c| (c, text_style)).collect();
-
-        if let Some(suffix) = state.get_command_suggestion() {
-            let suggestion_style =
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
-            styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
-        }
-
-        let safe_end = safe_byte_index(&state.input_buffer, state.cursor_position);
-        let raw_prefix = &state.input_buffer[..safe_end];
-        let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
-
-        let mut current_line_spans = vec![prompt_span];
-        let mut current_run: Option<(Style, String)> = None;
-
-        let mut col = 2;
-        let mut row = 0;
-
-        let total_chars = styled_chars.len();
-        for (i, &(c, style)) in styled_chars.iter().enumerate() {
-            if i == cursor_char_index {
-                cursor_dx = col as u16;
-                cursor_dy = row as u16;
-            }
-
-            if c == '\n' {
-                if let Some((st, s)) = current_run.take() {
-                    current_line_spans.push(Span::styled(s, st));
-                }
-                box_lines.push(Line::from(current_line_spans.clone()));
-                current_line_spans.clear();
-                row += 1;
-                col = 0;
-            } else {
-                if col >= inner_width as usize {
-                    if let Some((st, s)) = current_run.take() {
-                        current_line_spans.push(Span::styled(s, st));
-                    }
-                    box_lines.push(Line::from(current_line_spans.clone()));
-                    current_line_spans.clear();
-                    row += 1;
-                    col = 0;
-                }
-
-                match current_run.as_mut() {
-                    Some((st, s)) if *st == style => {
-                        s.push(c);
-                    }
-                    _ => {
-                        if let Some((st, s)) = current_run.take() {
-                            current_line_spans.push(Span::styled(s, st));
-                        }
-                        current_run = Some((style, c.to_string()));
-                    }
-                }
-                col += 1;
-            }
-        }
-
-        if cursor_char_index == total_chars {
-            cursor_dx = col as u16;
-            cursor_dy = row as u16;
-        }
-
-        if let Some((st, s)) = current_run.take() {
-            current_line_spans.push(Span::styled(s, st));
-        }
-        box_lines.push(Line::from(current_line_spans));
-    }
-
-    f.render_widget(
-        Paragraph::new(box_lines).style(Style::default().bg(COLOR_BG())),
-        inner,
-    );
-
-    if inner.width > 0 && !show_picker {
-        f.set_cursor_position(ratatui::layout::Position {
-            x: inner.x + cursor_dx.min(inner.width.saturating_sub(1)),
-            y: inner.y + cursor_dy,
-        });
-    }
-
-    let hint_area = welcome_chunks[5];
-    let hint_box_width_area =
-        ratatui::layout::Rect::new(prompt_box_area.x, hint_area.y, prompt_box_area.width, 1);
-    let hint_text = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "tab",
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            " agents   ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            "ctrl+p",
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            " commands",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-    ]))
-    .alignment(ratatui::layout::Alignment::Right)
-    .style(Style::default().bg(COLOR_BG()));
-    f.render_widget(hint_text, hint_box_width_area);
-
-    let tip_area = welcome_chunks[7];
-    let tip_text = crate::app::TIPS[state.tip_index % crate::app::TIPS.len()];
-    let tip_full = tip_text.to_string();
-    let tip_prefix = "● ";
-    let prefix_w = tip_prefix.width();
-    let tip_w = tip_full.width();
-    let total_w = prefix_w + tip_w + 4;
-    let tip_padding = (width.saturating_sub(total_w as u16) / 2) as usize;
-    let centered_spans = vec![
-        Span::styled(" ".repeat(tip_padding), Style::default()),
-        Span::styled(
-            "● ",
-            get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            "Tip ",
-            get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            tip_full,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-    ];
-    f.render_widget(
-        Paragraph::new(Line::from(centered_spans)).style(Style::default().bg(COLOR_BG())),
-        tip_area,
-    );
-
-    let bottom_y = height.saturating_sub(2);
-    let metadata_area = ratatui::layout::Rect::new(2, bottom_y, width.saturating_sub(4), 1);
-
-    let meta_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-        .split(metadata_area);
-
-    let left_meta = Paragraph::new(Span::styled(
-        &state.cwd_and_branch,
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ))
-    .style(Style::default().bg(COLOR_BG()));
-    let version_label = match state.update_check {
-        crate::update::UpdateState::Available(latest) => format!(
-            "v{} · update available: v{}",
-            env!("CARGO_PKG_VERSION"),
-            crate::update::format_version(latest)
-        ),
-        crate::update::UpdateState::Checking => {
-            format!("v{} · checking for updates…", env!("CARGO_PKG_VERSION"))
-        }
-        _ => format!("v{}", env!("CARGO_PKG_VERSION")),
-    };
-    let right_meta = Paragraph::new(Span::styled(
-        version_label,
-        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-    ))
-    .alignment(ratatui::layout::Alignment::Right)
-    .style(Style::default().bg(COLOR_BG()));
-
-    f.render_widget(left_meta, meta_chunks[0]);
-    f.render_widget(right_meta, meta_chunks[1]);
-
-    (prompt_box_area, inner)
 }
 
 fn centered_rect_fixed(width: u16, height: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
@@ -519,7 +204,7 @@ pub(super) fn render_verbosity_picker_modal(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.panel));
+        .style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -549,7 +234,7 @@ pub(super) fn render_verbosity_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
         modal_chunks[0],
     );
 
@@ -593,7 +278,7 @@ pub(super) fn render_verbosity_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.panel)),
+        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
         modal_chunks[2],
     );
 
@@ -602,7 +287,7 @@ pub(super) fn render_verbosity_picker_modal(
         Style::default().fg(p.muted),
     )]);
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
         modal_chunks[3],
     );
 }
@@ -621,7 +306,7 @@ pub(super) fn render_thinking_picker_modal(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.panel));
+        .style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -651,7 +336,7 @@ pub(super) fn render_thinking_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
         modal_chunks[0],
     );
 
@@ -695,7 +380,7 @@ pub(super) fn render_thinking_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.panel)),
+        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
         modal_chunks[2],
     );
 
@@ -704,7 +389,7 @@ pub(super) fn render_thinking_picker_modal(
         Style::default().fg(p.muted),
     )]);
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
         modal_chunks[3],
     );
 }
@@ -723,7 +408,7 @@ pub(super) fn render_protocol_picker_modal(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.panel));
+        .style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -753,7 +438,7 @@ pub(super) fn render_protocol_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
         modal_chunks[0],
     );
 
@@ -804,7 +489,7 @@ pub(super) fn render_protocol_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.panel)),
+        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
         modal_chunks[2],
     );
 
@@ -813,7 +498,7 @@ pub(super) fn render_protocol_picker_modal(
         Style::default().fg(p.muted),
     )]);
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
         modal_chunks[3],
     );
 }
@@ -2251,7 +1936,7 @@ pub(super) fn render_theme_picker_modal(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.panel));
+        .style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -2281,7 +1966,7 @@ pub(super) fn render_theme_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
         modal_chunks[0],
     );
 
@@ -2309,10 +1994,10 @@ pub(super) fn render_theme_picker_modal(
         } else {
             let left = format!("   {:<12} — {}", theme.name, theme.description);
             Line::from(vec![
-                Span::styled(left, Style::default().fg(p.text).bg(p.panel)),
+                Span::styled(left, Style::default().fg(p.text).bg(p.bg)),
                 Span::styled(
                     active_badge.to_string(),
-                    Style::default().fg(p.muted).bg(p.panel),
+                    Style::default().fg(p.muted).bg(p.bg),
                 ),
             ])
         };
@@ -2320,7 +2005,7 @@ pub(super) fn render_theme_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.panel)),
+        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
         modal_chunks[2],
     );
 
@@ -2329,7 +2014,7 @@ pub(super) fn render_theme_picker_modal(
         Style::default().fg(p.muted),
     ));
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.panel)),
+        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
         modal_chunks[3],
     );
 }
