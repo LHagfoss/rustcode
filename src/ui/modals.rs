@@ -490,9 +490,28 @@ pub fn get_filtered_picker_items(state: &AppState) -> Vec<PickerItem> {
         .collect()
 }
 
-pub(super) fn render_verbosity_picker_modal(f: &mut Frame, state: &AppState) {
+/// Computes a rect for an inline picker anchored directly above the chat input box (`input_area`).
+pub(super) fn input_anchor_rect(
+    f: &Frame,
+    input_area: ratatui::layout::Rect,
+    max_height: u16,
+) -> ratatui::layout::Rect {
+    let screen = f.area();
+    let width = input_area.width.clamp(40, screen.width.saturating_sub(4));
+    let available_h = input_area.y.saturating_sub(1);
+    let height = max_height.min(available_h).max(4);
+    let x = input_area.x + (input_area.width.saturating_sub(width)) / 2;
+    let y = input_area.y.saturating_sub(height);
+    ratatui::layout::Rect::new(x, y, width, height)
+}
+
+pub(super) fn render_verbosity_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let p = crate::ui::theme::get_palette(&state.config.theme);
-    let modal_area = centered_rect_fixed(72, 8, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 9);
 
     f.render_widget(Clear, modal_area);
 
@@ -588,9 +607,13 @@ pub(super) fn render_verbosity_picker_modal(f: &mut Frame, state: &AppState) {
     );
 }
 
-pub(super) fn render_thinking_picker_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_thinking_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let p = crate::ui::theme::get_palette(&state.config.theme);
-    let modal_area = centered_rect_fixed(72, 9, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 10);
 
     f.render_widget(Clear, modal_area);
 
@@ -686,9 +709,13 @@ pub(super) fn render_thinking_picker_modal(f: &mut Frame, state: &AppState) {
     );
 }
 
-pub(super) fn render_protocol_picker_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_protocol_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let p = crate::ui::theme::get_palette(&state.config.theme);
-    let modal_area = centered_rect_fixed(78, 9, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 10);
 
     f.render_widget(Clear, modal_area);
 
@@ -792,15 +819,18 @@ pub(super) fn render_protocol_picker_modal(f: &mut Frame, state: &AppState) {
 }
 
 /// Render the model picker modal overlay.
-pub(super) fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_model_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let filtered_items = get_filtered_picker_items(state);
 
     let selected_idx = state
         .model_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    // Fixed modal box in center of terminal
-    let modal_area = centered_rect_fixed(65, 18, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 14);
 
     // Clear the background to prevent text bleed-through
     f.render_widget(Clear, modal_area);
@@ -967,16 +997,20 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
 }
 
 /// Render the session history picker modal overlay (/history).
-pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_history_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     // Confirmation overlay for delete (Ctrl+D)
     if let Some(del_idx) = state.pending_delete_session_idx {
-        let modal_area = centered_rect_fixed(60, 10, f.area());
+        let modal_area = input_anchor_rect(f, input_area, 10);
         f.render_widget(Clear, modal_area);
         f.render_widget(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(COLOR_PRIMARY()))
-                .style(Style::default().bg(COLOR_PANEL())),
+                .style(Style::default().bg(COLOR_BG())),
             modal_area,
         );
 
@@ -1003,7 +1037,7 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
                 .add_modifier(Modifier::BOLD),
         )]);
         f.render_widget(
-            Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
+            Paragraph::new(header_line).style(Style::default().bg(COLOR_BG())),
             modal_chunks[0],
         );
 
@@ -1018,7 +1052,7 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
                 ),
             ]);
             f.render_widget(
-                Paragraph::new(title_line).style(Style::default().bg(COLOR_PANEL())),
+                Paragraph::new(title_line).style(Style::default().bg(COLOR_BG())),
                 modal_chunks[2],
             );
 
@@ -1030,7 +1064,7 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
                 ),
             ]);
             f.render_widget(
-                Paragraph::new(info_line).style(Style::default().bg(COLOR_PANEL())),
+                Paragraph::new(info_line).style(Style::default().bg(COLOR_BG())),
                 modal_chunks[3],
             );
         }
@@ -1052,7 +1086,7 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
             Span::styled(" cancel", Style::default().fg(COLOR_MUTED())),
         ]);
         f.render_widget(
-            Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
+            Paragraph::new(footer_line).style(Style::default().bg(COLOR_BG())),
             modal_chunks[5],
         );
 
@@ -1064,10 +1098,14 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
         .history_picker_index
         .min(sessions.len().saturating_sub(1));
 
-    let modal_area = centered_rect_fixed(65, 18, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_BG())),
         modal_area,
     );
 
@@ -1177,14 +1215,22 @@ pub(super) fn render_history_picker_modal(f: &mut Frame, state: &AppState) {
     );
 }
 
-pub(super) fn render_mcp_config_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_mcp_config_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let servers = &state.config.mcp_servers;
     let selected_idx = state.mcp_picker_index;
 
-    let modal_area = centered_rect_fixed(70, 18, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_BG())),
         modal_area,
     );
 
@@ -1521,7 +1567,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
 ];
 
-pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_command_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let search = state.command_picker_search.to_lowercase();
     let filtered_items: Vec<&PaletteItem> = PALETTE_ITEMS
         .iter()
@@ -1535,7 +1585,7 @@ pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
         .command_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    let modal_area = centered_rect_fixed(65, 20, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 14);
 
     f.render_widget(Clear, modal_area);
 
@@ -1543,7 +1593,7 @@ pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(COLOR_PANEL()));
+        .style(Style::default().bg(COLOR_BG()));
 
     f.render_widget(modal_block, modal_area);
 
@@ -1682,7 +1732,11 @@ pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
     f.render_widget(list_paragraph, modal_chunks[4]);
 }
 
-pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_tool_confirmation_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let confirmations = match &state.pending_tool_confirmation {
         Some(c) if !c.is_empty() => c,
         _ => return,
@@ -1690,21 +1744,15 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
 
     if confirmations.len() == 1 {
         let confirmation = &confirmations[0];
-        let screen_width = f.area().width;
         let screen_height = f.area().height;
-        let width = if confirmation.content_preview.contains('\x00') {
-            (screen_width.saturating_sub(4)).clamp(80, 160)
-        } else {
-            (screen_width.saturating_sub(10)).clamp(60, 120)
-        };
         let has_preview = !confirmation.content_preview.trim().is_empty();
         let preview_lines = confirmation.content_preview.lines().count();
         let height = if has_preview {
-            ((preview_lines as u16) + 9).clamp(14, (screen_height.saturating_sub(4)).min(40))
+            ((preview_lines as u16) + 9).clamp(10, (screen_height.saturating_sub(4)).min(20))
         } else {
-            9
+            8
         };
-        let modal_area = centered_rect_fixed(width, height, f.area());
+        let modal_area = input_anchor_rect(f, input_area, height);
 
         f.render_widget(Clear, modal_area);
 
@@ -1712,7 +1760,7 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::Yellow))
-            .style(Style::default().bg(COLOR_PANEL()));
+            .style(Style::default().bg(COLOR_BG()));
         f.render_widget(modal_block, modal_area);
 
         let inner_area = modal_area.inner(Margin {
@@ -2050,13 +2098,17 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
 
 /// Interactive `ask_question` modal: renders the question and its options, with
 /// the highlighted option (and, for multi-select, ticked options) emphasized.
-pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_question_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let Some(q) = &state.pending_question else {
         return;
     };
 
     let screen = f.area();
-    let width = screen.width.saturating_sub(10).clamp(48, 84);
+    let width = input_area.width.clamp(48, screen.width.saturating_sub(4));
 
     // Wrap the question to the inner width so the modal height fits it.
     let inner_w = width.saturating_sub(4).max(10) as usize;
@@ -2074,7 +2126,7 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
     let row_count = q.options.len() as u16 + 1;
     let body_rows = q_lines.len() as u16 + 1 + row_count + 1 + 1; // question + gap + rows + gap + hint
     let height = (body_rows + 2).min(screen.height.saturating_sub(2)).max(6);
-    let modal_area = centered_rect_fixed(width, height, screen);
+    let modal_area = input_anchor_rect(f, input_area, height);
 
     f.render_widget(Clear, modal_area);
     f.render_widget(
@@ -2082,7 +2134,7 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+            .style(Style::default().bg(COLOR_BG())),
         modal_area,
     );
     let inner = modal_area.inner(Margin {
@@ -2096,7 +2148,7 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
             ql,
             Style::default()
                 .fg(COLOR_PRIMARY())
-                .bg(COLOR_PANEL())
+                .bg(COLOR_BG())
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -2122,7 +2174,7 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
                 .bg(COLOR_PRIMARY())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())
+            Style::default().fg(COLOR_TEXT()).bg(COLOR_BG())
         };
         // Pad the highlighted row so the selection bar spans the modal width.
         let padded = format!("{label:<width$}", width = inner.width as usize);
@@ -2142,7 +2194,7 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
             .bg(COLOR_PRIMARY())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(COLOR_TIP()).bg(COLOR_PANEL())
+        Style::default().fg(COLOR_TIP()).bg(COLOR_BG())
     };
     let custom_padded = format!("{custom_label:<width$}", width = inner.width as usize);
     lines.push(Line::from(Span::styled(custom_padded, custom_style)));
@@ -2150,11 +2202,11 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         hint,
-        Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+        Style::default().fg(COLOR_MUTED()).bg(COLOR_BG()),
     )));
 
     f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(lines).style(Style::default().bg(COLOR_BG())),
         inner,
     );
 }
@@ -2185,9 +2237,13 @@ fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-pub(super) fn render_theme_picker_modal(f: &mut Frame, state: &AppState) {
+pub(super) fn render_theme_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
     let p = crate::ui::theme::get_palette(&state.config.theme);
-    let modal_area = centered_rect_fixed(65, 14, f.area());
+    let modal_area = input_anchor_rect(f, input_area, 12);
 
     f.render_widget(Clear, modal_area);
 
