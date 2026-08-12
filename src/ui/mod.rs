@@ -718,15 +718,58 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
     lines_count
 }
 
-/// Returns ("Tokens/s: ", "N.N") with the live rate when streaming, or "0.0" when not.
-fn format_tokens_info(state: &AppState) -> (String, String) {
+fn current_tps(state: &AppState) -> f64 {
     if state.status == AppStatus::Streaming
         && let Some(ref tracker) = state.stream_tracker
     {
-        let (tps, _) = tracker.snapshot();
-        return ("Tps: ".to_string(), format!("{:.1}", tps));
+        return tracker.snapshot().0;
     }
-    ("Tps: ".to_string(), "0.0".to_string())
+    0.0
+}
+
+fn format_tps_value(tps: f64) -> String {
+    format!("{tps:.1}")
+}
+
+fn format_tps_info(tps: f64) -> String {
+    format!("Tps: {}", format_tps_value(tps))
+}
+
+fn format_token_count(tokens: u32) -> String {
+    if tokens >= 1000 {
+        format!("{:.1}K", tokens as f32 / 1000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn format_context_info(
+    total_tokens: u32,
+    context_window: u32,
+    cached_tokens: Option<u32>,
+) -> String {
+    let pct = if context_window == 0 {
+        0.0
+    } else {
+        ((total_tokens as f32 / context_window as f32) * 100.0).min(100.0)
+    };
+    let cached = cached_tokens
+        .filter(|cached| *cached > 0)
+        .map(|cached| format!(" ({} cached)", format_token_count(cached)))
+        .unwrap_or_default();
+    format!(
+        "Context: {}{} ({pct:.0}%)",
+        format_token_count(total_tokens),
+        cached,
+    )
+}
+
+fn input_footer_hint_text() -> &'static str {
+    "Ctrl+P commands"
+}
+
+fn footer_layout_constraints() -> Constraint {
+    Constraint::Length(1)
 }
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
@@ -817,183 +860,93 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         ));
     }
 
-    let right_spans = if state.history.is_empty() {
-        vec![
-            Span::styled("   ", Style::default()),
-            Span::styled(
-                "tab",
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ),
-            Span::styled(
-                " agents   ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-            Span::styled(
-                "ctrl+p",
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ),
-            Span::styled(
-                " commands",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-        ]
+    let (total_tokens, cached_tokens) = if let Some(usage) = &state.current_token_usage {
+        (usage.total_tokens, usage.cached_tokens)
     } else {
-        let (total_tokens, cached_tokens) = if let Some(usage) = &state.current_token_usage {
-            (usage.total_tokens, usage.cached_tokens)
+        let last_usage = state
+            .history
+            .iter()
+            .rev()
+            .find_map(|m| m.token_usage.as_ref());
+        if let Some(u) = last_usage {
+            (u.total_tokens, u.cached_tokens)
         } else {
-            let last_usage = state
-                .history
-                .iter()
-                .rev()
-                .find_map(|m| m.token_usage.as_ref());
-            if let Some(u) = last_usage {
-                (u.total_tokens, u.cached_tokens)
-            } else {
-                let chars: usize = state.history.iter().map(|m| m.content.len()).sum();
-                ((chars / 4) as u32, None)
-            }
-        };
-
-        let token_str = if total_tokens >= 1000 {
-            format!("{:.1}K", total_tokens as f32 / 1000.0)
-        } else {
-            format!("{}", total_tokens)
-        };
-
-        let cached_str = if let Some(cached) = cached_tokens {
-            if cached > 0 {
-                let cached_formatted = if cached >= 1000 {
-                    format!("{:.1}K", cached as f32 / 1000.0)
-                } else {
-                    format!("{}", cached)
-                };
-                format!(" ({} cached)", cached_formatted)
-            } else {
-                "".to_string()
-            }
-        } else {
-            "".to_string()
-        };
-
-        let window = state.active_context_window();
-        let pct = if window == 0 {
-            0.0
-        } else {
-            ((total_tokens as f32 / window as f32) * 100.0).min(100.0)
-        };
-
-        let mut right_spans = Vec::new();
-
-        // Add leading padding for visual spacing at start
-        right_spans.push(Span::styled("   ", Style::default()));
-
-        let tps_label = format_tokens_info(state).0;
-        let tps_value = format_tokens_info(state).1;
-        if !tps_label.is_empty() {
-            right_spans.push(Span::styled(
-                tps_label,
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-            right_spans.push(Span::styled(
-                tps_value,
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
+            let chars: usize = state.history.iter().map(|m| m.content.len()).sum();
+            ((chars / 4) as u32, None)
         }
-
-        right_spans.push(Span::styled(
-            "   Context: ",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-        right_spans.push(Span::styled(
-            token_str,
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ));
-        if !cached_str.is_empty() {
-            right_spans.push(Span::styled(
-                cached_str,
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-        }
-        right_spans.push(Span::styled(
-            format!(" ({:.0}%)", pct),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-
-        if let Some(quota) = state.model_quota_remaining {
-            let color = if quota > 50.0 {
-                COLOR_PRIMARY()
-            } else if quota > 20.0 {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-            right_spans.push(Span::styled(
-                "   Quota: ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-            right_spans.push(Span::styled(
-                format!("{:.0}%", quota),
-                get_themed_style(color, COLOR_BG(), Modifier::BOLD, show_picker),
-            ));
-        }
-
-        right_spans.push(Span::styled("   ", Style::default()));
-        right_spans.push(Span::styled(
-            "ctrl+p",
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ));
-        right_spans.push(Span::styled(
-            " commands",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-
-        right_spans
     };
+
+    let mut right_spans = Vec::new();
+    right_spans.push(Span::styled(
+        "   Auto-Confirm: ",
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    ));
+    right_spans.push(Span::styled(
+        state.auto_confirm_status_text(),
+        get_themed_style(
+            if state.auto_confirm { COLOR_PRIMARY() } else { COLOR_MUTED() },
+            COLOR_BG(),
+            if state.auto_confirm { Modifier::BOLD } else { Modifier::empty() },
+            show_picker,
+        ),
+    ));
+    right_spans.push(Span::styled(
+        format!(
+            "   {}",
+            format_context_info(total_tokens, state.active_context_window(), cached_tokens)
+        ),
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    ));
+    right_spans.push(Span::styled(
+        format!("   {}", format_tps_info(current_tps(state))),
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    ));
+
+    if let Some(quota) = state.model_quota_remaining {
+        let color = if quota > 50.0 {
+            COLOR_PRIMARY()
+        } else if quota > 20.0 {
+            Color::Yellow
+        } else {
+            Color::Red
+        };
+        right_spans.push(Span::styled(
+            "   Quota: ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+        right_spans.push(Span::styled(
+            format!("{quota:.0}%"),
+            get_themed_style(color, COLOR_BG(), Modifier::BOLD, show_picker),
+        ));
+    }
+
+    right_spans.push(Span::styled("   ", Style::default()));
+    right_spans.push(Span::styled(
+        "ctrl+p",
+        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+    ));
+    right_spans.push(Span::styled(
+        " commands",
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    ));
 
     let footer_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(28),
             Constraint::Fill(1),
         ])
         .split(footer_area);
-
-    let status_color = if state.auto_confirm {
-        COLOR_PRIMARY()
-    } else {
-        COLOR_MUTED()
-    };
-    let status_modifier = if state.auto_confirm {
-        Modifier::BOLD
-    } else {
-        Modifier::empty()
-    };
 
     f.render_widget(
         Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG())),
         footer_chunks[0],
     );
     f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "Auto-Confirm: ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-            Span::styled(
-                state.auto_confirm_status_text(),
-                get_themed_style(status_color, COLOR_BG(), status_modifier, show_picker),
-            ),
-        ]))
-        .alignment(ratatui::layout::Alignment::Center)
-        .style(Style::default().bg(COLOR_BG())),
-        footer_chunks[1],
-    );
-    f.render_widget(
         Paragraph::new(Line::from(right_spans))
             .alignment(ratatui::layout::Alignment::Right)
             .style(Style::default().bg(COLOR_BG())),
-        footer_chunks[2],
+        footer_chunks[1],
     );
 }
 
@@ -1093,14 +1046,10 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     ]);
 
     let footer_hints = Line::from(vec![
-        Span::styled(" Tab ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("autocomplete · ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("Shift+Enter ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("newline · ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("/ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("commands · ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("Ctrl+O ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("model ", Style::default().fg(COLOR_MUTED())),
+        Span::styled(
+            input_footer_hint_text(),
+            Style::default().fg(COLOR_MUTED()),
+        ),
     ]);
 
     let block = Block::default()
@@ -2504,8 +2453,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             Constraint::Min(3),
             Constraint::Length(queue_block_height),
             Constraint::Length(input_height),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            footer_layout_constraints(),
         ])
         .split(f.area());
 
