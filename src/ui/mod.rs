@@ -295,6 +295,45 @@ fn truncate_thought_preview(text: &str, max_width: usize) -> String {
     result
 }
 
+fn split_thought_blocks(content: &str) -> (String, Option<String>) {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+
+    let mut answer = String::new();
+    let mut thought_preview = None;
+    let mut rest = content;
+
+    while let Some(open_idx) = rest.find(OPEN) {
+        answer.push_str(&rest[..open_idx]);
+        let after_open = &rest[open_idx + OPEN.len()..];
+
+        if let Some(close_idx) = after_open.find(CLOSE) {
+            let thought = &after_open[..close_idx];
+            if thought_preview.is_none() {
+                thought_preview = thought
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_owned);
+            }
+            rest = &after_open[close_idx + CLOSE.len()..];
+        } else {
+            if thought_preview.is_none() {
+                thought_preview = after_open
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_owned);
+            }
+            rest = "";
+            break;
+        }
+    }
+
+    answer.push_str(rest);
+    (answer.trim().to_string(), thought_preview)
+}
+
 fn strip_rendered_tool_blocks(content: &str) -> String {
     let mut output = content.to_string();
 
@@ -345,26 +384,10 @@ fn render_assistant_message<'a>(
         content
     };
 
-    let mut think_content = None;
-    let mut main_content = display_content;
+    let (main_content_owned, thought_preview) = split_thought_blocks(display_content);
+    let main_content = main_content_owned.as_str();
 
-    if content.contains("<think>")
-        && let Some(start_idx) = content.find("<think>")
-    {
-        if let Some(real_end_idx) = content[start_idx..].find("</think>") {
-            let end_idx = start_idx + real_end_idx;
-            let think_part = &content[start_idx + 7..end_idx];
-            let main_part = &content[end_idx + 8..];
-            think_content = Some(think_part.trim());
-            main_content = main_part.trim();
-        } else {
-            let think_part = &content[start_idx + 7..];
-            think_content = Some(think_part.trim());
-            main_content = "";
-        }
-    }
-
-    if let Some(think) = think_content {
+    if let Some(first_line) = thought_preview {
         let time_str = response_time_ms.map(|ms| {
             if ms >= 1000 {
                 let sec = ms as f32 / 1000.0;
@@ -392,15 +415,10 @@ fn render_assistant_message<'a>(
             (None, None) => "Thought".to_string(),
         };
 
-        let first_line = think
-            .lines()
-            .map(|l| l.trim())
-            .find(|l| !l.is_empty())
-            .unwrap_or("");
         let preview_width = (viewport_width as usize)
             .saturating_sub(2)
             .min(64);
-        let preview = truncate_thought_preview(first_line, preview_width);
+        let preview = truncate_thought_preview(&first_line, preview_width);
 
         lines.push(Line::from(vec![
             Span::styled(

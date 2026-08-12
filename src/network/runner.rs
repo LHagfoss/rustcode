@@ -6,6 +6,17 @@ pub(crate) struct TurnRunner {
     max_continuations: usize,
 }
 
+pub(crate) struct ResponseChunk {
+    pub(crate) content: String,
+    pub(crate) finish_reason: Option<String>,
+    pub(crate) has_native_tool_calls: bool,
+}
+
+pub(crate) struct CollectedResponse {
+    pub(crate) content: String,
+    pub(crate) finish_reason: Option<String>,
+}
+
 impl TurnRunner {
     pub(crate) fn new() -> Self {
         Self {
@@ -28,23 +39,30 @@ impl TurnRunner {
 /// and subagent adapters to share exactly one continuation policy.
 pub(crate) async fn collect_response<F, Fut>(
     mut request: F,
-) -> Result<(String, Option<String>), String>
+) -> Result<CollectedResponse, String>
 where
     F: FnMut(String) -> Fut,
-    Fut: Future<Output = Result<(String, Option<String>), String>>,
+    Fut: Future<Output = Result<ResponseChunk, String>>,
 {
     let mut accumulated = String::new();
+    let mut has_native_tool_calls = false;
     let mut runner = TurnRunner::new();
     loop {
-        let (chunk, finish_reason) = request(accumulated.clone()).await?;
-        accumulated.push_str(&chunk);
-        if runner.allow_continuation(crate::network::is_cut_off(
-            &accumulated,
-            finish_reason.as_deref(),
-        )) {
+        let chunk = request(accumulated.clone()).await?;
+        accumulated.push_str(&chunk.content);
+        has_native_tool_calls |= chunk.has_native_tool_calls;
+        if !has_native_tool_calls
+            && runner.allow_continuation(crate::network::is_cut_off(
+                &accumulated,
+                chunk.finish_reason.as_deref(),
+            ))
+        {
             continue;
         }
-        return Ok((accumulated, finish_reason));
+        return Ok(CollectedResponse {
+            content: accumulated,
+            finish_reason: chunk.finish_reason,
+        });
     }
 }
 
@@ -75,13 +93,67 @@ mod tests {
             } else {
                 Some("stop".to_string())
             };
-            async move { Ok((chunk.to_string(), reason)) }
+            async move {
+                Ok(ResponseChunk {
+                    content: chunk.to_string(),
+                    finish_reason: reason,
+                    has_native_tool_calls: false,
+                })
+            }
         })
         .await
         .expect("response should collect");
 
-        assert_eq!(result.0, "partial finish");
+        assert_eq!(result.content, "partial finish");
         assert_eq!(calls, 2);
         assert_eq!(previous_args, ["", "partial"]);
+    }
+
+    #[tokio::test]
+    async fn collect_response_stops_on_native_tool_call_with_reasoning() {
+        let mut calls = 0;
+        let result = collect_response(|previous| {
+            calls += 1;
+            async move {
+                Ok(ResponseChunk {
+                    content: if previous.is_empty() {
+                        "<think>plan</think>".into()
+                    } else {
+                        "unexpected continuation".into()
+                    },
+                    finish_reason: Some("stop".into()),
+                    has_native_tool_calls: true,
+                })
+            }
+        })
+        .await
+        .expect("native tool response should collect");
+
+        assert_eq!(calls, 1);
+        assert_eq!(result.content, "<think>plan</think>");
+    }
+
+    #[tokio::test]
+    async fn collect_response_continues_reasoning_only_without_native_tool_call() {
+        let mut calls = 0;
+        let result = collect_response(|previous| {
+            calls += 1;
+            async move {
+                Ok(ResponseChunk {
+                    content: if previous.is_empty() {
+                        "<think>plan</think>".into()
+                    } else {
+                        "answer".into()
+                    },
+                    finish_reason: Some("stop".into()),
+                    has_native_tool_calls: false,
+                })
+            }
+        })
+        .await
+        .expect("reasoning-only response should continue");
+
+        assert_eq!(calls, 2);
+        assert_eq!(result.content, "<think>plan</think>answer");
     }
 }
