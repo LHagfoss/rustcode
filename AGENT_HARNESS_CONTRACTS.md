@@ -106,11 +106,14 @@ Tool authorization is centralized in [`src/tools/mod.rs`](src/tools/mod.rs).
 Unknown tools and registered tools marked as requiring confirmation do not run
 silently in interactive mode.
 
-`run_command` uses command-aware authorization. Read-only Git inspection such
-as `status`, `diff`, `log`, `show`, and `rev-parse` is non-blocking. Each shell
-segment is inspected independently; `restore`, path checkout, `reset`, `clean`,
-branch deletion, and force operations require explicit confirmation. The
-confirmation preview includes the resolved command and the destructive scope.
+`run_command` uses conservative command-aware authorization. Explicitly
+allowlisted read-only inspection such as Git `status`, `diff`, `log`, `show`,
+and `rev-parse`, supported `gh` list/view/status commands, and search commands
+is non-blocking. Unknown command families, shell redirection, and potentially
+mutating segments require explicit confirmation. Each shell segment is
+inspected independently; `restore`, path checkout, `reset`, `clean`, branch
+deletion, and force operations retain named destructive scopes in the
+confirmation preview.
 The classifier and regression tests are in
 [`src/tools/exec.rs`](src/tools/exec.rs), with interactive policy wiring in
 [`src/network/policy.rs`](src/network/policy.rs).
@@ -163,4 +166,3 @@ change, create a `feature/...` or `fix/...` branch from `main`, verify it,
 commit, push, open a PR, merge into `main`, then pull `main`. This is the
 repository workflow documented in `AGENTS.md`; it is not a permission granted
 to the model by a prompt.
-
