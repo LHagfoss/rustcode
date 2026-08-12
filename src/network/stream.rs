@@ -2,6 +2,9 @@
 /// processes the stream events.
 pub(crate) struct StreamBuffer {
     pub content: String,
+    pub thought_time_ms: u64,
+    pub thought_tokens: u32,
+    pub thought_started_at: Option<std::time::Instant>,
     /// Provider-assigned ids for the structured tool calls in this response, in
     /// the order the calls appear. Empty for the text protocols, where a call is
     /// prose the model wrote and has no identity of its own.
@@ -19,6 +22,9 @@ impl StreamBuffer {
     pub fn new() -> Self {
         Self {
             content: String::new(),
+            thought_time_ms: 0,
+            thought_tokens: 0,
+            thought_started_at: None,
             tool_call_ids: Vec::new(),
             native_tool_calls: Vec::new(),
         }
@@ -27,8 +33,19 @@ impl StreamBuffer {
     /// Drops everything carried over from a previous request.
     pub fn reset(&mut self) {
         self.content.clear();
+        self.thought_time_ms = 0;
+        self.thought_tokens = 0;
+        self.thought_started_at = None;
         self.tool_call_ids.clear();
         self.native_tool_calls.clear();
+    }
+
+    pub fn finish_thought(&mut self) {
+        if let Some(started) = self.thought_started_at.take() {
+            self.thought_time_ms = self
+                .thought_time_ms
+                .saturating_add(started.elapsed().as_millis() as u64);
+        }
     }
 }
 
@@ -39,6 +56,9 @@ mod tests {
     #[test]
     fn reset_clears_typed_native_calls_and_provider_ids() {
         let mut buffer = StreamBuffer::new();
+        buffer.thought_time_ms = 12;
+        buffer.thought_tokens = 4;
+        buffer.thought_started_at = Some(std::time::Instant::now());
         buffer.tool_call_ids.push("call-1".to_string());
         buffer.native_tool_calls.push(crate::tools::ToolCallEnvelope {
             call_id: "call-1".to_string(),
@@ -50,5 +70,8 @@ mod tests {
 
         assert!(buffer.tool_call_ids.is_empty());
         assert!(buffer.native_tool_calls.is_empty());
+        assert_eq!(buffer.thought_time_ms, 0);
+        assert_eq!(buffer.thought_tokens, 0);
+        assert!(buffer.thought_started_at.is_none());
     }
 }
