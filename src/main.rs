@@ -169,6 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout = io::stdout();
     execute!(
         stdout,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+        crossterm::cursor::MoveTo(0, 0),
         crossterm::event::EnableBracketedPaste,
         crossterm::event::EnableFocusChange,
         SetCursorStyle::BlinkingBar,
@@ -184,6 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
     crate::config::archive_live_history();
 
