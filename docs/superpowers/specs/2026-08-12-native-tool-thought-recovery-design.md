@@ -96,4 +96,3 @@ Add focused unit tests that prove:
 5. Environment metadata is delimited and remains appended after the user text.
 
 Run `cargo check --tests` and `cargo test` before publishing.
-
