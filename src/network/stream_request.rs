@@ -9,6 +9,61 @@ use super::retry;
 use super::stream::StreamBuffer;
 use super::{align_alternating_messages, count_tokens, parse_sse_line, ToolFenceCounter};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_sse_stream_returns_after_idle_timeout() {
+        let (_writer, reader) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        let read = read_sse_line(&mut reader, &mut line);
+        tokio::pin!(read);
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(retry::STREAM_IDLE_TIMEOUT + std::time::Duration::from_millis(1))
+            .await;
+
+        let error = read.await.expect_err("silent stream must not hang forever");
+        assert!(error.contains("idle timeout"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn sse_data_before_idle_timeout_is_returned_normally() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(reader);
+        let writer_task = tokio::spawn(async move {
+            tokio::io::AsyncWriteExt::write_all(&mut writer, b"data: ready\n")
+                .await
+                .unwrap();
+        });
+        let mut line = String::new();
+
+        let bytes = read_sse_line(&mut reader, &mut line)
+            .await
+            .expect("data should arrive before the idle timeout");
+
+        assert_eq!(bytes, "data: ready\n".len());
+        assert_eq!(line, "data: ready\n");
+        writer_task.await.unwrap();
+    }
+}
+
+async fn read_sse_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    line_buf: &mut String,
+) -> Result<usize, String> {
+    match tokio::time::timeout(retry::STREAM_IDLE_TIMEOUT, reader.read_line(line_buf)).await {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => Err(format!("SSE stream read failed: {error}")),
+        Err(_) => Err(format!(
+            "SSE stream idle timeout after {}s without provider data",
+            retry::STREAM_IDLE_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 /// Metadata-only summary of an outbound chat-completion request: round shape
 /// and size, not content. This is what gets written to debug.log by default
 /// in place of the full serialized payload (see `request_debug_log_line`).
@@ -331,7 +386,7 @@ pub async fn stream_request(
         }
 
         tokio::select! {
-            r = reader.read_line(&mut line_buf) => {
+            r = read_sse_line(&mut reader, &mut line_buf) => {
                 match r {
                     Ok(0) => {
                         dbg_log!("stream_request: SSE stream read EOF (0 bytes)");
@@ -461,6 +516,9 @@ pub async fn stream_request(
                     }
                     Err(e) => {
                         dbg_log!("stream_request: SSE read error: {}", e);
+                        if e.contains("idle timeout") {
+                            return Err(e);
+                        }
                         break;
                     }
                 }
