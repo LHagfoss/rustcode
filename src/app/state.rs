@@ -357,6 +357,10 @@ pub struct ChatMessage {
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_time_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_time_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_tokens: Option<u32>,
     #[serde(skip)]
     pub diff: Option<String>,
     /// Ephemeral normal code preview for newly written files. It is derived
@@ -414,6 +418,8 @@ impl ChatMessage {
             token_usage: None,
             timestamp: current_timestamp(),
             response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
             diff: None,
             file_preview: None,
             tool_result: None,
@@ -779,6 +785,9 @@ pub struct AppState {
     pub history: Vec<ChatMessage>,
     pub current_response: String,
     pub current_token_usage: Option<TokenUsage>,
+    pub current_thought_time_ms: u64,
+    pub current_thought_tokens: u32,
+    pub current_thought_started_at: Option<std::time::Instant>,
     pub model_quota_remaining: Option<f32>,
     pub pending_queue: Vec<String>,
     pub status: AppStatus,
@@ -1022,6 +1031,9 @@ impl AppState {
             history,
             current_response: String::new(),
             current_token_usage: None,
+            current_thought_time_ms: 0,
+            current_thought_tokens: 0,
+            current_thought_started_at: None,
             model_quota_remaining: None,
             pending_queue: Vec::new(),
             status: AppStatus::Idle,

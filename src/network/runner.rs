@@ -10,11 +10,15 @@ pub(crate) struct ResponseChunk {
     pub(crate) content: String,
     pub(crate) finish_reason: Option<String>,
     pub(crate) has_native_tool_calls: bool,
+    pub(crate) thought_time_ms: u64,
+    pub(crate) thought_tokens: u32,
 }
 
 pub(crate) struct CollectedResponse {
     pub(crate) content: String,
     pub(crate) finish_reason: Option<String>,
+    pub(crate) thought_time_ms: u64,
+    pub(crate) thought_tokens: u32,
 }
 
 impl TurnRunner {
@@ -46,11 +50,15 @@ where
 {
     let mut accumulated = String::new();
     let mut has_native_tool_calls = false;
+    let mut thought_time_ms: u64 = 0;
+    let mut thought_tokens: u32 = 0;
     let mut runner = TurnRunner::new();
     loop {
         let chunk = request(accumulated.clone()).await?;
         accumulated.push_str(&chunk.content);
         has_native_tool_calls |= chunk.has_native_tool_calls;
+        thought_time_ms = thought_time_ms.saturating_add(chunk.thought_time_ms);
+        thought_tokens = thought_tokens.saturating_add(chunk.thought_tokens);
         if !has_native_tool_calls
             && runner.allow_continuation(crate::network::is_cut_off(
                 &accumulated,
@@ -62,6 +70,8 @@ where
         return Ok(CollectedResponse {
             content: accumulated,
             finish_reason: chunk.finish_reason,
+            thought_time_ms,
+            thought_tokens,
         });
     }
 }
@@ -98,6 +108,8 @@ mod tests {
                     content: chunk.to_string(),
                     finish_reason: reason,
                     has_native_tool_calls: false,
+                    thought_time_ms: 0,
+                    thought_tokens: 0,
                 })
             }
         })
@@ -123,6 +135,8 @@ mod tests {
                     },
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: true,
+                    thought_time_ms: 0,
+                    thought_tokens: 0,
                 })
             }
         })
@@ -147,6 +161,8 @@ mod tests {
                     },
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: false,
+                    thought_time_ms: 0,
+                    thought_tokens: 0,
                 })
             }
         })
@@ -155,5 +171,32 @@ mod tests {
 
         assert_eq!(calls, 2);
         assert_eq!(result.content, "<think>plan</think>answer");
+    }
+
+    #[tokio::test]
+    async fn collect_response_accumulates_thought_stats_across_segments() {
+        let mut calls = 0;
+        let result = collect_response(|previous| {
+            calls += 1;
+            async move {
+                Ok(ResponseChunk {
+                    content: if previous.is_empty() {
+                        "<think>first</think>".into()
+                    } else {
+                        "answer".into()
+                    },
+                    finish_reason: Some("stop".into()),
+                    has_native_tool_calls: false,
+                    thought_time_ms: if previous.is_empty() { 250 } else { 400 },
+                    thought_tokens: if previous.is_empty() { 12 } else { 8 },
+                })
+            }
+        })
+        .await
+        .expect("thought stats should collect");
+
+        assert_eq!(calls, 2);
+        assert_eq!(result.thought_time_ms, 650);
+        assert_eq!(result.thought_tokens, 20);
     }
 }

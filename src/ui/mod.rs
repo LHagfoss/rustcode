@@ -263,6 +263,8 @@ fn model_label(state: &AppState) -> String {
 struct AssistantRenderOptions {
     token_usage: Option<crate::app::TokenUsage>,
     response_time_ms: Option<u64>,
+    thought_time_ms: Option<u64>,
+    thought_tokens: Option<u32>,
     is_generating: bool,
     viewport_width: u16,
     show_picker: bool,
@@ -371,6 +373,8 @@ fn render_assistant_message<'a>(
     let AssistantRenderOptions {
         token_usage,
         response_time_ms,
+        thought_time_ms,
+        thought_tokens,
         is_generating,
         viewport_width,
         show_picker,
@@ -388,7 +392,7 @@ fn render_assistant_message<'a>(
     let main_content = main_content_owned.as_str();
 
     if let Some(first_line) = thought_preview {
-        let time_str = response_time_ms.map(|ms| {
+        let time_str = thought_time_ms.or(response_time_ms).map(|ms| {
             if ms >= 1000 {
                 let sec = ms as f32 / 1000.0;
                 if (sec * 10.0).fract() == 0.0 || sec >= 10.0 {
@@ -400,11 +404,11 @@ fn render_assistant_message<'a>(
                 format!("{}ms", ms)
             }
         });
-        let tokens_str = token_usage.as_ref().map(|u| {
-            if u.total_tokens >= 1000 {
-                format!("{:.1}k tokens", u.total_tokens as f32 / 1000.0)
+        let tokens_str = thought_tokens.or_else(|| token_usage.as_ref().map(|u| u.total_tokens)).map(|tokens| {
+            if tokens >= 1000 {
+                format!("{:.1}k tokens", tokens as f32 / 1000.0)
             } else {
-                format!("{} tokens", u.total_tokens)
+                format!("{} tokens", tokens)
             }
         });
 
@@ -2246,6 +2250,8 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 AssistantRenderOptions {
                     token_usage: msg.token_usage.clone(),
                     response_time_ms: msg.response_time_ms,
+                    thought_time_ms: msg.thought_time_ms,
+                    thought_tokens: msg.thought_tokens,
                     is_generating: false,
                     viewport_width: inner_area.width,
                     show_picker,
@@ -2279,14 +2285,23 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         };
 
         if !should_hide_stream {
-            let live_ms = state.generation_start_time.map(|t| t.elapsed().as_millis() as u64);
+            let live_thought_ms = state.current_thought_time_ms.saturating_add(
+                state
+                    .current_thought_started_at
+                    .map(|started| started.elapsed().as_millis() as u64)
+                    .unwrap_or(0),
+            );
             render_assistant_message(
                 &state.current_response,
                 &mut lines,
                 &mut copy_clicks,
                 AssistantRenderOptions {
                     token_usage: None,
-                    response_time_ms: live_ms,
+                    response_time_ms: state
+                        .generation_start_time
+                        .map(|started| started.elapsed().as_millis() as u64),
+                    thought_time_ms: Some(live_thought_ms),
+                    thought_tokens: Some(state.current_thought_tokens),
                     is_generating: true,
                     viewport_width: inner_area.width,
                     show_picker,

@@ -256,6 +256,8 @@ use super::*;
             AssistantRenderOptions {
                 token_usage: None,
                 response_time_ms: None,
+                thought_time_ms: None,
+                thought_tokens: None,
                 is_generating: false,
                 viewport_width: width,
                 show_picker: false,
@@ -298,6 +300,8 @@ use super::*;
             AssistantRenderOptions {
                 token_usage: None,
                 response_time_ms: None,
+                thought_time_ms: None,
+                thought_tokens: None,
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
@@ -335,6 +339,8 @@ use super::*;
             AssistantRenderOptions {
                 token_usage: None,
                 response_time_ms: None,
+                thought_time_ms: None,
+                thought_tokens: None,
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
@@ -418,6 +424,8 @@ use super::*;
                     cached_tokens: None,
                 }),
                 response_time_ms: Some(3000),
+                thought_time_ms: None,
+                thought_tokens: None,
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
@@ -437,6 +445,37 @@ use super::*;
             .map(|span| span.content.as_ref())
             .collect();
         assert!(!rendered.contains("Tracing line by line."));
+    }
+
+    #[test]
+    fn thinking_metadata_uses_thought_stats_not_full_response_stats() {
+        use super::{AssistantRenderOptions, render_assistant_message};
+        use crate::app::TokenUsage;
+
+        let mut lines = Vec::new();
+        let mut copies = Vec::new();
+        render_assistant_message(
+            "<think>Planning the answer.</think>Final answer.",
+            &mut lines,
+            &mut copies,
+            AssistantRenderOptions {
+                token_usage: Some(TokenUsage {
+                    prompt_tokens: 1000,
+                    completion_tokens: 900,
+                    total_tokens: 1900,
+                    cached_tokens: None,
+                }),
+                response_time_ms: Some(9000),
+                thought_time_ms: Some(1250),
+                thought_tokens: Some(42),
+                is_generating: false,
+                viewport_width: 80,
+                show_picker: false,
+                last_copy_text: None,
+            },
+        );
+
+        assert_eq!(lines[0].spans[1].content, "Thought for 1.2s, 42 tokens");
     }
 
     #[test]
