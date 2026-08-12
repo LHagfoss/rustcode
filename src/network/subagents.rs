@@ -127,7 +127,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let request_api_url = api_base_url.clone();
         let request_model = model_name.clone();
         let request_msgs = msgs.clone();
-        let (content, _finish_reason) = match runner::collect_response(move |previous| {
+        let collected = match runner::collect_response(move |previous| {
             let mut current_msgs = request_msgs.clone();
             if !previous.is_empty() {
                 let nudge = continuation_nudge(&previous);
@@ -161,7 +161,13 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 .await
                 .map_err(|e| e.to_string())?;
                 let chunk_content = request_buffer.lock().await.content.clone();
-                Ok((chunk_content, finish_reason))
+                let has_native_tool_calls =
+                    !request_buffer.lock().await.native_tool_calls.is_empty();
+                Ok(super::runner::ResponseChunk {
+                    content: chunk_content,
+                    finish_reason,
+                    has_native_tool_calls,
+                })
             }
         })
         .await
@@ -169,6 +175,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             Ok(result) => result,
             Err(e) => return Err(format!("error: subagent request failed: {e}")),
         };
+        let content = collected.content;
 
         if content.is_empty() {
             return Err("error: subagent returned an empty reply".to_string());

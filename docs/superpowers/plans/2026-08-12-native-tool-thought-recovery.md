@@ -21,13 +21,14 @@
 ### Task 1: Stop continuation when native tool calls exist
 
 **Files:**
+- Modify: `src/network/subagents.rs` for the shared collector interface
 - Modify: \`src/network/runner.rs\`
 - Modify: \`src/network/turn_engine.rs\` around the \`runner::collect_response\` call
 - Test: \`src/network/runner.rs\` unit tests
 
 **Interfaces:**
 - \`runner::ResponseChunk { content: String, finish_reason: Option<String>, has_native_tool_calls: bool }\` is returned by the request closure.
-- \`runner::CollectedResponse { content: String, finish_reason: Option<String>, has_native_tool_calls: bool }\` is returned by \`collect_response\`.
+- \`runner::CollectedResponse { content: String, finish_reason: Option<String> }\` is returned by \`collect_response\`.
 - \`turn_engine\` fills \`has_native_tool_calls\` from \`stream_buffer.native_tool_calls.is_empty()\` after \`stream_request\` completes.
 
 - [ ] **Step 1: Write the failing tests**
