@@ -45,7 +45,7 @@ Also add a layout-policy assertion that the render constraints contain no spacer
 Run:
 
 ```bash
-cargo test ui::tests --lib
+cargo test --bin rustcode ui::tests
 ```
 
 Expected: compilation failure because the new pure helpers/layout policy do not exist yet.
@@ -68,7 +68,7 @@ Implement helpers for context and TPS text, preserving the current token formatt
 Run:
 
 ```bash
-cargo test ui::tests --lib
+cargo test --bin rustcode ui::tests
 ```
 
 Expected: the helper tests pass; any remaining failure must identify a layout or rendering assertion.
@@ -96,7 +96,7 @@ Delete the extra `Constraint::Length(1)` between `input_height` and the footer c
 Run:
 
 ```bash
-cargo test ui::tests --lib
+cargo test --bin rustcode ui::tests
 git diff --check
 git diff -- src/ui/mod.rs
 ```
@@ -129,4 +129,3 @@ git diff --stat
 ```
 
 Confirm only the implementation and focused tests remain unstaged for the feature commit; the already-committed design and plan docs are expected history.
-
