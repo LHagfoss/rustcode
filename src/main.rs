@@ -20,9 +20,9 @@ use crate::app::{AppState, AppStatus, ChatMessage, Verbosity};
 use clap::Parser;
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, DisableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
@@ -167,16 +167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    // Use SGR Mouse Mode (ESC[?1006h) — reliable on macOS Terminal.app and iTerm2.
-    // ESC[?1003h adds any-motion reporting, which crossterm's EnableMouseCapture
-    // leaves off; without it the terminal only reports motion while a button is
-    // held and buttons can never show a hover state.
-    use std::io::Write;
-    write!(stdout, "\x1b[?1006h\x1b[?1003h").ok();
     execute!(
         stdout,
-        EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture,
         crossterm::event::EnableBracketedPaste,
         crossterm::event::EnableFocusChange,
         SetCursorStyle::BlinkingBar,
@@ -1995,14 +1987,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::config::flush_history();
 
     disable_raw_mode()?;
-    {
-        use std::io::Write;
-        write!(terminal.backend_mut(), "\x1b[?1003l").ok();
-    }
     execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
         crossterm::event::DisableBracketedPaste,
         crossterm::event::DisableFocusChange,
         SetCursorStyle::DefaultUserShape
