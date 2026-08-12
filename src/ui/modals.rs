@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -206,36 +206,71 @@ pub(super) fn render_welcome_screen(
 
     let prompt_box_area = box_chunks[1];
 
-    let prompt_box_split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(prompt_box_area);
+    let (mode_label_str, mode_color) = match state.agent_mode {
+        crate::config::AgentMode::Build => ("build", COLOR_PRIMARY()),
+        crate::config::AgentMode::Plan => ("plan", Color::Rgb(229, 192, 123)),
+    };
+    let model_str = model_label(state);
 
-    let line_chars = "▌\n".repeat(prompt_box_area.height as usize);
-    let vertical_line_widget = Paragraph::new(line_chars).style(get_themed_style(
-        COLOR_SECONDARY(),
-        COLOR_BG(),
-        Modifier::empty(),
-        show_picker,
-    ));
-    f.render_widget(vertical_line_widget, prompt_box_split[0]);
+    let title_left = Line::from(vec![
+        Span::styled(" ✦ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("rustcode", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+    ]);
 
-    let solid_panel = Block::default().style(Style::default().bg(COLOR_PANEL()));
+    let title_right = Line::from(vec![
+        Span::styled(format!("[{mode_label_str}] "), Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("[{model_str}] "), Style::default().fg(COLOR_MUTED())),
+    ]);
+
+    let footer_hints = Line::from(vec![
+        Span::styled(" Tab ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("autocomplete · ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("Shift+Enter ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("newline · ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("/ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("commands · ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("Ctrl+O ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("model ", Style::default().fg(COLOR_MUTED())),
+    ]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if show_picker { COLOR_MUTED() } else { COLOR_PRIMARY() }))
+        .title(title_left)
+        .title(title_right.alignment(ratatui::layout::Alignment::Right))
+        .title_bottom(footer_hints.alignment(ratatui::layout::Alignment::Right));
+
+    f.render_widget(block, prompt_box_area);
+
+    let inner = prompt_box_area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+
+    let prompt_span = Span::styled(
+        "❯ ",
+        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+    );
 
     let mut box_lines = Vec::new();
     let mut cursor_dx = 0u16;
     let mut cursor_dy = 0u16;
 
     if state.input_buffer.is_empty() {
-        box_lines.push(Line::from(Span::styled(
-            "Ask anything... \"Fix a TODO in the codebase\"",
-            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), show_picker),
-        )));
+        box_lines.push(Line::from(vec![
+            prompt_span,
+            Span::styled(
+                "Ask anything... \"Fix a TODO in the codebase\"",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+            ),
+        ]));
     } else {
         let text_style = if state.input_buffer.starts_with('/') {
-            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)
         } else {
-            get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)
         };
 
         let mut styled_chars: Vec<(char, Style)> =
@@ -243,20 +278,18 @@ pub(super) fn render_welcome_screen(
 
         if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
-                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
-        // Caret position is computed in the collapsed view so it matches the
-        // `[Image #N]` chips the user sees (same remap as the chat input).
         let safe_end = safe_byte_index(&state.input_buffer, state.cursor_position);
         let raw_prefix = &state.input_buffer[..safe_end];
         let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 
-        let mut current_line_spans = Vec::new();
+        let mut current_line_spans = vec![prompt_span];
         let mut current_run: Option<(Style, String)> = None;
 
-        let mut col = 0;
+        let mut col = 2;
         let mut row = 0;
 
         let total_chars = styled_chars.len();
@@ -311,46 +344,8 @@ pub(super) fn render_welcome_screen(
         box_lines.push(Line::from(current_line_spans));
     }
 
-    box_lines.push(Line::from(""));
-
-    let agent_label = match state.agent_mode {
-        crate::config::AgentMode::Build => "Build",
-        crate::config::AgentMode::Plan => "Plan",
-    };
-    let agent_style = match state.agent_mode {
-        crate::config::AgentMode::Build => get_themed_style(
-            COLOR_SECONDARY(),
-            COLOR_PANEL(),
-            Modifier::BOLD,
-            show_picker,
-        ),
-        crate::config::AgentMode::Plan => get_themed_style(
-            Color::Rgb(229, 192, 123),
-            COLOR_PANEL(),
-            Modifier::BOLD,
-            show_picker,
-        ),
-    };
-
-    box_lines.push(Line::from(vec![
-        Span::styled(agent_label, agent_style),
-        Span::styled(
-            " · ",
-            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            model_label(state),
-            get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
-        ),
-    ]));
-
-    let inner = prompt_box_split[1].inner(Margin {
-        vertical: 1,
-        horizontal: 2,
-    });
-    f.render_widget(solid_panel, prompt_box_split[1]);
     f.render_widget(
-        Paragraph::new(box_lines).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(box_lines).style(Style::default().bg(COLOR_BG())),
         inner,
     );
 
@@ -448,7 +443,7 @@ pub(super) fn render_welcome_screen(
     f.render_widget(left_meta, meta_chunks[0]);
     f.render_widget(right_meta, meta_chunks[1]);
 
-    (prompt_box_area, prompt_box_split[1])
+    (prompt_box_area, inner)
 }
 
 fn centered_rect_fixed(width: u16, height: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
@@ -501,7 +496,11 @@ pub(super) fn render_verbosity_picker_modal(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.panel));
+    let modal_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(COLOR_PRIMARY()))
+        .style(Style::default().bg(p.panel));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -595,7 +594,11 @@ pub(super) fn render_thinking_picker_modal(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.panel));
+    let modal_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(COLOR_PRIMARY()))
+        .style(Style::default().bg(p.panel));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -689,7 +692,11 @@ pub(super) fn render_protocol_picker_modal(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.panel));
+    let modal_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(COLOR_PRIMARY()))
+        .style(Style::default().bg(p.panel));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -798,8 +805,11 @@ pub(super) fn render_model_picker_modal(f: &mut Frame, state: &AppState) {
     // Clear the background to prevent text bleed-through
     f.render_widget(Clear, modal_area);
 
-    // Borderless solid background panel
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
+    let modal_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(COLOR_PRIMARY()))
+        .style(Style::default().bg(COLOR_PANEL()));
 
     f.render_widget(modal_block, modal_area);
 
@@ -1529,7 +1539,11 @@ pub(super) fn render_command_picker_modal(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
+    let modal_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(COLOR_PRIMARY()))
+        .style(Style::default().bg(COLOR_PANEL()));
 
     f.render_widget(modal_block, modal_area);
 
@@ -1694,7 +1708,11 @@ pub(super) fn render_tool_confirmation_modal(f: &mut Frame, state: &AppState) {
 
         f.render_widget(Clear, modal_area);
 
-        let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(COLOR_PANEL()));
         f.render_widget(modal_block, modal_area);
 
         let inner_area = modal_area.inner(Margin {
@@ -2060,7 +2078,11 @@ pub(super) fn render_question_modal(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
     let inner = modal_area.inner(Margin {
@@ -2169,7 +2191,11 @@ pub(super) fn render_theme_picker_modal(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.panel));
+    let modal_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(COLOR_PRIMARY()))
+        .style(Style::default().bg(p.panel));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
