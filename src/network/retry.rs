@@ -20,6 +20,12 @@ pub const MAX_RETRIES: usize = 5;
 /// request timeout (which would kill legitimate long-running SSE streams).
 pub const HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Maximum time allowed between bytes/events once an SSE response has
+/// started. This is an idle timeout, not a total completion timeout: thinking
+/// and long responses may continue indefinitely while the provider is making
+/// progress.
+pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Fibonacci-like delays for rate limits (1, 2, 3, 5, 8, 13, 21, 30 s).
 /// More patient than exponential — avoids hammering a throttled endpoint.
 const FIBO_DELAYS_MS: &[u64] = &[1000, 2000, 3000, 5000, 8000, 13000, 21000, 30000];
