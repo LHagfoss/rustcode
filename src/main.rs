@@ -1964,17 +1964,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // leaving the block highlighted.
                                     s.clear_selection();
                                 } else {
-                                    // A plain click: toggle a thought if one sits on this
-                                    // row, otherwise just clear any existing selection.
+                                    // A plain click clears any existing selection.
                                     s.clear_selection();
                                     let click_screen_row = b.1.saturating_sub(s.scroll_row);
-                                    if let Some(&(_, idx)) = s
-                                        .thought_toggle_rows
-                                        .iter()
-                                        .find(|(row, _)| *row == click_screen_row)
-                                    {
-                                        s.toggle_thought(idx);
-                                    } else if let Some((_, code)) = s
+                                    if let Some((_, code)) = s
                                         .code_copy_rows
                                         .iter()
                                         .find(|(row, _)| *row == click_screen_row)
