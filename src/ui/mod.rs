@@ -1041,7 +1041,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let border_color = if show_picker {
         COLOR_MUTED()
     } else {
-        COLOR_TEXT()
+        COLOR_PRIMARY()
     };
 
     let (mode_label_str, mode_color) = match state.agent_mode {
@@ -1661,7 +1661,7 @@ fn render_status_panel<'a>(
         return;
     }
 
-    let border_c = COLOR_TEXT();
+    let border_c = COLOR_PRIMARY();
     let reset_bg = COLOR_BG();
 
     let box_w = (width as usize).saturating_sub(2).max(40);
@@ -1794,7 +1794,7 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let left_w = if inner_w >= 90 { 50 } else { (inner_w * 44 / 100).max(30) };
     let right_w = inner_w.saturating_sub(left_w + 1);
 
-    let border_c = COLOR_TEXT();
+    let border_c = COLOR_PRIMARY();
     let primary = COLOR_PRIMARY();
     let text_c = COLOR_TEXT();
     let muted_c = COLOR_MUTED();
