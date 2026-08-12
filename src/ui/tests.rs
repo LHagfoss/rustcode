@@ -247,13 +247,11 @@ use super::*;
 
         let content = "```text\nWhy Rust Outshines C#\n\nA short line\n```";
         let mut lines = Vec::new();
-        let mut clicks = Vec::new();
         let mut copies = Vec::new();
         let width: u16 = 80;
         render_assistant_message(
             content,
             &mut lines,
-            &mut clicks,
             &mut copies,
             AssistantRenderOptions {
                 token_usage: None,
@@ -261,8 +259,6 @@ use super::*;
                 is_generating: false,
                 viewport_width: width,
                 show_picker: false,
-                thought_collapsed: true,
-                msg_index: None,
                 last_copy_text: None,
             },
         );
@@ -294,12 +290,10 @@ use super::*;
         let content =
             "```diff\n--- a/src/temp.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-old\n-removed\n```";
         let mut lines = Vec::new();
-        let mut clicks = Vec::new();
         let mut copies = Vec::new();
         render_assistant_message(
             content,
             &mut lines,
-            &mut clicks,
             &mut copies,
             AssistantRenderOptions {
                 token_usage: None,
@@ -307,8 +301,6 @@ use super::*;
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
-                thought_collapsed: true,
-                msg_index: None,
                 last_copy_text: None,
             },
         );
@@ -335,12 +327,10 @@ use super::*;
             "\n```"
         );
         let mut lines = Vec::new();
-        let mut clicks = Vec::new();
         let mut copies = Vec::new();
         render_assistant_message(
             content,
             &mut lines,
-            &mut clicks,
             &mut copies,
             AssistantRenderOptions {
                 token_usage: None,
@@ -348,8 +338,6 @@ use super::*;
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
-                thought_collapsed: false,
-                msg_index: None,
                 last_copy_text: None,
             },
         );
@@ -367,6 +355,32 @@ use super::*;
     }
 
     #[test]
+    fn thought_preview_keeps_short_text_unchanged() {
+        assert_eq!(
+            truncate_thought_preview("Analyzing Paste Events", 24),
+            "Analyzing Paste Events"
+        );
+    }
+
+    #[test]
+    fn thought_preview_truncates_to_one_display_line() {
+        assert_eq!(
+            truncate_thought_preview(
+                "The user has made a request with contradictory instructions.",
+                24
+            ),
+            "The user has made a req…"
+        );
+    }
+
+    #[test]
+    fn thought_preview_does_not_split_wide_or_multibyte_characters() {
+        let result = truncate_thought_preview("分析しています 🚀", 10);
+        assert!(result.width() <= 10);
+        assert!(result.is_char_boundary(result.len()));
+    }
+
+    #[test]
     fn test_thinking_renders_metadata_and_summary() {
         use super::{AssistantRenderOptions, render_assistant_message};
         use crate::app::TokenUsage;
@@ -374,12 +388,10 @@ use super::*;
         let content =
             "<think>\nUnderstanding the history issue.\nTracing line by line.\n</think>\nDone";
         let mut lines = Vec::new();
-        let mut clicks = Vec::new();
         let mut copies = Vec::new();
         render_assistant_message(
             content,
             &mut lines,
-            &mut clicks,
             &mut copies,
             AssistantRenderOptions {
                 token_usage: Some(TokenUsage {
@@ -392,17 +404,22 @@ use super::*;
                 is_generating: false,
                 viewport_width: 80,
                 show_picker: false,
-                thought_collapsed: true,
-                msg_index: Some(1),
                 last_copy_text: None,
             },
         );
 
         assert_eq!(lines[0].spans[1].content, "Thought for 3s, 1.4k tokens");
+        assert_eq!(lines[0].spans[0].content, "▸ ");
         assert_eq!(
             lines[1].spans[0].content,
             "  Understanding the history issue."
         );
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(!rendered.contains("Tracing line by line."));
     }
 
     #[test]

@@ -762,8 +762,6 @@ pub enum HoverTarget {
     None,
     /// The jump-to-latest pill.
     ScrollPill,
-    /// A collapsible thought header, at this screen row.
-    ThoughtHeader(u16),
     /// A code block's `[Copy]` badge, at this screen row.
     CopyBadge(u16),
 }
@@ -911,8 +909,6 @@ pub struct AppState {
     /// True when the active selection lives in the input box rather than the
     /// chat. Input has no scroll offset, so highlight/extract use scroll_row 0.
     pub sel_in_input: bool,
-    pub expanded_thoughts: std::collections::HashSet<usize>,
-    pub thought_toggle_rows: Vec<(u16, usize)>,
     /// Screen rows carrying a code-block `[Copy]` badge, mapped to the block's
     /// text, for click-to-copy hit-testing.
     pub code_copy_rows: Vec<(u16, String)>,
@@ -1100,8 +1096,6 @@ impl AppState {
             sel_end: None,
             selecting: false,
             sel_in_input: false,
-            expanded_thoughts: std::collections::HashSet::new(),
-            thought_toggle_rows: Vec::new(),
             code_copy_rows: Vec::new(),
 
             last_escape_time: None,
@@ -1513,10 +1507,6 @@ impl AppState {
         {
             return HoverTarget::ScrollPill;
         }
-        // Chat rows are recorded in screen coordinates by the renderer.
-        if self.thought_toggle_rows.iter().any(|(r, _)| *r == row) {
-            return HoverTarget::ThoughtHeader(row);
-        }
         if let Some((_, code_text)) = self.code_copy_rows.iter().find(|(r, _)| *r == row) {
             let badge_width = if self
                 .last_copy_text
@@ -1629,11 +1619,6 @@ impl AppState {
         self.redraw_requested = true;
     }
 
-    pub fn toggle_thought(&mut self, idx: usize) {
-        if !self.expanded_thoughts.remove(&idx) {
-            self.expanded_thoughts.insert(idx);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1891,11 +1876,10 @@ mod hover_tests {
     fn hover_target_prefers_the_pill_then_clickable_rows() {
         let mut s = AppState::new();
         s.scroll_to_bottom_btn = Some(Rect::new(60, 20, 20, 1));
-        s.thought_toggle_rows = vec![(5, 3)];
         s.code_copy_rows = vec![(9, "code".to_string())];
 
         assert_eq!(s.hover_target_at(65, 20), HoverTarget::ScrollPill);
-        assert_eq!(s.hover_target_at(0, 5), HoverTarget::ThoughtHeader(5));
+        assert_eq!(s.hover_target_at(0, 5), HoverTarget::None);
         assert_eq!(s.hover_target_at(40, 9), HoverTarget::CopyBadge(9));
         // Nothing clickable on this row, and outside the pill rect.
         assert_eq!(s.hover_target_at(40, 7), HoverTarget::None);

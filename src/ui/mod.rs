@@ -264,9 +264,33 @@ struct AssistantRenderOptions {
     is_generating: bool,
     viewport_width: u16,
     show_picker: bool,
-    thought_collapsed: bool,
-    msg_index: Option<usize>,
     last_copy_text: Option<(String, std::time::Instant)>,
+}
+
+fn truncate_thought_preview(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_string();
+    }
+
+    let content_width = max_width - 1;
+    let mut result = String::new();
+    let mut width = 0;
+    for c in text.chars() {
+        let char_width = c.width().unwrap_or(0);
+        if width + char_width > content_width {
+            break;
+        }
+        result.push(c);
+        width += char_width;
+    }
+    result.push('…');
+    result
 }
 
 fn strip_rendered_tool_blocks(content: &str) -> String {
@@ -300,7 +324,6 @@ fn strip_rendered_tool_blocks(content: &str) -> String {
 fn render_assistant_message<'a>(
     content: &'a str,
     lines: &mut Vec<Line<'a>>,
-    click_registry: &mut Vec<(usize, usize)>,
     copy_registry: &mut Vec<(usize, String)>,
     options: AssistantRenderOptions,
 ) {
@@ -310,8 +333,6 @@ fn render_assistant_message<'a>(
         is_generating,
         viewport_width,
         show_picker,
-        thought_collapsed,
-        msg_index,
         last_copy_text,
     } = options;
     let display_content = if let Some(idx) = content.find("\n\n[harness verification:") {
@@ -369,25 +390,19 @@ fn render_assistant_message<'a>(
             (None, None) => "Thought".to_string(),
         };
 
-        let toggle = if thought_collapsed { "+ " } else { "− " };
-        if let Some(idx) = msg_index {
-            click_registry.push((lines.len(), idx));
-        }
-
         let first_line = think
             .lines()
             .map(|l| l.trim())
             .find(|l| !l.is_empty())
             .unwrap_or("");
-        let preview = if first_line.chars().count() > 70 {
-            format!("{}...", first_line.chars().take(67).collect::<String>())
-        } else {
-            first_line.to_string()
-        };
+        let preview_width = (viewport_width as usize)
+            .saturating_sub(2)
+            .min(64);
+        let preview = truncate_thought_preview(first_line, preview_width);
 
         lines.push(Line::from(vec![
             Span::styled(
-                toggle,
+                "▸ ",
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
             Span::styled(
@@ -396,29 +411,11 @@ fn render_assistant_message<'a>(
             ),
         ]));
 
-        if thought_collapsed {
-            if !preview.is_empty() {
-                if let Some(idx) = msg_index {
-                    click_registry.push((lines.len(), idx));
-                }
-                lines.push(Line::from(vec![Span::styled(
-                    format!("  {preview}"),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-                )]));
-            }
-        } else {
-            for raw_line in think.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "│ ",
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        raw_line,
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ),
-                ]));
-            }
+        if !preview.is_empty() {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {preview}"),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            )]));
         }
     }
 
@@ -1436,7 +1433,6 @@ fn resolve_tool_result_name(
 struct ChatCache {
     key: ChatKey,
     lines: Vec<Line<'static>>,
-    header_wrapped_rows: Vec<(u16, usize)>,
     copy_wrapped_rows: Vec<(u16, String)>,
     msg_wrapped_rows: Vec<u16>,
     total_wrapped_lines: u16,
@@ -1444,7 +1440,6 @@ struct ChatCache {
 
 type RenderedConversation = (
     Vec<Line<'static>>,
-    Vec<(u16, usize)>,
     Vec<(u16, String)>,
     Vec<u16>,
     u16,
@@ -1457,7 +1452,6 @@ struct ChatKey {
     last_len: usize,
     width: u16,
     show_picker: bool,
-    thoughts: (usize, usize),
     copied_recently: Option<(String, bool)>,
     theme: String,
 }
@@ -1474,10 +1468,6 @@ fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
         last_len: state.history.last().map_or(0, |m| m.content.len()),
         width,
         show_picker,
-        thoughts: (
-            state.expanded_thoughts.len(),
-            state.expanded_thoughts.iter().sum(),
-        ),
         copied_recently: state
             .last_copy_text
             .as_ref()
@@ -1957,7 +1947,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             c.borrow().as_ref().filter(|c| c.key == cache_key).map(|c| {
                 (
                     c.lines.clone(),
-                    c.header_wrapped_rows.clone(),
                     c.copy_wrapped_rows.clone(),
                     c.msg_wrapped_rows.clone(),
                     c.total_wrapped_lines,
@@ -1968,11 +1957,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         None
     };
 
-    let (lines, header_wrapped_rows, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines): RenderedConversation = if let Some(hit) = cached {
+    let (lines, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines): RenderedConversation = if let Some(hit) = cached {
         hit
     } else {
     let mut lines: Vec<Line> = Vec::new();
-    let mut thought_clicks: Vec<(usize, usize)> = Vec::new();
     let mut copy_clicks: Vec<(usize, String)> = Vec::new();
 
     if state.history.is_empty() {
@@ -2221,11 +2209,9 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 }
             }
 
-            let collapsed = !state.expanded_thoughts.contains(&msg_idx);
             render_assistant_message(
                 &msg.content,
                 &mut lines,
-                &mut thought_clicks,
                 &mut copy_clicks,
                 AssistantRenderOptions {
                     token_usage: msg.token_usage.clone(),
@@ -2233,8 +2219,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     is_generating: false,
                     viewport_width: inner_area.width,
                     show_picker,
-                    thought_collapsed: collapsed,
-                    msg_index: Some(msg_idx),
                     last_copy_text: state.last_copy_text.clone(),
                 },
             );
@@ -2269,7 +2253,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             render_assistant_message(
                 &state.current_response,
                 &mut lines,
-                &mut thought_clicks,
                 &mut copy_clicks,
                 AssistantRenderOptions {
                     token_usage: None,
@@ -2277,8 +2260,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                     is_generating: true,
                     viewport_width: inner_area.width,
                     show_picker,
-                    thought_collapsed: true,
-                    msg_index: None,
                     last_copy_text: state.last_copy_text.clone(),
                 },
             );
@@ -2290,17 +2271,14 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     // scrolled to the bottom
     lines.push(Line::from(""));
 
-    // Resolve wrapped start rows for everything the mouse can hit — thought
-    // headers, code-block [Copy] badges, and message boundaries — in a single
+    // Resolve wrapped start rows for code-block [Copy] badges and message
+    // boundaries in a single
     // pass. Lines wrap independently, so per-line line_count sums to the exact
     // screen offset.
-    let mut header_wrapped_rows: Vec<(u16, usize)> = Vec::new();
     let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
     let mut msg_wrapped_rows: Vec<u16> = Vec::new();
     let mut cum = 0u16;
     {
-        let click_map: std::collections::HashMap<usize, usize> =
-            thought_clicks.iter().copied().collect();
         let copy_map: std::collections::HashMap<usize, String> =
             copy_clicks.iter().cloned().collect();
         // Messages that emitted no lines share their successor's start index,
@@ -2311,9 +2289,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             .filter(|&i| i < lines.len())
             .collect();
         for (i, line) in lines.iter().enumerate() {
-            if let Some(&midx) = click_map.get(&i) {
-                header_wrapped_rows.push((cum, midx));
-            }
             if let Some(text) = copy_map.get(&i) {
                 copy_wrapped_rows.push((cum, text.clone()));
             }
@@ -2339,14 +2314,13 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             let cache = ChatCache {
                 key: cache_key,
                 lines: owned_lines.clone(),
-                header_wrapped_rows: header_wrapped_rows.clone(),
                 copy_wrapped_rows: copy_wrapped_rows.clone(),
                 msg_wrapped_rows: msg_wrapped_rows.clone(),
                 total_wrapped_lines,
             };
             CHAT_CACHE.with(|c| *c.borrow_mut() = Some(cache));
         }
-        (owned_lines, header_wrapped_rows, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines)
+        (owned_lines, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines)
     };
 
     let conversation_paragraph = Paragraph::new(lines)
@@ -2411,15 +2385,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         state.scroll_to_bottom_btn = None;
     }
 
-    // Map visible thought headers to on-screen rows for click hit-testing.
-    state.thought_toggle_rows.clear();
-    for (wrapped_row, midx) in header_wrapped_rows {
-        if wrapped_row >= scroll_offset && wrapped_row < scroll_offset + inner_area.height {
-            let screen_row = inner_area.y + (wrapped_row - scroll_offset);
-            state.thought_toggle_rows.push((screen_row, midx));
-        }
-    }
-
     // Map each visible [Copy] badge to its on-screen row for click hit-testing.
     state.code_copy_rows.clear();
     for (wrapped_row, text) in copy_wrapped_rows {
@@ -2429,20 +2394,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         }
     }
 
-    // Hover feedback for the clickable chat rows. The rows live inside the
+    // Hover feedback for the clickable code-copy rows. The rows live inside the
     // memoized conversation lines, so tinting them here — after the paragraph
     // is painted — keeps the pointer out of the cache key.
     match state.hover {
-        HoverTarget::ThoughtHeader(row) => {
-            if row >= inner_area.y && row < inner_area.y + inner_area.height {
-                let buf = f.buffer_mut();
-                for col in inner_area.x..inner_area.x + inner_area.width {
-                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
-                        cell.set_bg(COLOR_HOVER_BG());
-                    }
-                }
-            }
-        }
         HoverTarget::CopyBadge(row) => {
             if row >= inner_area.y && row < inner_area.y + inner_area.height {
                 let buf = f.buffer_mut();
