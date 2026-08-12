@@ -185,12 +185,105 @@ fn destructive_git_scope(segment: &str) -> Option<String> {
     Some(format!("git {subcommand}: {scope}"))
 }
 
+fn is_read_only_git(tokens: &[&str]) -> bool {
+    let Some((subcommand, subcommand_index)) = git_subcommand(tokens) else {
+        return false;
+    };
+    if destructive_git_scope(&tokens.join(" ")).is_some() {
+        return false;
+    }
+
+    let arguments = &tokens[subcommand_index + 1..];
+    if arguments
+        .iter()
+        .any(|argument| {
+            *argument == "-o"
+                || *argument == "--output"
+                || argument.starts_with("--output=")
+                || *argument == "--ext-diff"
+        })
+    {
+        return false;
+    }
+
+    matches!(
+        subcommand,
+        "status" | "diff" | "log" | "show" | "rev-parse" | "describe"
+    )
+        || (subcommand == "branch"
+            && arguments.iter().all(|argument| {
+                matches!(
+                    *argument,
+                    "-a"
+                        | "--all"
+                        | "-r"
+                        | "--remotes"
+                        | "-v"
+                        | "--verbose"
+                        | "--show-current"
+                )
+            }))
+}
+
+fn is_read_only_gh(tokens: &[&str]) -> bool {
+    let Some(binary) = tokens.first() else {
+        return true;
+    };
+    if binary.rsplit(['/', '\\']).next() != Some("gh") {
+        return false;
+    }
+
+    match tokens.get(1..).unwrap_or_default() {
+        ["help", ..] | ["--help", ..] | ["-h", ..] => true,
+        ["auth", "status", ..] | ["auth", "help", ..] => true,
+        ["issue", "list", ..] | ["issue", "view", ..] => true,
+        ["pr", "list", ..] | ["pr", "view", ..] => true,
+        _ => false,
+    }
+}
+
+fn is_read_only_segment(segment: &str) -> bool {
+    let tokens = segment.split_whitespace().collect::<Vec<_>>();
+    let Some(binary) = tokens.first().map(|token| token.rsplit(['/', '\\']).next()) else {
+        return true;
+    };
+
+    match binary {
+        Some("git") => is_read_only_git(&tokens),
+        Some("gh") => is_read_only_gh(&tokens),
+        Some("command") => tokens.get(1) == Some(&"-v"),
+        Some("find") => !tokens[1..].iter().any(|argument| {
+            matches!(
+                *argument,
+                "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir" | "-fprint" | "-fprintf"
+                    | "-fls"
+            )
+        }),
+        Some(
+            "date" | "echo" | "false" | "grep" | "ls" | "printf" | "pwd" | "rg" | "test"
+            | "true" | "type" | "uname" | "which",
+        ) => true,
+        _ => false,
+    }
+}
+
 pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
-    let scopes = split_command_segments(command)
+    let segments = split_command_segments(command);
+    let git_scopes = segments
         .iter()
         .filter_map(|segment| destructive_git_scope(segment))
         .collect::<Vec<_>>();
-    (!scopes.is_empty()).then(|| scopes.join("; "))
+    if !git_scopes.is_empty() {
+        return Some(git_scopes.join("; "));
+    }
+    if command.chars().any(|character| matches!(character, '<' | '>')) {
+        return Some("shell redirection".to_string());
+    }
+    if segments.iter().all(|segment| is_read_only_segment(segment)) {
+        None
+    } else {
+        Some("unclassified or potentially mutating shell command".to_string())
+    }
 }
 
 pub(crate) fn command_requires_confirmation(args: &Value) -> bool {
@@ -804,6 +897,45 @@ mod tests {
                 "must not confirm: {command}"
             );
         }
+    }
+
+    #[test]
+    fn allowlisted_read_only_shell_commands_stay_non_blocking() {
+        for command in [
+            "gh issue list --repo lhagfoss/rustcode",
+            "gh auth status",
+            "rg -n AutoConfirm src/",
+            "pwd",
+        ] {
+            assert!(
+                !command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must not confirm: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_or_mutating_shell_commands_require_confirmation() {
+        for command in [
+            "gh issue close 1 --repo lhagfoss/rustcode",
+            "rm -rf /tmp/example",
+            "python -c 'print(1)'",
+            "cargo test",
+            "find . -exec rm -f {} \\;",
+            "command rm -rf /tmp/example",
+        ] {
+            assert!(
+                command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must confirm: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_segment_in_shell_chain_requires_confirmation() {
+        assert!(command_requires_confirmation(&serde_json::json!({
+            "command": "git status --short && gh issue close 1"
+        })));
     }
 
     #[test]
