@@ -60,14 +60,8 @@ pub(super) fn render_popup_menu(
             let padding_len = (area.width as usize).saturating_sub(total_len);
 
             Line::from(vec![
-                Span::styled(
-                    left_text,
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_BG()),
-                ),
-                Span::styled(
-                    desc_text,
-                    Style::default().fg(COLOR_MUTED()).bg(COLOR_BG()),
-                ),
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT()).bg(COLOR_BG())),
+                Span::styled(desc_text, Style::default().fg(COLOR_MUTED()).bg(COLOR_BG())),
                 Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
             ])
         };
@@ -116,10 +110,7 @@ pub(super) fn render_at_popup_menu(
             let padding_len = (area.width as usize).saturating_sub(left_text.len());
 
             Line::from(vec![
-                Span::styled(
-                    left_text,
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_BG()),
-                ),
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT()).bg(COLOR_BG())),
                 Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
             ])
         };
@@ -349,7 +340,11 @@ pub(super) fn render_thinking_picker_modal(
 
     let choices = [
         ("On", Some(true), "Force <think> reasoning on"),
-        ("Off", Some(false), "Skip <think> entirely (faster, no trace)"),
+        (
+            "Off",
+            Some(false),
+            "Skip <think> entirely (faster, no trace)",
+        ),
         ("Default", None, "Leave it to the server/Modelfile"),
     ];
 
@@ -1841,48 +1836,150 @@ pub(super) fn render_question_modal(
 
     for (i, opt) in q.options.iter().enumerate() {
         let is_sel = i == q.selected;
-        let marker = if q.is_multi_select {
-            if q.chosen.get(i).copied().unwrap_or(false) {
-                "[x] "
+        let prefix_span = if is_sel {
+            Span::styled(
+                "❯ ",
+                Style::default()
+                    .fg(COLOR_PRIMARY())
+                    .bg(COLOR_BG())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled("  ", Style::default().fg(COLOR_TEXT()).bg(COLOR_BG()))
+        };
+
+        let check_span = if q.is_multi_select {
+            let is_checked = q.chosen.get(i).copied().unwrap_or(false);
+            let check_str = if is_checked { "[x] " } else { "[ ] " };
+            let style = if is_sel {
+                Style::default()
+                    .fg(COLOR_PRIMARY())
+                    .bg(COLOR_BG())
+                    .add_modifier(Modifier::BOLD)
+            } else if is_checked {
+                Style::default().fg(COLOR_TIP()).bg(COLOR_BG())
             } else {
-                "[ ] "
-            }
-        } else if is_sel {
-            "› "
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_BG())
+            };
+            Some(Span::styled(check_str, style))
         } else {
-            "  "
+            None
         };
-        let label = format!("{marker}{}. {opt}", i + 1);
-        let style = if is_sel {
-            Style::default()
-                .fg(COLOR_BG())
-                .bg(COLOR_PRIMARY())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(COLOR_TEXT()).bg(COLOR_BG())
-        };
-        // Pad the highlighted row so the selection bar spans the modal width.
-        let padded = format!("{label:<width$}", width = inner.width as usize);
-        lines.push(Line::from(Span::styled(padded, style)));
+
+        let num_str = format!("{}. ", i + 1);
+        let num_span = Span::styled(
+            num_str,
+            if is_sel {
+                Style::default()
+                    .fg(COLOR_PRIMARY())
+                    .bg(COLOR_BG())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_BG())
+            },
+        );
+
+        let opt_span = Span::styled(
+            opt.to_string(),
+            if is_sel {
+                Style::default()
+                    .fg(COLOR_PRIMARY())
+                    .bg(COLOR_BG())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(COLOR_TEXT()).bg(COLOR_BG())
+            },
+        );
+
+        let mut row_spans = vec![prefix_span];
+        if let Some(cs) = check_span {
+            row_spans.push(cs);
+        }
+        row_spans.push(num_span);
+        row_spans.push(opt_span);
+        lines.push(Line::from(row_spans));
     }
 
     // The always-present "write your own answer" slot (index == options.len()).
     let custom_idx = q.options.len();
     let custom_sel = q.selected == custom_idx;
-    let custom_label = match &q.custom_input {
-        Some(text) => format!("✎ {text}▏"),
-        None => "✎ Write your own answer…".to_string(),
-    };
-    let custom_style = if custom_sel || q.custom_input.is_some() {
-        Style::default()
-            .fg(COLOR_BG())
-            .bg(COLOR_PRIMARY())
-            .add_modifier(Modifier::BOLD)
+    let prefix_span = if custom_sel {
+        Span::styled(
+            "❯ ",
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .bg(COLOR_BG())
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
-        Style::default().fg(COLOR_TIP()).bg(COLOR_BG())
+        Span::styled("  ", Style::default().fg(COLOR_TEXT()).bg(COLOR_BG()))
     };
-    let custom_padded = format!("{custom_label:<width$}", width = inner.width as usize);
-    lines.push(Line::from(Span::styled(custom_padded, custom_style)));
+
+    let icon_span = Span::styled(
+        "✎ ",
+        if custom_sel {
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .bg(COLOR_BG())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(COLOR_MUTED()).bg(COLOR_BG())
+        },
+    );
+
+    if let Some(text) = &q.custom_input {
+        let mut cursor_pos = q.custom_cursor.min(text.len());
+        while cursor_pos > 0 && !text.is_char_boundary(cursor_pos) {
+            cursor_pos -= 1;
+        }
+        let before_cursor = &text[..cursor_pos];
+        let after_cursor = &text[cursor_pos..];
+
+        let before_span = Span::styled(
+            before_cursor.to_string(),
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .bg(COLOR_BG())
+                .add_modifier(Modifier::BOLD),
+        );
+        let cursor_span = Span::styled(
+            "│",
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .bg(COLOR_BG())
+                .add_modifier(Modifier::BOLD),
+        );
+        let after_span = Span::styled(
+            after_cursor.to_string(),
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .bg(COLOR_BG())
+                .add_modifier(Modifier::BOLD),
+        );
+
+        lines.push(Line::from(vec![
+            prefix_span,
+            icon_span,
+            before_span,
+            cursor_span,
+            after_span,
+        ]));
+    } else if custom_sel {
+        let text_span = Span::styled(
+            "Write your own answer…│",
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .bg(COLOR_BG())
+                .add_modifier(Modifier::BOLD),
+        );
+        lines.push(Line::from(vec![prefix_span, icon_span, text_span]));
+    } else {
+        let text_span = Span::styled(
+            "Write your own answer…",
+            Style::default().fg(COLOR_MUTED()).bg(COLOR_BG()),
+        );
+        lines.push(Line::from(vec![prefix_span, icon_span, text_span]));
+    }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
