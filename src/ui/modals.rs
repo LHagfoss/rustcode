@@ -122,12 +122,6 @@ pub(super) fn render_at_popup_menu(
     );
 }
 
-fn centered_rect_fixed(width: u16, height: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    let x = r.x + r.width.saturating_sub(width) / 2;
-    let y = r.y + r.height.saturating_sub(height) / 2;
-    ratatui::layout::Rect::new(x, y, width.min(r.width), height.min(r.height))
-}
-
 #[derive(Clone)]
 pub struct PickerItem {
     pub group: String,
@@ -281,6 +275,46 @@ pub(super) fn render_verbosity_picker_modal(
         Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
         modal_chunks[3],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::ToolConfirmation;
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    #[test]
+    fn batch_confirmation_header_is_rendered_above_the_input() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![
+            ToolConfirmation {
+                tool_name: "write_to_file".to_string(),
+                path: "src/one.rs".to_string(),
+                content_preview: String::new(),
+                content_bytes: 1,
+            },
+            ToolConfirmation {
+                tool_name: "run_command".to_string(),
+                path: "cargo check".to_string(),
+                content_preview: String::new(),
+                content_bytes: 11,
+            },
+        ]);
+
+        let input_area = Rect::new(10, 32, 80, 6);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let header_row = (0..40).find(|y| {
+            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
+            row.contains("Approve 2 tool calls in parallel?")
+        });
+
+        assert_eq!(header_row, Some(17));
+    }
 }
 
 pub(super) fn render_thinking_picker_modal(
@@ -1670,14 +1704,18 @@ pub(super) fn render_tool_confirmation_modal(
         );
     } else {
         // Render batch confirmation modal
-        let modal_area = centered_rect_fixed(70, 16, f.area());
+        let modal_area = input_anchor_rect(f, input_area, 16);
         f.render_widget(Clear, modal_area);
-        let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
+        let modal_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(COLOR_BG()));
         f.render_widget(modal_block, modal_area);
 
         let inner_area = modal_area.inner(Margin {
             vertical: 1,
-            horizontal: 3,
+            horizontal: 2,
         });
 
         let modal_chunks = Layout::default()
