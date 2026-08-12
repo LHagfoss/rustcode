@@ -783,6 +783,9 @@ pub enum Verbosity {
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
+    /// First history index shown in the TUI. The full history remains available
+    /// to the model; `/clear` advances this boundary without deleting messages.
+    pub history_display_start: usize,
     pub current_response: String,
     pub current_token_usage: Option<TokenUsage>,
     pub current_thought_time_ms: u64,
@@ -1029,6 +1032,7 @@ impl AppState {
             scroll_to_bottom_btn: None,
             hover: HoverTarget::None,
             history,
+            history_display_start: 0,
             current_response: String::new(),
             current_token_usage: None,
             current_thought_time_ms: 0,
