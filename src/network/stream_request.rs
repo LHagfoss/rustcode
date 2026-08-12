@@ -441,12 +441,41 @@ pub async fn stream_request(
                                         if let Some(r_token) = reasoning {
                                             if !in_reasoning {
                                                 in_reasoning = true;
+                                                let started = std::time::Instant::now();
+                                                buffer.lock().await.thought_started_at = Some(started);
+                                                if !quiet {
+                                                    state.lock().await.current_thought_started_at = Some(started);
+                                                }
                                                 chunk.push_str("<think>\n");
+                                            }
+                                            let thought_tokens = (r_token.len() as f64
+                                                * crate::app::TOKENS_PER_CHAR_APPROX)
+                                                as u32;
+                                            {
+                                                let mut buffer = buffer.lock().await;
+                                                buffer.thought_tokens = buffer
+                                                    .thought_tokens
+                                                    .saturating_add(thought_tokens);
+                                            }
+                                            if !quiet {
+                                                let mut s = state.lock().await;
+                                                s.current_thought_tokens = s
+                                                    .current_thought_tokens
+                                                    .saturating_add(thought_tokens);
                                             }
                                             chunk.push_str(r_token);
                                         } else if let Some(c_token) = content {
                                             if in_reasoning {
                                                 in_reasoning = false;
+                                                buffer.lock().await.finish_thought();
+                                                if !quiet {
+                                                    let mut s = state.lock().await;
+                                                    if let Some(started) = s.current_thought_started_at.take() {
+                                                        s.current_thought_time_ms = s
+                                                            .current_thought_time_ms
+                                                            .saturating_add(started.elapsed().as_millis() as u64);
+                                                    }
+                                                }
                                                 chunk.push_str("\n</think>\n\n");
                                             }
                                             chunk.push_str(c_token);
@@ -531,6 +560,15 @@ pub async fn stream_request(
     }
 
     if in_reasoning {
+        buffer.lock().await.finish_thought();
+        if !quiet {
+            let mut s = state.lock().await;
+            if let Some(started) = s.current_thought_started_at.take() {
+                s.current_thought_time_ms = s
+                    .current_thought_time_ms
+                    .saturating_add(started.elapsed().as_millis() as u64);
+            }
+        }
         buffer.lock().await.content.push_str("\n</think>\n\n");
         if !quiet {
             let mut s = state.lock().await;

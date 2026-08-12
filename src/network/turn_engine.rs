@@ -253,7 +253,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         }
     };
 
-    state.lock().await.current_response.clear();
+    {
+        let mut s = state.lock().await;
+        s.current_response.clear();
+        s.current_thought_time_ms = 0;
+        s.current_thought_tokens = 0;
+        s.current_thought_started_at = None;
+    }
     stream_buffer.lock().await.reset();
 
     let (api_base_url, model_name) = {
@@ -310,13 +316,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-                let chunk_content = request_buffer.lock().await.content.clone();
-                let has_native_tool_calls =
-                    !request_buffer.lock().await.native_tool_calls.is_empty();
+                let buffer = request_buffer.lock().await;
                 Ok(runner::ResponseChunk {
-                    content: chunk_content,
+                    content: buffer.content.clone(),
                     finish_reason,
-                    has_native_tool_calls,
+                    has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
+                    thought_time_ms: buffer.thought_time_ms,
+                    thought_tokens: buffer.thought_tokens,
                 })
             }
         })
@@ -345,7 +351,15 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let runner::CollectedResponse {
         content: accumulated_content,
         finish_reason: response_finish_reason,
+        thought_time_ms,
+        thought_tokens,
     } = collected_response;
+    let thought_time_ms = accumulated_content
+        .contains("<think>")
+        .then_some(thought_time_ms);
+    let thought_tokens = accumulated_content
+        .contains("<think>")
+        .then_some(thought_tokens);
 
     crate::logger::operational_event(
         "model.response",
@@ -503,6 +517,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             .with_tool_calls(rejected_refs.clone());
         msg.response_time_ms = Some(turn_response_time_ms);
         msg.token_usage = turn_token_usage.clone();
+        msg.thought_time_ms = thought_time_ms;
+        msg.thought_tokens = thought_tokens;
         s.history.push(msg);
         for message in unanswered_call_results(&rejected_refs, &reason) {
             s.history.push(message);
@@ -601,6 +617,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         let mut msg = ChatMessage::new("assistant", &ctx.final_content);
                         msg.response_time_ms = Some(turn_response_time_ms);
                         msg.token_usage = turn_token_usage.clone();
+                        msg.thought_time_ms = thought_time_ms;
+                        msg.thought_tokens = thought_tokens;
                         s.history.push(msg);
                         s.history
                             .push(ChatMessage::new("system", LOOP_RECOVERY_PROMPT));
@@ -622,6 +640,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         let mut msg = ChatMessage::new("assistant", &ctx.final_content);
                         msg.response_time_ms = Some(turn_response_time_ms);
                         msg.token_usage = turn_token_usage.clone();
+                        msg.thought_time_ms = thought_time_ms;
+                        msg.thought_tokens = thought_tokens;
                         s.history.push(msg);
                         s.history
                             .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
@@ -662,6 +682,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     .with_tool_calls(call_refs.clone());
                 msg.response_time_ms = Some(turn_response_time_ms);
                 msg.token_usage = turn_token_usage.clone();
+                msg.thought_time_ms = thought_time_ms;
+                msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 if dropped_calls > 0 {
                     s.history.push(ChatMessage::new(
@@ -1047,6 +1069,8 @@ nothing in this summary was written to disk by this task]",
         let mut msg = ChatMessage::new("assistant", &ctx.final_content);
         msg.response_time_ms = Some(turn_response_time_ms);
         msg.token_usage = turn_token_usage.clone();
+        msg.thought_time_ms = thought_time_ms;
+        msg.thought_tokens = thought_tokens;
         s.history.push(msg);
 
         let reason = crate::tools::diagnose_failed_tool_call(&ctx.final_content)
@@ -1136,6 +1160,8 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 let mut msg = ChatMessage::new("assistant", ctx.final_content.clone());
                 msg.response_time_ms = Some(turn_response_time_ms);
                 msg.token_usage = turn_token_usage.clone();
+                msg.thought_time_ms = thought_time_ms;
+                msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 s.history.push(ChatMessage::new(
                             "system",
@@ -1231,6 +1257,10 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
             };
             let mut msg = ChatMessage::new(role, content);
             msg.response_time_ms = s.response_time.map(|d| d.as_millis() as u64);
+            if msg.content.contains("<think>") {
+                msg.thought_time_ms = Some(s.current_thought_time_ms);
+                msg.thought_tokens = Some(s.current_thought_tokens);
+            }
             s.history.push(msg);
         }
 
