@@ -799,16 +799,14 @@ fn format_input_status_text(state: &AppState) -> String {
     }
 
     status.push(input_footer_hint_text().to_string());
-    status.join("   ")
+    status.join("  ")
 }
 
-fn footer_layout_constraints() -> Constraint {
-    Constraint::Length(1)
+fn activity_status_label(state: &AppState) -> String {
+    classify_activity(&state.status, &state.running_tools).label
 }
 
-fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
-    let footer_area = *chunks.last().unwrap();
-    let show_picker = state.modal_open();
+fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
     let activity = classify_activity(&state.status, &state.running_tools);
     let animation_frame = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -828,7 +826,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
                 .map(|_| "answer question".to_string())
         });
 
-    let mut left_spans = Vec::new();
+    let mut left_spans = vec![Span::raw(" ")];
     for cell in &cells {
         let (symbol, color, modifier) = match activity.kind {
             ActivityKind::ActionRequired => ("!", Color::Yellow, Modifier::empty()),
@@ -846,7 +844,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         ));
     }
 
-    let mut status_text = activity.label.clone();
+    let mut status_text = activity_status_label(state);
     let detail = if activity.kind == ActivityKind::ActionRequired {
         action_detail
     } else {
@@ -885,7 +883,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool
     ) {
         left_spans.push(Span::styled(
-            "   esc ",
+            "  esc ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
         left_spans.push(Span::styled(
@@ -894,10 +892,7 @@ fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppSta
         ));
     }
 
-    f.render_widget(
-        Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG())),
-        footer_area,
-    );
+    Line::from(left_spans)
 }
 
 /// Shows the most recently queued prompt on a thin line directly above the
@@ -995,8 +990,9 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         ),
     ]);
 
-    let footer_hints = Line::from(vec![Span::styled(
-        format_input_status_text(state),
+    let activity_line = activity_status_line(state, show_picker);
+    let status_line = Line::from(vec![Span::styled(
+        format!(" {} ", format_input_status_text(state)),
         Style::default().fg(COLOR_MUTED()),
     )]);
 
@@ -1006,7 +1002,8 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         .border_style(Style::default().fg(border_color))
         .title(title_left)
         .title(title_right.alignment(ratatui::layout::Alignment::Right))
-        .title_bottom(footer_hints.alignment(ratatui::layout::Alignment::Right));
+        .title_bottom(activity_line.alignment(ratatui::layout::Alignment::Left))
+        .title_bottom(status_line.alignment(ratatui::layout::Alignment::Right));
 
     f.render_widget(block, area);
 
@@ -2401,14 +2398,12 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             Constraint::Min(3),
             Constraint::Length(queue_block_height),
             Constraint::Length(input_height),
-            footer_layout_constraints(),
         ])
         .split(f.area());
 
     render_conversation(f, &chunks, state);
     render_queue_line(f, &chunks, state);
     let input_margin = render_input(f, &chunks, state);
-    render_footer(f, &chunks, state);
 
     let (_, at_query) =
         crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
