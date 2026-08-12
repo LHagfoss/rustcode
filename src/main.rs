@@ -22,9 +22,9 @@ use crossterm::{
     cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -169,9 +169,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout = io::stdout();
     execute!(
         stdout,
-        EnterAlternateScreen,
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
-        crossterm::cursor::MoveTo(0, 0),
         crossterm::event::EnableBracketedPaste,
         crossterm::event::EnableFocusChange,
         SetCursorStyle::BlinkingBar,
@@ -186,7 +183,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let terminal_height = crossterm::terminal::size()?.1;
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Inline(terminal_height),
+        },
+    )?;
     terminal.clear()?;
 
     crate::config::archive_live_history();
@@ -2069,8 +2072,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal.backend_mut(),
         crossterm::event::DisableBracketedPaste,
         crossterm::event::DisableFocusChange,
-        SetCursorStyle::DefaultUserShape,
-        LeaveAlternateScreen
+        SetCursorStyle::DefaultUserShape
     )?;
     let goodbye_origin = goodbye_cursor_position(terminal.size()?.height);
     execute!(
