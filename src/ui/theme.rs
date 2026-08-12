@@ -213,9 +213,7 @@ pub fn ensure_themes_dir() -> Option<PathBuf> {
 
     for (filename, content) in BUILTIN_THEMES {
         let file_path = themes_dir.join(filename);
-        if !file_path.exists() {
-            let _ = fs::write(file_path, content);
-        }
+        let _ = fs::write(file_path, content);
     }
 
     Some(themes_dir)

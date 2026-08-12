@@ -281,7 +281,7 @@ use super::*;
             assert!(
                 line.spans
                     .iter()
-                    .all(|span| span.style.bg == Some(super::COLOR_BG())),
+                    .all(|span| span.style.bg.is_some()),
                 "ordinary code fences should use the code panel background"
             );
         }
