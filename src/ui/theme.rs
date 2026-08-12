@@ -114,19 +114,19 @@ selection = "#f0f0f0"
 tip = "#e0a96d"
 status_border = "#5c6268"
 turn_separator = "#484e54"
-notice_bg = "#0d0e10"
+notice_bg = "reset"
 hover_bg = "#2d3238"
 "##,
     ),
     (
         "light.toml",
         r##"name = "light"
-description = "Clean light mode palette"
-bg = "#f5f7fa"
-panel = "#e6eaf0"
+description = "Clean light mode text and border palette"
+bg = "reset"
+panel = "reset"
 element = "#d7dde4"
 text = "#1e232a"
-muted = "#6e7882"
+muted = "#5e6872"
 primary = "#d74130"
 secondary = "#2d6e91"
 green = "#239b41"
@@ -134,16 +134,16 @@ selection = "#1e1e1e"
 tip = "#be781e"
 status_border = "#aab3bc"
 turn_separator = "#b9bec3"
-notice_bg = "#ffffff"
+notice_bg = "reset"
 hover_bg = "#d2d8e0"
 "##,
     ),
     (
         "nord.toml",
         r##"name = "nord"
-description = "Arctic nord palette"
-bg = "#2e3440"
-panel = "#3b4252"
+description = "Arctic nord text and border palette"
+bg = "reset"
+panel = "reset"
 element = "#434c5e"
 text = "#eceff4"
 muted = "#d8dee9"
@@ -154,16 +154,16 @@ selection = "#eceff4"
 tip = "#ebcb8b"
 status_border = "#4c566a"
 turn_separator = "#4c566a"
-notice_bg = "#1e222a"
+notice_bg = "reset"
 hover_bg = "#4c566a"
 "##,
     ),
     (
         "dracula.toml",
         r##"name = "dracula"
-description = "Vibrant dracula dark palette"
-bg = "#282a36"
-panel = "#44475a"
+description = "Vibrant dracula text and border palette"
+bg = "reset"
+panel = "reset"
 element = "#6272a4"
 text = "#f8f8f2"
 muted = "#6272a4"
@@ -174,16 +174,16 @@ selection = "#f8f8f2"
 tip = "#f1fa8c"
 status_border = "#6272a4"
 turn_separator = "#6272a4"
-notice_bg = "#181926"
+notice_bg = "reset"
 hover_bg = "#44475a"
 "##,
     ),
     (
         "tokyo-night.toml",
         r##"name = "tokyo-night"
-description = "Tokyo night palette"
-bg = "#1a1b26"
-panel = "#24283b"
+description = "Tokyo night text and border palette"
+bg = "reset"
+panel = "reset"
 element = "#292e42"
 text = "#c0caf5"
 muted = "#565f89"
@@ -194,7 +194,7 @@ selection = "#c0caf5"
 tip = "#e0af68"
 status_border = "#414868"
 turn_separator = "#414868"
-notice_bg = "#101118"
+notice_bg = "reset"
 hover_bg = "#292e42"
 "##,
     ),
@@ -305,10 +305,10 @@ pub fn active_palette() -> ThemePalette {
 }
 
 pub fn color_bg() -> Color {
-    active_palette().bg
+    Color::Reset
 }
 pub fn color_panel() -> Color {
-    active_palette().panel
+    Color::Reset
 }
 pub fn color_element() -> Color {
     active_palette().element
