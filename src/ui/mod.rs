@@ -27,7 +27,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use std::hash::{Hash, Hasher};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -717,7 +717,7 @@ fn format_tokens_info(state: &AppState) -> (String, String) {
 }
 
 fn render_footer(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
-    let footer_area = chunks[4];
+    let footer_area = *chunks.last().unwrap();
     let show_picker = state.modal_open();
     let activity = classify_activity(&state.status, &state.running_tools);
     let animation_frame = std::time::SystemTime::now()
@@ -1044,34 +1044,64 @@ fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &Ap
 
 fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) -> Margin {
     let show_picker = state.modal_open();
+    let area = chunks[2];
 
-    let input_split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(chunks[2]);
+    let border_color = if state.status == AppStatus::Streaming {
+        COLOR_GREEN()
+    } else if show_picker {
+        COLOR_MUTED()
+    } else {
+        COLOR_PRIMARY()
+    };
 
-    let line_chars = "▌\n".repeat(chunks[2].height as usize);
-    let vertical_line_widget = Paragraph::new(line_chars).style(get_themed_style(
-        COLOR_SECONDARY(),
-        COLOR_BG(),
-        Modifier::empty(),
-        show_picker,
-    ));
-    f.render_widget(vertical_line_widget, input_split[0]);
+    let (mode_label_str, mode_color) = match state.agent_mode {
+        crate::config::AgentMode::Build => ("build", COLOR_PRIMARY()),
+        crate::config::AgentMode::Plan => ("plan", Color::Rgb(229, 192, 123)),
+    };
+    let model_str = model_label(state);
 
-    let solid_panel = Block::default().style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(solid_panel, input_split[1]);
+    let title_left = Line::from(vec![
+        Span::styled(" ✦ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("rustcode", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+    ]);
+
+    let title_right = Line::from(vec![
+        Span::styled(format!("[{mode_label_str}] "), Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("[{model_str}] "), Style::default().fg(COLOR_MUTED())),
+    ]);
+
+    let footer_hints = Line::from(vec![
+        Span::styled(" Tab ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("autocomplete · ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("Shift+Enter ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("newline · ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("/ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("commands · ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("Ctrl+O ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("model ", Style::default().fg(COLOR_MUTED())),
+    ]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(title_left)
+        .title(title_right.alignment(ratatui::layout::Alignment::Right))
+        .title_bottom(footer_hints.alignment(ratatui::layout::Alignment::Right));
+
+    f.render_widget(block, area);
 
     let input_margin = Margin {
         vertical: 1,
         horizontal: 2,
     };
-    let input_inner = input_split[1].inner(input_margin);
+    let input_inner = area.inner(input_margin);
 
     let text_style = if state.input_buffer.starts_with('/') {
-        get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
+        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)
     } else {
-        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
+        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)
     };
 
     let inner_width = input_inner.width as usize;
@@ -1080,21 +1110,18 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let mut cursor_dy = 0u16;
 
     if inner_width > 0 {
-        // Show pasted images as compact `[Image #N]` chips instead of the raw
-        // `![image](file://…)` marker. The buffer itself is unchanged; the cursor
-        // is remapped into this collapsed view so caret placement stays correct.
         let display_buffer = collapse_image_markers(&state.input_buffer);
         let mut styled_chars: Vec<(char, Style)> =
             display_buffer.chars().map(|c| (c, text_style)).collect();
 
         if state.input_buffer.is_empty() && state.get_command_suggestion().is_none() {
             let placeholder_style =
-                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
-            let placeholder_text = "Ask RustCode a question, or type / for commands...";
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
+            let placeholder_text = "Ask a question, request code changes, or type / for commands...";
             styled_chars.extend(placeholder_text.chars().map(|c| (c, placeholder_style)));
         } else if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
-                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
@@ -1113,10 +1140,14 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let raw_prefix = &state.input_buffer[..safe_end];
         let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 
-        let mut current_line_spans = Vec::new();
+        let prompt_span = Span::styled(
+            "❯ ",
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+        );
+        let mut current_line_spans = vec![prompt_span];
         let mut current_run: Option<(Style, String)> = None;
 
-        let mut col = 0;
+        let mut col = 2;
         let mut row = 0;
 
         let total_chars = styled_chars.len();
@@ -1171,42 +1202,22 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         lines.push(Line::from(current_line_spans));
     }
 
-    let text_area_height = input_inner.height.saturating_sub(1);
+    let text_area_height = input_inner.height;
     let text_area = ratatui::layout::Rect::new(
         input_inner.x,
         input_inner.y,
         input_inner.width,
         text_area_height,
     );
-    let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL()));
+    let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_BG()));
     f.render_widget(paragraph, text_area);
-    // Record the editable region so mouse drag-selection can target it.
     state.input_text_area = Some(text_area);
 
-    let build_y = input_inner.y + input_inner.height.saturating_sub(1);
-    let build_area = ratatui::layout::Rect::new(input_inner.x, build_y, input_inner.width, 1);
-    let (mode_label, mode_color) = match state.agent_mode {
-        crate::config::AgentMode::Build => ("Build", COLOR_SECONDARY()),
-        crate::config::AgentMode::Plan => ("Plan", Color::Rgb(229, 192, 123)),
-    };
-    let build_line = Line::from(vec![
-        Span::styled(
-            mode_label,
-            get_themed_style(mode_color, COLOR_PANEL(), Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            " · ",
-            get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            model_label(state),
-            get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
-        ),
-    ]);
-    f.render_widget(Paragraph::new(build_line), build_area);
-
     if inner_width > 0 && !show_picker {
-        f.set_cursor_position((input_inner.x + cursor_dx, input_inner.y + cursor_dy));
+        f.set_cursor_position((
+            input_inner.x + cursor_dx.min(input_inner.width.saturating_sub(1)),
+            input_inner.y + cursor_dy,
+        ));
     }
 
     input_margin
