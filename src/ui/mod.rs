@@ -5,7 +5,7 @@ mod modals;
 mod tool_result;
 
 use highlight::{
-    highlight_code_block, highlight_code_line, highlight_diff_line, pad_to_width,
+    highlight_code_block, highlight_code_line, highlight_diff_line,
     render_unified_diff, wrap_code_spans,
 };
 use markdown::render_markdown;
@@ -2106,8 +2106,7 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
             if msg_idx > 0 {
                 push_turn_separator(&mut lines, inner_area.width, show_picker);
             }
-            // Account for "▌" prefix (1 char) + internal bubble padding (2 left + 2 right) + right margin (3)
-            let content_width = (inner_area.width as usize).saturating_sub(8);
+            let content_width = (inner_area.width as usize).saturating_sub(4);
             let display_content = collapse_image_markers(&msg.content);
             let mut wrapped_lines = Vec::new();
             for raw_line in display_content.lines() {
@@ -2132,43 +2131,31 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
                 }
             }
 
-            // Top padding row
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "▌",
-                    get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    " ".repeat(content_width + 4),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-            ]));
-
-            for line_str in wrapped_lines {
-                let padded_text = pad_to_width(&line_str, content_width);
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "▌",
-                        get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ),
-                    Span::styled(
-                        format!("  {padded_text}  "),
-                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ),
-                ]));
+            for (idx, line_str) in wrapped_lines.into_iter().enumerate() {
+                if idx == 0 {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            "❯ ",
+                            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                        ),
+                        Span::styled(
+                            line_str,
+                            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            "  ",
+                            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                        ),
+                        Span::styled(
+                            line_str,
+                            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                        ),
+                    ]));
+                }
             }
-
-            // Bottom padding row
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "▌",
-                    get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    " ".repeat(content_width + 4),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-            ]));
             lines.push(Line::from(""));
         } else if msg.role == "assistant" {
             let calls = msg.resolved_tool_calls(state.active_tool_protocol());
