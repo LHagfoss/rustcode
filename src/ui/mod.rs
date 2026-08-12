@@ -1781,12 +1781,15 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let mut banner = Vec::new();
     let version = env!("CARGO_PKG_VERSION");
     let model_name = model_label(state);
-    let cwd_branch = if state.cwd_and_branch.is_empty() {
-        std::env::current_dir()
+    let (cwd_str, branch_str) = if state.cwd_and_branch.is_empty() {
+        let p = std::env::current_dir()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "rustcode".to_string())
+            .unwrap_or_else(|_| "rustcode".to_string());
+        (p, String::new())
+    } else if let Some((c, b)) = state.cwd_and_branch.split_once(':') {
+        (c.to_string(), format!("git: {b}"))
     } else {
-        state.cwd_and_branch.clone()
+        (state.cwd_and_branch.clone(), String::new())
     };
 
     let box_w = total_width.saturating_sub(2).max(65);
@@ -1809,8 +1812,8 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     ]));
 
     let make_row = |left_str: String, left_style: Style, right_str: String, right_style: Style| -> Line<'static> {
-        let l_cell = format!("{:<width$}", left_str, width = left_w);
-        let r_cell = format!("{:<width$}", right_str, width = right_w);
+        let l_cell = fit_to_width(&left_str, left_w);
+        let r_cell = fit_to_width(&right_str, right_w);
         Line::from(vec![
             Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
             Span::styled(l_cell, left_style),
@@ -1821,7 +1824,7 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     };
 
     let make_divider_row = |left_str: String, left_style: Style| -> Line<'static> {
-        let l_cell = format!("{:<width$}", left_str, width = left_w);
+        let l_cell = fit_to_width(&left_str, left_w);
         let r_div = "─".repeat(right_w);
         Line::from(vec![
             Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
@@ -1903,15 +1906,25 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         "  Built-in MCP tools, search & execution".to_string(), Style::default().fg(muted_c).bg(reset_bg),
     ));
 
-    // Row 9: Left: Centered "<cwd_branch>" | Right: Blank space
-    let cwd_pad = left_w.saturating_sub(cwd_branch.len()) / 2;
-    let left9 = format!("{}{}", " ".repeat(cwd_pad), cwd_branch);
+    // Row 9: Left: Centered "<cwd_str>" | Right: Blank space
+    let cwd_pad = left_w.saturating_sub(cwd_str.len()) / 2;
+    let left9 = format!("{}{}", " ".repeat(cwd_pad), cwd_str);
     banner.push(make_row(
         left9, Style::default().fg(muted_c).bg(reset_bg),
         "".to_string(), Style::default().bg(reset_bg),
     ));
 
-    // Row 10: Blank line bottom padding
+    // Row 10: Left: Centered "<branch_str>" | Right: Blank space
+    if !branch_str.is_empty() {
+        let branch_pad = left_w.saturating_sub(branch_str.len()) / 2;
+        let left10 = format!("{}{}", " ".repeat(branch_pad), branch_str);
+        banner.push(make_row(
+            left10, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD),
+            "".to_string(), Style::default().bg(reset_bg),
+        ));
+    }
+
+    // Row 11: Blank line bottom padding
     banner.push(make_row(
         "".to_string(), Style::default().bg(reset_bg),
         "".to_string(), Style::default().bg(reset_bg),
