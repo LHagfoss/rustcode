@@ -802,8 +802,35 @@ fn format_input_status_text(state: &AppState) -> String {
     status.join("  ")
 }
 
+const STREAMING_STATUS_WORDS: &[&str] = &[
+    "Thinking...",
+    "Analyzing code...",
+    "Consulting the oracle...",
+    "Brewing coffee...",
+    "Refactoring reality...",
+    "Checking documentation...",
+    "Optimizing loops...",
+    "Debugging the universe...",
+    "Synthesizing solutions...",
+    "Querying knowledge base...",
+];
+
+fn streaming_status_word(elapsed_secs: u64) -> &'static str {
+    STREAMING_STATUS_WORDS[((elapsed_secs / 3) as usize) % STREAMING_STATUS_WORDS.len()]
+}
+
 fn activity_status_label(state: &AppState) -> String {
-    classify_activity(&state.status, &state.running_tools).label
+    let activity = classify_activity(&state.status, &state.running_tools);
+    if activity.kind == ActivityKind::Working {
+        return streaming_status_word(
+            state
+                .generation_start_time
+                .map(|started| started.elapsed().as_secs())
+                .unwrap_or(0),
+        )
+        .to_string();
+    }
+    activity.label
 }
 
 fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
@@ -892,6 +919,7 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
         ));
     }
 
+    left_spans.push(Span::raw(" "));
     Line::from(left_spans)
 }
 
