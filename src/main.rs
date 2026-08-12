@@ -482,11 +482,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             drop(s);
 
                             if typing {
-                                // Freeform "write your own answer" text entry.
                                 match key.code {
-                                    // Cmd/Ctrl+V — paste clipboard text into the slot.
-                                    // (Bracketed-paste terminals arrive via Event::Paste
-                                    // instead; this covers terminals that forward the key.)
                                     KeyCode::Char('v') | KeyCode::Char('V')
                                         if key.modifiers.contains(event::KeyModifiers::CONTROL)
                                             || key
@@ -502,31 +498,105 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             let normalized =
                                                 text.replace("\r\n", "\n").replace('\r', "\n");
                                             let mut s = app_state.lock().await;
-                                            if let Some(q) = s.pending_question.as_mut()
-                                                && let Some(buf) = q.custom_input.as_mut()
-                                            {
-                                                for c in normalized.chars() {
-                                                    if c != '\n' {
-                                                        buf.push(c);
-                                                    }
-                                                }
+                                            if let Some(q) = s.pending_question.as_mut() {
+                                                q.insert_str(&normalized);
                                             }
+                                        }
+                                    }
+                                    KeyCode::Char('a') | KeyCode::Char('A')
+                                        if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                                    {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.move_cursor_home();
+                                        }
+                                    }
+                                    KeyCode::Char('e') | KeyCode::Char('E')
+                                        if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                                    {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.move_cursor_end();
+                                        }
+                                    }
+                                    KeyCode::Char('w') | KeyCode::Char('W')
+                                        if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                                    {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.delete_word_before();
                                         }
                                     }
                                     KeyCode::Char(c) => {
                                         let mut s = app_state.lock().await;
-                                        if let Some(q) = s.pending_question.as_mut()
-                                            && let Some(buf) = q.custom_input.as_mut()
-                                        {
-                                            buf.push(c);
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.insert_char(c);
                                         }
                                     }
                                     KeyCode::Backspace => {
                                         let mut s = app_state.lock().await;
-                                        if let Some(q) = s.pending_question.as_mut()
-                                            && let Some(buf) = q.custom_input.as_mut()
-                                        {
-                                            buf.pop();
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                                                q.delete_word_before();
+                                            } else {
+                                                q.delete_char_before();
+                                            }
+                                        }
+                                    }
+                                    KeyCode::Delete => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.delete_char_after();
+                                        }
+                                    }
+                                    KeyCode::Left => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            if key.modifiers.contains(event::KeyModifiers::ALT)
+                                                || key
+                                                    .modifiers
+                                                    .contains(event::KeyModifiers::CONTROL)
+                                            {
+                                                q.move_cursor_word_left();
+                                            } else {
+                                                q.move_cursor_left();
+                                            }
+                                        }
+                                    }
+                                    KeyCode::Right => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            if key.modifiers.contains(event::KeyModifiers::ALT)
+                                                || key
+                                                    .modifiers
+                                                    .contains(event::KeyModifiers::CONTROL)
+                                            {
+                                                q.move_cursor_word_right();
+                                            } else {
+                                                q.move_cursor_right();
+                                            }
+                                        }
+                                    }
+                                    KeyCode::Home => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.move_cursor_home();
+                                        }
+                                    }
+                                    KeyCode::End => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.move_cursor_end();
+                                        }
+                                    }
+                                    KeyCode::Up => {
+                                        let mut s = app_state.lock().await;
+                                        if let Some(q) = s.pending_question.as_mut() {
+                                            q.selected = q.selected.saturating_sub(1);
+                                            if q.selected < q.options.len() {
+                                                q.custom_input = None;
+                                                q.custom_cursor = 0;
+                                            }
                                         }
                                     }
                                     KeyCode::Enter => {
@@ -547,14 +617,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         s.pending_question = None;
                                     }
                                     KeyCode::Esc => {
-                                        // Back out to the option list, keep the modal open.
                                         let mut s = app_state.lock().await;
                                         if let Some(q) = s.pending_question.as_mut() {
                                             q.custom_input = None;
+                                            q.custom_cursor = 0;
                                         }
                                     }
                                     _ => {}
                                 }
+                                needs_redraw = true;
                                 continue;
                             }
 
@@ -568,16 +639,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::Down => {
                                     let mut s = app_state.lock().await;
                                     if let Some(q) = s.pending_question.as_mut() {
-                                        // options.len() is the "write your own answer" slot.
                                         let last = q.options.len();
                                         q.selected = (q.selected + 1).min(last);
+                                        if q.selected == last {
+                                            q.activate_custom_input();
+                                        }
                                     }
                                 }
                                 KeyCode::Char(' ') => {
                                     let mut s = app_state.lock().await;
                                     if let Some(q) = s.pending_question.as_mut() {
                                         if q.selected == q.options.len() {
-                                            q.custom_input = Some(String::new());
+                                            q.activate_custom_input();
                                         } else if q.is_multi_select
                                             && let Some(c) = q.chosen.get_mut(q.selected)
                                         {
@@ -605,9 +678,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
+                                KeyCode::Char(c) => {
+                                    let mut s = app_state.lock().await;
+                                    if let Some(q) = s.pending_question.as_mut() {
+                                        if q.selected == q.options.len() {
+                                            q.activate_custom_input();
+                                            q.insert_char(c);
+                                        }
+                                    }
+                                }
                                 KeyCode::Enter => {
                                     let mut s = app_state.lock().await;
-                                    // Selecting the "write your own answer" slot enters text mode.
                                     let is_custom_slot = s
                                         .pending_question
                                         .as_ref()
@@ -615,7 +696,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .unwrap_or(false);
                                     if is_custom_slot {
                                         if let Some(q) = s.pending_question.as_mut() {
-                                            q.custom_input = Some(String::new());
+                                            q.activate_custom_input();
                                         }
                                     } else if let Some(q) = s.pending_question.as_ref() {
                                         let answer = if q.is_multi_select {
@@ -644,7 +725,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                                 KeyCode::Esc => {
-                                    // Dismiss question and cancel active generation stream
                                     current_cancel_token.cancel();
                                     current_cancel_token =
                                         tokio_util::sync::CancellationToken::new();
@@ -657,9 +737,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 _ => {}
                             }
+                            needs_redraw = true;
                             continue;
                         }
+                    }
 
+                    {
+                        let s = app_state.lock().await;
                         if s.status == AppStatus::VerbosityPicker {
                             drop(s);
                             match key.code {
@@ -1948,13 +2032,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Route the paste into whichever text field is focused: the
                     // ask_question custom-answer slot, the MCP editor, else chat.
                     if s.status == AppStatus::AwaitingQuestion {
-                        if let Some(q) = s.pending_question.as_mut()
-                            && let Some(buf) = q.custom_input.as_mut()
-                        {
-                            for c in normalized.chars() {
-                                if c != '\n' && c != '\r' {
-                                    buf.push(c);
-                                }
+                        if let Some(q) = s.pending_question.as_mut() {
+                            if q.custom_input.is_some() {
+                                q.insert_str(&normalized);
                             }
                         }
                     } else if s.show_mcp_config {
