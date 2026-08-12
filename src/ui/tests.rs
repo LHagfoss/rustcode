@@ -504,6 +504,40 @@ use super::*;
     }
 
     #[test]
+    fn tool_result_spacing_targets_next_assistant() {
+        use super::tool_result_needs_assistant_gap;
+        use crate::app::ChatMessage;
+
+        let direct_assistant = vec![
+            ChatMessage::new("tool", "tool output"),
+            ChatMessage::new("assistant", "<think>planning</think>answer"),
+        ];
+        assert!(tool_result_needs_assistant_gap(&direct_assistant, 0));
+
+        let hidden_notice_then_assistant = vec![
+            ChatMessage::new("tool", "tool output"),
+            ChatMessage::new("system", "[harness: stopped after 1 tool round(s)]"),
+            ChatMessage::new("assistant", "<think>planning</think>answer"),
+        ];
+        assert!(tool_result_needs_assistant_gap(
+            &hidden_notice_then_assistant,
+            0
+        ));
+
+        let user_follows = vec![
+            ChatMessage::new("tool", "tool output"),
+            ChatMessage::new("user", "next prompt"),
+        ];
+        assert!(!tool_result_needs_assistant_gap(&user_follows, 0));
+
+        let consecutive_tools = vec![
+            ChatMessage::new("tool", "first output"),
+            ChatMessage::new("tool", "second output"),
+        ];
+        assert!(!tool_result_needs_assistant_gap(&consecutive_tools, 0));
+    }
+
+    #[test]
     fn status_panels_render_minimal_inline() {
         use super::render_status_panel;
 
