@@ -1517,6 +1517,25 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
     lines.push(Line::from(""));
 }
 
+fn push_new_chat_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
+    let label = " ✨ NEW CHAT ";
+    let remaining = (width as usize).saturating_sub(label.width());
+    let left = remaining / 2;
+    let right = remaining - left;
+    let style = get_themed_style(
+        COLOR_PRIMARY(),
+        COLOR_BG(),
+        Modifier::BOLD,
+        show_picker,
+    );
+    lines.push(Line::from(vec![
+        Span::styled("─".repeat(left), style),
+        Span::styled(label, style),
+        Span::styled("─".repeat(right), style),
+    ]));
+    lines.push(Line::from(""));
+}
+
 fn is_hidden_system_notice(content: &str) -> bool {
     content.contains("Loop warning:")
         || content.contains("tool calls in that response were dropped")
@@ -1943,6 +1962,10 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
     for (msg_idx, msg) in state.history.iter().enumerate().skip(display_start) {
         msg_start_lines.push(lines.len());
         if msg.role == "system" {
+            if msg.content == "✨ New chat started" {
+                push_new_chat_separator(&mut lines, inner_area.width, show_picker);
+                continue;
+            }
             // Hide benign intermediate notices and full compaction summary text from TUI display
             if is_hidden_system_notice(&msg.content) {
                 continue;

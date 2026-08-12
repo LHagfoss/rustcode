@@ -22,7 +22,7 @@ use crossterm::{
     cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
@@ -169,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout = io::stdout();
     execute!(
         stdout,
+        EnterAlternateScreen,
         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
         crossterm::cursor::MoveTo(0, 0),
         crossterm::event::EnableBracketedPaste,
@@ -2068,7 +2069,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal.backend_mut(),
         crossterm::event::DisableBracketedPaste,
         crossterm::event::DisableFocusChange,
-        SetCursorStyle::DefaultUserShape
+        SetCursorStyle::DefaultUserShape,
+        LeaveAlternateScreen
     )?;
     let goodbye_origin = goodbye_cursor_position(terminal.size()?.height);
     execute!(
