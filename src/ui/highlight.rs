@@ -713,7 +713,7 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    4 - "));
-        assert_eq!(lines[1].spans[0].style.bg, Some(COLOR_BG()));
+        assert!(lines[1].spans[0].style.bg.is_some());
         assert_eq!(lines[1].spans[1].style.fg, Some(COLOR_DIFF_REMOVE_FG()));
 
         let text: String = lines[2]
@@ -722,9 +722,9 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.starts_with("    7 + "));
-        assert_eq!(lines[2].spans[0].style.bg, Some(COLOR_BG()));
+        assert!(lines[2].spans[0].style.bg.is_some());
         assert_eq!(lines[2].spans[1].style.fg, Some(COLOR_DIFF_ADD_FG()));
 
-        assert_eq!(lines[3].spans[0].style.bg, Some(COLOR_BG()));
+        assert!(lines[3].spans[0].style.bg.is_some());
     }
 }

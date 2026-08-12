@@ -1745,6 +1745,13 @@ fn render_status_panel<'a>(
     }
 }
 
+const RUSTCODE_LOGO: &[&str] = &[
+    "                  ▄                   █      ",
+    "▄▀▀▀ █   █ ▄▀▀▀▀ ▀█▀▀ ▄▀▀▀▀ ▄▀▀▀▄ ▄▀▀▀█ ▄▀▀▀▄",
+    "█    █   █  ▀▀▀▄  █   █     █   █ █   █ █▀▀▀▀",
+    "▀     ▀▀▀  ▀▀▀▀    ▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀",
+];
+
 fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line<'static>> {
     let mut banner = Vec::new();
     let version = env!("CARGO_PKG_VERSION");
@@ -1757,12 +1764,13 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         state.cwd_and_branch.clone()
     };
 
-    let box_w = total_width.saturating_sub(2).clamp(50, 110);
+    let box_w = total_width.saturating_sub(2).max(50);
     let inner_w = box_w.saturating_sub(2);
-    let left_w = (inner_w * 40 / 100).max(24);
+    let left_w = if inner_w >= 85 { 48 } else { (inner_w * 45 / 100).max(22) };
     let right_w = inner_w.saturating_sub(left_w + 1);
 
     let primary = COLOR_PRIMARY();
+    let secondary = COLOR_SECONDARY();
     let text_c = COLOR_TEXT();
     let muted_c = COLOR_MUTED();
     let reset_bg = COLOR_BG();
@@ -1786,56 +1794,56 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
     ]));
 
-    // Row 2: Left: "      ▄     ▄" | Right: "Run /help to view all slash commands"
-    let left2 = format!("  {:<width$}", "      ▄     ▄", width = left_w.saturating_sub(2));
-    let right2 = format!(" {:<width$}", "Run /help to view all slash commands", width = right_w.saturating_sub(1));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left2, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right2, Style::default().fg(text_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
+    // Logo rows (Rows 2..5)
+    let right_content = [
+        "Run /help to view all slash commands",
+        "Type @ to mention and link project files",
+        "───DIVIDER───",
+        "Shortcuts & Options",
+    ];
 
-    // Row 3: Left: "     ▐██   ██▌" | Right: "Type @ to mention and link project files"
-    let left3 = format!("  {:<width$}", "     ▐██   ██▌", width = left_w.saturating_sub(2));
-    let right3 = format!(" {:<width$}", "Type @ to mention and link project files", width = right_w.saturating_sub(1));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left3, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right3, Style::default().fg(text_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
+    for idx in 0..4 {
+        let logo_raw = RUSTCODE_LOGO[idx];
+        let logo_line = if left_w >= 48 {
+            format!("  {:<width$}", logo_raw, width = left_w.saturating_sub(2))
+        } else {
+            format!("  {:<width$}", "rustcode", width = left_w.saturating_sub(2))
+        };
 
-    // Row 4: Left: "    ▄█████████▄" | Right: "──────────────────────────────────────"
-    let left4 = format!("  {:<width$}", "    ▄█████████▄", width = left_w.saturating_sub(2));
-    let right4 = format!(" {}", "─".repeat(right_w.saturating_sub(1)));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left4, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-        Span::styled("├", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right4, Style::default().fg(primary).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
+        let rc = right_content[idx];
+        if rc == "───DIVIDER───" {
+            let right_div = format!(" {}", "─".repeat(right_w.saturating_sub(1)));
+            banner.push(Line::from(vec![
+                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(logo_line, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+                Span::styled("├", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(right_div, Style::default().fg(primary).bg(reset_bg)),
+                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            ]));
+        } else {
+            let is_header = idx == 3;
+            let r_text = format!(" {:<width$}", rc, width = right_w.saturating_sub(1));
+            let r_style = if is_header {
+                Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(text_c).bg(reset_bg)
+            };
+            banner.push(Line::from(vec![
+                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(logo_line, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+                Span::styled(r_text, r_style),
+                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            ]));
+        }
+    }
 
-    // Row 5: Left: "   ▐█ ▀█████▀ █▌" | Right: "Shortcuts & Features"
-    let left5 = format!("  {:<width$}", "   ▐█ ▀█████▀ █▌", width = left_w.saturating_sub(2));
-    let right5 = format!(" {:<width$}", "Shortcuts & Features", width = right_w.saturating_sub(1));
+    // Row 6: Left: spacer | Right: "/model select model · /theme switch theme"
+    let left6 = format!("  {:<width$}", "", width = left_w.saturating_sub(2));
+    let right6 = format!(" {:<width$}", "/model select model  ·  /theme switch theme", width = right_w.saturating_sub(1));
     banner.push(Line::from(vec![
         Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left5, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right5, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
-
-    // Row 6: Left: "    ▀ ▄▀ ▀ ▀▄ ▀" | Right: "/model select model · /theme switch theme"
-    let left6 = format!("  {:<width$}", "    ▀ ▄▀ ▀ ▀▄ ▀", width = left_w.saturating_sub(2));
-    let right6 = format!(" {:<width$}", "/model select model · /theme switch theme", width = right_w.saturating_sub(1));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left6, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(left6, Style::default().fg(muted_c).bg(reset_bg)),
         Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
         Span::styled(right6, Style::default().fg(muted_c).bg(reset_bg)),
         Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
@@ -1848,7 +1856,7 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     };
     let info_left = format!("{model_name} · {mode_str}");
     let left7 = format!("  {:<width$}", info_left, width = left_w.saturating_sub(2));
-    let right7 = format!(" {:<width$}", "Tab autocomplete · Shift+Enter newline", width = right_w.saturating_sub(1));
+    let right7 = format!(" {:<width$}", "Tab autocomplete  ·  Shift+Enter newline", width = right_w.saturating_sub(1));
     banner.push(Line::from(vec![
         Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
         Span::styled(left7, Style::default().fg(muted_c).bg(reset_bg)),
@@ -2442,7 +2450,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
             Vec::new()
         };
 
-    let inner_width = f.area().width.saturating_sub(6).max(1);
+    let inner_width = f.area().width.saturating_sub(4).max(1);
     let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
     let input_lines = raw_input_lines.min(8);
     let input_height = input_lines + 2;
@@ -2450,7 +2458,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .horizontal_margin(3)
+        .horizontal_margin(0)
         .vertical_margin(1)
         .constraints([
             Constraint::Min(3),
