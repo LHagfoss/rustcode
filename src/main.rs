@@ -2076,11 +2076,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         crossterm::event::DisableFocusChange,
         SetCursorStyle::DefaultUserShape
     )?;
+    let goodbye_origin = goodbye_cursor_position(terminal.size()?.height);
+    execute!(
+        terminal.backend_mut(),
+        crossterm::cursor::MoveTo(goodbye_origin.0, goodbye_origin.1)
+    )?;
     terminal.show_cursor()?;
 
     print_goodbye();
 
     Ok(())
+}
+
+fn goodbye_cursor_position(height: u16) -> (u16, u16) {
+    (0, height.saturating_sub(1))
 }
 
 /// Printed on every exit path (/quit, /exit, Ctrl+C, ...) after the terminal
@@ -2133,8 +2142,18 @@ fn print_goodbye() {
 
 #[cfg(test)]
 mod draw_loop_tests {
-    use super::{STREAM_FRAME_INTERVAL, background_task_history_message, should_draw};
+    use super::{
+        STREAM_FRAME_INTERVAL, background_task_history_message, goodbye_cursor_position,
+        should_draw,
+    };
     use std::time::Duration;
+
+    #[test]
+    fn goodbye_cursor_position_is_bottom_left() {
+        assert_eq!(goodbye_cursor_position(24), (0, 23));
+        assert_eq!(goodbye_cursor_position(1), (0, 0));
+        assert_eq!(goodbye_cursor_position(0), (0, 0));
+    }
 
     #[test]
     fn idle_without_input_never_redraws() {
