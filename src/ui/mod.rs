@@ -1038,9 +1038,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let show_picker = state.modal_open();
     let area = chunks[2];
 
-    let border_color = if state.status == AppStatus::Streaming {
-        COLOR_GREEN()
-    } else if show_picker {
+    let border_color = if show_picker {
         COLOR_MUTED()
     } else {
         COLOR_PRIMARY()
@@ -1764,9 +1762,9 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         state.cwd_and_branch.clone()
     };
 
-    let box_w = total_width.saturating_sub(2).max(50);
+    let box_w = total_width.saturating_sub(4).clamp(65, 120);
     let inner_w = box_w.saturating_sub(2);
-    let left_w = if inner_w >= 85 { 48 } else { (inner_w * 45 / 100).max(22) };
+    let left_w = if inner_w >= 90 { 50 } else { (inner_w * 44 / 100).max(30) };
     let right_w = inner_w.saturating_sub(left_w + 1);
 
     let primary = COLOR_PRIMARY();
@@ -1783,99 +1781,114 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         Span::styled(top_border, Style::default().fg(primary).bg(reset_bg)),
     ]));
 
-    // Row 1: Left: "Welcome back!" | Right: "Tips for getting started"
-    let left1 = format!("  {:<width$}", "Welcome back!", width = left_w.saturating_sub(2));
-    let right1 = format!(" {:<width$}", "Tips for getting started", width = right_w.saturating_sub(1));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left1, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right1, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
+    let make_row = |left_str: String, left_style: Style, right_str: String, right_style: Style| -> Line<'static> {
+        let l_cell = format!("{:<width$}", left_str, width = left_w);
+        let r_cell = format!("{:<width$}", right_str, width = right_w);
+        Line::from(vec![
+            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled(l_cell, left_style),
+            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled(r_cell, right_style),
+            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        ])
+    };
 
-    // Logo rows (Rows 2..5)
-    let right_content = [
-        "Run /help to view all slash commands",
-        "Type @ to mention and link project files",
-        "───DIVIDER───",
-        "Shortcuts & Options",
-    ];
+    let make_divider_row = |left_str: String, left_style: Style| -> Line<'static> {
+        let l_cell = format!("{:<width$}", left_str, width = left_w);
+        let r_div = format!(" {}", "─".repeat(right_w.saturating_sub(1)));
+        Line::from(vec![
+            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled(l_cell, left_style),
+            Span::styled("├", Style::default().fg(primary).bg(reset_bg)),
+            Span::styled(r_div, Style::default().fg(primary).bg(reset_bg)),
+            Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
+        ])
+    };
 
-    for idx in 0..4 {
-        let logo_raw = RUSTCODE_LOGO[idx];
-        let logo_line = if left_w >= 48 {
-            format!("  {:<width$}", logo_raw, width = left_w.saturating_sub(2))
-        } else {
-            format!("  {:<width$}", "rustcode", width = left_w.saturating_sub(2))
-        };
+    // Row 0: Blank line top padding
+    banner.push(make_row(
+        "".to_string(), Style::default().bg(reset_bg),
+        "".to_string(), Style::default().bg(reset_bg),
+    ));
 
-        let rc = right_content[idx];
-        if rc == "───DIVIDER───" {
-            let right_div = format!(" {}", "─".repeat(right_w.saturating_sub(1)));
-            banner.push(Line::from(vec![
-                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-                Span::styled(logo_line, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-                Span::styled("├", Style::default().fg(primary).bg(reset_bg)),
-                Span::styled(right_div, Style::default().fg(primary).bg(reset_bg)),
-                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-            ]));
-        } else {
-            let is_header = idx == 3;
-            let r_text = format!(" {:<width$}", rc, width = right_w.saturating_sub(1));
-            let r_style = if is_header {
-                Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(text_c).bg(reset_bg)
-            };
-            banner.push(Line::from(vec![
-                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-                Span::styled(logo_line, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD)),
-                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-                Span::styled(r_text, r_style),
-                Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-            ]));
-        }
-    }
+    // Row 1: Left: Centered "Welcome back!" | Right: "  Tips for getting started"
+    let welcome_txt = "Welcome back!";
+    let welcome_pad = left_w.saturating_sub(welcome_txt.len()) / 2;
+    let left1 = format!("{}{}", " ".repeat(welcome_pad), welcome_txt);
+    banner.push(make_row(
+        left1, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
+        "  Tips for getting started".to_string(), Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD),
+    ));
 
-    // Row 6: Left: spacer | Right: "/model select model · /theme switch theme"
-    let left6 = format!("  {:<width$}", "", width = left_w.saturating_sub(2));
-    let right6 = format!(" {:<width$}", "/model select model  ·  /theme switch theme", width = right_w.saturating_sub(1));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left6, Style::default().fg(muted_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right6, Style::default().fg(muted_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
+    // Row 2: Left: Blank space | Right: "  Run /help to view all slash commands"
+    banner.push(make_row(
+        "".to_string(), Style::default().bg(reset_bg),
+        "  Run /help to view all slash commands".to_string(), Style::default().fg(text_c).bg(reset_bg),
+    ));
 
-    // Row 7: Left: "<model> · <mode>" | Right: "Tab autocomplete · Shift+Enter newline"
+    // Rows 3..6: 4-line RustCode logo on Left
+    let logo_width = 45;
+    let logo_pad = left_w.saturating_sub(logo_width) / 2;
+
+    // Row 3: Logo line 0 | Right: "  Type @ to mention and link project files"
+    let l_line0 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[0]) } else { "  rustcode".to_string() };
+    banner.push(make_row(
+        l_line0, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        "  Type @ to mention and link project files".to_string(), Style::default().fg(text_c).bg(reset_bg),
+    ));
+
+    // Row 4: Logo line 1 | Right: Divider Line ──────
+    let l_line1 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[1]) } else { "".to_string() };
+    banner.push(make_divider_row(
+        l_line1, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+    ));
+
+    // Row 5: Logo line 2 | Right: "  Shortcuts & Options"
+    let l_line2 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[2]) } else { "".to_string() };
+    banner.push(make_row(
+        l_line2, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        "  Shortcuts & Options".to_string(), Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD),
+    ));
+
+    // Row 6: Logo line 3 | Right: "  /model select model  ·  /theme switch theme"
+    let l_line3 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[3]) } else { "".to_string() };
+    banner.push(make_row(
+        l_line3, Style::default().fg(secondary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        "  /model select model  ·  /theme switch theme".to_string(), Style::default().fg(muted_c).bg(reset_bg),
+    ));
+
+    // Row 7: Left: Blank space | Right: "  Tab autocomplete     ·  Shift+Enter newline"
+    banner.push(make_row(
+        "".to_string(), Style::default().bg(reset_bg),
+        "  Tab autocomplete     ·  Shift+Enter newline".to_string(), Style::default().fg(muted_c).bg(reset_bg),
+    ));
+
+    // Row 8: Left: Centered "<model> · <mode>" | Right: "  Built-in MCP tools, search & execution"
     let mode_str = match state.agent_mode {
         crate::config::AgentMode::Build => "build",
         crate::config::AgentMode::Plan => "plan",
     };
-    let info_left = format!("{model_name} · {mode_str}");
-    let left7 = format!("  {:<width$}", info_left, width = left_w.saturating_sub(2));
-    let right7 = format!(" {:<width$}", "Tab autocomplete  ·  Shift+Enter newline", width = right_w.saturating_sub(1));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left7, Style::default().fg(muted_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right7, Style::default().fg(muted_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
+    let info_txt = format!("{model_name} · {mode_str}");
+    let info_pad = left_w.saturating_sub(info_txt.len()) / 2;
+    let left8 = format!("{}{}", " ".repeat(info_pad), info_txt);
+    banner.push(make_row(
+        left8, Style::default().fg(muted_c).bg(reset_bg),
+        "  Built-in MCP tools, search & execution".to_string(), Style::default().fg(muted_c).bg(reset_bg),
+    ));
 
-    // Row 8: Left: "<cwd_branch>" | Right: "Built-in MCP tools, search & execution"
-    let left8_raw = cwd_branch.chars().take(left_w.saturating_sub(3)).collect::<String>();
-    let left8 = format!("  {:<width$}", left8_raw, width = left_w.saturating_sub(2));
-    let right8 = format!(" {:<width$}", "Built-in MCP tools, search & execution", width = right_w.saturating_sub(1));
-    banner.push(Line::from(vec![
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(left8, Style::default().fg(muted_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-        Span::styled(right8, Style::default().fg(muted_c).bg(reset_bg)),
-        Span::styled("│", Style::default().fg(primary).bg(reset_bg)),
-    ]));
+    // Row 9: Left: Centered "<cwd_branch>" | Right: Blank space
+    let cwd_pad = left_w.saturating_sub(cwd_branch.len()) / 2;
+    let left9 = format!("{}{}", " ".repeat(cwd_pad), cwd_branch);
+    banner.push(make_row(
+        left9, Style::default().fg(muted_c).bg(reset_bg),
+        "".to_string(), Style::default().bg(reset_bg),
+    ));
+
+    // Row 10: Blank line bottom padding
+    banner.push(make_row(
+        "".to_string(), Style::default().bg(reset_bg),
+        "".to_string(), Style::default().bg(reset_bg),
+    ));
 
     // Bottom border
     let bot_border = format!("╰{}╯", "─".repeat(inner_w));
