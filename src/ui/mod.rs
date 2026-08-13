@@ -2305,8 +2305,6 @@ pub(crate) fn render_live_tail(
         || !state.running_tools.is_empty()
     {
         lines.push(activity_status_line(state, false));
-        lines.push(Line::from(""));
-        lines.push(Line::from(""));
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
