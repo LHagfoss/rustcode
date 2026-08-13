@@ -2499,7 +2499,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         .saturating_sub(2)
         .saturating_sub(queue_block_height)
         .saturating_sub(input_height);
-    let chunks = Layout::default()
+    let max_chunks = Layout::default()
         .direction(Direction::Vertical)
         .horizontal_margin(0)
         .vertical_margin(1)
@@ -2510,7 +2510,31 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         ])
         .split(f.area());
 
-    render_live_conversation(f, &chunks, state);
+    render_live_conversation(f, &max_chunks, state);
+    let has_conversation = state
+        .history
+        .iter()
+        .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
+    let min_welcome_height = if !has_conversation { 15 } else { 0 };
+    let chat_height = conversation_area_height(state.conversation_content_height, max_chat_height)
+        .max(min_welcome_height)
+        .min(max_chat_height);
+    let chunks = if chat_height == max_chat_height {
+        max_chunks
+    } else {
+        let compact_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .horizontal_margin(0)
+            .vertical_margin(1)
+            .constraints([
+                Constraint::Length(chat_height),
+                Constraint::Length(queue_block_height),
+                Constraint::Length(input_height),
+            ])
+            .split(f.area());
+        render_live_conversation(f, &compact_chunks, state);
+        compact_chunks
+    };
 
     render_queue_line(f, &chunks, state);
     let input_margin = render_input(f, &chunks, state);
