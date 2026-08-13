@@ -1375,6 +1375,18 @@ fn to_pascal_case(name: &str) -> String {
         .collect()
 }
 
+fn contract_home_path(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if path.starts_with(&home) {
+            return format!("~{}", &path[home.len()..]);
+        }
+    }
+    path.to_string()
+}
+
 fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, String) {
     let action_label = match name {
         "view_file" => "Read".to_string(),
@@ -1383,11 +1395,11 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         "delete_file" => "Delete".to_string(),
         "move_file" => "Move".to_string(),
         "copy_file" => "Copy".to_string(),
-        "list_directory" | "glob" => "ListDir".to_string(),
-        "grep" => "Grep".to_string(),
-        "find_symbol" => "Symbol".to_string(),
+        "list_directory" | "list_dir" | "glob" => "ListDir".to_string(),
+        "grep" | "grep_search" => "Search".to_string(),
+        "find_symbol" | "codebase_symbol" => "Symbol".to_string(),
         "run_command" => "Bash".to_string(),
-        "search_web" => "Search".to_string(),
+        "search_web" | "codebase_search" => "Search".to_string(),
         "get_project_map" => "ProjectMap".to_string(),
         "manage_task" => "ManageTask".to_string(),
         "background_task" => "TaskDone".to_string(),
@@ -1399,36 +1411,38 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         | "replace_file_content"
         | "multi_replace_file_content"
         | "write_to_file"
-        | "delete_file" => args
-            .get("TargetFile")
-            .or_else(|| args.get("path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        | "delete_file" => {
+            let path = args
+                .get("TargetFile")
+                .or_else(|| args.get("AbsolutePath"))
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            contract_home_path(path)
+        }
         "move_file" | "copy_file" => {
             let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
             let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
             format!("{} -> {}", src, dest)
         }
-        "list_directory" | "glob" => args
-            .get("DirectoryPath")
-            .or_else(|| args.get("path"))
-            .or_else(|| args.get("pattern"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(".")
-            .to_string(),
-        "grep" => {
-            let pattern = args
+        "list_directory" | "list_dir" | "glob" => {
+            let path = args
+                .get("DirectoryPath")
+                .or_else(|| args.get("SearchPath"))
+                .or_else(|| args.get("path"))
+                .or_else(|| args.get("pattern"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            contract_home_path(path)
+        }
+        "grep" | "grep_search" => {
+            let query = args
                 .get("Query")
+                .or_else(|| args.get("query"))
                 .or_else(|| args.get("pattern"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("?");
-            let path = args
-                .get("SearchPath")
-                .or_else(|| args.get("path"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
-            format!("\"{}\" in {}", pattern, path)
+            format!("Grep {query}")
         }
         "run_command" => args
             .get("CommandLine")
@@ -1436,8 +1450,9 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
-        "search_web" | "find_symbol" => args
+        "search_web" | "codebase_search" | "find_symbol" | "codebase_symbol" => args
             .get("query")
+            .or_else(|| args.get("Query"))
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
@@ -1810,8 +1825,8 @@ fn render_committed_tool_result(
 
     let message = &state.history[message_index];
     let (action, target) = tool_result_action(state, message_index, tool_name);
-    let (success, status) = tool_result_status(message, tool_name, result);
-    let status_color = if success {
+    let (success, _status) = tool_result_status(message, tool_name, result);
+    let bullet_color = if success {
         COLOR_GREEN()
     } else {
         Color::Rgb(229, 123, 123)
@@ -1819,8 +1834,8 @@ fn render_committed_tool_result(
 
     let mut header = vec![
         Span::styled(
-            "• ",
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+            "● ",
+            get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
         ),
         Span::styled(
             action,
@@ -1829,19 +1844,11 @@ fn render_committed_tool_result(
     ];
     if !target.is_empty() && target != "?" {
         header.push(Span::styled(
-            format!(" · {target}"),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            format!("({target})"),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }
 
-    let icon = if success { "✓" } else { "✗" };
-    let mut lines = vec![
-        Line::from(header),
-        Line::from(Span::styled(
-            format!("  └ {icon} {status}"),
-            get_themed_style(status_color, COLOR_BG(), Modifier::BOLD, show_picker),
-        )),
-    ];
     let body = cached_tool_result(
         tool_name,
         result,
@@ -1849,7 +1856,19 @@ fn render_committed_tool_result(
         &state.verbosity,
         show_picker,
     );
-    lines.extend(indent_tool_result_body(body, tool_name));
+    let is_expanded = state.expanded_thoughts.contains(&message_index);
+
+    if !body.is_empty() && !is_expanded {
+        header.push(Span::styled(
+            " (ctrl+o to expand)",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+        ));
+    }
+
+    let mut lines = vec![Line::from(header)];
+    if is_expanded {
+        lines.extend(indent_tool_result_body(body, tool_name));
+    }
     lines
 }
 
@@ -2361,7 +2380,13 @@ pub(crate) fn render_committed_history_block(
             );
             if !tool_lines.is_empty() {
                 lines.extend(tool_lines);
-                lines.push(Line::from(""));
+                let next_is_tool = state
+                    .history
+                    .get(message_index + 1)
+                    .is_some_and(|m| m.role == "tool");
+                if !next_is_tool {
+                    lines.push(Line::from(""));
+                }
             }
         }
         "system" if !is_hidden_system_notice(&message.content) => {

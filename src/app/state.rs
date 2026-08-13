@@ -952,6 +952,7 @@ pub struct AppState {
     /// protocol, agent mode, or MCP tool set changes.
     pub prompt_cache: PromptCache,
     pub verbosity: Verbosity,
+    pub expanded_thoughts: std::collections::HashSet<usize>,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -1070,6 +1071,7 @@ impl AppState {
             theme_picker_index: 0,
             theme_picker_initial: String::new(),
             verbosity,
+            expanded_thoughts: std::collections::HashSet::new(),
             show_command_picker: false,
             command_picker_index: 0,
             command_picker_search: String::new(),
