@@ -711,7 +711,7 @@ fn new_chat_separator_spans_width_and_centers_label() {
 fn conversation_area_height_fits_short_transcripts_and_caps_long_ones() {
     assert_eq!(conversation_area_height(8, 36), 8);
     assert_eq!(conversation_area_height(64, 36), 36);
-    assert_eq!(conversation_area_height(0, 36), 3);
+    assert_eq!(conversation_area_height(0, 36), 0);
 }
 
 #[test]
@@ -874,6 +874,16 @@ fn transcript_cursor_retries_pending_content_until_acknowledged() {
 }
 
 #[test]
+fn transcript_cursor_holds_thought_stream_until_finalized() {
+    let cursor = super::scrollback::TranscriptCursor::default();
+
+    assert!(cursor.pending_stable_stream("<think>\nPlanning\n").is_empty());
+    assert!(cursor
+        .pending_stable_stream("thoughtPlanning the response\n")
+        .is_empty());
+}
+
+#[test]
 fn live_tail_excludes_committed_history() {
     let mut state = AppState::new();
     state
@@ -975,6 +985,30 @@ fn committed_user_messages_keep_regular_body_text() {
 }
 
 #[test]
+fn committed_assistant_message_has_one_trailing_separator() {
+    let state = AppState::new();
+
+    let block = super::render_committed_assistant_text(&state, "Finished.", 80);
+
+    assert_eq!(block.len(), 2);
+    assert_eq!(block[0].spans[0].content, "• ");
+    assert!(block[1].spans.is_empty());
+}
+
+#[test]
+fn committed_assistant_message_uses_saved_thought_metrics() {
+    let mut state = AppState::new();
+    let mut message = ChatMessage::new("assistant", "<think>Planning.</think>Finished.");
+    message.thought_time_ms = Some(1250);
+    message.thought_tokens = Some(42);
+    state.history.push(message);
+
+    let block = super::render_committed_history_block(&state, 0, 80);
+
+    assert_eq!(block[0].spans[1].content, "Thought for 1.2s, 42 tokens");
+}
+
+#[test]
 fn live_tail_uses_formatted_working_status() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
@@ -1005,7 +1039,7 @@ fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
 #[test]
 fn transcript_cursor_keeps_a_committed_prefix_when_the_stream_finalizes() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
-    let final_text = "<think>\nPlanning the response\n</think>\n\nFinal answer";
+    let final_text = "Opening line\nFinal answer";
     let stable = format!("{}\n", cursor.pending_stable_stream(final_text).join("\n"));
     cursor.commit_stable_stream(&stable);
 

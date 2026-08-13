@@ -1,5 +1,13 @@
 use std::ops::Range;
 
+fn stream_starts_with_thought(stream: &str) -> bool {
+    let text = stream.trim_start();
+    text.starts_with("<think>")
+        || text
+            .strip_prefix("thought")
+            .is_some_and(|rest| rest.chars().next().is_some_and(char::is_uppercase))
+}
+
 /// Return the newline-terminated rows that can be appended permanently and
 /// leave the unfinished suffix for the mutable live viewport.
 pub(crate) fn split_stable_rows(text: &str) -> (Vec<String>, String) {
@@ -51,6 +59,12 @@ impl TranscriptCursor {
     }
 
     pub(crate) fn pending_stable_stream(&self, stream: &str) -> Vec<String> {
+        // Terminal scrollback cannot revise earlier rows. Hold a response that
+        // starts with reasoning until it is finalized, so it is emitted once
+        // with its normalized thought block and final timing/token metadata.
+        if self.committed_stream.is_empty() && stream_starts_with_thought(stream) {
+            return Vec::new();
+        }
         let pending = stream.strip_prefix(&self.committed_stream).unwrap_or(stream);
         split_stable_rows(pending).0
     }
