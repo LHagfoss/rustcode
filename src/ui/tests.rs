@@ -350,6 +350,17 @@ fn thought_parser_drops_unclosed_block_from_answer() {
 }
 
 #[test]
+fn thought_parser_handles_missing_open_tag() {
+    let (answer, preview) =
+        split_thought_blocks("Reasoning about user request.\n</think>\n\nFinal response");
+    assert_eq!(answer, "Final response");
+    assert_eq!(
+        preview.as_deref(),
+        Some("Reasoning about user request.")
+    );
+}
+
+#[test]
 fn thought_preview_keeps_short_text_unchanged() {
     assert_eq!(
         truncate_thought_preview("Analyzing Paste Events", 24),
