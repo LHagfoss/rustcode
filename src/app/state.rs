@@ -856,6 +856,8 @@ pub struct AppState {
 
     pub last_copy_text: Option<(String, std::time::Instant)>,
     pub generation_start_time: Option<std::time::Instant>,
+    /// Keeps the Working row visible for the draw that paints a finalized reply.
+    pub working_status_pending: bool,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     pub modal_scroll_row: u16,
 
@@ -1081,6 +1083,7 @@ impl AppState {
             mcp_edit_state: None,
             last_copy_text: None,
             generation_start_time: None,
+            working_status_pending: false,
             pending_tool_confirmation: None,
             modal_scroll_row: 0,
             tool_confirmation_response: None,
