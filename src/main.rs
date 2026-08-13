@@ -24,13 +24,18 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use ratatui::{
+    Terminal, TerminalOptions, Viewport,
+    backend::CrosstermBackend,
+    widgets::{Paragraph, Widget, Wrap},
+};
 use std::io;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smooth scrolling
+const LIVE_VIEWPORT_ROWS: u16 = 12;
 
 /// Frame budget while a response is in flight: 60Hz, so streamed tokens,
 /// spinners, the elapsed-second counter and the rotating status label (which
@@ -183,11 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let backend = CrosstermBackend::new(stdout);
-    let terminal_height = crossterm::terminal::size()?.1;
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
-            viewport: Viewport::Inline(terminal_height),
+            viewport: Viewport::Inline(LIVE_VIEWPORT_ROWS),
         },
     )?;
     terminal.clear()?;
@@ -304,10 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_draw = std::time::Instant::now();
     let mut was_responding = false;
     let mut terminal_focused = true;
-    // Scroll coalescing: batch rapid scroll events
-    let mut scroll_coalesce: i32 = 0;
-    const SCROLL_COALESCE_WINDOW: Duration = Duration::from_millis(16);
-    let mut last_scroll_time = Instant::now();
+    let mut transcript_cursor = crate::ui::scrollback::TranscriptCursor::default();
 
     loop {
         let (response_active, background_redraw, active_notice) = {
@@ -354,6 +355,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if should_draw {
             let mut guard = app_state.lock().await;
+
+            let terminal_width = terminal.size()?.width;
+            transcript_cursor.begin_stream(&guard.current_response);
+            let stable_rows = transcript_cursor.pending_stable_stream(&guard.current_response);
+            if !stable_rows.is_empty() {
+                let stable = format!("{}\n", stable_rows.join("\n"));
+                let lines = crate::ui::render_committed_assistant_text(
+                    &guard,
+                    &stable,
+                    terminal_width,
+                );
+                let height = Paragraph::new(lines.clone())
+                    .wrap(Wrap { trim: false })
+                    .line_count(terminal_width)
+                    .max(1) as u16;
+                terminal.insert_before(height, |buffer| {
+                    Paragraph::new(lines)
+                        .wrap(Wrap { trim: false })
+                        .render(buffer.area, buffer);
+                })?;
+                transcript_cursor.commit_stable_stream(&stable);
+            }
+
+            let history_range = transcript_cursor.pending_history_range(guard.history.len());
+            let mut blocks = Vec::new();
+            for index in history_range.clone() {
+                let message = &guard.history[index];
+                if message.role == "assistant" {
+                    if let Some(remainder) =
+                        transcript_cursor.take_final_stream_remainder(&message.content)
+                    {
+                        if !remainder.is_empty() {
+                            blocks.push(crate::ui::render_committed_assistant_text(
+                                &guard,
+                                &remainder,
+                                terminal_width,
+                            ));
+                        }
+                    } else {
+                        blocks.push(crate::ui::render_committed_history_block(
+                            &guard,
+                            index,
+                            terminal_width,
+                        ));
+                    }
+                } else {
+                    let block = crate::ui::render_committed_history_block(&guard, index, terminal_width);
+                    if !block.is_empty() {
+                        blocks.push(block);
+                    }
+                }
+            }
+            for lines in blocks {
+                let height = Paragraph::new(lines.clone())
+                    .wrap(Wrap { trim: false })
+                    .line_count(terminal_width)
+                    .max(1) as u16;
+                terminal.insert_before(height, |buffer| {
+                    Paragraph::new(lines)
+                        .wrap(Wrap { trim: false })
+                        .render(buffer.area, buffer);
+                })?;
+            }
+            transcript_cursor.commit_history_through(history_range.end);
 
             // Update terminal title based on the same activity snapshot used by
             // the footer, so state and animation stay synchronized.
@@ -1532,16 +1597,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.move_cursor_line_down();
                             }
                         }
-                        KeyCode::PageUp => {
-                            let mut s = app_state.lock().await;
-                            let page = s.page_rows();
-                            s.scroll_up(page);
-                        }
-                        KeyCode::PageDown => {
-                            let mut s = app_state.lock().await;
-                            let page = s.page_rows();
-                            s.scroll_down(page);
-                        }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
                             let has_at =
@@ -1672,43 +1727,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             s.command_picker_search.clear();
                         }
 
-                        // Ctrl+Y, Cmd+C, or Ctrl+C copies the current app selection.
-                        KeyCode::Char('y')
-                        | KeyCode::Char('Y')
-                        | KeyCode::Char('c')
-                        | KeyCode::Char('C')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL)
-                                || key.modifiers.contains(event::KeyModifiers::SUPER)
-                                || key.modifiers.contains(event::KeyModifiers::META) =>
-                        {
-                            let mut s = app_state.lock().await;
-                            if let Some(text) = s.selected_text.clone() {
-                                dbg_log!(
-                                    "[MAIN] KeyCopy copying selected text ({} chars): {:?}",
-                                    text.len(),
-                                    text
-                                );
-                                if crate::clipboard::copy_to_clipboard(&text) {
-                                    s.set_notice("Copied to clipboard");
-                                }
-                            }
-                            s.clear_selection();
-                            needs_redraw = true;
-                        }
-                        KeyCode::Char('t')
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
-                        {
-                            let mut s = app_state.lock().await;
-                            s.mouse_capture_enabled = !s.mouse_capture_enabled;
-                            s.clear_selection();
-                            use std::io::Write;
-                            if s.mouse_capture_enabled {
-                                write!(terminal.backend_mut(), "\x1b[?1006h\x1b[?1003h").ok();
-                            } else {
-                                s.hover = crate::app::HoverTarget::None;
-                                write!(terminal.backend_mut(), "\x1b[?1006l\x1b[?1003l").ok();
-                            }
-                        }
                         KeyCode::Char(c) => {
                             let mut s = app_state.lock().await;
                             let ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
@@ -1794,218 +1812,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     terminal_focused = false;
                     needs_redraw = true;
                 }
-                Event::Mouse(mouse) => {
-                    use crossterm::event::{MouseButton, MouseEventKind};
-                    let now = Instant::now();
-                    // Coalesce rapid scroll events
-                    if now.duration_since(last_scroll_time) < SCROLL_COALESCE_WINDOW {
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => scroll_coalesce += 1,
-                            MouseEventKind::ScrollDown => scroll_coalesce -= 1,
-                            _ => {}
-                        }
-                        continue;
-                    }
-                    // Process accumulated scroll
-                    if scroll_coalesce != 0 {
-                        let mut s = app_state.lock().await;
-                        let modal = s.modal_open();
-                        if !modal {
-                            if scroll_coalesce > 0 {
-                                s.scroll_up((scroll_coalesce as u16).min(10));
-                            } else {
-                                s.scroll_down((-scroll_coalesce as u16).min(10));
-                            }
-                            needs_redraw = true;
-                        }
-                        scroll_coalesce = 0;
-                    }
-                    last_scroll_time = now;
-
-                    let mut s = app_state.lock().await;
-                    let modal = s.modal_open();
-
-                    // Refresh the hover highlight for every pointer event, not just
-                    // motion: scrolling moves rows under a stationary pointer too.
-                    // Any-motion reporting fires on each cell crossed, so a redraw
-                    // is only worth it when the hovered element actually changes.
-                    let next_hover = if modal {
-                        crate::app::HoverTarget::None
-                    } else {
-                        s.hover_target_at(mouse.column, mouse.row)
-                    };
-                    if s.hover != next_hover {
-                        s.hover = next_hover;
-                        needs_redraw = true;
-                    }
-
-                    match mouse.kind {
-                        MouseEventKind::Moved => {}
-                        MouseEventKind::ScrollUp if !modal => {
-                            s.scroll_up(1);
-                            if s.selecting {
-                                s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
-                            }
-                            needs_redraw = true;
-                        }
-                        MouseEventKind::ScrollDown if !modal => {
-                            s.scroll_down(1);
-                            if s.selecting {
-                                s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
-                            }
-                            needs_redraw = true;
-                        }
-                        MouseEventKind::Down(MouseButton::Left) if !modal => {
-                            let hit_scroll_btn = s
-                                .scroll_to_bottom_btn
-                                .map(|r| {
-                                    r.contains(ratatui::layout::Position::new(
-                                        mouse.column,
-                                        mouse.row,
-                                    ))
-                                })
-                                .unwrap_or(false);
-                            if hit_scroll_btn {
-                                // Jump to newest — do NOT start a text selection, and do
-                                // NOT return from the event loop (that would quit the app).
-                                s.scroll_to_bottom();
-                                needs_redraw = true;
-                            } else {
-                                let inside_chat = if let Some(ca) = s.chat_area {
-                                    mouse.row >= ca.y
-                                        && mouse.row < ca.y + ca.height
-                                        && mouse.column >= ca.x
-                                        && mouse.column < ca.x + ca.width
-                                } else {
-                                    true
-                                };
-                                let inside_input = s
-                                    .input_text_area
-                                    .map(|ia| {
-                                        mouse.row >= ia.y
-                                            && mouse.row < ia.y + ia.height
-                                            && mouse.column >= ia.x
-                                            && mouse.column < ia.x + ia.width
-                                    })
-                                    .unwrap_or(false);
-                                if inside_chat {
-                                    s.sel_in_input = false;
-                                    s.sel_start = Some((mouse.column, mouse.row + s.scroll_row));
-                                    s.sel_end = Some((mouse.column, mouse.row + s.scroll_row));
-                                    s.selecting = true;
-                                } else if inside_input {
-                                    // Input box has no scroll offset: store raw screen rows.
-                                    s.sel_in_input = true;
-                                    s.sel_start = Some((mouse.column, mouse.row));
-                                    s.sel_end = Some((mouse.column, mouse.row));
-                                    s.selecting = true;
-                                } else {
-                                    s.clear_selection();
-                                }
-                                needs_redraw = true;
-                            }
-                        }
-                        MouseEventKind::Drag(MouseButton::Left) if s.selecting => {
-                            let target_row = if s.sel_in_input {
-                                // Clamp to the input rect; no scroll in the input box.
-                                match s.input_text_area {
-                                    Some(ia) => mouse
-                                        .row
-                                        .max(ia.y)
-                                        .min((ia.y + ia.height).saturating_sub(1)),
-                                    None => mouse.row,
-                                }
-                            } else {
-                                let mut tr = mouse.row + s.scroll_row;
-                                if let Some(ca) = s.chat_area {
-                                    if mouse.row < ca.y {
-                                        s.scroll_up(1);
-                                        tr = ca.y + s.scroll_row;
-                                    } else if mouse.row >= ca.y + ca.height {
-                                        s.scroll_down(1);
-                                        tr = (ca.y + ca.height).saturating_sub(1) + s.scroll_row;
-                                    }
-                                }
-                                tr
-                            };
-                            s.sel_end = Some((mouse.column, target_row));
-                            needs_redraw = true;
-                        }
-                        MouseEventKind::Up(MouseButton::Left) if s.selecting => {
-                            let target_row = if s.sel_in_input {
-                                match s.input_text_area {
-                                    Some(ia) => mouse
-                                        .row
-                                        .max(ia.y)
-                                        .min((ia.y + ia.height).saturating_sub(1)),
-                                    None => mouse.row,
-                                }
-                            } else {
-                                let mut tr = mouse.row + s.scroll_row;
-                                if let Some(ca) = s.chat_area {
-                                    tr = tr
-                                        .max(ca.y + s.scroll_row)
-                                        .min((ca.y + ca.height).saturating_sub(1) + s.scroll_row);
-                                }
-                                tr
-                            };
-                            s.sel_end = Some((mouse.column, target_row));
-                            s.selecting = false;
-                            if let (Some(a), Some(b)) = (s.sel_start, s.sel_end) {
-                                if a != b {
-                                    // Dragged: copy on release, like selecting on a web page.
-                                    if let Some(text) = s.selected_text.take() {
-                                        dbg_log!(
-                                            "[MAIN] MouseUp copying selected text ({} chars): {:?}",
-                                            text.len(),
-                                            text
-                                        );
-                                        if crate::clipboard::copy_to_clipboard(&text) {
-                                            s.set_notice("Copied to clipboard");
-                                        }
-                                    }
-                                    // The text is on the clipboard, so the marks
-                                    // have done their job — drop them instead of
-                                    // leaving the block highlighted.
-                                    s.clear_selection();
-                                } else {
-                                    // A plain click clears any existing selection.
-                                    s.clear_selection();
-                                    let click_screen_row = b.1.saturating_sub(s.scroll_row);
-                                    if let Some((_, code)) = s
-                                        .code_copy_rows
-                                        .iter()
-                                        .find(|(row, _)| *row == click_screen_row)
-                                        .map(|(r, t)| (*r, t.clone()))
-                                    {
-                                        // Clicked a code block's header row. Only copy if click is on the right edge Copy button.
-                                        let badge_width = if s.last_copy_text.as_ref().is_some_and(
-                                            |(t_text, t)| {
-                                                t_text == &code && t.elapsed().as_secs() < 2
-                                            },
-                                        ) {
-                                            12
-                                        } else {
-                                            9
-                                        };
-                                        let is_on_copy_button = s.chat_area.map_or(true, |ca| {
-                                            b.0 >= (ca.x + ca.width).saturating_sub(badge_width)
-                                        });
-                                        if is_on_copy_button {
-                                            if crate::clipboard::copy_to_clipboard(&code) {
-                                                s.set_notice("Copied to clipboard");
-                                            }
-                                            s.last_copy_text =
-                                                Some((code.clone(), std::time::Instant::now()));
-                                        }
-                                    }
-                                }
-                            }
-                            needs_redraw = true;
-                        }
-                        _ => {}
-                    }
-                }
+                // Native terminal mouse handling owns transcript scrolling and selection.
+                Event::Mouse(_) => {}
                 Event::Paste(text) => {
                     // Terminals with bracketed paste enabled deliver Cmd+V through
                     // this event instead of the Char('v') key handler. When the
