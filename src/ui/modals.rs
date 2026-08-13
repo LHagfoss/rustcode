@@ -380,9 +380,19 @@ mod tests {
             let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
             row.contains("Approve 2 tool calls in parallel?")
         });
+        let rendered = (0..11)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        assert!(header_row.is_some());
+        assert!(header_row.is_some(), "rendered modal:\n{rendered}");
         assert!(header_row.unwrap() < input_area.y);
+        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
     }
 }
 
@@ -1626,16 +1636,28 @@ pub(super) fn render_tool_confirmation_modal(
             horizontal: 2,
         });
 
+        let compact = inner_area.height < (confirmations.len() as u16).saturating_add(5);
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),                       // Header
-                Constraint::Length(1),                       // Spacer
-                Constraint::Min(confirmations.len() as u16), // List of tools
-                Constraint::Length(1),                       // Auto-confirm option
-                Constraint::Length(1),                       // Spacer
-                Constraint::Length(1),                       // Footer/Actions
-            ])
+            .constraints(if compact {
+                [
+                    Constraint::Length(1), // Header
+                    Constraint::Length(0), // Spacer
+                    Constraint::Min(1),    // Truncated list of tools
+                    Constraint::Length(0), // Auto-confirm option
+                    Constraint::Length(0), // Spacer
+                    Constraint::Length(1), // Footer/Actions
+                ]
+            } else {
+                [
+                    Constraint::Length(1),                       // Header
+                    Constraint::Length(1),                       // Spacer
+                    Constraint::Min(confirmations.len() as u16), // List of tools
+                    Constraint::Length(1),                       // Auto-confirm option
+                    Constraint::Length(1),                       // Spacer
+                    Constraint::Length(1),                       // Footer/Actions
+                ]
+            })
             .split(inner_area);
 
         let header_line = Line::from(vec![Span::styled(
