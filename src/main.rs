@@ -361,20 +361,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stable_rows = transcript_cursor.pending_stable_stream(&guard.current_response);
             if !stable_rows.is_empty() {
                 let stable = format!("{}\n", stable_rows.join("\n"));
-                let lines = crate::ui::render_committed_assistant_text(
+                let lines = crate::ui::render_committed_assistant_chunk(
                     &guard,
                     &stable,
                     terminal_width,
                 );
-                let height = Paragraph::new(lines.clone())
-                    .wrap(Wrap { trim: false })
-                    .line_count(terminal_width)
-                    .max(1) as u16;
-                terminal.insert_before(height, |buffer| {
-                    Paragraph::new(lines)
+                if !lines.is_empty() {
+                    let height = Paragraph::new(lines.clone())
                         .wrap(Wrap { trim: false })
-                        .render(buffer.area, buffer);
-                })?;
+                        .line_count(terminal_width)
+                        .max(1) as u16;
+                    terminal.insert_before(height, |buffer| {
+                        Paragraph::new(lines)
+                            .wrap(Wrap { trim: false })
+                            .render(buffer.area, buffer);
+                    })?;
+                }
                 transcript_cursor.commit_stable_stream(&stable);
             }
 
@@ -393,11 +395,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         transcript_cursor.take_final_stream_remainder(&message.content)
                     {
                         if !remainder.is_empty() {
-                            blocks.push(crate::ui::render_committed_assistant_text(
+                            let mut chunk = crate::ui::render_committed_assistant_chunk(
                                 &guard,
                                 &remainder,
                                 terminal_width,
-                            ));
+                            );
+                            if !chunk.is_empty() {
+                                chunk.push(ratatui::text::Line::from(""));
+                                blocks.push(chunk);
+                            }
                         }
                     } else {
                         blocks.push(crate::ui::render_committed_history_block(
