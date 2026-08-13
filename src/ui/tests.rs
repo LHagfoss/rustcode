@@ -1175,6 +1175,24 @@ fn live_tail_keeps_working_for_the_final_painted_frame() {
 }
 
 #[test]
+fn render_clearing_working_status_pending_requests_follow_up_redraw() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut state = AppState::new();
+    state.status = AppStatus::Idle;
+    state.working_status_pending = true;
+    state.redraw_requested = false;
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut state))
+        .unwrap();
+
+    assert!(!state.working_status_pending, "working_status_pending should be reset to false");
+    assert!(state.take_redraw_request(), "render must request a follow-up redraw when working_status_pending is cleared");
+}
+
+#[test]
 fn empty_composer_has_no_extra_blank_rows() {
     use ratatui::{Terminal, backend::TestBackend};
 
