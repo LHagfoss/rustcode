@@ -756,7 +756,7 @@ fn render_assistant_message<'a>(
                         continue;
                     }
 
-                    let prefix = if emitted_assistant_gutter { "  " } else { "• " };
+                    let prefix = "  ";
                     emitted_assistant_gutter = true;
                     let mut spans = vec![Span::styled(
                         prefix,
@@ -772,7 +772,9 @@ fn render_assistant_message<'a>(
                 }
             }
         }
-        lines.push(Line::from(""));
+        if !is_generating {
+            lines.push(Line::from(""));
+        }
     }
 }
 

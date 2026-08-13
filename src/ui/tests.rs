@@ -1022,7 +1022,7 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
         .iter()
         .filter(|line| !line.spans.is_empty())
         .collect();
-    assert_eq!(prose[0].spans[0].content, "• ");
+    assert_eq!(prose[0].spans[0].content, "  ");
     let first_line = prose[0]
         .spans
         .iter()
@@ -1058,10 +1058,10 @@ fn assistant_message_uses_one_gutter_across_paragraphs() {
         .iter()
         .filter_map(|line| line.spans.first())
         .map(|span| span.content.as_ref())
-        .filter(|prefix| *prefix == "• ")
+        .filter(|prefix| *prefix == "  ")
         .collect();
 
-    assert_eq!(prefixes, vec!["• "]);
+    assert_eq!(prefixes.len(), 2);
 }
 
 #[test]
@@ -1097,7 +1097,7 @@ fn committed_assistant_message_has_one_trailing_separator() {
     let block = super::render_committed_assistant_text(&state, "Finished.", 80);
 
     assert_eq!(block.len(), 2);
-    assert_eq!(block[0].spans[0].content, "• ");
+    assert_eq!(block[0].spans[0].content, "  ");
     assert!(block[1].spans.is_empty());
 }
 
