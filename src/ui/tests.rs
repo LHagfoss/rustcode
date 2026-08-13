@@ -360,6 +360,40 @@ fn committed_tool_result_shows_failure_status() {
 }
 
 #[test]
+fn use_skill_renders_in_committed_history() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "use_skill".to_owned(),
+            arguments: r#"{"name":"clockify"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "use_skill: <skill_content>...</skill_content>")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "use_skill".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                exit_code: None,
+                changed_paths: Vec::new(),
+                truncated: false,
+                full_output_artifact: None,
+            }),
+    );
+
+    let rendered = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line.contains("● UseSkill(clockify)")));
+}
+
+#[test]
 fn collapses_image_markers_to_chips() {
     // Plain text is untouched.
     assert_eq!(collapse_image_markers("hello world"), "hello world");
