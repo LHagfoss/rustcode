@@ -5,8 +5,8 @@ mod modals;
 mod tool_result;
 
 use highlight::{
-    highlight_code_block, highlight_code_line, highlight_diff_line,
-    render_unified_diff, wrap_code_spans,
+    highlight_code_block, highlight_code_line, highlight_diff_line, render_unified_diff,
+    wrap_code_spans,
 };
 use markdown::render_markdown;
 pub use modals::{PALETTE_ITEMS, PaletteItem};
@@ -19,9 +19,7 @@ use modals::{
 };
 use tool_result::{render_file_preview, render_tool_result};
 
-use crate::app::activity::{
-    ActivityKind, AnimationCell, animation_trail, classify_activity,
-};
+use crate::app::activity::{ActivityKind, AnimationCell, animation_trail, classify_activity};
 use crate::app::{AppState, AppStatus, ChatMessage, HoverTarget, NoticeKind};
 use ratatui::{
     Frame,
@@ -404,13 +402,15 @@ fn render_assistant_message<'a>(
                 format!("{}ms", ms)
             }
         });
-        let tokens_str = thought_tokens.or_else(|| token_usage.as_ref().map(|u| u.total_tokens)).map(|tokens| {
-            if tokens >= 1000 {
-                format!("{:.1}k tokens", tokens as f32 / 1000.0)
-            } else {
-                format!("{} tokens", tokens)
-            }
-        });
+        let tokens_str = thought_tokens
+            .or_else(|| token_usage.as_ref().map(|u| u.total_tokens))
+            .map(|tokens| {
+                if tokens >= 1000 {
+                    format!("{:.1}k tokens", tokens as f32 / 1000.0)
+                } else {
+                    format!("{} tokens", tokens)
+                }
+            });
 
         let thought_meta = match (time_str, tokens_str) {
             (Some(t), Some(k)) => format!("Thought for {t}, {k}"),
@@ -419,9 +419,7 @@ fn render_assistant_message<'a>(
             (None, None) => "Thought".to_string(),
         };
 
-        let preview_width = (viewport_width as usize)
-            .saturating_sub(2)
-            .min(64);
+        let preview_width = (viewport_width as usize).saturating_sub(2).min(64);
         let preview = truncate_thought_preview(&first_line, preview_width);
 
         lines.push(Line::from(vec![
@@ -782,7 +780,11 @@ fn context_usage(state: &AppState) -> (u32, Option<u32>) {
         return (usage.total_tokens, usage.cached_tokens);
     }
 
-    let chars: usize = state.history.iter().map(|message| message.content.len()).sum();
+    let chars: usize = state
+        .history
+        .iter()
+        .map(|message| message.content.len())
+        .sum();
     ((chars / 4) as u32, None)
 }
 
@@ -822,25 +824,82 @@ fn streaming_status_word(elapsed_secs: u64) -> &'static str {
 fn activity_status_label(state: &AppState) -> String {
     let activity = classify_activity(&state.status, &state.running_tools);
     if activity.kind == ActivityKind::Working {
-        return streaming_status_word(
-            state
-                .generation_start_time
-                .map(|started| started.elapsed().as_secs())
-                .unwrap_or(0),
-        )
-        .to_string();
+        return "Working".to_string();
     }
     activity.label
 }
 
-fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
-    let activity = classify_activity(&state.status, &state.running_tools);
-    let animation_frame = std::time::SystemTime::now()
+fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
+    let f = factor.clamp(0.0, 1.0);
+    let r = (c1.0 as f32 * f + c2.0 as f32 * (1.0 - f)) as u8;
+    let g = (c1.1 as f32 * f + c2.1 as f32 * (1.0 - f)) as u8;
+    let b = (c1.2 as f32 * f + c2.2 as f32 * (1.0 - f)) as u8;
+    (r, g, b)
+}
+
+fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+    let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
-        / 100;
-    let cells = animation_trail(animation_frame, 6);
+        .as_millis() as f32
+        / 1000.0;
+    let padding = 6.0f32;
+    let period = chars.len() as f32 + padding * 2.0;
+    let sweep_seconds = 2.0f32;
+    let pos_f = (elapsed % sweep_seconds) / sweep_seconds * period;
+    let band_half_width = 4.0f32;
+
+    let base_rgb = (130, 135, 145);
+    let highlight_rgb = (255, 255, 255);
+
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, ch)| {
+            let i_pos = i as f32 + padding;
+            let dist = (i_pos - pos_f).abs();
+            let t = if dist <= band_half_width {
+                0.5 * (1.0 + (std::f32::consts::PI * (dist / band_half_width)).cos())
+            } else {
+                0.0
+            };
+            let (r, g, b) = blend_rgb(highlight_rgb, base_rgb, t * 0.9);
+            let modifier = if t > 0.4 {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            };
+            Span::styled(
+                ch.to_string(),
+                Style::default()
+                    .fg(Color::Rgb(r, g, b))
+                    .add_modifier(modifier),
+            )
+        })
+        .collect()
+}
+
+fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+    if elapsed_secs < 60 {
+        format!("{elapsed_secs}s")
+    } else if elapsed_secs < 3600 {
+        let mins = elapsed_secs / 60;
+        let secs = elapsed_secs % 60;
+        format!("{mins}m {secs:02}s")
+    } else {
+        let hours = elapsed_secs / 3600;
+        let mins = (elapsed_secs % 3600) / 60;
+        let secs = elapsed_secs % 60;
+        format!("{hours}h {mins:02}m {secs:02}s")
+    }
+}
+
+fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
+    let activity = classify_activity(&state.status, &state.running_tools);
     let action_detail = state
         .pending_tool_confirmation
         .as_ref()
@@ -853,74 +912,87 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
                 .map(|_| "answer question".to_string())
         });
 
-    let mut left_spans = vec![Span::raw(" ")];
-    for cell in &cells {
-        let (symbol, color, modifier) = match activity.kind {
-            ActivityKind::ActionRequired => ("!", Color::Yellow, Modifier::empty()),
-            ActivityKind::Ready => ("◦", COLOR_MUTED(), Modifier::empty()),
-            _ => match cell {
-                AnimationCell::Lead => ("●", COLOR_PRIMARY(), Modifier::empty()),
-                AnimationCell::Middle => ("●", COLOR_PRIMARY(), Modifier::DIM),
-                AnimationCell::Tail => ("○", COLOR_MUTED(), Modifier::empty()),
-                AnimationCell::Empty => ("◦", COLOR_MUTED(), Modifier::empty()),
-            },
-        };
-        left_spans.push(Span::styled(
-            symbol,
-            get_themed_style(color, COLOR_BG(), modifier, show_picker),
+    let mut spans = vec![Span::raw(" ")];
+
+    let bullet_symbol = match activity.kind {
+        ActivityKind::ActionRequired => "!",
+        ActivityKind::Ready => "◦",
+        _ => "•",
+    };
+    let bullet_color = match activity.kind {
+        ActivityKind::ActionRequired => Color::Yellow,
+        ActivityKind::Ready => COLOR_MUTED(),
+        _ => COLOR_PRIMARY(),
+    };
+    spans.push(Span::styled(
+        bullet_symbol,
+        get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
+    ));
+    spans.push(Span::raw(" "));
+
+    let label_text = activity_status_label(state);
+    if matches!(
+        activity.kind,
+        ActivityKind::Working | ActivityKind::RunningTool
+    ) {
+        spans.extend(shimmer_spans(&label_text, show_picker));
+    } else {
+        spans.push(Span::styled(
+            label_text,
+            get_themed_style(
+                if activity.kind == ActivityKind::ActionRequired {
+                    Color::Yellow
+                } else if activity.kind == ActivityKind::Ready {
+                    COLOR_MUTED()
+                } else {
+                    COLOR_PRIMARY()
+                },
+                COLOR_BG(),
+                Modifier::BOLD,
+                show_picker,
+            ),
         ));
     }
 
-    let mut status_text = activity_status_label(state);
     let detail = if activity.kind == ActivityKind::ActionRequired {
         action_detail
     } else {
         activity.detail.clone()
     };
     if let Some(detail) = detail {
-        status_text.push_str(" · ");
-        status_text.push_str(&detail);
+        spans.push(Span::styled(
+            format!(" · {detail}"),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
     }
+
     if matches!(
         activity.kind,
         ActivityKind::Working | ActivityKind::RunningTool
     ) && let Some(started) = state.generation_start_time
     {
-        status_text.push_str(&format!(" · {}s", started.elapsed().as_secs()));
+        spans.push(Span::styled(
+            format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
     }
-
-    left_spans.push(Span::styled(
-        format!("  {status_text}"),
-        get_themed_style(
-            if activity.kind == ActivityKind::ActionRequired {
-                Color::Yellow
-            } else if activity.kind == ActivityKind::Ready {
-                COLOR_MUTED()
-            } else {
-                COLOR_PRIMARY()
-            },
-            COLOR_BG(),
-            Modifier::BOLD,
-            show_picker,
-        ),
-    ));
 
     if matches!(
         activity.kind,
         ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool
     ) {
-        left_spans.push(Span::styled(
-            "  esc ",
+        spans.push(Span::styled(
+            " · esc ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
-        left_spans.push(Span::styled(
+        spans.push(Span::styled(
             "interrupt",
             get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
     }
 
-    left_spans.push(Span::raw(" "));
-    Line::from(left_spans)
+    spans.push(Span::raw(" "));
+    Line::from(spans)
 }
 
 /// Shows the most recently queued prompt on a thin line directly above the
@@ -1002,8 +1074,18 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let model_str = model_label(state);
 
     let title_left = Line::from(vec![
-        Span::styled(" ✦ ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("rustcode", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " ✦ ",
+            Style::default()
+                .fg(COLOR_PRIMARY())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "rustcode",
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
     ]);
 
@@ -1018,7 +1100,6 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         ),
     ]);
 
-    let activity_line = activity_status_line(state, show_picker);
     let status_line = Line::from(vec![Span::styled(
         format!(" {} ", format_input_status_text(state)),
         Style::default().fg(COLOR_MUTED()),
@@ -1030,7 +1111,6 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         .border_style(Style::default().fg(border_color))
         .title(title_left)
         .title(title_right.alignment(ratatui::layout::Alignment::Right))
-        .title_bottom(activity_line.alignment(ratatui::layout::Alignment::Left))
         .title_bottom(status_line.alignment(ratatui::layout::Alignment::Right));
 
     f.render_widget(block, area);
@@ -1060,7 +1140,8 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         if state.input_buffer.is_empty() && state.get_command_suggestion().is_none() {
             let placeholder_style =
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
-            let placeholder_text = "Ask a question, request code changes, or type / for commands...";
+            let placeholder_text =
+                "Ask a question, request code changes, or type / for commands...";
             styled_chars.extend(placeholder_text.chars().map(|c| (c, placeholder_style)));
         } else if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
@@ -1394,12 +1475,7 @@ struct ChatCache {
     total_wrapped_lines: u16,
 }
 
-type RenderedConversation = (
-    Vec<Line<'static>>,
-    Vec<(u16, String)>,
-    Vec<u16>,
-    u16,
-);
+type RenderedConversation = (Vec<Line<'static>>, Vec<(u16, String)>, Vec<u16>, u16);
 
 #[derive(PartialEq, Clone)]
 struct ChatKey {
@@ -1522,12 +1598,7 @@ fn push_new_chat_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picke
     let remaining = (width as usize).saturating_sub(label.width());
     let left = remaining / 2;
     let right = remaining - left;
-    let style = get_themed_style(
-        COLOR_PRIMARY(),
-        COLOR_BG(),
-        Modifier::BOLD,
-        show_picker,
-    );
+    let style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     lines.push(Line::from(vec![
         Span::styled("─".repeat(left), style),
         Span::styled(label, style),
@@ -1646,9 +1717,10 @@ fn render_status_panel<'a>(
     let title_str = format!(">_ RustCode v{version}");
     let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
     let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
-    lines.push(Line::from(vec![
-        Span::styled(top_border, Style::default().fg(border_c).bg(reset_bg)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        top_border,
+        Style::default().fg(border_c).bg(reset_bg),
+    )]));
 
     // Top blank padding line
     lines.push(Line::from(vec![
@@ -1675,20 +1747,33 @@ fn render_status_panel<'a>(
             let padded_header = fit_to_width(&format!("  {trimmed}"), content_w);
             lines.push(Line::from(vec![
                 Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
-                Span::styled(padded_header, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
+                Span::styled(
+                    padded_header,
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
                 Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else if trimmed.starts_with('/') {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             let cmd_name = parts.first().copied().unwrap_or("");
-            let cmd_desc = if parts.len() > 1 { parts[1..].join(" ") } else { String::new() };
+            let cmd_desc = if parts.len() > 1 {
+                parts[1..].join(" ")
+            } else {
+                String::new()
+            };
             let left_sp = format!("  {:<18}", cmd_name);
             let right_len = content_w.saturating_sub(left_sp.chars().count());
             let right_sp = fit_to_width(&cmd_desc, right_len);
             lines.push(Line::from(vec![
                 Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
-                Span::styled(left_sp, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
-                Span::styled(right_sp, get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(
+                    left_sp,
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    right_sp,
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
                 Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else if trimmed.starts_with("Enter")
@@ -1706,17 +1791,29 @@ fn render_status_panel<'a>(
             let right_sp = fit_to_width(desc, right_len);
             lines.push(Line::from(vec![
                 Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
-                Span::styled(left_sp, get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)),
-                Span::styled(right_sp, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(
+                    left_sp,
+                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    right_sp,
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
                 Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else if trimmed.starts_with('•') || trimmed.starts_with('-') {
-            let bullet_text = trimmed.trim_start_matches('•').trim_start_matches('-').trim();
+            let bullet_text = trimmed
+                .trim_start_matches('•')
+                .trim_start_matches('-')
+                .trim();
             let full_str = format!("  • {bullet_text}");
             let padded_str = fit_to_width(&full_str, content_w);
             lines.push(Line::from(vec![
                 Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
-                Span::styled(padded_str, get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(
+                    padded_str,
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
                 Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         } else {
@@ -1724,7 +1821,10 @@ fn render_status_panel<'a>(
             let padded_str = fit_to_width(&full_str, content_w);
             lines.push(Line::from(vec![
                 Span::styled("│ ", Style::default().fg(border_c).bg(reset_bg)),
-                Span::styled(padded_str, get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker)),
+                Span::styled(
+                    padded_str,
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
                 Span::styled(" │", Style::default().fg(border_c).bg(reset_bg)),
             ]));
         }
@@ -1739,9 +1839,10 @@ fn render_status_panel<'a>(
 
     // Bottom border: ╰──────────────────────────────────────────────────────────╯
     let bot_border = format!("╰{}╯", "─".repeat(inner_w));
-    lines.push(Line::from(vec![
-        Span::styled(bot_border, Style::default().fg(border_c).bg(reset_bg)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        bot_border,
+        Style::default().fg(border_c).bg(reset_bg),
+    )]));
 }
 
 const RUSTCODE_LOGO: &[&str] = &[
@@ -1768,7 +1869,11 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
 
     let box_w = total_width.saturating_sub(2).max(65);
     let inner_w = box_w.saturating_sub(2);
-    let left_w = if inner_w >= 90 { 50 } else { (inner_w * 44 / 100).max(30) };
+    let left_w = if inner_w >= 90 {
+        50
+    } else {
+        (inner_w * 44 / 100).max(30)
+    };
     let right_w = inner_w.saturating_sub(left_w + 1);
 
     let border_c = COLOR_PRIMARY();
@@ -1781,11 +1886,16 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let title_str = format!("RustCode v{version}");
     let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
     let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
-    banner.push(Line::from(vec![
-        Span::styled(top_border, Style::default().fg(border_c).bg(reset_bg)),
-    ]));
+    banner.push(Line::from(vec![Span::styled(
+        top_border,
+        Style::default().fg(border_c).bg(reset_bg),
+    )]));
 
-    let make_row = |left_str: String, left_style: Style, right_str: String, right_style: Style| -> Line<'static> {
+    let make_row = |left_str: String,
+                    left_style: Style,
+                    right_str: String,
+                    right_style: Style|
+     -> Line<'static> {
         let l_cell = fit_to_width(&left_str, left_w);
         let r_cell = fit_to_width(&right_str, right_w);
         Line::from(vec![
@@ -1811,8 +1921,10 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
 
     // Row 0: Blank line top padding
     banner.push(make_row(
-        "".to_string(), Style::default().bg(reset_bg),
-        "".to_string(), Style::default().bg(reset_bg),
+        "".to_string(),
+        Style::default().bg(reset_bg),
+        "".to_string(),
+        Style::default().bg(reset_bg),
     ));
 
     // Row 1: Left: Centered "Welcome back!" | Right: "  Tips for getting started"
@@ -1820,14 +1932,24 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let welcome_pad = left_w.saturating_sub(welcome_txt.len()) / 2;
     let left1 = format!("{}{}", " ".repeat(welcome_pad), welcome_txt);
     banner.push(make_row(
-        left1, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
-        "  Tips for getting started".to_string(), Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        left1,
+        Style::default()
+            .fg(text_c)
+            .bg(reset_bg)
+            .add_modifier(Modifier::BOLD),
+        "  Tips for getting started".to_string(),
+        Style::default()
+            .fg(primary)
+            .bg(reset_bg)
+            .add_modifier(Modifier::BOLD),
     ));
 
     // Row 2: Left: Blank space | Right: "  Run /help to view all slash commands"
     banner.push(make_row(
-        "".to_string(), Style::default().bg(reset_bg),
-        "  Run /help to view all slash commands".to_string(), Style::default().fg(text_c).bg(reset_bg),
+        "".to_string(),
+        Style::default().bg(reset_bg),
+        "  Run /help to view all slash commands".to_string(),
+        Style::default().fg(text_c).bg(reset_bg),
     ));
 
     // Rows 3..6: 4-line RustCode logo on Left in WHITE
@@ -1835,36 +1957,76 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let logo_pad = left_w.saturating_sub(logo_width) / 2;
 
     // Row 3: Logo line 0 | Right: "  Type @ to mention and link project files"
-    let l_line0 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[0]) } else { "  rustcode".to_string() };
+    let l_line0 = if left_w >= 48 {
+        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[0])
+    } else {
+        "  rustcode".to_string()
+    };
     banner.push(make_row(
-        l_line0, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
-        "  Type @ to mention and link project files".to_string(), Style::default().fg(text_c).bg(reset_bg),
+        l_line0,
+        Style::default()
+            .fg(text_c)
+            .bg(reset_bg)
+            .add_modifier(Modifier::BOLD),
+        "  Type @ to mention and link project files".to_string(),
+        Style::default().fg(text_c).bg(reset_bg),
     ));
 
     // Row 4: Logo line 1 | Right: Divider Line ────────────────
-    let l_line1 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[1]) } else { "".to_string() };
+    let l_line1 = if left_w >= 48 {
+        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[1])
+    } else {
+        "".to_string()
+    };
     banner.push(make_divider_row(
-        l_line1, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
+        l_line1,
+        Style::default()
+            .fg(text_c)
+            .bg(reset_bg)
+            .add_modifier(Modifier::BOLD),
     ));
 
     // Row 5: Logo line 2 | Right: "  Shortcuts & Options"
-    let l_line2 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[2]) } else { "".to_string() };
+    let l_line2 = if left_w >= 48 {
+        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[2])
+    } else {
+        "".to_string()
+    };
     banner.push(make_row(
-        l_line2, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
-        "  Shortcuts & Options".to_string(), Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD),
+        l_line2,
+        Style::default()
+            .fg(text_c)
+            .bg(reset_bg)
+            .add_modifier(Modifier::BOLD),
+        "  Shortcuts & Options".to_string(),
+        Style::default()
+            .fg(primary)
+            .bg(reset_bg)
+            .add_modifier(Modifier::BOLD),
     ));
 
     // Row 6: Logo line 3 | Right: "  /model select model  ·  /theme switch theme"
-    let l_line3 = if left_w >= 48 { format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[3]) } else { "".to_string() };
+    let l_line3 = if left_w >= 48 {
+        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[3])
+    } else {
+        "".to_string()
+    };
     banner.push(make_row(
-        l_line3, Style::default().fg(text_c).bg(reset_bg).add_modifier(Modifier::BOLD),
-        "  /model select model  ·  /theme switch theme".to_string(), Style::default().fg(muted_c).bg(reset_bg),
+        l_line3,
+        Style::default()
+            .fg(text_c)
+            .bg(reset_bg)
+            .add_modifier(Modifier::BOLD),
+        "  /model select model  ·  /theme switch theme".to_string(),
+        Style::default().fg(muted_c).bg(reset_bg),
     ));
 
     // Row 7: Left: Blank space | Right: "  Tab autocomplete     ·  Shift+Enter newline"
     banner.push(make_row(
-        "".to_string(), Style::default().bg(reset_bg),
-        "  Tab autocomplete     ·  Shift+Enter newline".to_string(), Style::default().fg(muted_c).bg(reset_bg),
+        "".to_string(),
+        Style::default().bg(reset_bg),
+        "  Tab autocomplete     ·  Shift+Enter newline".to_string(),
+        Style::default().fg(muted_c).bg(reset_bg),
     ));
 
     // Row 8: Left: Centered "<model> · <mode>" | Right: "  Built-in MCP tools, search & execution"
@@ -1876,16 +2038,20 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
     let info_pad = left_w.saturating_sub(info_txt.len()) / 2;
     let left8 = format!("{}{}", " ".repeat(info_pad), info_txt);
     banner.push(make_row(
-        left8, Style::default().fg(muted_c).bg(reset_bg),
-        "  Built-in MCP tools, search & execution".to_string(), Style::default().fg(muted_c).bg(reset_bg),
+        left8,
+        Style::default().fg(muted_c).bg(reset_bg),
+        "  Built-in MCP tools, search & execution".to_string(),
+        Style::default().fg(muted_c).bg(reset_bg),
     ));
 
     // Row 9: Left: Centered "<cwd_str>" | Right: Blank space
     let cwd_pad = left_w.saturating_sub(cwd_str.len()) / 2;
     let left9 = format!("{}{}", " ".repeat(cwd_pad), cwd_str);
     banner.push(make_row(
-        left9, Style::default().fg(muted_c).bg(reset_bg),
-        "".to_string(), Style::default().bg(reset_bg),
+        left9,
+        Style::default().fg(muted_c).bg(reset_bg),
+        "".to_string(),
+        Style::default().bg(reset_bg),
     ));
 
     // Row 10: Left: Centered "<branch_str>" | Right: Blank space
@@ -1893,22 +2059,30 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         let branch_pad = left_w.saturating_sub(branch_str.len()) / 2;
         let left10 = format!("{}{}", " ".repeat(branch_pad), branch_str);
         banner.push(make_row(
-            left10, Style::default().fg(primary).bg(reset_bg).add_modifier(Modifier::BOLD),
-            "".to_string(), Style::default().bg(reset_bg),
+            left10,
+            Style::default()
+                .fg(primary)
+                .bg(reset_bg)
+                .add_modifier(Modifier::BOLD),
+            "".to_string(),
+            Style::default().bg(reset_bg),
         ));
     }
 
     // Row 11: Blank line bottom padding
     banner.push(make_row(
-        "".to_string(), Style::default().bg(reset_bg),
-        "".to_string(), Style::default().bg(reset_bg),
+        "".to_string(),
+        Style::default().bg(reset_bg),
+        "".to_string(),
+        Style::default().bg(reset_bg),
     ));
 
     // Bottom border
     let bot_border = format!("╰{}╯", "─".repeat(inner_w));
-    banner.push(Line::from(vec![
-        Span::styled(bot_border, Style::default().fg(border_c).bg(reset_bg)),
-    ]));
+    banner.push(Line::from(vec![Span::styled(
+        bot_border,
+        Style::default().fg(border_c).bg(reset_bg),
+    )]));
 
     banner
 }
@@ -1941,389 +2115,471 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         None
     };
 
-    let (lines, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines): RenderedConversation = if let Some(hit) = cached {
-        hit
-    } else {
-    let mut lines: Vec<Line> = Vec::new();
-    let mut copy_clicks: Vec<(usize, String)> = Vec::new();
+    let (lines, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines): RenderedConversation =
+        if let Some(hit) = cached {
+            hit
+        } else {
+            let mut lines: Vec<Line> = Vec::new();
+            let mut copy_clicks: Vec<(usize, String)> = Vec::new();
 
-    let display_start = state.history_display_start.min(state.history.len());
+            let display_start = state.history_display_start.min(state.history.len());
 
-    if display_start == 0 && state.history.is_empty() {
-        lines.push(Line::from(""));
-        lines.extend(build_claude_startup_banner(state, inner_area.width as usize));
-        lines.push(Line::from(""));
-    }
-
-    // Line index where each message's block starts. Messages that render
-    // nothing produce a duplicate index; deduped below.
-    let mut msg_start_lines: Vec<usize> = Vec::new();
-
-    for (msg_idx, msg) in state.history.iter().enumerate().skip(display_start) {
-        msg_start_lines.push(lines.len());
-        if msg.role == "system" {
-            if msg.content == "✨ New chat started" {
-                push_new_chat_separator(&mut lines, inner_area.width, show_picker);
-                continue;
-            }
-            // Hide benign intermediate notices and full compaction summary text from TUI display
-            if is_hidden_system_notice(&msg.content) {
-                continue;
-            }
-            if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+            if display_start == 0 && state.history.is_empty() {
+                lines.push(Line::from(""));
+                lines.extend(build_claude_startup_banner(
+                    state,
+                    inner_area.width as usize,
+                ));
                 lines.push(Line::from(""));
             }
-            render_status_panel(&msg.content, inner_area.width, show_picker, &mut lines);
-            if lines.last().is_some_and(|l| !l.spans.is_empty()) {
-                lines.push(Line::from(""));
-            }
-        } else if msg.role == "tool" {
-            let show_tool_details = !matches!(state.verbosity, crate::app::Verbosity::High);
-            let prev_tool_info = if msg_idx > 0 {
-                // Walk backward past consecutive tool messages to find the preceding assistant message
-                let mut assistant_idx = None;
-                let mut tool_count_before_this = 0;
-                for i in (0..msg_idx).rev() {
-                    if state.history[i].role == "tool" {
-                        tool_count_before_this += 1;
-                    } else if state.history[i].role == "assistant" {
-                        assistant_idx = Some(i);
-                        break;
-                    } else if state.history[i].role == "system"
-                        && is_hidden_system_notice(&state.history[i].content)
-                    {
+
+            // Line index where each message's block starts. Messages that render
+            // nothing produce a duplicate index; deduped below.
+            let mut msg_start_lines: Vec<usize> = Vec::new();
+
+            for (msg_idx, msg) in state.history.iter().enumerate().skip(display_start) {
+                msg_start_lines.push(lines.len());
+                if msg.role == "system" {
+                    if msg.content == "✨ New chat started" {
+                        push_new_chat_separator(&mut lines, inner_area.width, show_picker);
                         continue;
-                    } else {
-                        break;
                     }
-                }
-
-                if let Some(a_idx) = assistant_idx {
-                    let assistant_msg = &state.history[a_idx];
-                    let calls = assistant_msg.resolved_tool_calls(state.active_tool_protocol());
-                    calls.get(tool_count_before_this).cloned().or_else(|| calls.first().cloned())
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let (action, arg) = if let Some(ref tool_call) = prev_tool_info {
-                format_pi_tool_action(&tool_call.name, &tool_call.arguments)
-            } else {
-                let tool_name = resolve_tool_result_name(
-                    None,
-                    msg.tool_result.as_ref().map(|r| r.tool_name.as_str()),
-                    msg.content.as_str(),
-                )
-                .unwrap_or_default();
-                let action_label = match tool_name.as_str() {
-                    "view_file" => "Read".to_string(),
-                    "replace_file_content" | "multi_replace_file_content" => "Edit".to_string(),
-                    "write_to_file" => "Write".to_string(),
-                    "list_directory" | "glob" => "ListDir".to_string(),
-                    "grep" => "Grep".to_string(),
-                    "run_command" => "Bash".to_string(),
-                    "manage_task" => "ManageTask".to_string(),
-                    "background_task" => "TaskDone".to_string(),
-                    other => to_pascal_case(other),
-                };
-                let arg = if tool_name == "background_task" {
-                    msg.content
-                        .lines()
-                        .next()
-                        .and_then(|l| l.strip_prefix("background_task: Task "))
-                        .and_then(|l| l.split_whitespace().next())
-                        .unwrap_or("")
-                        .to_string()
-                } else {
-                    String::new()
-                };
-                (action_label, arg)
-            };
-
-            let action_len = action.len();
-            let mut spans = vec![
-                Span::styled(
-                    "● ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ),
-                Span::styled(
-                    action,
-                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                ),
-            ];
-            let prefix_len = action_len + 7;
-            let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len);
-            let display_arg = if arg.is_empty() {
-                String::new()
-            } else if arg.chars().count() > max_arg_len {
-                let take_len = max_arg_len.saturating_sub(3);
-                format!("{}...", arg.chars().take(take_len).collect::<String>())
-            } else {
-                arg.clone()
-            };
-            spans.push(Span::styled(
-                format!("({display_arg})"),
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-            lines.push(Line::from(spans));
-
-            if show_tool_details {
-                if let Some((ref path, ref content)) = msg.file_preview {
-                    lines.extend(render_file_preview(
-                        path,
-                        content,
-                        inner_area.width as usize,
-                        show_picker,
-                    ));
-                } else if let Some(ref diff) = msg.diff {
-                    let code_content_width = inner_area.width as usize;
-                    lines.extend(render_unified_diff(diff, code_content_width, show_picker));
-                } else if let Some(tool_name) = resolve_tool_result_name(
-                    prev_tool_info.as_ref().map(|call| call.name.as_str()),
-                    msg.tool_result.as_ref().map(|result| result.tool_name.as_str()),
-                    &msg.content,
-                ) {
-                    let result = msg
-                        .content
-                        .split_once(": ")
-                        .map(|(_, result)| result)
-                        .unwrap_or(&msg.content);
-                    lines.extend(cached_tool_result(
-                        &tool_name,
-                        result,
-                        inner_area.width as usize,
-                        &state.verbosity,
-                        show_picker,
-                    ));
-                }
-            }
-            let next_is_user = state
-                .history
-                .get(msg_idx + 1)
-                .is_some_and(|next| next.role == "user");
-            if tool_result_needs_assistant_gap(&state.history, msg_idx) || next_is_user {
-                lines.push(Line::from(""));
-            }
-
-        } else if msg.role == "user" {
-            if msg_idx > 0 {
-                push_turn_separator(&mut lines, inner_area.width, show_picker);
-            }
-            let content_width = (inner_area.width as usize).saturating_sub(4);
-            let display_content = collapse_image_markers(&msg.content);
-            let mut wrapped_lines = Vec::new();
-            for raw_line in display_content.lines() {
-                if raw_line.is_empty() {
-                    wrapped_lines.push("".to_string());
-                } else {
-                    let mut current = String::new();
-                    for word in raw_line.split_whitespace() {
-                        if current.is_empty() {
-                            current.push_str(word);
-                        } else if current.width() + 1 + word.width() <= content_width {
-                            current.push(' ');
-                            current.push_str(word);
-                        } else {
-                            wrapped_lines.push(current);
-                            current = word.to_string();
+                    // Hide benign intermediate notices and full compaction summary text from TUI display
+                    if is_hidden_system_notice(&msg.content) {
+                        continue;
+                    }
+                    if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                        lines.push(Line::from(""));
+                    }
+                    render_status_panel(&msg.content, inner_area.width, show_picker, &mut lines);
+                    if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                        lines.push(Line::from(""));
+                    }
+                } else if msg.role == "tool" {
+                    let show_tool_details = !matches!(state.verbosity, crate::app::Verbosity::High);
+                    let prev_tool_info = if msg_idx > 0 {
+                        // Walk backward past consecutive tool messages to find the preceding assistant message
+                        let mut assistant_idx = None;
+                        let mut tool_count_before_this = 0;
+                        for i in (0..msg_idx).rev() {
+                            if state.history[i].role == "tool" {
+                                tool_count_before_this += 1;
+                            } else if state.history[i].role == "assistant" {
+                                assistant_idx = Some(i);
+                                break;
+                            } else if state.history[i].role == "system"
+                                && is_hidden_system_notice(&state.history[i].content)
+                            {
+                                continue;
+                            } else {
+                                break;
+                            }
                         }
-                    }
-                    if !current.is_empty() {
-                        wrapped_lines.push(current);
-                    }
-                }
-            }
 
-            for (idx, line_str) in wrapped_lines.into_iter().enumerate() {
-                if idx == 0 {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            "❯ ",
-                            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                        ),
-                        Span::styled(
-                            line_str,
-                            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-                        ),
-                    ]));
-                } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            "  ",
-                            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                        ),
-                        Span::styled(
-                            line_str,
-                            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                        ),
-                    ]));
-                }
-            }
-            lines.push(Line::from(""));
-        } else if msg.role == "assistant" {
-            let calls = msg.resolved_tool_calls(state.active_tool_protocol());
-            let has_following_tool_result = tool_result_follows(&state.history, msg_idx);
+                        if let Some(a_idx) = assistant_idx {
+                            let assistant_msg = &state.history[a_idx];
+                            let calls =
+                                assistant_msg.resolved_tool_calls(state.active_tool_protocol());
+                            calls
+                                .get(tool_count_before_this)
+                                .cloned()
+                                .or_else(|| calls.first().cloned())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
 
-            if let Some(tool_call) = calls.first() {
-                if !has_following_tool_result {
-                    let (action, arg) =
-                        format_pi_tool_action(&tool_call.name, &tool_call.arguments);
-                    let elapsed_ms = state.generation_start_time.map(|t| t.elapsed().as_millis()).unwrap_or(0);
-                    let circle = if (elapsed_ms / 350).is_multiple_of(2) { "○ " } else { "● " };
+                    let (action, arg) = if let Some(ref tool_call) = prev_tool_info {
+                        format_pi_tool_action(&tool_call.name, &tool_call.arguments)
+                    } else {
+                        let tool_name = resolve_tool_result_name(
+                            None,
+                            msg.tool_result.as_ref().map(|r| r.tool_name.as_str()),
+                            msg.content.as_str(),
+                        )
+                        .unwrap_or_default();
+                        let action_label = match tool_name.as_str() {
+                            "view_file" => "Read".to_string(),
+                            "replace_file_content" | "multi_replace_file_content" => {
+                                "Edit".to_string()
+                            }
+                            "write_to_file" => "Write".to_string(),
+                            "list_directory" | "glob" => "ListDir".to_string(),
+                            "grep" => "Grep".to_string(),
+                            "run_command" => "Bash".to_string(),
+                            "manage_task" => "ManageTask".to_string(),
+                            "background_task" => "TaskDone".to_string(),
+                            other => to_pascal_case(other),
+                        };
+                        let arg = if tool_name == "background_task" {
+                            msg.content
+                                .lines()
+                                .next()
+                                .and_then(|l| l.strip_prefix("background_task: Task "))
+                                .and_then(|l| l.split_whitespace().next())
+                                .unwrap_or("")
+                                .to_string()
+                        } else {
+                            String::new()
+                        };
+                        (action_label, arg)
+                    };
+
                     let action_len = action.len();
-                    let prefix_len = action_len + 10; // circle (2) + action + "(...)" (5) + margin offset (3)
+                    let mut spans = vec![
+                        Span::styled(
+                            "● ",
+                            get_themed_style(
+                                COLOR_MUTED(),
+                                COLOR_BG(),
+                                Modifier::empty(),
+                                show_picker,
+                            ),
+                        ),
+                        Span::styled(
+                            action,
+                            get_themed_style(
+                                COLOR_PRIMARY(),
+                                COLOR_BG(),
+                                Modifier::BOLD,
+                                show_picker,
+                            ),
+                        ),
+                    ];
+                    let prefix_len = action_len + 7;
                     let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len);
-                    let display_arg = if arg.chars().count() > max_arg_len {
+                    let display_arg = if arg.is_empty() {
+                        String::new()
+                    } else if arg.chars().count() > max_arg_len {
                         let take_len = max_arg_len.saturating_sub(3);
                         format!("{}...", arg.chars().take(take_len).collect::<String>())
                     } else {
                         arg.clone()
                     };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            circle,
-                            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                        ),
-                        Span::styled(
-                            action,
-                            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                        ),
-                        Span::styled(
-                            format!("({display_arg})..."),
-                            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-                        ),
-                    ]));
+                    spans.push(Span::styled(
+                        format!("({display_arg})"),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ));
+                    lines.push(Line::from(spans));
+
+                    if show_tool_details {
+                        if let Some((ref path, ref content)) = msg.file_preview {
+                            lines.extend(render_file_preview(
+                                path,
+                                content,
+                                inner_area.width as usize,
+                                show_picker,
+                            ));
+                        } else if let Some(ref diff) = msg.diff {
+                            let code_content_width = inner_area.width as usize;
+                            lines.extend(render_unified_diff(
+                                diff,
+                                code_content_width,
+                                show_picker,
+                            ));
+                        } else if let Some(tool_name) = resolve_tool_result_name(
+                            prev_tool_info.as_ref().map(|call| call.name.as_str()),
+                            msg.tool_result
+                                .as_ref()
+                                .map(|result| result.tool_name.as_str()),
+                            &msg.content,
+                        ) {
+                            let result = msg
+                                .content
+                                .split_once(": ")
+                                .map(|(_, result)| result)
+                                .unwrap_or(&msg.content);
+                            lines.extend(cached_tool_result(
+                                &tool_name,
+                                result,
+                                inner_area.width as usize,
+                                &state.verbosity,
+                                show_picker,
+                            ));
+                        }
+                    }
+                    let next_is_user = state
+                        .history
+                        .get(msg_idx + 1)
+                        .is_some_and(|next| next.role == "user");
+                    if tool_result_needs_assistant_gap(&state.history, msg_idx) || next_is_user {
+                        lines.push(Line::from(""));
+                    }
+                } else if msg.role == "user" {
+                    if msg_idx > 0 {
+                        push_turn_separator(&mut lines, inner_area.width, show_picker);
+                    }
+                    let content_width = (inner_area.width as usize).saturating_sub(4);
+                    let display_content = collapse_image_markers(&msg.content);
+                    let mut wrapped_lines = Vec::new();
+                    for raw_line in display_content.lines() {
+                        if raw_line.is_empty() {
+                            wrapped_lines.push("".to_string());
+                        } else {
+                            let mut current = String::new();
+                            for word in raw_line.split_whitespace() {
+                                if current.is_empty() {
+                                    current.push_str(word);
+                                } else if current.width() + 1 + word.width() <= content_width {
+                                    current.push(' ');
+                                    current.push_str(word);
+                                } else {
+                                    wrapped_lines.push(current);
+                                    current = word.to_string();
+                                }
+                            }
+                            if !current.is_empty() {
+                                wrapped_lines.push(current);
+                            }
+                        }
+                    }
+
+                    for (idx, line_str) in wrapped_lines.into_iter().enumerate() {
+                        if idx == 0 {
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    "❯ ",
+                                    get_themed_style(
+                                        COLOR_PRIMARY(),
+                                        COLOR_BG(),
+                                        Modifier::BOLD,
+                                        show_picker,
+                                    ),
+                                ),
+                                Span::styled(
+                                    line_str,
+                                    get_themed_style(
+                                        COLOR_TEXT(),
+                                        COLOR_BG(),
+                                        Modifier::BOLD,
+                                        show_picker,
+                                    ),
+                                ),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    "  ",
+                                    get_themed_style(
+                                        COLOR_MUTED(),
+                                        COLOR_BG(),
+                                        Modifier::empty(),
+                                        show_picker,
+                                    ),
+                                ),
+                                Span::styled(
+                                    line_str,
+                                    get_themed_style(
+                                        COLOR_TEXT(),
+                                        COLOR_BG(),
+                                        Modifier::empty(),
+                                        show_picker,
+                                    ),
+                                ),
+                            ]));
+                        }
+                    }
+                    lines.push(Line::from(""));
+                } else if msg.role == "assistant" {
+                    let calls = msg.resolved_tool_calls(state.active_tool_protocol());
+                    let has_following_tool_result = tool_result_follows(&state.history, msg_idx);
+
+                    if let Some(tool_call) = calls.first() {
+                        if !has_following_tool_result {
+                            let (action, arg) =
+                                format_pi_tool_action(&tool_call.name, &tool_call.arguments);
+                            let elapsed_ms = state
+                                .generation_start_time
+                                .map(|t| t.elapsed().as_millis())
+                                .unwrap_or(0);
+                            let circle = if (elapsed_ms / 350).is_multiple_of(2) {
+                                "○ "
+                            } else {
+                                "● "
+                            };
+                            let action_len = action.len();
+                            let prefix_len = action_len + 10; // circle (2) + action + "(...)" (5) + margin offset (3)
+                            let max_arg_len =
+                                (inner_area.width as usize).saturating_sub(prefix_len);
+                            let display_arg = if arg.chars().count() > max_arg_len {
+                                let take_len = max_arg_len.saturating_sub(3);
+                                format!("{}...", arg.chars().take(take_len).collect::<String>())
+                            } else {
+                                arg.clone()
+                            };
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    circle,
+                                    get_themed_style(
+                                        COLOR_MUTED(),
+                                        COLOR_BG(),
+                                        Modifier::empty(),
+                                        show_picker,
+                                    ),
+                                ),
+                                Span::styled(
+                                    action,
+                                    get_themed_style(
+                                        COLOR_PRIMARY(),
+                                        COLOR_BG(),
+                                        Modifier::BOLD,
+                                        show_picker,
+                                    ),
+                                ),
+                                Span::styled(
+                                    format!("({display_arg})..."),
+                                    get_themed_style(
+                                        COLOR_MUTED(),
+                                        COLOR_BG(),
+                                        Modifier::ITALIC,
+                                        show_picker,
+                                    ),
+                                ),
+                            ]));
+                        }
+                    }
+
+                    render_assistant_message(
+                        &msg.content,
+                        &mut lines,
+                        &mut copy_clicks,
+                        AssistantRenderOptions {
+                            token_usage: msg.token_usage.clone(),
+                            response_time_ms: msg.response_time_ms,
+                            thought_time_ms: msg.thought_time_ms,
+                            thought_tokens: msg.thought_tokens,
+                            is_generating: false,
+                            viewport_width: inner_area.width,
+                            show_picker,
+                            last_copy_text: state.last_copy_text.clone(),
+                        },
+                    );
+
+                    let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
+                        m.role == "tool"
+                            || (m.role == "assistant"
+                                && !m
+                                    .resolved_tool_calls(state.active_tool_protocol())
+                                    .is_empty())
+                    });
+                    if !next_is_tool {
+                        lines.push(Line::from(""));
+                    }
                 }
             }
 
-            render_assistant_message(
-                &msg.content,
-                &mut lines,
-                &mut copy_clicks,
-                AssistantRenderOptions {
-                    token_usage: msg.token_usage.clone(),
-                    response_time_ms: msg.response_time_ms,
-                    thought_time_ms: msg.thought_time_ms,
-                    thought_tokens: msg.thought_tokens,
-                    is_generating: false,
-                    viewport_width: inner_area.width,
-                    show_picker,
-                    last_copy_text: state.last_copy_text.clone(),
-                },
-            );
+            if display_start < state.history.len()
+                && (state.status == AppStatus::Streaming || state.status == AppStatus::Queued)
+                && !state.current_response.is_empty()
+            {
+                let parsed_tool = crate::tools::parse_tool_call(
+                    &state.current_response,
+                    state.active_tool_protocol(),
+                );
+                let is_tool_syntax = crate::tools::is_tool_call_start(&state.current_response);
 
-            let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
-                m.role == "tool"
-                    || (m.role == "assistant"
-                        && !m.resolved_tool_calls(state.active_tool_protocol()).is_empty())
-            });
-            if !next_is_tool {
+                let should_hide_stream = match parsed_tool {
+                    Some(ref tool_call) => !crate::tools::is_code_editing_tool(&tool_call.name),
+                    None => is_tool_syntax,
+                };
+
+                if !should_hide_stream {
+                    let live_thought_ms = state.current_thought_time_ms.saturating_add(
+                        state
+                            .current_thought_started_at
+                            .map(|started| started.elapsed().as_millis() as u64)
+                            .unwrap_or(0),
+                    );
+                    render_assistant_message(
+                        &state.current_response,
+                        &mut lines,
+                        &mut copy_clicks,
+                        AssistantRenderOptions {
+                            token_usage: None,
+                            response_time_ms: state
+                                .generation_start_time
+                                .map(|started| started.elapsed().as_millis() as u64),
+                            thought_time_ms: Some(live_thought_ms),
+                            thought_tokens: Some(state.current_thought_tokens),
+                            is_generating: true,
+                            viewport_width: inner_area.width,
+                            show_picker,
+                            last_copy_text: state.last_copy_text.clone(),
+                        },
+                    );
+                    lines.push(Line::from(""));
+                }
+            }
+
+            if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
+                || !state.running_tools.is_empty()
+            {
+                lines.push(activity_status_line(state, show_picker));
                 lines.push(Line::from(""));
             }
-        }
-    }
 
-    if display_start < state.history.len()
-        && (state.status == AppStatus::Streaming || state.status == AppStatus::Queued)
-        && !state.current_response.is_empty()
-    {
-        let parsed_tool = crate::tools::parse_tool_call(
-            &state.current_response,
-            state.active_tool_protocol(),
-        );
-        let is_tool_syntax = crate::tools::is_tool_call_start(&state.current_response);
-
-        let should_hide_stream = match parsed_tool {
-            Some(ref tool_call) => !crate::tools::is_code_editing_tool(&tool_call.name),
-            None => is_tool_syntax,
-        };
-
-        if !should_hide_stream {
-            let live_thought_ms = state.current_thought_time_ms.saturating_add(
-                state
-                    .current_thought_started_at
-                    .map(|started| started.elapsed().as_millis() as u64)
-                    .unwrap_or(0),
-            );
-            render_assistant_message(
-                &state.current_response,
-                &mut lines,
-                &mut copy_clicks,
-                AssistantRenderOptions {
-                    token_usage: None,
-                    response_time_ms: state
-                        .generation_start_time
-                        .map(|started| started.elapsed().as_millis() as u64),
-                    thought_time_ms: Some(live_thought_ms),
-                    thought_tokens: Some(state.current_thought_tokens),
-                    is_generating: true,
-                    viewport_width: inner_area.width,
-                    show_picker,
-                    last_copy_text: state.last_copy_text.clone(),
-                },
-            );
+            // breathing room between the last line and the input box when
+            // scrolled to the bottom
             lines.push(Line::from(""));
-        }
-    }
 
-    // breathing room between the last line and the input box when
-    // scrolled to the bottom
-    lines.push(Line::from(""));
-
-    // Resolve wrapped start rows for code-block [Copy] badges and message
-    // boundaries in a single
-    // pass. Lines wrap independently, so per-line line_count sums to the exact
-    // screen offset.
-    let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
-    let mut msg_wrapped_rows: Vec<u16> = Vec::new();
-    let mut cum = 0u16;
-    {
-        let copy_map: std::collections::HashMap<usize, String> =
-            copy_clicks.iter().cloned().collect();
-        // Messages that emitted no lines share their successor's start index,
-        // and a trailing index past the end belongs to no visible content.
-        let msg_line_set: std::collections::HashSet<usize> = msg_start_lines
-            .iter()
-            .copied()
-            .filter(|&i| i < lines.len())
-            .collect();
-        for (i, line) in lines.iter().enumerate() {
-            if let Some(text) = copy_map.get(&i) {
-                copy_wrapped_rows.push((cum, text.clone()));
+            // Resolve wrapped start rows for code-block [Copy] badges and message
+            // boundaries in a single
+            // pass. Lines wrap independently, so per-line line_count sums to the exact
+            // screen offset.
+            let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
+            let mut msg_wrapped_rows: Vec<u16> = Vec::new();
+            let mut cum = 0u16;
+            {
+                let copy_map: std::collections::HashMap<usize, String> =
+                    copy_clicks.iter().cloned().collect();
+                // Messages that emitted no lines share their successor's start index,
+                // and a trailing index past the end belongs to no visible content.
+                let msg_line_set: std::collections::HashSet<usize> = msg_start_lines
+                    .iter()
+                    .copied()
+                    .filter(|&i| i < lines.len())
+                    .collect();
+                for (i, line) in lines.iter().enumerate() {
+                    if let Some(text) = copy_map.get(&i) {
+                        copy_wrapped_rows.push((cum, text.clone()));
+                    }
+                    if msg_line_set.contains(&i) {
+                        msg_wrapped_rows.push(cum);
+                    }
+                    let w = line.width() as u16;
+                    let h = if inner_area.width == 0 || w <= inner_area.width {
+                        1
+                    } else {
+                        Paragraph::new(vec![line.clone()])
+                            .wrap(Wrap { trim: false })
+                            .line_count(inner_area.width) as u16
+                    };
+                    cum = cum.saturating_add(h);
+                }
             }
-            if msg_line_set.contains(&i) {
-                msg_wrapped_rows.push(cum);
+
+            let total_wrapped_lines = cum;
+
+            let owned_lines: Vec<Line<'static>> = lines.iter().map(own_line).collect();
+            if idle {
+                let cache = ChatCache {
+                    key: cache_key,
+                    lines: owned_lines.clone(),
+                    copy_wrapped_rows: copy_wrapped_rows.clone(),
+                    msg_wrapped_rows: msg_wrapped_rows.clone(),
+                    total_wrapped_lines,
+                };
+                CHAT_CACHE.with(|c| *c.borrow_mut() = Some(cache));
             }
-            let w = line.width() as u16;
-            let h = if inner_area.width == 0 || w <= inner_area.width {
-                1
-            } else {
-                Paragraph::new(vec![line.clone()])
-                    .wrap(Wrap { trim: false })
-                    .line_count(inner_area.width) as u16
-            };
-            cum = cum.saturating_add(h);
-        }
-    }
-
-    let total_wrapped_lines = cum;
-
-        let owned_lines: Vec<Line<'static>> = lines.iter().map(own_line).collect();
-        if idle {
-            let cache = ChatCache {
-                key: cache_key,
-                lines: owned_lines.clone(),
-                copy_wrapped_rows: copy_wrapped_rows.clone(),
-                msg_wrapped_rows: msg_wrapped_rows.clone(),
+            (
+                owned_lines,
+                copy_wrapped_rows,
+                msg_wrapped_rows,
                 total_wrapped_lines,
-            };
-            CHAT_CACHE.with(|c| *c.borrow_mut() = Some(cache));
-        }
-        (owned_lines, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines)
-    };
+            )
+        };
 
     let conversation_paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -2464,9 +2720,8 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     render_queue_line(f, &chunks, state);
     let input_margin = render_input(f, &chunks, state);
 
-    let (_, at_query) =
-        crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
-            .unwrap_or((0, String::new()));
+    let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
+        .unwrap_or((0, String::new()));
     let at_files = if !at_query.is_empty()
         || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
             .ends_with('@')

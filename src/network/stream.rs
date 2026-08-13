@@ -60,11 +60,13 @@ mod tests {
         buffer.thought_tokens = 4;
         buffer.thought_started_at = Some(std::time::Instant::now());
         buffer.tool_call_ids.push("call-1".to_string());
-        buffer.native_tool_calls.push(crate::tools::ToolCallEnvelope {
-            call_id: "call-1".to_string(),
-            tool_name: "grep".to_string(),
-            arguments: serde_json::json!({"pattern": "x"}),
-        });
+        buffer
+            .native_tool_calls
+            .push(crate::tools::ToolCallEnvelope {
+                call_id: "call-1".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "x"}),
+            });
 
         buffer.reset();
 

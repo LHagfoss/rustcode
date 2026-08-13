@@ -1487,14 +1487,14 @@ pub(super) fn render_tool_confirmation_modal(
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),                            // 0: Header
-                Constraint::Length(1),                            // 1: Spacer
-                Constraint::Length(1),                            // 2: Tool & target line
-                Constraint::Length(1),                            // 3: Auto-confirm status
-                Constraint::Length(1),                            // 4: Spacer
-                Constraint::Min(if has_preview { 2 } else { 0 }), // 5: Preview Diff / Content
+                Constraint::Length(1),                               // 0: Header
+                Constraint::Length(1),                               // 1: Spacer
+                Constraint::Length(1),                               // 2: Tool & target line
+                Constraint::Length(1),                               // 3: Auto-confirm status
+                Constraint::Length(1),                               // 4: Spacer
+                Constraint::Min(if has_preview { 2 } else { 0 }),    // 5: Preview Diff / Content
                 Constraint::Length(if has_preview { 1 } else { 0 }), // 6: Spacer
-                Constraint::Length(1),                            // 7: Footer buttons
+                Constraint::Length(1),                               // 7: Footer buttons
             ])
             .split(inner_area);
 
@@ -1520,12 +1520,16 @@ pub(super) fn render_tool_confirmation_modal(
 
         let path_display = if confirmation.path.len() > inner_area.width as usize - 22 {
             let cut = (inner_area.width as usize).saturating_sub(25).max(5);
-            format!("…{}", &confirmation.path[confirmation.path.len().saturating_sub(cut)..])
+            format!(
+                "…{}",
+                &confirmation.path[confirmation.path.len().saturating_sub(cut)..]
+            )
         } else {
             confirmation.path.clone()
         };
 
-        let size_str = if confirmation.tool_name != "run_command" && confirmation.content_bytes > 0 {
+        let size_str = if confirmation.tool_name != "run_command" && confirmation.content_bytes > 0
+        {
             format!(" ({} bytes)", confirmation.content_bytes)
         } else {
             String::new()
@@ -1672,7 +1676,8 @@ pub(super) fn render_tool_confirmation_modal(
         f.render_widget(Paragraph::new(footer_line), modal_chunks[7]);
     } else {
         // Render batch confirmation modal
-        let height = (confirmations.len() as u16 + 7).clamp(8, (screen_height.saturating_sub(4)).min(22));
+        let height =
+            (confirmations.len() as u16 + 7).clamp(8, (screen_height.saturating_sub(4)).min(22));
         let modal_area = input_anchor_rect(f, input_area, height);
         f.render_widget(Clear, modal_area);
         let modal_block = Block::default()
@@ -1690,12 +1695,12 @@ pub(super) fn render_tool_confirmation_modal(
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // Header
-                Constraint::Length(1), // Spacer
+                Constraint::Length(1),                       // Header
+                Constraint::Length(1),                       // Spacer
                 Constraint::Min(confirmations.len() as u16), // List of tools
-                Constraint::Length(1), // Auto-confirm option
-                Constraint::Length(1), // Spacer
-                Constraint::Length(1), // Footer/Actions
+                Constraint::Length(1),                       // Auto-confirm option
+                Constraint::Length(1),                       // Spacer
+                Constraint::Length(1),                       // Footer/Actions
             ])
             .split(inner_area);
 

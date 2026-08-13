@@ -1,6 +1,6 @@
+use super::TurnContext;
 use super::events::ToolResult;
 use super::text::strip_ansi_escapes;
-use super::TurnContext;
 use regex::Regex;
 use std::sync::LazyLock;
 
