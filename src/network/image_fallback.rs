@@ -26,7 +26,8 @@ where
     let mut pending_cache = HashMap::new();
     let mut image_number = 0usize;
 
-    for message in history.iter() {
+    for (msg_idx, message) in history.iter().enumerate() {
+        let is_latest = msg_idx == history.len() - 1;
         if message.role != "user" || !message.content.contains(IMAGE_MARKER) {
             rewritten.push(message.content.clone());
             continue;
@@ -43,23 +44,52 @@ where
                 break;
             };
             let path = &after_marker[..end];
-            let bytes = std::fs::read(path)
-                .map_err(|e| format!("image analysis failed: could not read image: {e}"))?;
+            let bytes_res = std::fs::read(path);
+            let bytes = match bytes_res {
+                Ok(b) => b,
+                Err(e) => {
+                    if is_latest {
+                        return Err(format!("image analysis failed: could not read image: {e}"));
+                    } else {
+                        output.push_str("[Attached image analysis unavailable: image missing]");
+                        remaining = &after_marker[end + 1..];
+                        continue;
+                    }
+                }
+            };
             let hash = image_hash(&bytes);
             let analysis =
                 if let Some(value) = cache.get(&hash).or_else(|| pending_cache.get(&hash)) {
                     value.clone()
                 } else {
-                    let value = request(vision_profile, bytes)
-                        .await
-                        .map_err(|e| format!("image analysis failed: {e}"))?;
-                    if value.trim().is_empty() {
-                        return Err(
-                            "image analysis failed: vision model returned empty output".to_string()
-                        );
+                    match request(vision_profile, bytes).await {
+                        Ok(value) if !value.trim().is_empty() => {
+                            pending_cache.insert(hash.clone(), value.clone());
+                            value
+                        }
+                        Ok(_) => {
+                            if is_latest {
+                                return Err(
+                                    "image analysis failed: vision model returned empty output"
+                                        .to_string(),
+                                );
+                            } else {
+                                let fallback = "[Attached image analysis unavailable]".to_string();
+                                pending_cache.insert(hash.clone(), fallback.clone());
+                                fallback
+                            }
+                        }
+                        Err(e) => {
+                            if is_latest {
+                                return Err(format!("image analysis failed: {e}"));
+                            } else {
+                                let fallback =
+                                    format!("[Attached image analysis unavailable: {e}]");
+                                pending_cache.insert(hash.clone(), fallback.clone());
+                                fallback
+                            }
+                        }
                     }
-                    pending_cache.insert(hash.clone(), value.clone());
-                    value
                 };
             image_number += 1;
             output.push_str(&format_analysis(image_number, &analysis));
@@ -359,6 +389,68 @@ mod tests {
         );
         assert_eq!(history[0].content, original);
         assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn missing_image_in_older_history_does_not_abort_the_new_turn() {
+        let missing = std::env::temp_dir().join("rustcode-missing-image.png");
+        let mut history = vec![
+            ChatMessage::new("user", format!("Earlier attachment: ![image](file://{})", missing.display())),
+            ChatMessage::new("user", "What time is it?"),
+        ];
+        let mut cache = HashMap::new();
+        let mut calls = 0;
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| {
+                calls += 1;
+                async { Ok("unused".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(calls, 0);
+        assert!(history[0]
+            .content
+            .contains("[Attached image analysis unavailable: image missing]"));
+        assert_eq!(history[1].content, "What time is it?");
+    }
+
+    #[tokio::test]
+    async fn vision_failure_in_older_history_does_not_abort_the_new_turn() {
+        let dir = tempdir().unwrap();
+        let marker = image(dir.path(), "older.png", b"older");
+        let mut history = vec![
+            ChatMessage::new("user", marker),
+            ChatMessage::new("user", "What time is it?"),
+        ];
+        let mut cache = HashMap::new();
+        let mut calls = 0;
+
+        preprocess_history_with(
+            &mut history,
+            &profile(Some(false)),
+            &profile(Some(true)),
+            &mut cache,
+            |_, _| {
+                calls += 1;
+                async { Err("cancelled".to_string()) }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(calls, 1);
+        assert!(history[0]
+            .content
+            .contains("[Attached image analysis unavailable: cancelled]"));
+        assert_eq!(history[1].content, "What time is it?");
+        assert_eq!(cache.len(), 1);
     }
 
     #[tokio::test]

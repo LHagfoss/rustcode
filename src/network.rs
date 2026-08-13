@@ -987,11 +987,12 @@ pub(crate) async fn prepare_turn_request(
                 },
             )
             .await?;
-            state
-                .lock()
-                .await
-                .image_analysis_cache
-                .extend(image_cache);
+            let mut guard = state.lock().await;
+            guard.image_analysis_cache.extend(image_cache);
+            let session_id = guard.active_session_id.clone();
+            let current_cache = guard.image_analysis_cache.clone();
+            drop(guard);
+            crate::config::save_session_image_cache(&session_id, &current_cache);
         }
     }
 
