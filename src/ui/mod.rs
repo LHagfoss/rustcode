@@ -2356,7 +2356,6 @@ pub(crate) fn render_committed_history_block(
                     ),
                 ]));
             }
-            lines.push(Line::from(""));
         }
         "assistant" => {
             if is_hidden_system_notice(&message.content) {
