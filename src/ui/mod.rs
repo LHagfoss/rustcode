@@ -2562,11 +2562,15 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         render_protocol_picker_modal(f, state, input_box_area);
     }
 
+    let had_working_pending = state.working_status_pending;
     render_notice(f, state);
     // The final Working row is only needed for the frame that paints the
     // finalized reply. New turns clear this at queue start if another prompt
     // is already waiting.
     state.working_status_pending = false;
+    if had_working_pending {
+        state.request_redraw();
+    }
 }
 
 /// How long a notice toast stays on screen before it fades out.
