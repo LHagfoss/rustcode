@@ -2098,7 +2098,10 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
 /// Render only the mutable portion of the current turn. Completed history is
 /// deliberately excluded: it will be committed to terminal scrollback.
 pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static>> {
-    let (_, tail) = scrollback::split_stable_rows(&state.current_response);
+    // The terminal committer moves stable rows into scrollback. Until that
+    // transport runs, retain the complete response here so no streamed text
+    // can disappear from the live view.
+    let tail = state.current_response.clone();
     let mut lines = Vec::new();
     let mut copy_clicks = Vec::new();
 
