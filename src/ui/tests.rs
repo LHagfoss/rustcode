@@ -71,6 +71,28 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
 }
 
 #[test]
+fn welcome_banner_renders_without_a_conversation() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut state = AppState::new();
+    let mut terminal = Terminal::new(TestBackend::new(100, 28)).unwrap();
+    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(
+        rendered.contains("Welcome back!"),
+        "the empty chat must display its welcome banner: {rendered:?}"
+    );
+}
+
+#[test]
 fn queue_preview_shows_recent_user_prompts_without_wakeups() {
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -978,6 +1000,21 @@ fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
         Some("tail".to_owned())
     );
     assert_eq!(cursor.take_final_stream_remainder("stable\ntail"), None);
+}
+
+#[test]
+fn transcript_cursor_keeps_a_committed_prefix_when_the_stream_finalizes() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    let final_text = "<think>\nPlanning the response\n</think>\n\nFinal answer";
+    let stable = format!("{}\n", cursor.pending_stable_stream(final_text).join("\n"));
+    cursor.commit_stable_stream(&stable);
+
+    cursor.begin_stream("");
+
+    assert_eq!(
+        cursor.take_final_stream_remainder(final_text),
+        Some("Final answer".to_owned())
+    );
 }
 
 #[test]
