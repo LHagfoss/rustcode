@@ -233,19 +233,12 @@ pub(super) fn unwrap_markdown_table_fences(content: &str) -> std::borrow::Cow<'_
         (len >= 3).then_some((marker, len, &scan[len..], blockquoted))
     }
 
-    let is_table_delimiter = |line: &str| {
-        let trimmed = strip_blockquote_prefix(line).trim().trim_matches('|');
-        let cells = trimmed.split('|').map(str::trim).collect::<Vec<_>>();
-        !cells.is_empty()
-            && cells.iter().all(|cell| {
-                let dashes = cell.trim_matches(':');
-                dashes.len() >= 3 && dashes.chars().all(|character| character == '-')
-            })
-    };
     let contains_table = |body: &[&str]| {
         body.windows(2).any(|pair| {
             let header = strip_blockquote_prefix(pair[0]).trim();
-            header.contains('|') && !is_table_delimiter(header) && is_table_delimiter(pair[1])
+            header.contains('|')
+                && !is_table_delimiter_line(header)
+                && is_table_delimiter_line(pair[1])
         })
     };
 
@@ -305,6 +298,76 @@ pub(super) fn unwrap_markdown_table_fences(content: &str) -> std::borrow::Cow<'_
     } else {
         std::borrow::Cow::Borrowed(content)
     }
+}
+
+fn is_table_dash(character: char) -> bool {
+    matches!(
+        character,
+        '-'
+            | '\u{2010}'
+            | '\u{2011}'
+            | '\u{2012}'
+            | '\u{2013}'
+            | '\u{2014}'
+            | '\u{2015}'
+            | '\u{2212}'
+            | '\u{2500}'
+            | '\u{FE58}'
+            | '\u{FE63}'
+            | '\u{FF0D}'
+    )
+}
+
+fn strip_table_blockquote_prefix(line: &str) -> &str {
+    let mut rest = line.trim_start();
+    while let Some(stripped) = rest.strip_prefix('>') {
+        rest = stripped.trim_start();
+    }
+    rest
+}
+
+fn is_table_delimiter_line(line: &str) -> bool {
+    let trimmed = strip_table_blockquote_prefix(line).trim().trim_matches('|');
+    if !trimmed.contains('|') {
+        return false;
+    }
+    let cells = trimmed.split('|').map(str::trim).collect::<Vec<_>>();
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let dashes = cell.trim_matches(':');
+            let dash_count = dashes.chars().count();
+            let has_unicode_dash = dashes.chars().any(|character| character != '-');
+            (dash_count >= 3 || (has_unicode_dash && dash_count >= 2))
+                && dashes.chars().all(is_table_dash)
+        })
+}
+
+/// Normalize the dash glyphs models commonly use for Markdown table separator
+/// rows (`––––`/`——`) to ASCII hyphens, which CommonMark recognizes as a table
+/// delimiter. Non-separator content is returned byte-for-byte unchanged.
+fn normalize_table_delimiters(content: &str) -> std::borrow::Cow<'_, str> {
+    let mut normalized = None::<String>;
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        if is_table_delimiter_line(line) {
+            let output = normalized.get_or_insert_with(|| String::with_capacity(content.len()));
+            if output.is_empty() {
+                output.push_str(&content[..offset]);
+            }
+            for character in line.chars() {
+                if is_table_dash(character) && character != '-' {
+                    output.push_str("---");
+                } else {
+                    output.push(character);
+                }
+            }
+        } else if let Some(output) = normalized.as_mut() {
+            output.push_str(line);
+        }
+        offset += line.len();
+    }
+
+    normalized.map_or(std::borrow::Cow::Borrowed(content), std::borrow::Cow::Owned)
 }
 
 fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
@@ -682,6 +745,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     };
 
     let normalized = unwrap_markdown_table_fences(content);
+    let normalized = normalize_table_delimiters(&normalized);
     let sanitized = sanitize_markdown(&normalized);
     for event in Parser::new_ext(&sanitized, Options::all()) {
         match event {
@@ -705,10 +769,6 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     list_continuation.as_deref(),
                 );
                 heading = Some(level);
-                paragraph.push(Span::styled(
-                    format!("{} ", "#".repeat(level as usize)),
-                    heading_style(level, show_picker),
-                ));
             }
             Event::End(TagEnd::Heading { .. }) => {
                 if !paragraph.is_empty() {
@@ -1116,17 +1176,23 @@ mod tests {
     }
 
     #[test]
-    fn renders_lists_and_keeps_codex_heading_markers() {
+    fn renders_lists_and_styles_headings_without_markdown_markers() {
         let lines = render_markdown("# Title\n\n- one\n- two", 80, false, false);
         let text: String = lines
             .iter()
             .flat_map(|line| line.spans.iter())
             .map(|span| span.content.as_ref())
             .collect();
-        assert!(text.contains("# Title"));
+        assert!(text.contains("Title"));
         assert!(text.contains('•'));
         assert!(text.contains("one"));
-        assert!(text.contains("# "));
+        assert!(!text.contains("# "));
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
+        );
     }
 
     #[test]
@@ -1233,6 +1299,23 @@ mod tests {
         assert!(rendered.iter().any(|line| line.starts_with('┌')));
         assert!(rendered.iter().any(|line| line.contains("grep")));
         assert!(rendered.iter().all(|line| !line.contains("```")));
+    }
+
+    #[test]
+    fn unicode_dash_table_separators_render_as_tables() {
+        let md = concat!(
+            "| Category | Name | Purpose |\n",
+            "|––––––|——|———————|\n",
+            "| Skill | clockify | Manage Clockify time entries |"
+        );
+        let rendered = render_markdown(md, 80, false, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.starts_with('┌')));
+        assert!(rendered.iter().any(|line| line.contains("clockify")));
+        assert!(rendered.iter().all(|line| !line.contains("| Category |")));
     }
 
     #[test]
