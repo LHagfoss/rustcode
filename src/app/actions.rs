@@ -1084,14 +1084,14 @@ pub fn start_new_session(s: &mut AppState) {
     s.continuous_mode = false;
     s.tip_index = crate::app::random_tip_index();
     s.history_display_start = 0;
+    s.history.clear();
 
     // Switch to a new active session ID
     s.active_session_id = crate::config::create_new_session(&mut s.config);
-    if crate::config::session_has_content(&s.history) {
-        crate::config::save_session_history(&s.active_session_id, &s.history);
-    }
+    crate::config::set_active_session_id(&s.active_session_id);
     s.history
         .push(ChatMessage::new("system", "✨ New chat started"));
+    crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
 /// Fill in the active profile's context window from the provider when the
@@ -1785,6 +1785,21 @@ mod tests {
     }
 
     #[test]
+    fn start_new_session_clears_history_and_starts_fresh() {
+        let mut state = crate::app::AppState::new();
+        let initial_session_id = state.active_session_id.clone();
+        state.history.push(crate::app::ChatMessage::new("user", "hello old chat"));
+        state.history.push(crate::app::ChatMessage::new("assistant", "response old chat"));
+
+        super::start_new_session(&mut state);
+
+        assert_ne!(state.active_session_id, initial_session_id);
+        assert_eq!(state.history.len(), 1);
+        assert_eq!(state.history[0].role, "system");
+        assert_eq!(state.history[0].content, "✨ New chat started");
+    }
+
+    #[test]
     fn render_codex_rate_limit_windows() {
         let mut text = String::from("Session usage:");
         let limits = serde_json::json!({
@@ -2051,13 +2066,9 @@ mod tests {
         assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
         {
             let s = state.lock().await;
-            assert_eq!(s.history.len(), original_history.len() + 1);
-            for (actual, expected) in s.history.iter().zip(&original_history) {
-                assert_eq!(actual.role, expected.role);
-                assert_eq!(actual.content, expected.content);
-            }
-            assert_eq!(s.history.last().unwrap().role, "system");
-            assert!(s.history.last().unwrap().content.contains("New chat"));
+            assert_eq!(s.history.len(), 1);
+            assert_eq!(s.history[0].role, "system");
+            assert!(s.history[0].content.contains("New chat"));
             assert_eq!(s.history_display_start, 0);
         }
     }

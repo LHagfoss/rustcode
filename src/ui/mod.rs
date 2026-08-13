@@ -304,30 +304,61 @@ fn split_thought_blocks(content: &str) -> (String, Option<String>) {
     let mut thought_preview = None;
     let mut rest = content;
 
-    while let Some(open_idx) = rest.find(OPEN) {
-        answer.push_str(&rest[..open_idx]);
-        let after_open = &rest[open_idx + OPEN.len()..];
+    loop {
+        let open_idx = rest.find(OPEN);
+        let close_idx = rest.find(CLOSE);
 
-        if let Some(close_idx) = after_open.find(CLOSE) {
-            let thought = &after_open[..close_idx];
-            if thought_preview.is_none() {
-                thought_preview = thought
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(str::to_owned);
+        match (open_idx, close_idx) {
+            (Some(o_idx), Some(c_idx)) if o_idx < c_idx => {
+                answer.push_str(&rest[..o_idx]);
+                let thought = &rest[o_idx + OPEN.len()..c_idx];
+                if thought_preview.is_none() {
+                    thought_preview = thought
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .map(str::to_owned);
+                }
+                rest = &rest[c_idx + CLOSE.len()..];
             }
-            rest = &after_open[close_idx + CLOSE.len()..];
-        } else {
-            if thought_preview.is_none() {
-                thought_preview = after_open
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(str::to_owned);
+            (Some(o_idx), None) => {
+                answer.push_str(&rest[..o_idx]);
+                let thought = &rest[o_idx + OPEN.len()..];
+                if thought_preview.is_none() {
+                    thought_preview = thought
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .map(str::to_owned);
+                }
+                rest = "";
+                break;
             }
-            rest = "";
-            break;
+            (None, Some(c_idx)) => {
+                let thought = &rest[..c_idx];
+                if thought_preview.is_none() {
+                    thought_preview = thought
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .map(str::to_owned);
+                }
+                rest = &rest[c_idx + CLOSE.len()..];
+            }
+            (Some(_), Some(c_idx)) => {
+                let thought = &rest[..c_idx];
+                if thought_preview.is_none() {
+                    thought_preview = thought
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .map(str::to_owned);
+                }
+                rest = &rest[c_idx + CLOSE.len()..];
+            }
+            (None, None) => {
+                break;
+            }
         }
     }
 
