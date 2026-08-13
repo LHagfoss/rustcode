@@ -1102,20 +1102,62 @@ fn live_tail_uses_formatted_working_status() {
 }
 
 #[test]
-fn live_tail_does_not_add_padding_row_below_working_status() {
+fn live_tail_adds_two_padding_rows_below_working_status() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
 
     let lines = super::render_live_tail(&state, 80, 24);
 
-    let status_text = lines
-        .last()
-        .expect("Working status should be the final live row")
+    assert!(lines.len() >= 3);
+    assert!(lines[lines.len() - 1].spans.is_empty());
+    assert!(lines[lines.len() - 2].spans.is_empty());
+    let status_text = lines[lines.len() - 3]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
     assert!(status_text.contains("Working"));
+}
+
+#[test]
+fn consecutive_thought_blocks_have_a_blank_line_gap() {
+    let mut lines = Vec::new();
+    let mut copy_clicks = Vec::new();
+    let options = super::AssistantRenderOptions {
+        token_usage: None,
+        response_time_ms: None,
+        thought_time_ms: Some(1500),
+        thought_tokens: Some(100),
+        is_generating: false,
+        viewport_width: 80,
+        show_picker: false,
+        last_copy_text: None,
+    };
+
+    super::render_assistant_message("<think>\nFirst thought\n</think>\nFirst response", &mut lines, &mut copy_clicks, options);
+
+    let options2 = super::AssistantRenderOptions {
+        token_usage: None,
+        response_time_ms: None,
+        thought_time_ms: Some(2000),
+        thought_tokens: Some(150),
+        is_generating: false,
+        viewport_width: 80,
+        show_picker: false,
+        last_copy_text: None,
+    };
+
+    super::render_assistant_message("<think>\nSecond thought\n</think>\nSecond response", &mut lines, &mut copy_clicks, options2);
+
+    let thought_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.spans.iter().any(|s| s.content.contains("Thought for")))
+        .map(|(i, _)| i)
+        .collect();
+
+    assert_eq!(thought_indices.len(), 2);
+    assert!(lines[thought_indices[1] - 1].spans.is_empty());
 }
 
 #[test]
