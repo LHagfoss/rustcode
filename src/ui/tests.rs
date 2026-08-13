@@ -1,5 +1,75 @@
 use super::*;
 
+#[test]
+fn model_picker_keeps_multiple_models_visible_above_the_composer() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut state = AppState::new();
+    state.config.models = (1..=5)
+        .map(|number| crate::config::ModelProfile {
+            name: format!("model-{number}"),
+            url: format!("http://localhost/{number}"),
+            model: format!("model-{number}"),
+            context_window: None,
+            engine: Some("Local".to_owned()),
+            api_key: None,
+            env_key: None,
+            tool_protocol: None,
+            enable_thinking: None,
+            max_tokens: None,
+            supports_vision: None,
+        })
+        .collect();
+    state.show_model_picker = true;
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    let visible_models = (1..=5)
+        .filter(|number| rendered.contains(&format!("model-{number}")))
+        .count();
+
+    assert!(
+        visible_models >= 3,
+        "the inline picker must show several choices, got {visible_models}: {rendered:?}"
+    );
+}
+
+#[test]
+fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut state = AppState::new();
+    state.show_command_picker = true;
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    let visible_commands = ["New session", "Resume session", "Copy last reply"]
+        .iter()
+        .filter(|command| rendered.contains(**command))
+        .count();
+
+    assert_eq!(
+        visible_commands, 3,
+        "the inline picker must show its first three commands: {rendered:?}"
+    );
+}
+
 // Regression: the tool-result cache used to `clear()` the whole map at the
 // cap, throwing away every still-visible result and forcing a full
 // re-render on the next frame. It now drops a single cold entry.
