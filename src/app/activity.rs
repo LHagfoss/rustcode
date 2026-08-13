@@ -155,8 +155,7 @@ pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64)
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivityKind, AnimationCell, animation_trail, classify_activity,
-        format_terminal_title,
+        ActivityKind, AnimationCell, animation_trail, classify_activity, format_terminal_title,
         sanitize_session_name,
     };
     use crate::app::AppStatus;
@@ -183,9 +182,12 @@ mod tests {
             sanitize_session_name("  fix | parser\u{0007}\nissue  ", 18),
             "fix / parser issue"
         );
-        assert!(sanitize_session_name("a very long session name", 12)
-            .chars()
-            .count() <= 12);
+        assert!(
+            sanitize_session_name("a very long session name", 12)
+                .chars()
+                .count()
+                <= 12
+        );
     }
 
     #[test]

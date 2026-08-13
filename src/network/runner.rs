@@ -41,9 +41,7 @@ impl TurnRunner {
 /// Collect one model response, transparently continuing responses cut off by
 /// the provider. The callback owns request construction, allowing TUI, CLI,
 /// and subagent adapters to share exactly one continuation policy.
-pub(crate) async fn collect_response<F, Fut>(
-    mut request: F,
-) -> Result<CollectedResponse, String>
+pub(crate) async fn collect_response<F, Fut>(mut request: F) -> Result<CollectedResponse, String>
 where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = Result<ResponseChunk, String>>,

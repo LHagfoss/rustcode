@@ -470,10 +470,12 @@ mod tests {
             response.events.first(),
             Some(AgentEvent::TextDelta(content)) if content.contains("decoy")
         ));
-        assert!(!response
-            .events
-            .iter()
-            .any(|event| matches!(event, AgentEvent::ToolCall(_))));
+        assert!(
+            !response
+                .events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::ToolCall(_)))
+        );
         assert_eq!(
             response.events.last(),
             Some(&AgentEvent::Finished(FinishReason::Stop))

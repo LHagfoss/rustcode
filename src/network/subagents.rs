@@ -8,9 +8,9 @@ use super::runner;
 use super::stream_request;
 use super::text::{continuation_nudge, strip_leading_think};
 use super::{
-    compact_history_to_budget, confirm_and_execute, final_tool_diff, is_mutating_tool,
-    is_read_only_tool, push_status_line, subagent_tool_history_message,
-    tool_result_precludes_preview_fallback, StreamBuffer, MAX_ACTIVE_SUBAGENTS,
+    MAX_ACTIVE_SUBAGENTS, StreamBuffer, compact_history_to_budget, confirm_and_execute,
+    final_tool_diff, is_mutating_tool, is_read_only_tool, push_status_line,
+    subagent_tool_history_message, tool_result_precludes_preview_fallback,
 };
 
 pub(crate) async fn set_subagent_status(

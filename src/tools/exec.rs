@@ -194,35 +194,25 @@ fn is_read_only_git(tokens: &[&str]) -> bool {
     }
 
     let arguments = &tokens[subcommand_index + 1..];
-    if arguments
-        .iter()
-        .any(|argument| {
-            *argument == "-o"
-                || *argument == "--output"
-                || argument.starts_with("--output=")
-                || *argument == "--ext-diff"
-        })
-    {
+    if arguments.iter().any(|argument| {
+        *argument == "-o"
+            || *argument == "--output"
+            || argument.starts_with("--output=")
+            || *argument == "--ext-diff"
+    }) {
         return false;
     }
 
     matches!(
         subcommand,
         "status" | "diff" | "log" | "show" | "rev-parse" | "describe"
-    )
-        || (subcommand == "branch"
-            && arguments.iter().all(|argument| {
-                matches!(
-                    *argument,
-                    "-a"
-                        | "--all"
-                        | "-r"
-                        | "--remotes"
-                        | "-v"
-                        | "--verbose"
-                        | "--show-current"
-                )
-            }))
+    ) || (subcommand == "branch"
+        && arguments.iter().all(|argument| {
+            matches!(
+                *argument,
+                "-a" | "--all" | "-r" | "--remotes" | "-v" | "--verbose" | "--show-current"
+            )
+        }))
 }
 
 fn is_read_only_gh(tokens: &[&str]) -> bool {
@@ -255,13 +245,19 @@ fn is_read_only_segment(segment: &str) -> bool {
         Some("find") => !tokens[1..].iter().any(|argument| {
             matches!(
                 *argument,
-                "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir" | "-fprint" | "-fprintf"
+                "-delete"
+                    | "-exec"
+                    | "-execdir"
+                    | "-ok"
+                    | "-okdir"
+                    | "-fprint"
+                    | "-fprintf"
                     | "-fls"
             )
         }),
         Some(
-            "date" | "echo" | "false" | "grep" | "ls" | "printf" | "pwd" | "rg" | "test"
-            | "true" | "type" | "uname" | "which",
+            "date" | "echo" | "false" | "grep" | "ls" | "printf" | "pwd" | "rg" | "test" | "true"
+            | "type" | "uname" | "which",
         ) => true,
         _ => false,
     }
@@ -276,7 +272,10 @@ pub(crate) fn command_confirmation_scope(command: &str) -> Option<String> {
     if !git_scopes.is_empty() {
         return Some(git_scopes.join("; "));
     }
-    if command.chars().any(|character| matches!(character, '<' | '>')) {
+    if command
+        .chars()
+        .any(|character| matches!(character, '<' | '>'))
+    {
         return Some("shell redirection".to_string());
     }
     if segments.iter().all(|segment| is_read_only_segment(segment)) {

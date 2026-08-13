@@ -540,7 +540,11 @@ mod tests {
         );
 
         assert!(lines.iter().any(|line| text_of(line).contains("line 349")));
-        assert!(!lines.iter().any(|line| text_of(line).contains("more lines")));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| text_of(line).contains("more lines"))
+        );
     }
 
     #[test]
@@ -565,8 +569,16 @@ mod tests {
         );
 
         assert_eq!(command.len(), generic.len());
-        assert!(command.iter().any(|line| text_of(line).contains("line 349")));
-        assert!(generic.iter().any(|line| text_of(line).contains("line 349")));
+        assert!(
+            command
+                .iter()
+                .any(|line| text_of(line).contains("line 349"))
+        );
+        assert!(
+            generic
+                .iter()
+                .any(|line| text_of(line).contains("line 349"))
+        );
     }
 
     #[test]
@@ -584,7 +596,11 @@ mod tests {
         );
 
         assert!(lines.iter().any(|line| text_of(line).contains("line 349")));
-        assert!(!lines.iter().any(|line| text_of(line).contains("more lines")));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| text_of(line).contains("more lines"))
+        );
     }
 
     #[test]
