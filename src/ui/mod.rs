@@ -2311,6 +2311,17 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
 /// Render only the mutable portion of the current turn. Completed history is
 /// deliberately excluded: it will be committed to terminal scrollback.
 pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static>> {
+    let has_conversation = state
+        .history
+        .iter()
+        .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
+    if !has_conversation
+        && state.current_response.is_empty()
+        && matches!(state.status, AppStatus::Idle)
+    {
+        return build_claude_startup_banner(state, width as usize);
+    }
+
     let (_, tail) = scrollback::split_stable_rows(&state.current_response);
     let mut lines = Vec::new();
     let mut copy_clicks = Vec::new();
