@@ -2535,6 +2535,26 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         .split(f.area());
 
     render_live_conversation(f, &max_chunks, state);
+    let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
+        .unwrap_or((0, String::new()));
+    let at_files = if !at_query.is_empty()
+        || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
+            .ends_with('@')
+    {
+        crate::app::list_project_file_paths(&at_query)
+    } else {
+        Vec::new()
+    };
+
+    let picker_active = state.show_model_picker
+        || state.show_theme_picker
+        || state.show_command_picker
+        || state.show_history_picker
+        || state.show_mcp_config
+        || state.status == AppStatus::AwaitingToolConfirmation
+        || !filtered_cmds.is_empty()
+        || !at_files.is_empty();
+
     let has_conversation = state
         .history
         .iter()
@@ -2543,7 +2563,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     let chat_height = conversation_area_height(state.conversation_content_height, max_chat_height)
         .max(min_welcome_height)
         .min(max_chat_height);
-    let chunks = if chat_height == max_chat_height {
+    let chunks = if picker_active || chat_height == max_chat_height {
         max_chunks
     } else {
         let compact_chunks = Layout::default()
@@ -2562,17 +2582,6 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     render_queue_line(f, &chunks, state);
     let input_margin = render_input(f, &chunks, state);
-
-    let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
-        .unwrap_or((0, String::new()));
-    let at_files = if !at_query.is_empty()
-        || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
-            .ends_with('@')
-    {
-        crate::app::list_project_file_paths(&at_query)
-    } else {
-        Vec::new()
-    };
 
     if !filtered_cmds.is_empty() {
         let input_inner = chunks[2].inner(input_margin);
