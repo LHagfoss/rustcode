@@ -1279,6 +1279,7 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
         };
 
         let mut s = state.lock().await;
+        s.working_status_pending = true;
         if let Some(msg) = s.history.iter_mut().rev().find(|m| m.role == "assistant") {
             if msg.token_usage.is_none() {
                 msg.token_usage = usage.clone();
@@ -1334,6 +1335,7 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
                 break;
             }
             s.status = AppStatus::Streaming;
+            s.working_status_pending = false;
             s.generation_start_time = Some(std::time::Instant::now());
             s.stream_tracker = Some(StreamTracker::new());
             s.recent_read_calls.clear();
