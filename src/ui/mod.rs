@@ -1606,7 +1606,10 @@ fn next_visible_message(history: &[ChatMessage], index: usize) -> Option<&ChatMe
     history
         .iter()
         .skip(index + 1)
-        .find(|message| !(message.role == "system" && is_hidden_system_notice(&message.content)))
+        .find(|message| {
+            !((message.role == "system" || message.role == "assistant")
+                && is_hidden_system_notice(&message.content))
+        })
 }
 
 fn tool_result_needs_assistant_gap(history: &[ChatMessage], tool_index: usize) -> bool {
@@ -2153,6 +2156,9 @@ pub(crate) fn render_committed_history_block(
             lines.push(Line::from(""));
         }
         "assistant" => {
+            if is_hidden_system_notice(&message.content) {
+                return Vec::new();
+            }
             return render_committed_assistant_text(state, &message.content, width);
         }
         "tool" => {
