@@ -25,6 +25,12 @@ pub(crate) struct TranscriptCursor {
 
 impl TranscriptCursor {
     pub(crate) fn begin_stream(&mut self, stream: &str) {
+        // Finalizing a response clears the live buffer before its matching
+        // history message reaches the draw loop. Keep the committed prefix
+        // through that handoff so the history renderer only emits the tail.
+        if stream.is_empty() {
+            return;
+        }
         if !stream.starts_with(&self.committed_stream) {
             self.committed_stream.clear();
         }
