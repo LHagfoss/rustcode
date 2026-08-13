@@ -24,6 +24,12 @@ pub(crate) struct TranscriptCursor {
 }
 
 impl TranscriptCursor {
+    pub(crate) fn begin_stream(&mut self, stream: &str) {
+        if !stream.starts_with(&self.committed_stream) {
+            self.committed_stream.clear();
+        }
+    }
+
     pub(crate) fn pending_history_range(&self, history_len: usize) -> Range<usize> {
         self.next_history_index.min(history_len)..history_len
     }
@@ -39,14 +45,23 @@ impl TranscriptCursor {
     }
 
     pub(crate) fn pending_stable_stream(&self, stream: &str) -> Vec<String> {
-        let pending = stream
-            .strip_prefix(&self.committed_stream)
-            .unwrap_or(stream);
+        let pending = stream.strip_prefix(&self.committed_stream).unwrap_or(stream);
         split_stable_rows(pending).0
     }
 
     pub(crate) fn commit_stable_stream(&mut self, stable: &str) {
         self.committed_stream.push_str(stable);
+    }
+
+    /// When the stream is finalized into a durable assistant history entry,
+    /// return the part not already emitted above the live viewport.
+    pub(crate) fn take_final_stream_remainder(&mut self, final_text: &str) -> Option<String> {
+        if self.committed_stream.is_empty() || !final_text.starts_with(&self.committed_stream) {
+            return None;
+        }
+        let remainder = final_text[self.committed_stream.len()..].to_owned();
+        self.committed_stream.clear();
+        Some(remainder)
     }
 
     pub(crate) fn take_stable_stream(&mut self, stream: &str) -> Vec<String> {

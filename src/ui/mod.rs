@@ -18,10 +18,10 @@ use modals::{
     render_protocol_picker_modal, render_question_modal, render_theme_picker_modal,
     render_thinking_picker_modal, render_tool_confirmation_modal, render_verbosity_picker_modal,
 };
-use tool_result::{render_file_preview, render_tool_result};
+use tool_result::render_tool_result;
 
-use crate::app::activity::{ActivityKind, AnimationCell, animation_trail, classify_activity};
-use crate::app::{AppState, AppStatus, ChatMessage, HoverTarget, NoticeKind};
+use crate::app::activity::{ActivityKind, classify_activity};
+use crate::app::{AppState, AppStatus, ChatMessage, NoticeKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin},
@@ -805,23 +805,6 @@ fn format_input_status_text(state: &AppState) -> String {
     status.join("  ")
 }
 
-const STREAMING_STATUS_WORDS: &[&str] = &[
-    "Thinking...",
-    "Analyzing code...",
-    "Consulting the oracle...",
-    "Brewing coffee...",
-    "Refactoring reality...",
-    "Checking documentation...",
-    "Optimizing loops...",
-    "Debugging the universe...",
-    "Synthesizing solutions...",
-    "Querying knowledge base...",
-];
-
-fn streaming_status_word(elapsed_secs: u64) -> &'static str {
-    STREAMING_STATUS_WORDS[((elapsed_secs / 3) as usize) % STREAMING_STATUS_WORDS.len()]
-}
-
 fn activity_status_label(state: &AppState) -> String {
     let activity = classify_activity(&state.status, &state.running_tools);
     if activity.kind == ActivityKind::Working {
@@ -1236,7 +1219,6 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     );
     let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_BG()));
     f.render_widget(paragraph, text_area);
-    state.input_text_area = Some(text_area);
 
     if inner_width > 0 && !show_picker {
         f.set_cursor_position((
@@ -2098,10 +2080,7 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
 /// Render only the mutable portion of the current turn. Completed history is
 /// deliberately excluded: it will be committed to terminal scrollback.
 pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static>> {
-    // The terminal committer moves stable rows into scrollback. Until that
-    // transport runs, retain the complete response here so no streamed text
-    // can disappear from the live view.
-    let tail = state.current_response.clone();
+    let (_, tail) = scrollback::split_stable_rows(&state.current_response);
     let mut lines = Vec::new();
     let mut copy_clicks = Vec::new();
 
@@ -2174,23 +2153,7 @@ pub(crate) fn render_committed_history_block(
             lines.push(Line::from(""));
         }
         "assistant" => {
-            let mut copy_clicks = Vec::new();
-            render_assistant_message(
-                &message.content,
-                &mut lines,
-                &mut copy_clicks,
-                AssistantRenderOptions {
-                    token_usage: message.token_usage.clone(),
-                    response_time_ms: message.response_time_ms,
-                    thought_time_ms: message.thought_time_ms,
-                    thought_tokens: message.thought_tokens,
-                    is_generating: false,
-                    viewport_width: width,
-                    show_picker,
-                    last_copy_text: None,
-                },
-            );
-            lines.push(Line::from(""));
+            return render_committed_assistant_text(state, &message.content, width);
         }
         "tool" => {
             let tool_name = resolve_tool_result_name(
@@ -2223,6 +2186,32 @@ pub(crate) fn render_committed_history_block(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
+pub(crate) fn render_committed_assistant_text(
+    _state: &AppState,
+    content: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut copy_clicks = Vec::new();
+    render_assistant_message(
+        content,
+        &mut lines,
+        &mut copy_clicks,
+        AssistantRenderOptions {
+            token_usage: None,
+            response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
+            is_generating: false,
+            viewport_width: width,
+            show_picker: false,
+            last_copy_text: None,
+        },
+    );
+    lines.push(Line::from(""));
+    lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
 fn render_live_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
     let area = chunks[0].inner(Margin {
         vertical: 0,
@@ -2232,617 +2221,12 @@ fn render_live_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], sta
     state.conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(area.width) as u16;
-    state.viewport_height = area.height;
-    state.last_max_scroll = 0;
-    state.scroll_row = 0;
-    state.chat_area = Some(area);
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(COLOR_BG())),
         area,
     );
-}
-
-fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
-    let inner_area = chunks[0].inner(Margin {
-        vertical: 0,
-        horizontal: 1,
-    });
-    let show_picker = state.modal_open();
-    state.viewport_height = inner_area.height;
-    state.chat_area = Some(inner_area);
-
-    // Streaming shows live content that changes every frame, so it always
-    // rebuilds; when idle we reuse the cached lines whenever the key matches.
-    let idle = !matches!(state.status, AppStatus::Streaming | AppStatus::Queued);
-    let cache_key = chat_cache_key(state, inner_area.width, show_picker);
-    let cached: Option<RenderedConversation> = if idle {
-        CHAT_CACHE.with(|c| {
-            c.borrow().as_ref().filter(|c| c.key == cache_key).map(|c| {
-                (
-                    c.lines.clone(),
-                    c.copy_wrapped_rows.clone(),
-                    c.msg_wrapped_rows.clone(),
-                    c.total_wrapped_lines,
-                )
-            })
-        })
-    } else {
-        None
-    };
-
-    let (lines, copy_wrapped_rows, msg_wrapped_rows, total_wrapped_lines): RenderedConversation =
-        if let Some(hit) = cached {
-            hit
-        } else {
-            let mut lines: Vec<Line> = Vec::new();
-            let mut copy_clicks: Vec<(usize, String)> = Vec::new();
-
-            let display_start = state.history_display_start.min(state.history.len());
-
-            if display_start == 0 && state.history.is_empty() {
-                lines.push(Line::from(""));
-                lines.extend(build_claude_startup_banner(
-                    state,
-                    inner_area.width as usize,
-                ));
-                lines.push(Line::from(""));
-            }
-
-            // Line index where each message's block starts. Messages that render
-            // nothing produce a duplicate index; deduped below.
-            let mut msg_start_lines: Vec<usize> = Vec::new();
-
-            for (msg_idx, msg) in state.history.iter().enumerate().skip(display_start) {
-                msg_start_lines.push(lines.len());
-                if msg.role == "system" {
-                    if msg.content == "✨ New chat started" {
-                        push_new_chat_separator(&mut lines, inner_area.width, show_picker);
-                        continue;
-                    }
-                    // Hide benign intermediate notices and full compaction summary text from TUI display
-                    if is_hidden_system_notice(&msg.content) {
-                        continue;
-                    }
-                    if lines.last().is_some_and(|l| !l.spans.is_empty()) {
-                        lines.push(Line::from(""));
-                    }
-                    render_status_panel(&msg.content, inner_area.width, show_picker, &mut lines);
-                    if lines.last().is_some_and(|l| !l.spans.is_empty()) {
-                        lines.push(Line::from(""));
-                    }
-                } else if msg.role == "tool" {
-                    let show_tool_details = !matches!(state.verbosity, crate::app::Verbosity::High);
-                    let prev_tool_info = if msg_idx > 0 {
-                        // Walk backward past consecutive tool messages to find the preceding assistant message
-                        let mut assistant_idx = None;
-                        let mut tool_count_before_this = 0;
-                        for i in (0..msg_idx).rev() {
-                            if state.history[i].role == "tool" {
-                                tool_count_before_this += 1;
-                            } else if state.history[i].role == "assistant" {
-                                assistant_idx = Some(i);
-                                break;
-                            } else if state.history[i].role == "system"
-                                && is_hidden_system_notice(&state.history[i].content)
-                            {
-                                continue;
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if let Some(a_idx) = assistant_idx {
-                            let assistant_msg = &state.history[a_idx];
-                            let calls =
-                                assistant_msg.resolved_tool_calls(state.active_tool_protocol());
-                            calls
-                                .get(tool_count_before_this)
-                                .cloned()
-                                .or_else(|| calls.first().cloned())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    let (action, arg) = if let Some(ref tool_call) = prev_tool_info {
-                        format_pi_tool_action(&tool_call.name, &tool_call.arguments)
-                    } else {
-                        let tool_name = resolve_tool_result_name(
-                            None,
-                            msg.tool_result.as_ref().map(|r| r.tool_name.as_str()),
-                            msg.content.as_str(),
-                        )
-                        .unwrap_or_default();
-                        let action_label = match tool_name.as_str() {
-                            "view_file" => "Read".to_string(),
-                            "replace_file_content" | "multi_replace_file_content" => {
-                                "Edit".to_string()
-                            }
-                            "write_to_file" => "Write".to_string(),
-                            "list_directory" | "glob" => "ListDir".to_string(),
-                            "grep" => "Grep".to_string(),
-                            "run_command" => "Bash".to_string(),
-                            "manage_task" => "ManageTask".to_string(),
-                            "background_task" => "TaskDone".to_string(),
-                            other => to_pascal_case(other),
-                        };
-                        let arg = if tool_name == "background_task" {
-                            msg.content
-                                .lines()
-                                .next()
-                                .and_then(|l| l.strip_prefix("background_task: Task "))
-                                .and_then(|l| l.split_whitespace().next())
-                                .unwrap_or("")
-                                .to_string()
-                        } else {
-                            String::new()
-                        };
-                        (action_label, arg)
-                    };
-
-                    let action_len = action.len();
-                    let mut spans = vec![
-                        Span::styled(
-                            "● ",
-                            get_themed_style(
-                                COLOR_MUTED(),
-                                COLOR_BG(),
-                                Modifier::empty(),
-                                show_picker,
-                            ),
-                        ),
-                        Span::styled(
-                            action,
-                            get_themed_style(
-                                COLOR_PRIMARY(),
-                                COLOR_BG(),
-                                Modifier::BOLD,
-                                show_picker,
-                            ),
-                        ),
-                    ];
-                    let prefix_len = action_len + 7;
-                    let max_arg_len = (inner_area.width as usize).saturating_sub(prefix_len);
-                    let display_arg = if arg.is_empty() {
-                        String::new()
-                    } else if arg.chars().count() > max_arg_len {
-                        let take_len = max_arg_len.saturating_sub(3);
-                        format!("{}...", arg.chars().take(take_len).collect::<String>())
-                    } else {
-                        arg.clone()
-                    };
-                    spans.push(Span::styled(
-                        format!("({display_arg})"),
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ));
-                    lines.push(Line::from(spans));
-
-                    if show_tool_details {
-                        if let Some((ref path, ref content)) = msg.file_preview {
-                            lines.extend(render_file_preview(
-                                path,
-                                content,
-                                inner_area.width as usize,
-                                show_picker,
-                            ));
-                        } else if let Some(ref diff) = msg.diff {
-                            let code_content_width = inner_area.width as usize;
-                            lines.extend(render_unified_diff(
-                                diff,
-                                code_content_width,
-                                show_picker,
-                            ));
-                        } else if let Some(tool_name) = resolve_tool_result_name(
-                            prev_tool_info.as_ref().map(|call| call.name.as_str()),
-                            msg.tool_result
-                                .as_ref()
-                                .map(|result| result.tool_name.as_str()),
-                            &msg.content,
-                        ) {
-                            let result = msg
-                                .content
-                                .split_once(": ")
-                                .map(|(_, result)| result)
-                                .unwrap_or(&msg.content);
-                            lines.extend(cached_tool_result(
-                                &tool_name,
-                                result,
-                                inner_area.width as usize,
-                                &state.verbosity,
-                                show_picker,
-                            ));
-                        }
-                    }
-                    let next_is_user = state
-                        .history
-                        .get(msg_idx + 1)
-                        .is_some_and(|next| next.role == "user");
-                    if tool_result_needs_assistant_gap(&state.history, msg_idx) || next_is_user {
-                        lines.push(Line::from(""));
-                    }
-                } else if msg.role == "user" {
-                    if msg_idx > 0 {
-                        push_turn_separator(&mut lines, inner_area.width, show_picker);
-                    }
-                    let content_width = (inner_area.width as usize).saturating_sub(4);
-                    let display_content = collapse_image_markers(&msg.content);
-                    let mut wrapped_lines = Vec::new();
-                    for raw_line in display_content.lines() {
-                        if raw_line.is_empty() {
-                            wrapped_lines.push("".to_string());
-                        } else {
-                            let mut current = String::new();
-                            for word in raw_line.split_whitespace() {
-                                if current.is_empty() {
-                                    current.push_str(word);
-                                } else if current.width() + 1 + word.width() <= content_width {
-                                    current.push(' ');
-                                    current.push_str(word);
-                                } else {
-                                    wrapped_lines.push(current);
-                                    current = word.to_string();
-                                }
-                            }
-                            if !current.is_empty() {
-                                wrapped_lines.push(current);
-                            }
-                        }
-                    }
-
-                    for (idx, line_str) in wrapped_lines.into_iter().enumerate() {
-                        if idx == 0 {
-                            lines.push(Line::from(vec![
-                                Span::styled(
-                                    "❯ ",
-                                    get_themed_style(
-                                        COLOR_PRIMARY(),
-                                        COLOR_BG(),
-                                        Modifier::BOLD,
-                                        show_picker,
-                                    ),
-                                ),
-                                Span::styled(
-                                    line_str,
-                                    get_themed_style(
-                                        COLOR_TEXT(),
-                                        COLOR_BG(),
-                                        Modifier::BOLD,
-                                        show_picker,
-                                    ),
-                                ),
-                            ]));
-                        } else {
-                            lines.push(Line::from(vec![
-                                Span::styled(
-                                    "  ",
-                                    get_themed_style(
-                                        COLOR_MUTED(),
-                                        COLOR_BG(),
-                                        Modifier::empty(),
-                                        show_picker,
-                                    ),
-                                ),
-                                Span::styled(
-                                    line_str,
-                                    get_themed_style(
-                                        COLOR_TEXT(),
-                                        COLOR_BG(),
-                                        Modifier::empty(),
-                                        show_picker,
-                                    ),
-                                ),
-                            ]));
-                        }
-                    }
-                    lines.push(Line::from(""));
-                } else if msg.role == "assistant" {
-                    let calls = msg.resolved_tool_calls(state.active_tool_protocol());
-                    let has_following_tool_result = tool_result_follows(&state.history, msg_idx);
-
-                    if let Some(tool_call) = calls.first() {
-                        if !has_following_tool_result {
-                            let (action, arg) =
-                                format_pi_tool_action(&tool_call.name, &tool_call.arguments);
-                            let elapsed_ms = state
-                                .generation_start_time
-                                .map(|t| t.elapsed().as_millis())
-                                .unwrap_or(0);
-                            let circle = if (elapsed_ms / 350).is_multiple_of(2) {
-                                "○ "
-                            } else {
-                                "● "
-                            };
-                            let action_len = action.len();
-                            let prefix_len = action_len + 10; // circle (2) + action + "(...)" (5) + margin offset (3)
-                            let max_arg_len =
-                                (inner_area.width as usize).saturating_sub(prefix_len);
-                            let display_arg = if arg.chars().count() > max_arg_len {
-                                let take_len = max_arg_len.saturating_sub(3);
-                                format!("{}...", arg.chars().take(take_len).collect::<String>())
-                            } else {
-                                arg.clone()
-                            };
-                            lines.push(Line::from(vec![
-                                Span::styled(
-                                    circle,
-                                    get_themed_style(
-                                        COLOR_MUTED(),
-                                        COLOR_BG(),
-                                        Modifier::empty(),
-                                        show_picker,
-                                    ),
-                                ),
-                                Span::styled(
-                                    action,
-                                    get_themed_style(
-                                        COLOR_PRIMARY(),
-                                        COLOR_BG(),
-                                        Modifier::BOLD,
-                                        show_picker,
-                                    ),
-                                ),
-                                Span::styled(
-                                    format!("({display_arg})..."),
-                                    get_themed_style(
-                                        COLOR_MUTED(),
-                                        COLOR_BG(),
-                                        Modifier::ITALIC,
-                                        show_picker,
-                                    ),
-                                ),
-                            ]));
-                        }
-                    }
-
-                    render_assistant_message(
-                        &msg.content,
-                        &mut lines,
-                        &mut copy_clicks,
-                        AssistantRenderOptions {
-                            token_usage: msg.token_usage.clone(),
-                            response_time_ms: msg.response_time_ms,
-                            thought_time_ms: msg.thought_time_ms,
-                            thought_tokens: msg.thought_tokens,
-                            is_generating: false,
-                            viewport_width: inner_area.width,
-                            show_picker,
-                            last_copy_text: state.last_copy_text.clone(),
-                        },
-                    );
-
-                    let next_is_tool = state.history.get(msg_idx + 1).is_some_and(|m| {
-                        m.role == "tool"
-                            || (m.role == "assistant"
-                                && !m
-                                    .resolved_tool_calls(state.active_tool_protocol())
-                                    .is_empty())
-                    });
-                    if !next_is_tool {
-                        lines.push(Line::from(""));
-                    }
-                }
-            }
-
-            if display_start < state.history.len()
-                && (state.status == AppStatus::Streaming || state.status == AppStatus::Queued)
-                && !state.current_response.is_empty()
-            {
-                let parsed_tool = crate::tools::parse_tool_call(
-                    &state.current_response,
-                    state.active_tool_protocol(),
-                );
-                let is_tool_syntax = crate::tools::is_tool_call_start(&state.current_response);
-
-                let should_hide_stream = match parsed_tool {
-                    Some(ref tool_call) => !crate::tools::is_code_editing_tool(&tool_call.name),
-                    None => is_tool_syntax,
-                };
-
-                if !should_hide_stream {
-                    let live_thought_ms = state.current_thought_time_ms.saturating_add(
-                        state
-                            .current_thought_started_at
-                            .map(|started| started.elapsed().as_millis() as u64)
-                            .unwrap_or(0),
-                    );
-                    render_assistant_message(
-                        &state.current_response,
-                        &mut lines,
-                        &mut copy_clicks,
-                        AssistantRenderOptions {
-                            token_usage: None,
-                            response_time_ms: state
-                                .generation_start_time
-                                .map(|started| started.elapsed().as_millis() as u64),
-                            thought_time_ms: Some(live_thought_ms),
-                            thought_tokens: Some(state.current_thought_tokens),
-                            is_generating: true,
-                            viewport_width: inner_area.width,
-                            show_picker,
-                            last_copy_text: state.last_copy_text.clone(),
-                        },
-                    );
-                    lines.push(Line::from(""));
-                }
-            }
-
-            if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
-                || !state.running_tools.is_empty()
-            {
-                lines.push(activity_status_line(state, show_picker));
-                lines.push(Line::from(""));
-            }
-
-            // breathing room between the last line and the input box when
-            // scrolled to the bottom
-            lines.push(Line::from(""));
-
-            // Resolve wrapped start rows for code-block [Copy] badges and message
-            // boundaries in a single
-            // pass. Lines wrap independently, so per-line line_count sums to the exact
-            // screen offset.
-            let mut copy_wrapped_rows: Vec<(u16, String)> = Vec::new();
-            let mut msg_wrapped_rows: Vec<u16> = Vec::new();
-            let mut cum = 0u16;
-            {
-                let copy_map: std::collections::HashMap<usize, String> =
-                    copy_clicks.iter().cloned().collect();
-                // Messages that emitted no lines share their successor's start index,
-                // and a trailing index past the end belongs to no visible content.
-                let msg_line_set: std::collections::HashSet<usize> = msg_start_lines
-                    .iter()
-                    .copied()
-                    .filter(|&i| i < lines.len())
-                    .collect();
-                for (i, line) in lines.iter().enumerate() {
-                    if let Some(text) = copy_map.get(&i) {
-                        copy_wrapped_rows.push((cum, text.clone()));
-                    }
-                    if msg_line_set.contains(&i) {
-                        msg_wrapped_rows.push(cum);
-                    }
-                    let w = line.width() as u16;
-                    let h = if inner_area.width == 0 || w <= inner_area.width {
-                        1
-                    } else {
-                        Paragraph::new(vec![line.clone()])
-                            .wrap(Wrap { trim: false })
-                            .line_count(inner_area.width) as u16
-                    };
-                    cum = cum.saturating_add(h);
-                }
-            }
-
-            let total_wrapped_lines = cum;
-
-            let owned_lines: Vec<Line<'static>> = lines.iter().map(own_line).collect();
-            if idle {
-                let cache = ChatCache {
-                    key: cache_key,
-                    lines: owned_lines.clone(),
-                    copy_wrapped_rows: copy_wrapped_rows.clone(),
-                    msg_wrapped_rows: msg_wrapped_rows.clone(),
-                    total_wrapped_lines,
-                };
-                CHAT_CACHE.with(|c| *c.borrow_mut() = Some(cache));
-            }
-            (
-                owned_lines,
-                copy_wrapped_rows,
-                msg_wrapped_rows,
-                total_wrapped_lines,
-            )
-        };
-
-    state.conversation_content_height = total_wrapped_lines;
-
-    let conversation_paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .style(Style::default().bg(COLOR_BG()));
-
-    let max_scroll = total_wrapped_lines.saturating_sub(inner_area.height);
-    state.last_max_scroll = max_scroll;
-
-    let scroll_offset = if state.is_scroll_locked_to_bottom {
-        state.scroll_row = max_scroll;
-        max_scroll
-    } else {
-        if state.scroll_row > max_scroll {
-            state.scroll_row = max_scroll;
-            max_scroll
-        } else {
-            state.scroll_row
-        }
-    };
-
-    let conversation_paragraph = conversation_paragraph.scroll((scroll_offset, 0));
-
-    f.render_widget(conversation_paragraph, inner_area);
-
-    // Sticky jump-to-latest pill — rendered AFTER the chat paragraph so it isn't
-    // painted over. Borderless dark pill centered along the bottom of the chat
-    // area, one row clear of the input box, labelled with how many messages
-    // start below the viewport.
-    // saturating_sub / min guard against narrow viewports.
-    if state.scroll_row < state.last_max_scroll {
-        let last_visible = scroll_offset + inner_area.height.saturating_sub(1);
-        let hidden = msg_wrapped_rows
-            .iter()
-            .filter(|&&row| row > last_visible)
-            .count();
-        let label = scroll_pill_label(hidden);
-        let btn_width = (label.chars().count() as u16).min(inner_area.width);
-        let btn_x = inner_area.x + inner_area.width.saturating_sub(btn_width) / 2;
-        // One blank row between the pill and the input box below it.
-        let btn_y = inner_area.y + inner_area.height.saturating_sub(2);
-        let btn_rect = ratatui::layout::Rect::new(btn_x, btn_y, btn_width, 1);
-        state.scroll_to_bottom_btn = Some(btn_rect);
-        let pill_bg = if state.hover == HoverTarget::ScrollPill {
-            COLOR_HOVER_BG()
-        } else {
-            COLOR_NOTICE_BG()
-        };
-        f.render_widget(ratatui::widgets::Clear, btn_rect);
-        f.render_widget(
-            ratatui::widgets::Paragraph::new(label)
-                .alignment(ratatui::layout::Alignment::Center)
-                .style(
-                    Style::default()
-                        .fg(COLOR_TEXT())
-                        .bg(pill_bg)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            btn_rect,
-        );
-    } else {
-        state.scroll_to_bottom_btn = None;
-    }
-
-    // Map each visible [Copy] badge to its on-screen row for click hit-testing.
-    state.code_copy_rows.clear();
-    for (wrapped_row, text) in copy_wrapped_rows {
-        if wrapped_row >= scroll_offset && wrapped_row < scroll_offset + inner_area.height {
-            let screen_row = inner_area.y + (wrapped_row - scroll_offset);
-            state.code_copy_rows.push((screen_row, text));
-        }
-    }
-
-    // Hover feedback for the clickable code-copy rows. The rows live inside the
-    // memoized conversation lines, so tinting them here — after the paragraph
-    // is painted — keeps the pointer out of the cache key.
-    match state.hover {
-        HoverTarget::CopyBadge(row) => {
-            if row >= inner_area.y && row < inner_area.y + inner_area.height {
-                let buf = f.buffer_mut();
-                let code_text = state
-                    .code_copy_rows
-                    .iter()
-                    .find(|(r, _)| *r == row)
-                    .map(|(_, t)| t);
-                let badge_width = if code_text.is_some_and(|ct| {
-                    state
-                        .last_copy_text
-                        .as_ref()
-                        .is_some_and(|(t_text, t)| t_text == ct && t.elapsed().as_secs() < 2)
-                }) {
-                    12
-                } else {
-                    9
-                };
-                let badge_start = (inner_area.x + inner_area.width).saturating_sub(badge_width);
-                for col in badge_start..inner_area.x + inner_area.width {
-                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
-                        cell.set_bg(COLOR_HOVER_BG());
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 pub fn render(f: &mut Frame, state: &mut AppState) {
@@ -2977,43 +2361,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         render_protocol_picker_modal(f, state, input_box_area);
     }
 
-    // Painted last so it sits on top of everything, like a native selection.
-    if !state.modal_open() {
-        if let (Some(start), Some(end)) = (state.sel_start, state.sel_end) {
-            if start != end {
-                // Input-box selections have no scroll offset and use the input rect;
-                // chat selections use chat_area and the chat scroll_row.
-                let (area, scroll) = if state.sel_in_input {
-                    (state.input_text_area, 0)
-                } else {
-                    (state.chat_area, state.scroll_row)
-                };
-                highlight_selection(f, start, end, area, scroll);
-                let text = extract_selection(f.buffer_mut(), start, end, area, scroll);
-                if !text.is_empty() {
-                    state.selected_text = Some(text);
-                }
-            } else {
-                state.selected_text = None;
-            }
-        } else {
-            state.selected_text = None;
-        }
-    }
-
-    // Transient notice toast, painted above everything (even modals).
     render_notice(f, state);
-}
-
-/// Label for the jump-to-latest pill. `hidden` is the number of messages whose
-/// first row sits below the viewport; zero means the user is only part-way
-/// through the last message, so no count is worth showing.
-fn scroll_pill_label(hidden: usize) -> String {
-    match hidden {
-        0 => " click to scroll down ↓ ".to_string(),
-        1 => " 1 new message · click to scroll down ↓ ".to_string(),
-        n => format!(" {n} new messages · click to scroll down ↓ "),
-    }
 }
 
 /// How long a notice toast stays on screen before it fades out.
@@ -3086,236 +2434,6 @@ fn render_notice(f: &mut Frame, state: &mut AppState) {
 
     f.render_widget(Clear, rect);
     f.render_widget(para, rect);
-}
-
-fn highlight_selection(
-    f: &mut Frame,
-    start: (u16, u16),
-    end: (u16, u16),
-    chat_area: Option<ratatui::layout::Rect>,
-    scroll_row: u16,
-) {
-    let screen_start_y = start.1.saturating_sub(scroll_row);
-    let screen_end_y = end.1.saturating_sub(scroll_row);
-
-    let (screen_start, screen_end) = if (screen_start_y, start.0) <= (screen_end_y, end.0) {
-        ((start.0, screen_start_y), (end.0, screen_end_y))
-    } else {
-        ((end.0, screen_end_y), (start.0, screen_start_y))
-    };
-
-    let buf = f.buffer_mut();
-    let area = buf.area;
-    let width = area.width;
-    if width == 0 {
-        return;
-    }
-
-    let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
-        // Chat content renders flush to ca.x (chat_area is already inset), so the
-        // selectable span is [ca.x, ca.x+width-1]. A former `+2`/`-2` gutter here
-        // clipped the first and last two columns of every left-aligned line.
-        (
-            ca.y,
-            ca.y + ca.height.saturating_sub(1),
-            ca.x,
-            ca.x + ca.width.saturating_sub(1),
-        )
-    } else {
-        (
-            area.y + 1,
-            area.y + area.height.saturating_sub(2),
-            area.x,
-            area.x + width.saturating_sub(1),
-        )
-    };
-
-    // If the selection is completely scrolled off-screen, don't draw anything
-    if screen_start.1 > max_row || screen_end.1 < min_row {
-        return;
-    }
-
-    let start_row = screen_start.1.max(min_row).min(max_row);
-    let end_row = screen_end.1.max(min_row).min(max_row);
-
-    for row in start_row..=end_row {
-        let mut last_content_col = None;
-        for col in (min_col..=max_col).rev() {
-            if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
-                let sym = cell.symbol();
-                if !sym.trim().is_empty() && sym != "│" && sym != "░" && sym != "█" && sym != "▌"
-                {
-                    last_content_col = Some(col);
-                    break;
-                }
-            }
-        }
-
-        // If this row has no text content at all (empty row, margin, or empty space below chat), skip it entirely!
-        let last_col = match last_content_col {
-            Some(c) => c,
-            None => continue,
-        };
-
-        let col_from = if row == start_row {
-            screen_start.0.max(min_col).min(max_col)
-        } else {
-            min_col
-        };
-        // Last row stops at the pointer, every earlier row runs to its end of
-        // content — the same shape `extract_selection` copies, so what is
-        // highlighted and what lands on the clipboard always agree.
-        let col_to = if row == end_row {
-            screen_end.0.max(min_col).min(max_col).min(last_col)
-        } else {
-            last_col
-        };
-
-        if col_from > col_to {
-            continue;
-        }
-
-        for col in col_from..=col_to {
-            if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(col, row)) {
-                cell.set_fg(Color::Rgb(0, 0, 0));
-                cell.set_bg(COLOR_SELECTION());
-            }
-        }
-    }
-}
-
-/// Reconstructs selected text from the last rendered buffer, row-major with trailing
-/// whitespace trimmed per line — matches what the highlight shows on screen.
-pub fn extract_selection(
-    buf: &ratatui::buffer::Buffer,
-    start: (u16, u16),
-    end: (u16, u16),
-    chat_area: Option<ratatui::layout::Rect>,
-    scroll_row: u16,
-) -> String {
-    let screen_start_y = start.1.saturating_sub(scroll_row);
-    let screen_end_y = end.1.saturating_sub(scroll_row);
-
-    let (screen_start, screen_end) = if (screen_start_y, start.0) <= (screen_end_y, end.0) {
-        ((start.0, screen_start_y), (end.0, screen_end_y))
-    } else {
-        ((end.0, screen_end_y), (start.0, screen_start_y))
-    };
-
-    let area = buf.area;
-    let width = area.width;
-    if width == 0 {
-        return String::new();
-    }
-
-    let (min_row, max_row, min_col, max_col) = if let Some(ca) = chat_area {
-        // Must match highlight_selection's bounds so the copied text lines up
-        // exactly with what the user sees highlighted (no clipped first/last cols).
-        (
-            ca.y,
-            ca.y + ca.height.saturating_sub(1),
-            ca.x,
-            ca.x + ca.width.saturating_sub(1),
-        )
-    } else {
-        (
-            area.y + 1,
-            area.y + area.height.saturating_sub(2),
-            area.x,
-            area.x + width.saturating_sub(1),
-        )
-    };
-
-    if screen_start.1 > max_row || screen_end.1 < min_row {
-        return String::new();
-    }
-
-    let start_row = screen_start.1.max(min_row).min(max_row);
-    let end_row = screen_end.1.max(min_row).min(max_row);
-
-    let mut lines_out = Vec::new();
-    for row in start_row..=end_row {
-        let col_from = if row == start_row {
-            screen_start.0.max(min_col).min(max_col)
-        } else {
-            min_col
-        };
-        let col_to = if row == end_row {
-            screen_end.0.max(min_col).min(max_col)
-        } else {
-            max_col
-        };
-        let mut line = String::new();
-        for col in col_from..=col_to {
-            if let Some(cell) = buf.cell(ratatui::layout::Position::new(col, row)) {
-                let sym = cell.symbol();
-                let filtered: String = sym
-                    .chars()
-                    .filter(|&c| c != '\0' && !c.is_control() && c != '▌')
-                    .collect();
-                line.push_str(&filtered);
-            }
-        }
-        let mut clean = line.trim_end();
-
-        // Strip leading UI border & header prefixes
-        for prefix in &[
-            "│ ",
-            "│",
-            "▌ ",
-            "▌",
-            "⚙ ",
-            "⚙",
-            "→ ",
-            "→",
-            "🦀 ",
-            "🦀",
-            "🌐 ",
-            "🌐",
-            "+ Warning: ",
-            "Warning: ",
-            "+ Thought: ",
-            "Thought: ",
-            "Goal: ",
-        ] {
-            if clean.starts_with(prefix) {
-                clean = &clean[prefix.len()..];
-                break;
-            }
-        }
-
-        // Strip trailing scrollbar blocks
-        for suffix in &[" █", "█", " ░", "░", " ▒", "▒", " ▓", "▓"] {
-            if clean.ends_with(suffix) {
-                clean = &clean[..clean.len() - suffix.len()];
-                break;
-            }
-        }
-
-        // Keep leading whitespace: copied code has to paste back with its
-        // indentation intact. Only the trailing padding the terminal renders is
-        // dropped (already done by `trim_end` above).
-        lines_out.push(clean.to_string());
-    }
-
-    // Blank rows inside the selection are real blank lines, but blank rows at
-    // either end are just the empty space the drag swept over.
-    while lines_out.first().is_some_and(|l| l.trim().is_empty()) {
-        lines_out.remove(0);
-    }
-    while lines_out.last().is_some_and(|l| l.trim().is_empty()) {
-        lines_out.pop();
-    }
-
-    let res = lines_out.join("\n");
-    dbg_log!(
-        "[SELECTION] Extracted {} chars from selection range start={:?} end={:?}: {:?}",
-        res.len(),
-        start,
-        end,
-        res
-    );
-    res
 }
 
 #[cfg(test)]
