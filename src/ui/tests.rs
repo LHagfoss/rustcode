@@ -1132,15 +1132,15 @@ fn live_tail_uses_formatted_working_status() {
 }
 
 #[test]
-fn live_tail_ends_with_working_status_without_extra_blank_padding() {
+fn live_tail_includes_working_status_with_trailing_gap() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
 
     let lines = super::render_live_tail(&state, 80, 24);
 
-    let status_text = lines
-        .last()
-        .expect("Working status should be the final live row")
+    assert!(lines.len() >= 2);
+    assert!(lines.last().unwrap().spans.is_empty());
+    let status_text = lines[lines.len() - 2]
         .spans
         .iter()
         .map(|span| span.content.as_ref())

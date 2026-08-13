@@ -563,9 +563,14 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 );
                 list_depth = list_depth.saturating_sub(1);
                 ordered_index.pop();
-                lines.push(Line::from(""));
+                if list_depth == 0 && lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                    lines.push(Line::from(""));
+                }
             }
             Event::Start(Tag::Item) => {
+                if list_depth > 0 && lines.last().is_some_and(|l| l.spans.is_empty()) {
+                    lines.pop();
+                }
                 let indent = "  ".repeat(list_depth.saturating_sub(1));
                 let marker = if let Some(Some(index)) = ordered_index.last() {
                     format!("{}{index}. ", indent)
