@@ -1710,13 +1710,7 @@ fn cached_tool_result(
 fn tool_result_is_hidden(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "use_skill"
-            | "set_goal"
-            | "todo_write"
-            | "spawn_agent"
-            | "send_agent"
-            | "complete_task"
-            | "ask_question"
+        "set_goal" | "todo_write" | "complete_task" | "ask_question"
     )
 }
 
