@@ -709,3 +709,36 @@ fn streaming_status_words_rotate_every_three_seconds() {
     assert_eq!(streaming_status_word(3), "Analyzing code...");
     assert_eq!(streaming_status_word(27), "Querying knowledge base...");
 }
+
+#[test]
+fn split_stable_rows_keeps_only_the_incomplete_suffix_live() {
+    let (stable, tail) = super::scrollback::split_stable_rows("first\nsecond\nthird");
+
+    assert_eq!(stable, vec!["first", "second"]);
+    assert_eq!(tail, "third");
+}
+
+#[test]
+fn transcript_cursor_never_recommits_history_or_stream_rows() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+
+    assert_eq!(cursor.take_history_range(3), 0..3);
+    assert_eq!(cursor.take_history_range(3), 3..3);
+    assert_eq!(cursor.take_stable_stream("alpha\nbeta"), vec!["alpha"]);
+    assert!(cursor.take_stable_stream("alpha\nbeta").is_empty());
+}
+
+#[test]
+fn transcript_cursor_retries_pending_content_until_acknowledged() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+
+    assert_eq!(cursor.pending_history_range(2), 0..2);
+    assert_eq!(cursor.pending_history_range(2), 0..2);
+    cursor.commit_history_through(2);
+    assert_eq!(cursor.pending_history_range(2), 2..2);
+
+    assert_eq!(cursor.pending_stable_stream("line\ntail"), vec!["line"]);
+    assert_eq!(cursor.pending_stable_stream("line\ntail"), vec!["line"]);
+    cursor.commit_stable_stream("line\n");
+    assert!(cursor.pending_stable_stream("line\ntail").is_empty());
+}

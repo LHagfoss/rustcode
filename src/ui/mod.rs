@@ -2,6 +2,7 @@ mod highlight;
 mod lru;
 mod markdown;
 mod modals;
+pub(crate) mod scrollback;
 mod tool_result;
 
 use highlight::{
