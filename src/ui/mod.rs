@@ -2423,6 +2423,34 @@ pub(crate) fn render_committed_history_block(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
+pub(crate) fn render_committed_assistant_chunk(
+    _state: &AppState,
+    content: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut copy_clicks = Vec::new();
+    render_assistant_message(
+        content,
+        &mut lines,
+        &mut copy_clicks,
+        AssistantRenderOptions {
+            token_usage: None,
+            response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
+            is_generating: true,
+            viewport_width: width,
+            show_picker: false,
+            last_copy_text: None,
+        },
+    );
+    while lines.last().is_some_and(|l| l.spans.is_empty()) {
+        lines.pop();
+    }
+    lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
 pub(crate) fn render_committed_assistant_text(
     _state: &AppState,
     content: &str,
