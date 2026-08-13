@@ -1593,6 +1593,171 @@ fn cached_tool_result(
     })
 }
 
+fn tool_result_is_hidden(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "use_skill"
+            | "set_goal"
+            | "todo_write"
+            | "spawn_agent"
+            | "send_agent"
+            | "complete_task"
+            | "ask_question"
+    )
+}
+
+fn tool_result_action(state: &AppState, message_index: usize, tool_name: &str) -> (String, String) {
+    let tool_call_id = state
+        .history
+        .get(message_index)
+        .and_then(|message| message.tool_call_id.as_deref());
+    let structured_call = state.history[..message_index]
+        .iter()
+        .rev()
+        .filter(|message| message.role == "assistant")
+        .flat_map(|message| message.tool_calls.iter().rev())
+        .find(|call| match tool_call_id {
+            Some(id) => call.id == id,
+            None => call.name == tool_name,
+        });
+
+    if let Some(call) = structured_call {
+        let args = serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null);
+        return format_pi_tool_action(&call.name, &args);
+    }
+
+    let parsed_call = state.history[..message_index]
+        .iter()
+        .rev()
+        .filter(|message| message.role == "assistant")
+        .flat_map(|message| {
+            message
+                .resolved_tool_calls(state.active_tool_protocol())
+                .into_iter()
+                .rev()
+        })
+        .find(|call| call.name == tool_name);
+    if let Some(call) = parsed_call {
+        return format_pi_tool_action(&call.name, &call.arguments);
+    }
+
+    format_pi_tool_action(tool_name, &serde_json::Value::Null)
+}
+
+fn tool_result_status(message: &ChatMessage, tool_name: &str, result: &str) -> (bool, String) {
+    if let Some(record) = &message.tool_result {
+        return match record.exit_code {
+            Some(code) => (record.success, format!("exit {code}")),
+            None if record.success => (true, "completed".to_owned()),
+            None => (false, "failed".to_owned()),
+        };
+    }
+
+    if tool_name == "run_command" {
+        if let Some(code) = result.lines().find_map(|line| {
+            line.strip_prefix("exit code: ")
+                .and_then(|code| code.trim().parse::<i32>().ok())
+        }) {
+            return (code == 0, format!("exit {code}"));
+        }
+    }
+
+    let failed = result
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| {
+            let line = line.trim_start().to_ascii_lowercase();
+            line.starts_with("error") || line.starts_with('✗')
+        });
+    if failed {
+        (false, "failed".to_owned())
+    } else {
+        (true, "completed".to_owned())
+    }
+}
+
+fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .filter(|line| {
+            tool_name != "run_command"
+                || !line
+                    .spans
+                    .iter()
+                    .any(|span| span.content.trim_start().starts_with('✗'))
+        })
+        .map(|line| {
+            if line.spans.is_empty() {
+                return line;
+            }
+            let mut spans = Vec::with_capacity(line.spans.len() + 1);
+            spans.push(Span::raw("  "));
+            spans.extend(line.spans);
+            let mut indented = Line::from(spans);
+            indented.style = line.style;
+            indented.alignment = line.alignment;
+            indented
+        })
+        .collect()
+}
+
+fn render_committed_tool_result(
+    state: &AppState,
+    message_index: usize,
+    tool_name: &str,
+    result: &str,
+    width: u16,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    if matches!(state.verbosity, crate::app::Verbosity::High) || tool_result_is_hidden(tool_name) {
+        return Vec::new();
+    }
+
+    let message = &state.history[message_index];
+    let (action, target) = tool_result_action(state, message_index, tool_name);
+    let (success, status) = tool_result_status(message, tool_name, result);
+    let status_color = if success {
+        COLOR_GREEN()
+    } else {
+        Color::Rgb(229, 123, 123)
+    };
+
+    let mut header = vec![
+        Span::styled(
+            "• ",
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+        Span::styled(
+            action,
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+    ];
+    if !target.is_empty() && target != "?" {
+        header.push(Span::styled(
+            format!(" · {target}"),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+
+    let icon = if success { "✓" } else { "✗" };
+    let mut lines = vec![
+        Line::from(header),
+        Line::from(Span::styled(
+            format!("  └ {icon} {status}"),
+            get_themed_style(status_color, COLOR_BG(), Modifier::BOLD, show_picker),
+        )),
+    ];
+    let body = cached_tool_result(
+        tool_name,
+        result,
+        width as usize,
+        &state.verbosity,
+        show_picker,
+    );
+    lines.extend(indent_tool_result_body(body, tool_name));
+    lines
+}
+
 fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
     let rule = "─".repeat(width.max(1) as usize);
     // No leading blank: the preceding transcript item (assistant text, status
@@ -2198,7 +2363,10 @@ pub(crate) fn render_committed_history_block(
         "tool" => {
             let tool_name = resolve_tool_result_name(
                 None,
-                message.tool_result.as_ref().map(|result| result.tool_name.as_str()),
+                message
+                    .tool_result
+                    .as_ref()
+                    .map(|result| result.tool_name.as_str()),
                 &message.content,
             )
             .unwrap_or_else(|| "Tool".to_owned());
@@ -2207,14 +2375,18 @@ pub(crate) fn render_committed_history_block(
                 .split_once(": ")
                 .map(|(_, result)| result)
                 .unwrap_or(&message.content);
-            lines.extend(cached_tool_result(
+            let tool_lines = render_committed_tool_result(
+                state,
+                message_index,
                 &tool_name,
                 result,
-                width as usize,
-                &state.verbosity,
+                width,
                 show_picker,
-            ));
-            lines.push(Line::from(""));
+            );
+            if !tool_lines.is_empty() {
+                lines.extend(tool_lines);
+                lines.push(Line::from(""));
+            }
         }
         "system" if !is_hidden_system_notice(&message.content) => {
             render_status_panel(&message.content, width, show_picker, &mut lines);
