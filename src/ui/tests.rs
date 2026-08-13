@@ -581,6 +581,15 @@ fn new_chat_separator_spans_width_and_centers_label() {
     assert!((left as isize - right as isize).abs() <= 1);
 }
 
+// Regression: a short transcript used to receive the entire remaining frame,
+// pinning the input box to the bottom and leaving a large empty gap.
+#[test]
+fn conversation_area_height_fits_short_transcripts_and_caps_long_ones() {
+    assert_eq!(conversation_area_height(8, 36), 8);
+    assert_eq!(conversation_area_height(64, 36), 36);
+    assert_eq!(conversation_area_height(0, 36), 3);
+}
+
 #[test]
 fn harness_recovery_notices_are_hidden_from_transcript() {
     assert!(super::is_hidden_system_notice(
