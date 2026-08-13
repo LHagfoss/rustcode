@@ -202,6 +202,55 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             return;
         }
         let cols = rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0);
+        let header = rows
+            .iter()
+            .find_map(|(cells, is_header)| is_header.then_some(cells));
+        let grid_is_cramped = cols > 1 && width < cols.saturating_mul(14).saturating_add(4);
+        if grid_is_cramped {
+            if let Some(header) = header {
+                let body_rows = rows
+                    .iter()
+                    .filter(|(_, is_header)| !is_header)
+                    .collect::<Vec<_>>();
+                for (row_index, (cells, _)) in body_rows.iter().enumerate() {
+                    for (column, value) in cells.iter().enumerate() {
+                        let label = header
+                            .get(column)
+                            .filter(|label| !label.is_empty())
+                            .cloned()
+                            .unwrap_or_else(|| format!("Field {}", column + 1));
+                        push_wrapped(
+                            lines,
+                            vec![
+                                Span::styled(
+                                    format!("  {label}: "),
+                                    get_themed_style(
+                                        COLOR_MUTED(),
+                                        COLOR_BG(),
+                                        Modifier::BOLD,
+                                        show_picker,
+                                    ),
+                                ),
+                                Span::styled(
+                                    value.clone(),
+                                    get_themed_style(
+                                        COLOR_TEXT(),
+                                        COLOR_BG(),
+                                        Modifier::empty(),
+                                        show_picker,
+                                    ),
+                                ),
+                            ],
+                            width,
+                        );
+                    }
+                    if row_index + 1 < body_rows.len() {
+                        lines.push(Line::from(""));
+                    }
+                }
+                return;
+            }
+        }
         // Ideal widths capped per-column: content drives width, header truncated to cap
         let caps = [18usize, 10, 18, 14, 18]; // last col widened so "Replay or Conversation?" content-driven
         let mut col_widths = vec![3usize; cols];
@@ -620,6 +669,31 @@ mod tests {
             .collect();
         assert!(all.contains("Header 1 │ Header 2"));
         assert!(all.contains('┌') && all.contains('┐') && all.contains('└'));
+    }
+
+    #[test]
+    fn narrow_tables_render_as_key_value_records() {
+        let md = concat!(
+            "| Name | Purpose |\n",
+            "|---|---|\n",
+            "| rustcode | a terminal coding agent with a readable narrow table layout |"
+        );
+        let lines = render_markdown(md, 28, false, false);
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered.iter().any(|line| line.contains("Name: rustcode")),
+            "unexpected narrow table rendering: {rendered:?}"
+        );
+        assert!(rendered.iter().any(|line| line.contains("Purpose:")));
+        assert!(rendered.len() > 3, "the long value should wrap: {rendered:?}");
+        assert!(
+            rendered.iter().all(|line| !line.contains('┌')),
+            "narrow tables must not use a cramped grid: {rendered:?}"
+        );
     }
 
     #[test]
