@@ -35,6 +35,10 @@ pub(crate) fn mutable_stream_text(text: &str) -> String {
     }
 }
 
+pub(crate) fn mutable_stream_is_continuation(text: &str) -> bool {
+    !stream_starts_with_thought(text) && text.contains('\n')
+}
+
 /// Tracks transcript content already handed to the terminal's scrollback.
 #[derive(Default)]
 pub(crate) struct TranscriptCursor {
@@ -57,6 +61,10 @@ impl TranscriptCursor {
 
     pub(crate) fn is_at_start(&self) -> bool {
         self.next_history_index == 0
+    }
+
+    pub(crate) fn has_committed_stream(&self) -> bool {
+        !self.committed_stream.is_empty()
     }
 
     pub(crate) fn pending_history_range(&self, history_len: usize) -> Range<usize> {
