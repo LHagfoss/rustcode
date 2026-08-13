@@ -70,6 +70,37 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
     );
 }
 
+#[test]
+fn queue_preview_shows_recent_user_prompts_without_wakeups() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut state = AppState::new();
+    state.pending_queue = vec![
+        "first prompt".to_owned(),
+        "second prompt".to_owned(),
+        "third prompt".to_owned(),
+        "fourth prompt".to_owned(),
+        "__task_wakeup__:task-123".to_owned(),
+    ];
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(rendered.contains("queued (4) · ↑ edit last"));
+    assert!(rendered.contains("second prompt"));
+    assert!(rendered.contains("third prompt"));
+    assert!(rendered.contains("fourth prompt"));
+    assert!(!rendered.contains("first prompt"));
+    assert!(!rendered.contains("__task_wakeup__"));
+}
+
 // Regression: the tool-result cache used to `clear()` the whole map at the
 // cap, throwing away every still-visible result and forcing a full
 // re-render on the next frame. It now drops a single cold entry.
