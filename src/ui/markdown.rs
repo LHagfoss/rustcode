@@ -186,7 +186,7 @@ pub(super) fn render_markdown<'a>(
     lines
 }
 
-fn sanitize_markdown_tables(content: &str) -> std::borrow::Cow<'_, str> {
+fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
         return std::borrow::Cow::Borrowed(content);
@@ -195,32 +195,57 @@ fn sanitize_markdown_tables(content: &str) -> std::borrow::Cow<'_, str> {
         let t = line.trim();
         t.starts_with('|') || (t.contains('|') && t.contains("---"))
     };
-
-    let mut needs_sanitization = false;
-    for i in 0..lines.len() {
-        if lines[i].trim().is_empty() && i > 0 && i + 1 < lines.len() {
-            if is_table_line(lines[i - 1]) && is_table_line(lines[i + 1]) {
-                needs_sanitization = true;
-                break;
-            }
-        }
-    }
-
-    if !needs_sanitization {
-        return std::borrow::Cow::Borrowed(content);
-    }
+    let is_list_item = |line: &str| -> bool {
+        let t = line.trim_start();
+        t.starts_with("- ")
+            || t.starts_with("* ")
+            || t.starts_with("+ ")
+            || t.starts_with("• ")
+            || t.starts_with("· ")
+            || (t.chars().next().is_some_and(|c| c.is_ascii_digit())
+                && t.find(". ").is_some_and(|idx| idx <= 4))
+    };
 
     let mut output = String::with_capacity(content.len());
-    for i in 0..lines.len() {
-        if lines[i].trim().is_empty() && i > 0 && i + 1 < lines.len() {
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+
+        // Drop empty line between table rows
+        if trimmed.is_empty() && i > 0 && i + 1 < lines.len() {
             if is_table_line(lines[i - 1]) && is_table_line(lines[i + 1]) {
+                i += 1;
                 continue;
             }
         }
+
+        // Drop empty line between list items
+        if trimmed.is_empty() && i > 0 && i + 1 < lines.len() {
+            if is_list_item(lines[i - 1]) && is_list_item(lines[i + 1]) {
+                i += 1;
+                continue;
+            }
+        }
+
         if !output.is_empty() {
             output.push('\n');
         }
-        output.push_str(lines[i]);
+
+        // Normalize bullet character to '-' so pulldown_cmark parses list items
+        let trimmed_start = line.trim_start();
+        if trimmed_start.starts_with("• ") || trimmed_start.starts_with("· ") {
+            let indent_len = line.len() - trimmed_start.len();
+            let indent = &line[..indent_len];
+            let rest = &trimmed_start[trimmed_start.find(' ').unwrap() + 1..];
+            output.push_str(indent);
+            output.push_str("- ");
+            output.push_str(rest);
+        } else {
+            output.push_str(line);
+        }
+
+        i += 1;
     }
     std::borrow::Cow::Owned(output)
 }
@@ -529,7 +554,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         )));
     };
 
-    let sanitized = sanitize_markdown_tables(content);
+    let sanitized = sanitize_markdown(content);
     for event in Parser::new_ext(&sanitized, Options::all()) {
         match event {
             Event::Start(Tag::Paragraph) => {}
@@ -1063,5 +1088,20 @@ mod tests {
         assert!(text.contains("agents-sdk"));
         assert!(text.contains("clockify"));
         assert!(text.contains("┌") || text.contains("Skill"));
+    }
+
+    #[test]
+    fn renders_loose_bullet_lists_without_intermediate_gaps() {
+        let md = "Shell & System\n\n• run_command — run any shell command\n\n• get_time — get current date/time\n\n• manage_task — manage background tasks\n";
+        let lines = render_markdown(md, 80, false, false);
+        let non_empty: Vec<_> = lines.iter().filter(|l| !l.spans.is_empty()).collect();
+        // 1 heading + 3 bullet lines = 4 non-empty lines
+        assert_eq!(non_empty.len(), 4);
+        // Ensure all 3 bullet lines have bullet marker
+        let bullet_count = lines
+            .iter()
+            .filter(|l| l.spans.iter().any(|s| s.content.contains('•')))
+            .count();
+        assert_eq!(bullet_count, 3);
     }
 }
