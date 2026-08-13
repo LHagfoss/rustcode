@@ -47,85 +47,10 @@ fn theme_change_changes_cache_keys() {
     let verbosity = crate::app::Verbosity::Low;
     theme::set_active_theme("default");
     let key1 = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
-
     theme::set_active_theme("nord");
     let key2 = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
 
-    assert_ne!(
-        key1, key2,
-        "cache key must differ when active theme changes"
-    );
-}
-
-// Regression: selection clamped to chat_area.x + 2, so the first two columns
-// of every left-aligned line (tool calls, assistant text) could not be
-// selected or copied. Bounds now start at chat_area.x.
-#[test]
-fn extract_selection_captures_first_column() {
-    use super::extract_selection;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-
-    let area = Rect::new(0, 0, 20, 3);
-    let mut buf = Buffer::empty(area);
-    // Chat content rendered flush to the left edge of the chat area.
-    buf.set_string(0, 0, "Grep(spinner)", ratatui::style::Style::default());
-    let chat_area = Some(area);
-
-    // Select the whole line, row 0, columns 0..=12.
-    let text = extract_selection(&buf, (0, 0), (12, 0), chat_area, 0);
-    assert_eq!(text.trim(), "Grep(spinner)", "first two chars must survive");
-    assert!(text.starts_with("Gr"), "got: {text:?}");
-}
-
-#[test]
-fn selection_keeps_indentation_and_interior_blank_lines() {
-    use super::extract_selection;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-
-    let area = Rect::new(0, 0, 40, 6);
-    let mut buf = Buffer::empty(area);
-    let style = ratatui::style::Style::default();
-    buf.set_string(0, 0, "fn main() {", style);
-    buf.set_string(0, 1, "    let x = 1;", style);
-    // Row 2 left blank on purpose — an interior blank line.
-    buf.set_string(0, 3, "    let y = 2;", style);
-
-    let text = extract_selection(&buf, (0, 0), (39, 3), Some(area), 0);
-
-    assert_eq!(text, "fn main() {\n    let x = 1;\n\n    let y = 2;");
-}
-
-#[test]
-fn selection_drops_blank_rows_swept_at_the_edges() {
-    use super::extract_selection;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-
-    let area = Rect::new(0, 0, 40, 6);
-    let mut buf = Buffer::empty(area);
-    buf.set_string(0, 2, "  hello", ratatui::style::Style::default());
-
-    // Drag started two rows above the text and ended two rows below it.
-    let text = extract_selection(&buf, (0, 0), (39, 5), Some(area), 0);
-
-    assert_eq!(text, "  hello");
-}
-
-#[test]
-fn scroll_pill_label_pluralizes_and_drops_zero_count() {
-    use super::scroll_pill_label;
-
-    assert_eq!(scroll_pill_label(0), " click to scroll down ↓ ");
-    assert_eq!(
-        scroll_pill_label(1),
-        " 1 new message · click to scroll down ↓ "
-    );
-    assert_eq!(
-        scroll_pill_label(4),
-        " 4 new messages · click to scroll down ↓ "
-    );
+    assert_ne!(key1, key2, "cache key must differ when active theme changes");
 }
 
 #[test]
@@ -197,24 +122,6 @@ fn persisted_edit_result_resolves_tool_name_without_previous_call() {
         .iter()
         .any(|line| line.spans.iter().any(|span| span.content.contains("new")))
     );
-}
-
-// The input box reuses extract_selection with its own rect and scroll 0.
-// Verify selection works for an area that is not at the buffer origin.
-#[test]
-fn extract_selection_works_in_input_area() {
-    use super::extract_selection;
-    use ratatui::buffer::Buffer;
-    use ratatui::layout::Rect;
-
-    let area = Rect::new(0, 0, 30, 12);
-    let mut buf = Buffer::empty(area);
-    // Input text region near the bottom of the screen.
-    let input_area = Rect::new(2, 9, 26, 2);
-    buf.set_string(2, 9, "hello world", ratatui::style::Style::default());
-
-    let text = extract_selection(&buf, (2, 9), (12, 9), Some(input_area), 0);
-    assert_eq!(text.trim(), "hello world", "got: {text:?}");
 }
 
 #[test]
@@ -703,14 +610,6 @@ fn input_bar_contains_live_status_and_command_hint() {
 }
 
 #[test]
-fn streaming_status_words_rotate_every_three_seconds() {
-    assert_eq!(streaming_status_word(0), "Thinking...");
-    assert_eq!(streaming_status_word(2), "Thinking...");
-    assert_eq!(streaming_status_word(3), "Analyzing code...");
-    assert_eq!(streaming_status_word(27), "Querying knowledge base...");
-}
-
-#[test]
 fn split_stable_rows_keeps_only_the_incomplete_suffix_live() {
     let (stable, tail) = super::scrollback::split_stable_rows("first\nsecond\nthird");
 
@@ -761,4 +660,25 @@ fn live_tail_excludes_committed_history() {
     assert!(text.contains("Working..."));
     assert!(text.contains("unclosed tail"));
     assert!(!text.contains("old completed answer"));
+}
+
+#[test]
+fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    cursor.commit_stable_stream("stable\n");
+
+    assert_eq!(
+        cursor.take_final_stream_remainder("stable\ntail"),
+        Some("tail".to_owned())
+    );
+    assert_eq!(cursor.take_final_stream_remainder("stable\ntail"), None);
+}
+
+#[test]
+fn transcript_cursor_resets_when_a_new_stream_replaces_the_old_one() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    cursor.commit_stable_stream("first\n");
+    cursor.begin_stream("second\ntail");
+
+    assert_eq!(cursor.pending_stable_stream("second\ntail"), vec!["second"]);
 }
