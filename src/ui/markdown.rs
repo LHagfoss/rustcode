@@ -606,16 +606,22 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             Event::End(TagEnd::Emphasis) => inline.italic = false,
             Event::Start(Tag::Strikethrough) => inline.strike = true,
             Event::End(TagEnd::Strikethrough) => inline.strike = false,
-            Event::Code(text) => paragraph.push(Span::styled(
-                text.to_string(),
-                text_style(
-                    InlineStyle {
-                        code: true,
-                        ..inline
-                    },
-                    show_picker,
-                ),
-            )),
+            Event::Code(text) => {
+                if in_table {
+                    current_cell.push_str(&text);
+                } else {
+                    paragraph.push(Span::styled(
+                        text.to_string(),
+                        text_style(
+                            InlineStyle {
+                                code: true,
+                                ..inline
+                            },
+                            show_picker,
+                        ),
+                    ));
+                }
+            }
             Event::Start(Tag::Link { .. }) => inline.link = true,
             Event::End(TagEnd::Link) => inline.link = false,
             Event::Text(text) | Event::InlineHtml(text) => {
@@ -792,6 +798,42 @@ mod tests {
             .collect();
         assert!(all.contains("Header 1 │ Header 2"));
         assert!(all.contains('┌') && all.contains('┐') && all.contains('└'));
+    }
+
+    #[test]
+    fn renders_latest_commits_table_fixture_as_markdown() {
+        let md = concat!(
+            "| Commit | Message |\n",
+            "|--------|---------|\n",
+            "| `3d6a1a5` | fix(ui): restore single-line bulleted tool call items matching screenshot design (#581) |\n",
+            "| `1089c53` | fix(ui): space consecutive thinking blocks, add working padding, and pin chat composer (#580) |\n",
+            "| `840ea2b` | Merge pull request #579 from LHagfoss/fix/working-status-final-frame |\n",
+            "| `10e8085` | fix(ui): keep working through final frame |\n",
+            "| `ad1ab89` | Merge pull request #578 from LHagfoss/fix/tool-confirmation-small-terminal |\n",
+            "| `d763994` | fix(ui): cover compact modal boundary |\n",
+            "| `f12b0e6` | fix(ui): preserve compact modal scope |\n",
+            "| `55180aa` | fix(ui): keep short modal actions visible |\n",
+            "| `b1df637` | fix(ui): guard short confirmation modals |\n",
+            "| `764fe6b` | fix(ui): use compact welcome box and clean thought block preambles (#577) |"
+        );
+        let rendered = render_markdown(md, 80, false, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        let table_index = rendered
+            .iter()
+            .position(|line| line.starts_with('┌'))
+            .expect("table should render with a top border");
+
+        assert!(rendered[table_index..].iter().any(|line| line.contains("3d6a1a5")));
+        assert!(rendered[table_index..].iter().any(|line| line.contains("764fe6b")));
+        assert!(
+            rendered[..table_index]
+                .iter()
+                .all(|line| !line.contains("3d6a1a5")),
+            "inline code from a table cell escaped above the table: {rendered:?}"
+        );
+        assert!(rendered.iter().all(|line| !line.contains("| Commit |")));
     }
 
     #[test]

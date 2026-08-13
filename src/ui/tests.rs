@@ -1078,6 +1078,19 @@ fn committed_user_messages_keep_regular_body_text() {
 }
 
 #[test]
+fn committed_user_message_has_no_redundant_trailing_separator() {
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("user", "check latest 10 commits"));
+
+    let block = super::render_committed_history_block(&state, 0, 80);
+
+    assert_eq!(block.len(), 1);
+    assert_eq!(block[0].spans[1].content, "check latest 10 commits");
+}
+
+#[test]
 fn committed_assistant_message_has_one_trailing_separator() {
     let state = AppState::new();
 
