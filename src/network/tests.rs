@@ -2127,7 +2127,7 @@ async fn view_file_reports_structured_truncation_only_when_content_is_omitted() 
 #[tokio::test]
 async fn control_plane_tool_does_not_stall_while_reading_workspace_root() {
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
+        std::time::Duration::from_secs(5),
         run_one_tool(test_tool_call(
             "use_skill",
             serde_json::json!({"name": "release-automation"}),

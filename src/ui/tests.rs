@@ -93,6 +93,35 @@ fn welcome_banner_renders_without_a_conversation() {
 }
 
 #[test]
+fn welcome_banner_includes_padding_below() {
+    let state = AppState::new();
+    let lines = super::render_live_tail(&state, 100, 28);
+    assert!(!lines.is_empty());
+    // The last line should be empty padding below the banner box
+    let last = &lines[lines.len() - 1];
+    assert!(
+        last.spans.is_empty() || last.spans.iter().all(|s| s.content.trim().is_empty()),
+        "welcome banner must end with a blank padding line"
+    );
+}
+
+#[test]
+fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
+    let state = AppState::new();
+    // Test with small height = 6
+    let lines = super::render_live_tail(&state, 100, 6);
+    let text = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(text.contains("Welcome back!"));
+    assert!(text.contains("╰"), "banner must end cleanly with a bottom border");
+}
+
+
+#[test]
 fn queue_preview_shows_recent_user_prompts_without_wakeups() {
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -497,6 +526,17 @@ fn thought_parser_handles_missing_open_tag() {
 }
 
 #[test]
+fn thought_parser_captures_preamble_before_think_tag() {
+    let raw = "Okay, the user is asking hello how are you, which I should respond to politely.\n\nFirst, I must check skills.\n\n<think>\nI will provide a standard friendly response.\n</think>\n\nHello! I am doing well, thank you for asking.";
+    let (answer, preview) = split_thought_blocks(raw);
+    assert_eq!(answer, "Hello! I am doing well, thank you for asking.");
+    assert_eq!(
+        preview.as_deref(),
+        Some("Okay, the user is asking hello how are you, which I should respond to politely.")
+    );
+}
+
+#[test]
 fn thought_preview_keeps_short_text_unchanged() {
     assert_eq!(
         truncate_thought_preview("Analyzing Paste Events", 24),
@@ -892,7 +932,7 @@ fn live_tail_excludes_committed_history() {
     state.status = AppStatus::Streaming;
     state.current_response = "stable line\nunclosed tail".to_owned();
 
-    let text = super::render_live_tail(&state, 80)
+    let text = super::render_live_tail(&state, 80, 24)
         .iter()
         .flat_map(|line| line.spans.iter())
         .map(|span| span.content.as_ref())
@@ -910,7 +950,7 @@ fn reasoning_prefixed_stream_keeps_completed_answer_lines_live() {
     state.current_response =
         "<think>\nPlanning\n</think>\n\nFirst answer line\nSecond answer line".to_owned();
 
-    let text = super::render_live_tail(&state, 80)
+    let text = super::render_live_tail(&state, 80, 24)
         .iter()
         .flat_map(|line| line.spans.iter())
         .map(|span| span.content.as_ref())
@@ -929,7 +969,7 @@ fn bare_thought_stream_stays_in_the_compact_reasoning_preview() {
     state.status = AppStatus::Streaming;
     state.current_response = "thoughtPlanning the response\n".to_owned();
 
-    let text = super::render_live_tail(&state, 80)
+    let text = super::render_live_tail(&state, 80, 24)
         .iter()
         .flat_map(|line| line.spans.iter())
         .map(|span| span.content.as_ref())
@@ -1050,7 +1090,7 @@ fn live_tail_uses_formatted_working_status() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
 
-    let text = super::render_live_tail(&state, 80)
+    let text = super::render_live_tail(&state, 80, 24)
         .iter()
         .flat_map(|line| line.spans.iter())
         .map(|span| span.content.as_ref())
@@ -1066,7 +1106,7 @@ fn live_tail_adds_one_blank_row_below_working_status() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
 
-    let lines = super::render_live_tail(&state, 80);
+    let lines = super::render_live_tail(&state, 80, 24);
 
     assert!(
         lines.last().is_some_and(|line| line.spans.is_empty()),

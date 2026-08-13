@@ -298,6 +298,32 @@ fn truncate_thought_preview(text: &str, max_width: usize) -> String {
     result
 }
 
+fn is_reasoning_preamble(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    const PREAMBLE_STARTS: &[&str] = &[
+        "Okay,",
+        "First,",
+        "The project",
+        "Thinking:",
+        "Thought:",
+        "thought",
+        "Thought",
+        "Let's",
+        "I should",
+        "I need to",
+        "Reasoning:",
+        "Plan:",
+        "Step 1",
+        "• Okay",
+        "• First",
+        "• The project",
+    ];
+    PREAMBLE_STARTS.iter().any(|prefix| trimmed.starts_with(prefix))
+}
+
 fn split_thought_blocks(content: &str) -> (String, Option<String>) {
     const OPEN: &str = "<think>";
     const CLOSE: &str = "</think>";
@@ -305,6 +331,8 @@ fn split_thought_blocks(content: &str) -> (String, Option<String>) {
     let mut answer = String::new();
     let mut thought_preview = None;
     let mut rest = content;
+    let mut thoughts_collected = Vec::new();
+    let mut is_first_segment = true;
 
     loop {
         let open_idx = rest.find(OPEN);
@@ -312,51 +340,52 @@ fn split_thought_blocks(content: &str) -> (String, Option<String>) {
 
         match (open_idx, close_idx) {
             (Some(o_idx), Some(c_idx)) if o_idx < c_idx => {
-                answer.push_str(&rest[..o_idx]);
-                let thought = &rest[o_idx + OPEN.len()..c_idx];
-                if thought_preview.is_none() {
-                    thought_preview = thought
-                        .lines()
-                        .map(str::trim)
-                        .find(|line| !line.is_empty())
-                        .map(str::to_owned);
+                let preamble = &rest[..o_idx];
+                if !preamble.trim().is_empty() {
+                    if is_first_segment && is_reasoning_preamble(preamble) {
+                        thoughts_collected.push(preamble);
+                    } else {
+                        answer.push_str(preamble);
+                    }
                 }
+                let thought = &rest[o_idx + OPEN.len()..c_idx];
+                thoughts_collected.push(thought);
                 rest = &rest[c_idx + CLOSE.len()..];
+                is_first_segment = false;
             }
             (Some(o_idx), None) => {
-                answer.push_str(&rest[..o_idx]);
-                let thought = &rest[o_idx + OPEN.len()..];
-                if thought_preview.is_none() {
-                    thought_preview = thought
-                        .lines()
-                        .map(str::trim)
-                        .find(|line| !line.is_empty())
-                        .map(str::to_owned);
+                let preamble = &rest[..o_idx];
+                if !preamble.trim().is_empty() {
+                    if is_first_segment && is_reasoning_preamble(preamble) {
+                        thoughts_collected.push(preamble);
+                    } else {
+                        answer.push_str(preamble);
+                    }
                 }
+                let thought = &rest[o_idx + OPEN.len()..];
+                thoughts_collected.push(thought);
                 rest = "";
                 break;
             }
             (None, Some(c_idx)) => {
                 let thought = &rest[..c_idx];
-                if thought_preview.is_none() {
-                    thought_preview = thought
-                        .lines()
-                        .map(str::trim)
-                        .find(|line| !line.is_empty())
-                        .map(str::to_owned);
+                if is_first_segment || is_reasoning_preamble(thought) {
+                    thoughts_collected.push(thought);
+                } else {
+                    answer.push_str(thought);
                 }
                 rest = &rest[c_idx + CLOSE.len()..];
+                is_first_segment = false;
             }
             (Some(_), Some(c_idx)) => {
                 let thought = &rest[..c_idx];
-                if thought_preview.is_none() {
-                    thought_preview = thought
-                        .lines()
-                        .map(str::trim)
-                        .find(|line| !line.is_empty())
-                        .map(str::to_owned);
+                if is_first_segment || is_reasoning_preamble(thought) {
+                    thoughts_collected.push(thought);
+                } else {
+                    answer.push_str(thought);
                 }
                 rest = &rest[c_idx + CLOSE.len()..];
+                is_first_segment = false;
             }
             (None, None) => {
                 break;
@@ -364,7 +393,20 @@ fn split_thought_blocks(content: &str) -> (String, Option<String>) {
         }
     }
 
-    answer.push_str(rest);
+    if !rest.is_empty() {
+        answer.push_str(rest);
+    }
+
+    for thought_str in thoughts_collected {
+        if thought_preview.is_none() {
+            thought_preview = thought_str
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && !line.starts_with("<think>"))
+                .map(str::to_owned);
+        }
+    }
+
     (answer.trim().to_string(), thought_preview)
 }
 
@@ -2066,34 +2108,23 @@ fn render_status_panel<'a>(
     )]));
 }
 
-const RUSTCODE_LOGO: &[&str] = &[
-    "                  ▄                   █      ",
-    "▄▀▀▀ █   █ ▄▀▀▀▀ ▀█▀▀ ▄▀▀▀▀ ▄▀▀▀▄ ▄▀▀▀█ ▄▀▀▀▄",
-    "█    █   █  ▀▀▀▄  █   █     █   █ █   █ █▀▀▀▀",
-    "▀     ▀▀▀  ▀▀▀▀    ▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀",
-];
 
-fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line<'static>> {
+
+pub(crate) fn build_claude_startup_banner(
+    state: &AppState,
+    total_width: usize,
+    _max_height: usize,
+) -> Vec<Line<'static>> {
     let mut banner = Vec::new();
     let version = env!("CARGO_PKG_VERSION");
     let model_name = model_label(state);
-    let (cwd_str, branch_str) = if state.cwd_and_branch.is_empty() {
-        let p = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "rustcode".to_string());
-        (p, String::new())
-    } else if let Some((c, b)) = state.cwd_and_branch.split_once(':') {
-        (c.to_string(), format!("git: {b}"))
-    } else {
-        (state.cwd_and_branch.clone(), String::new())
-    };
 
     let box_w = total_width.saturating_sub(2).max(65);
     let inner_w = box_w.saturating_sub(2);
     let left_w = if inner_w >= 90 {
         50
     } else {
-        (inner_w * 44 / 100).max(30)
+        (inner_w * 48 / 100).max(30)
     };
     let right_w = inner_w.saturating_sub(left_w + 1);
 
@@ -2128,25 +2159,11 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         ])
     };
 
-    let make_divider_row = |left_str: String, left_style: Style| -> Line<'static> {
-        let l_cell = fit_to_width(&left_str, left_w);
-        let r_div = "─".repeat(right_w);
-        Line::from(vec![
-            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
-            Span::styled(l_cell, left_style),
-            Span::styled("├", Style::default().fg(border_c).bg(reset_bg)),
-            Span::styled(r_div, Style::default().fg(border_c).bg(reset_bg)),
-            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
-        ])
+    let mode_str = match state.agent_mode {
+        crate::config::AgentMode::Build => "build",
+        crate::config::AgentMode::Plan => "plan",
     };
-
-    // Row 0: Blank line top padding
-    banner.push(make_row(
-        "".to_string(),
-        Style::default().bg(reset_bg),
-        "".to_string(),
-        Style::default().bg(reset_bg),
-    ));
+    let info_txt = format!("{model_name} · {mode_str}");
 
     // Row 1: Left: Centered "Welcome back!" | Right: "  Tips for getting started"
     let welcome_txt = "Welcome back!";
@@ -2165,137 +2182,14 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
             .add_modifier(Modifier::BOLD),
     ));
 
-    // Row 2: Left: Blank space | Right: "  Run /help to view all slash commands"
+    // Row 2: Left: Centered "<model> · <mode>" | Right: "  Run /help to view all slash commands"
+    let info_pad = left_w.saturating_sub(info_txt.len()) / 2;
+    let left_info = format!("{}{}", " ".repeat(info_pad), info_txt);
     banner.push(make_row(
-        "".to_string(),
-        Style::default().bg(reset_bg),
+        left_info,
+        Style::default().fg(muted_c).bg(reset_bg),
         "  Run /help to view all slash commands".to_string(),
         Style::default().fg(text_c).bg(reset_bg),
-    ));
-
-    // Rows 3..6: 4-line RustCode logo on Left in WHITE
-    let logo_width = 45;
-    let logo_pad = left_w.saturating_sub(logo_width) / 2;
-
-    // Row 3: Logo line 0 | Right: "  Type @ to mention and link project files"
-    let l_line0 = if left_w >= 48 {
-        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[0])
-    } else {
-        "  rustcode".to_string()
-    };
-    banner.push(make_row(
-        l_line0,
-        Style::default()
-            .fg(text_c)
-            .bg(reset_bg)
-            .add_modifier(Modifier::BOLD),
-        "  Type @ to mention and link project files".to_string(),
-        Style::default().fg(text_c).bg(reset_bg),
-    ));
-
-    // Row 4: Logo line 1 | Right: Divider Line ────────────────
-    let l_line1 = if left_w >= 48 {
-        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[1])
-    } else {
-        "".to_string()
-    };
-    banner.push(make_divider_row(
-        l_line1,
-        Style::default()
-            .fg(text_c)
-            .bg(reset_bg)
-            .add_modifier(Modifier::BOLD),
-    ));
-
-    // Row 5: Logo line 2 | Right: "  Shortcuts & Options"
-    let l_line2 = if left_w >= 48 {
-        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[2])
-    } else {
-        "".to_string()
-    };
-    banner.push(make_row(
-        l_line2,
-        Style::default()
-            .fg(text_c)
-            .bg(reset_bg)
-            .add_modifier(Modifier::BOLD),
-        "  Shortcuts & Options".to_string(),
-        Style::default()
-            .fg(primary)
-            .bg(reset_bg)
-            .add_modifier(Modifier::BOLD),
-    ));
-
-    // Row 6: Logo line 3 | Right: "  /model select model  ·  /theme switch theme"
-    let l_line3 = if left_w >= 48 {
-        format!("{}{}", " ".repeat(logo_pad), RUSTCODE_LOGO[3])
-    } else {
-        "".to_string()
-    };
-    banner.push(make_row(
-        l_line3,
-        Style::default()
-            .fg(text_c)
-            .bg(reset_bg)
-            .add_modifier(Modifier::BOLD),
-        "  /model select model  ·  /theme switch theme".to_string(),
-        Style::default().fg(muted_c).bg(reset_bg),
-    ));
-
-    // Row 7: Left: Blank space | Right: "  Tab autocomplete     ·  Shift+Enter newline"
-    banner.push(make_row(
-        "".to_string(),
-        Style::default().bg(reset_bg),
-        "  Tab autocomplete     ·  Shift+Enter newline".to_string(),
-        Style::default().fg(muted_c).bg(reset_bg),
-    ));
-
-    // Row 8: Left: Centered "<model> · <mode>" | Right: "  Built-in MCP tools, search & execution"
-    let mode_str = match state.agent_mode {
-        crate::config::AgentMode::Build => "build",
-        crate::config::AgentMode::Plan => "plan",
-    };
-    let info_txt = format!("{model_name} · {mode_str}");
-    let info_pad = left_w.saturating_sub(info_txt.len()) / 2;
-    let left8 = format!("{}{}", " ".repeat(info_pad), info_txt);
-    banner.push(make_row(
-        left8,
-        Style::default().fg(muted_c).bg(reset_bg),
-        "  Built-in MCP tools, search & execution".to_string(),
-        Style::default().fg(muted_c).bg(reset_bg),
-    ));
-
-    // Row 9: Left: Centered "<cwd_str>" | Right: Blank space
-    let cwd_pad = left_w.saturating_sub(cwd_str.len()) / 2;
-    let left9 = format!("{}{}", " ".repeat(cwd_pad), cwd_str);
-    banner.push(make_row(
-        left9,
-        Style::default().fg(muted_c).bg(reset_bg),
-        "".to_string(),
-        Style::default().bg(reset_bg),
-    ));
-
-    // Row 10: Left: Centered "<branch_str>" | Right: Blank space
-    if !branch_str.is_empty() {
-        let branch_pad = left_w.saturating_sub(branch_str.len()) / 2;
-        let left10 = format!("{}{}", " ".repeat(branch_pad), branch_str);
-        banner.push(make_row(
-            left10,
-            Style::default()
-                .fg(primary)
-                .bg(reset_bg)
-                .add_modifier(Modifier::BOLD),
-            "".to_string(),
-            Style::default().bg(reset_bg),
-        ));
-    }
-
-    // Row 11: Blank line bottom padding
-    banner.push(make_row(
-        "".to_string(),
-        Style::default().bg(reset_bg),
-        "".to_string(),
-        Style::default().bg(reset_bg),
     ));
 
     // Bottom border
@@ -2304,6 +2198,9 @@ fn build_claude_startup_banner(state: &AppState, total_width: usize) -> Vec<Line
         bot_border,
         Style::default().fg(border_c).bg(reset_bg),
     )]));
+
+    // Padding below welcome message
+    banner.push(Line::from(""));
 
     banner
 }
@@ -2317,7 +2214,11 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
 
 /// Render only the mutable portion of the current turn. Completed history is
 /// deliberately excluded: it will be committed to terminal scrollback.
-pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static>> {
+pub(crate) fn render_live_tail(
+    state: &AppState,
+    width: u16,
+    height: u16,
+) -> Vec<Line<'static>> {
     let has_conversation = state
         .history
         .iter()
@@ -2326,7 +2227,7 @@ pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
     {
-        return build_claude_startup_banner(state, width as usize);
+        return build_claude_startup_banner(state, width as usize, height as usize);
     }
 
     let tail = scrollback::mutable_stream_text(&state.current_response);
@@ -2494,7 +2395,7 @@ fn render_live_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], sta
         vertical: 0,
         horizontal: 1,
     });
-    let lines = render_live_tail(state, area.width);
+    let lines = render_live_tail(state, area.width, area.height);
     state.conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(area.width) as u16;
@@ -2546,7 +2447,12 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     // shrink to their wrapped content height, while long ones retain the full
     // scrollable viewport.
     render_live_conversation(f, &max_chunks, state);
-    let chat_height = conversation_area_height(state.conversation_content_height, max_chat_height);
+    let has_conversation = state
+        .history
+        .iter()
+        .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
+    let min_welcome_height = if !has_conversation { 15 } else { 0 };
+    let chat_height = conversation_area_height(state.conversation_content_height, max_chat_height).max(min_welcome_height).min(max_chat_height);
     let chunks = if chat_height == max_chat_height {
         max_chunks
     } else {

@@ -380,6 +380,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let history_range = transcript_cursor.pending_history_range(guard.history.len());
             let mut blocks = Vec::new();
+            if transcript_cursor.is_at_start() && !history_range.is_empty() {
+                let banner = crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
+                if !banner.is_empty() {
+                    blocks.push(banner);
+                }
+            }
             for index in history_range.clone() {
                 let message = &guard.history[index];
                 if message.role == "assistant" {

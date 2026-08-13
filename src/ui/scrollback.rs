@@ -55,6 +55,10 @@ impl TranscriptCursor {
         }
     }
 
+    pub(crate) fn is_at_start(&self) -> bool {
+        self.next_history_index == 0
+    }
+
     pub(crate) fn pending_history_range(&self, history_len: usize) -> Range<usize> {
         self.next_history_index.min(history_len)..history_len
     }
