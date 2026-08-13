@@ -313,7 +313,8 @@ mod tests {
             row.contains("Approve 2 tool calls in parallel?")
         });
 
-        assert_eq!(header_row, Some(17));
+        assert_eq!(header_row, Some(24));
+        assert!(header_row.unwrap() < input_area.y);
     }
 }
 
@@ -1456,15 +1457,16 @@ pub(super) fn render_tool_confirmation_modal(
         _ => return,
     };
 
+    let screen_height = f.area().height;
+
     if confirmations.len() == 1 {
         let confirmation = &confirmations[0];
-        let screen_height = f.area().height;
         let has_preview = !confirmation.content_preview.trim().is_empty();
         let preview_lines = confirmation.content_preview.lines().count();
         let height = if has_preview {
-            ((preview_lines as u16) + 9).clamp(10, (screen_height.saturating_sub(4)).min(20))
+            ((preview_lines as u16) + 8).clamp(9, (screen_height.saturating_sub(4)).min(22))
         } else {
-            8
+            7
         };
         let modal_area = input_anchor_rect(f, input_area, height);
 
@@ -1473,7 +1475,7 @@ pub(super) fn render_tool_confirmation_modal(
         let modal_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(COLOR_TIP()))
             .style(Style::default().bg(COLOR_BG()));
         f.render_widget(modal_block, modal_area);
 
@@ -1487,14 +1489,12 @@ pub(super) fn render_tool_confirmation_modal(
             .constraints([
                 Constraint::Length(1),                            // 0: Header
                 Constraint::Length(1),                            // 1: Spacer
-                Constraint::Length(1),                            // 2: Tool
-                Constraint::Length(1),                            // 3: Path
-                Constraint::Length(1),                            // 4: Size
-                Constraint::Length(1),                            // 5: Auto-confirm status
-                Constraint::Length(1),                            // 6: Spacer
-                Constraint::Min(if has_preview { 2 } else { 0 }), // 7: Preview Diff / Content
-                Constraint::Length(1),                            // 8: Spacer
-                Constraint::Length(1),                            // 9: Footer buttons
+                Constraint::Length(1),                            // 2: Tool & target line
+                Constraint::Length(1),                            // 3: Auto-confirm status
+                Constraint::Length(1),                            // 4: Spacer
+                Constraint::Min(if has_preview { 2 } else { 0 }), // 5: Preview Diff / Content
+                Constraint::Length(if has_preview { 1 } else { 0 }), // 6: Spacer
+                Constraint::Length(1),                            // 7: Footer buttons
             ])
             .split(inner_area);
 
@@ -1516,55 +1516,36 @@ pub(super) fn render_tool_confirmation_modal(
                 .fg(COLOR_TIP())
                 .add_modifier(Modifier::BOLD),
         )]);
-        f.render_widget(
-            Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
-            modal_chunks[0],
-        );
+        f.render_widget(Paragraph::new(header_line), modal_chunks[0]);
+
+        let path_display = if confirmation.path.len() > inner_area.width as usize - 22 {
+            let cut = (inner_area.width as usize).saturating_sub(25).max(5);
+            format!("…{}", &confirmation.path[confirmation.path.len().saturating_sub(cut)..])
+        } else {
+            confirmation.path.clone()
+        };
+
+        let size_str = if confirmation.tool_name != "run_command" && confirmation.content_bytes > 0 {
+            format!(" ({} bytes)", confirmation.content_bytes)
+        } else {
+            String::new()
+        };
 
         let tool_line = Line::from(vec![
-            Span::styled("  tool  ", Style::default().fg(COLOR_MUTED())),
+            Span::styled("  ", Style::default()),
             Span::styled(
-                &confirmation.tool_name,
+                format!("{:<15}", action_label),
                 Style::default()
                     .fg(COLOR_TEXT())
                     .add_modifier(Modifier::BOLD),
             ),
-        ]);
-        f.render_widget(
-            Paragraph::new(tool_line).style(Style::default().bg(COLOR_PANEL())),
-            modal_chunks[2],
-        );
-
-        let path_display = if confirmation.path.len() > inner_area.width as usize - 10 {
-            let cut = inner_area.width as usize - 13;
-            format!("…{}", &confirmation.path[confirmation.path.len() - cut..])
-        } else {
-            confirmation.path.clone()
-        };
-        let path_title = match confirmation.tool_name.as_str() {
-            "run_command" => "  cmd   ",
-            _ => "  path  ",
-        };
-        let path_line = Line::from(vec![
-            Span::styled(path_title, Style::default().fg(COLOR_MUTED())),
-            Span::styled(path_display, Style::default().fg(COLOR_PRIMARY())),
-        ]);
-        f.render_widget(
-            Paragraph::new(path_line).style(Style::default().bg(COLOR_PANEL())),
-            modal_chunks[3],
-        );
-
-        let size_line = Line::from(vec![
-            Span::styled("  size  ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
-                format!("{} bytes", confirmation.content_bytes),
-                Style::default().fg(COLOR_TEXT()),
+                format!(" {}", path_display),
+                Style::default().fg(COLOR_PRIMARY()),
             ),
+            Span::styled(size_str, Style::default().fg(COLOR_MUTED())),
         ]);
-        f.render_widget(
-            Paragraph::new(size_line).style(Style::default().bg(COLOR_PANEL())),
-            modal_chunks[4],
-        );
+        f.render_widget(Paragraph::new(tool_line), modal_chunks[2]);
 
         let auto_confirm_status = if state.auto_confirm {
             "[x] Auto-confirm future tool calls"
@@ -1581,13 +1562,10 @@ pub(super) fn render_tool_confirmation_modal(
             ),
             Span::styled(" (Tab to toggle)", Style::default().fg(COLOR_MUTED())),
         ]);
-        f.render_widget(
-            Paragraph::new(auto_confirm_line).style(Style::default().bg(COLOR_PANEL())),
-            modal_chunks[5],
-        );
+        f.render_widget(Paragraph::new(auto_confirm_line), modal_chunks[3]);
 
         if !confirmation.content_preview.is_empty() {
-            let diff_height = modal_chunks[7].height as usize;
+            let diff_height = modal_chunks[5].height as usize;
             let scroll = state.modal_scroll_row as usize;
 
             let has_null = confirmation.content_preview.contains('\x00');
@@ -1599,7 +1577,7 @@ pub(super) fn render_tool_confirmation_modal(
                         Constraint::Length(1), // Divider
                         Constraint::Percentage(50),
                     ])
-                    .split(modal_chunks[7]);
+                    .split(modal_chunks[5]);
 
                 let mut left_lines = Vec::new();
                 let mut right_lines = Vec::new();
@@ -1650,13 +1628,13 @@ pub(super) fn render_tool_confirmation_modal(
                     .collect();
                 f.render_widget(
                     Paragraph::new(preview_lines).wrap(Wrap { trim: false }),
-                    modal_chunks[7],
+                    modal_chunks[5],
                 );
             }
         }
 
         let total_lines = confirmation.content_preview.lines().count();
-        let scroll_info = if modal_chunks.len() > 7 && total_lines > modal_chunks[7].height as usize
+        let scroll_info = if modal_chunks.len() > 5 && total_lines > modal_chunks[5].height as usize
         {
             format!(
                 "  ↑/↓ scroll ({}/{})",
@@ -1676,7 +1654,7 @@ pub(super) fn render_tool_confirmation_modal(
             ),
             Span::styled(" approve  ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
-                "n",
+                "n / esc",
                 Style::default()
                     .fg(COLOR_PRIMARY())
                     .add_modifier(Modifier::BOLD),
@@ -1688,28 +1666,19 @@ pub(super) fn render_tool_confirmation_modal(
                     .fg(COLOR_TIP())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" toggle auto-confirm  ", Style::default().fg(COLOR_MUTED())),
-            Span::styled(
-                "esc",
-                Style::default()
-                    .fg(COLOR_PRIMARY())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" cancel", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" toggle auto-confirm", Style::default().fg(COLOR_MUTED())),
             Span::styled(scroll_info, Style::default().fg(COLOR_MUTED())),
         ]);
-        f.render_widget(
-            Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
-            modal_chunks[9],
-        );
+        f.render_widget(Paragraph::new(footer_line), modal_chunks[7]);
     } else {
         // Render batch confirmation modal
-        let modal_area = input_anchor_rect(f, input_area, 16);
+        let height = (confirmations.len() as u16 + 7).clamp(8, (screen_height.saturating_sub(4)).min(22));
+        let modal_area = input_anchor_rect(f, input_area, height);
         f.render_widget(Clear, modal_area);
         let modal_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(COLOR_TIP()))
             .style(Style::default().bg(COLOR_BG()));
         f.render_widget(modal_block, modal_area);
 
@@ -1723,7 +1692,7 @@ pub(super) fn render_tool_confirmation_modal(
             .constraints([
                 Constraint::Length(1), // Header
                 Constraint::Length(1), // Spacer
-                Constraint::Min(5),    // List of tools
+                Constraint::Min(confirmations.len() as u16), // List of tools
                 Constraint::Length(1), // Auto-confirm option
                 Constraint::Length(1), // Spacer
                 Constraint::Length(1), // Footer/Actions
@@ -1754,8 +1723,8 @@ pub(super) fn render_tool_confirmation_modal(
             };
 
             let path_display = if c.path.len() > inner_area.width as usize - 25 {
-                let cut = inner_area.width as usize - 28;
-                format!("…{}", &c.path[c.path.len() - cut..])
+                let cut = (inner_area.width as usize).saturating_sub(28).max(5);
+                format!("…{}", &c.path[c.path.len().saturating_sub(cut)..])
             } else {
                 c.path.clone()
             };
@@ -1784,6 +1753,7 @@ pub(super) fn render_tool_confirmation_modal(
             "[ ] Auto-confirm future tool calls"
         };
         let auto_confirm_line = Line::from(vec![
+            Span::styled("  ", Style::default()),
             Span::styled(
                 auto_confirm_status,
                 Style::default()
@@ -1808,7 +1778,14 @@ pub(super) fn render_tool_confirmation_modal(
                     .fg(COLOR_PRIMARY())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" deny all", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" deny all  ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(
+                "tab",
+                Style::default()
+                    .fg(COLOR_TIP())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" toggle auto-confirm", Style::default().fg(COLOR_MUTED())),
         ]);
         f.render_widget(Paragraph::new(footer_line), modal_chunks[5]);
     }
