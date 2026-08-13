@@ -316,6 +316,74 @@ mod tests {
         assert_eq!(header_row, Some(24));
         assert!(header_row.unwrap() < input_area.y);
     }
+
+    #[test]
+    fn single_confirmation_with_preview_renders_in_short_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "list_directory".to_string(),
+            path: "src/".to_string(),
+            content_preview: "src/main.rs".to_string(),
+            content_bytes: 11,
+        }]);
+
+        let input_area = Rect::new(10, 8, 80, 3);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let confirmation_row = (0..12).find(|y| {
+            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
+            row.contains("Execute tool")
+        });
+        let rendered = (0..12)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(confirmation_row.is_some(), "rendered modal:\n{rendered}");
+        assert!(confirmation_row.unwrap() < input_area.y);
+    }
+
+    #[test]
+    fn batch_confirmation_renders_in_short_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 11)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![
+            ToolConfirmation {
+                tool_name: "list_directory".to_string(),
+                path: "src/".to_string(),
+                content_preview: String::new(),
+                content_bytes: 0,
+            },
+            ToolConfirmation {
+                tool_name: "read_file".to_string(),
+                path: "Cargo.toml".to_string(),
+                content_preview: String::new(),
+                content_bytes: 0,
+            },
+        ]);
+
+        let input_area = Rect::new(10, 7, 80, 3);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let header_row = (0..11).find(|y| {
+            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
+            row.contains("Approve 2 tool calls in parallel?")
+        });
+
+        assert!(header_row.is_some());
+        assert!(header_row.unwrap() < input_area.y);
+    }
 }
 
 pub(super) fn render_thinking_picker_modal(
@@ -1327,7 +1395,9 @@ pub(super) fn render_tool_confirmation_modal(
         let has_preview = !confirmation.content_preview.trim().is_empty();
         let preview_lines = confirmation.content_preview.lines().count();
         let height = if has_preview {
-            ((preview_lines as u16) + 8).clamp(9, (screen_height.saturating_sub(4)).min(22))
+            ((preview_lines as u16) + 8)
+                .max(9)
+                .min((screen_height.saturating_sub(4)).min(22))
         } else {
             7
         };
@@ -1539,8 +1609,9 @@ pub(super) fn render_tool_confirmation_modal(
         f.render_widget(Paragraph::new(footer_line), modal_chunks[7]);
     } else {
         // Render batch confirmation modal
-        let height =
-            (confirmations.len() as u16 + 7).clamp(8, (screen_height.saturating_sub(4)).min(22));
+        let height = (confirmations.len() as u16 + 7)
+            .max(8)
+            .min((screen_height.saturating_sub(4)).min(22));
         let modal_area = input_anchor_rect(f, input_area, height);
         f.render_widget(Clear, modal_area);
         let modal_block = Block::default()
