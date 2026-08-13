@@ -21,7 +21,10 @@ impl ColorSpec {
 
 fn parse_hex_color(hex: &str) -> Option<Color> {
     let s = hex.trim_start_matches('#');
-    if s.eq_ignore_ascii_case("reset") || s.eq_ignore_ascii_case("none") || s.eq_ignore_ascii_case("transparent") {
+    if s.eq_ignore_ascii_case("reset")
+        || s.eq_ignore_ascii_case("none")
+        || s.eq_ignore_ascii_case("transparent")
+    {
         return Some(Color::Reset);
     }
     if s.len() == 6 {

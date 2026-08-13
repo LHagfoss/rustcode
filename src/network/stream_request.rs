@@ -7,7 +7,7 @@ use tokio_util::io::StreamReader;
 
 use super::retry;
 use super::stream::StreamBuffer;
-use super::{align_alternating_messages, count_tokens, parse_sse_line, ToolFenceCounter};
+use super::{ToolFenceCounter, align_alternating_messages, count_tokens, parse_sse_line};
 
 #[cfg(test)]
 mod tests {

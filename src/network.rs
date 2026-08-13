@@ -47,17 +47,16 @@ pub(crate) use events::{ToolResult, ToolResultMetadata};
 #[path = "network/tool_exec.rs"]
 pub(crate) mod tool_exec;
 pub(crate) use tool_exec::{
-    augmented_path, bounded_tool_result_history_message, confirm_and_execute,
-    execute_tool_batch, extract_diff_block, final_tool_diff, finalize_tool_result,
-    get_diff_preview, get_tool_project_root, resolve_bin, subagent_tool_history_message,
-    tool_result_from_execution, tool_result_history_message,
-    tool_result_precludes_preview_fallback,
+    augmented_path, bounded_tool_result_history_message, confirm_and_execute, execute_tool_batch,
+    extract_diff_block, final_tool_diff, finalize_tool_result, get_diff_preview,
+    get_tool_project_root, resolve_bin, subagent_tool_history_message, tool_result_from_execution,
+    tool_result_history_message, tool_result_precludes_preview_fallback,
 };
 
 #[path = "network/turn_engine.rs"]
 pub(crate) mod turn_engine;
-pub use turn_engine::{process_queue_orchestrator, run_agent_turn, run_single_turn, TurnContext};
 pub(crate) use turn_engine::ToolFenceCounter;
+pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn, run_single_turn};
 
 #[path = "network/lifecycle.rs"]
 pub(crate) mod lifecycle;
@@ -101,8 +100,7 @@ pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
 #[path = "network/context_tail.rs"]
 pub(crate) mod context_tail;
 pub(crate) use context_tail::{
-    build_dynamic_context_tail, build_volatile_context_block,
-    format_read_file_context_entry,
+    build_dynamic_context_tail, build_volatile_context_block, format_read_file_context_entry,
 };
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -196,7 +194,11 @@ impl std::fmt::Display for TurnBudgetLimit {
 /// 30-round turn look like it spent only what the last round used, silently
 /// defeating the token safety budget. Falls back to a character-based
 /// estimate for providers that don't report usage.
-pub(crate) fn accumulate_tokens_used(current: u64, reported_this_round: Option<u64>, content: &str) -> u64 {
+pub(crate) fn accumulate_tokens_used(
+    current: u64,
+    reported_this_round: Option<u64>,
+    content: &str,
+) -> u64 {
     current.saturating_add(reported_this_round.unwrap_or_else(|| count_tokens(content) as u64))
 }
 
@@ -441,8 +443,6 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
     );
 }
 
-
-
 /// Extract a context length from ollama's /api/show `model_info` blob;
 /// the key is architecture-prefixed, e.g. "llama.context_length".
 fn context_length_from_model_info(info: &serde_json::Value) -> Option<u32> {
@@ -594,7 +594,9 @@ pub(crate) fn tool_signature(name: &str, args: &serde_json::Value) -> String {
     format!("{name}:{key}")
 }
 
-pub(crate) fn align_alternating_messages(raw_msgs: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+pub(crate) fn align_alternating_messages(
+    raw_msgs: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
     if raw_msgs.is_empty() {
         return raw_msgs;
     }
@@ -793,7 +795,6 @@ fn push_status_line(s: &mut AppState, text: String) {
     s.history.push(ChatMessage::new("system", text));
     crate::config::save_history(&s.history);
 }
-
 
 /// Assemble the full provider request for one agent turn.
 ///
@@ -997,8 +998,7 @@ pub(crate) async fn prepare_turn_request(
     }
 
     history_snapshot.retain(|m| {
-        (matches!(m.role.as_str(), "user" | "assistant" | "tool")
-            && !m.content.starts_with('/'))
+        (matches!(m.role.as_str(), "user" | "assistant" | "tool") && !m.content.starts_with('/'))
             || is_model_directed_note(m)
     });
 
@@ -1068,8 +1068,6 @@ pub(crate) async fn prepare_turn_request(
 /// tool ran, a single cached compiler check is appended to the first mutating
 /// tool's result so build errors surface inline.
 
-
-
 /// One result message per call that will never run, so no call is left
 /// unanswered.
 ///
@@ -1134,7 +1132,11 @@ const MAX_COMPLETION_BLOCKS: u8 = 2;
 /// found the state it wanted already there for some unrelated reason, and took
 /// that as proof of its own edit. Capped so the gate cannot argue forever with a
 /// model that insists.
-pub(crate) fn completion_claims_unapplied_work(made_edits: bool, failed: usize, blocks: u8) -> bool {
+pub(crate) fn completion_claims_unapplied_work(
+    made_edits: bool,
+    failed: usize,
+    blocks: u8,
+) -> bool {
     !made_edits && failed > 0 && blocks < MAX_COMPLETION_BLOCKS
 }
 
@@ -1159,7 +1161,10 @@ pub(crate) fn active_todo_checkpoint(todos: &[crate::app::TodoItem]) -> Option<S
 
 /// Pair calls with the ids the provider assigned them, by position. Yields
 /// nothing under the text protocols, where calls are prose without identity.
-pub(crate) fn call_refs_for(calls: &[crate::tools::ToolCall], ids: &[String]) -> Vec<crate::app::ToolCallRef> {
+pub(crate) fn call_refs_for(
+    calls: &[crate::tools::ToolCall],
+    ids: &[String],
+) -> Vec<crate::app::ToolCallRef> {
     calls
         .iter()
         .zip(ids.iter())
@@ -1171,7 +1176,10 @@ pub(crate) fn call_refs_for(calls: &[crate::tools::ToolCall], ids: &[String]) ->
         .collect()
 }
 
-pub(crate) fn unanswered_call_results(calls: &[crate::app::ToolCallRef], reason: &str) -> Vec<ChatMessage> {
+pub(crate) fn unanswered_call_results(
+    calls: &[crate::app::ToolCallRef],
+    reason: &str,
+) -> Vec<ChatMessage> {
     calls
         .iter()
         .map(|call| {
