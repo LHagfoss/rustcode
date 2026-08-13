@@ -924,6 +924,23 @@ fn reasoning_prefixed_stream_keeps_completed_answer_lines_live() {
 }
 
 #[test]
+fn bare_thought_stream_stays_in_the_compact_reasoning_preview() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.current_response = "thoughtPlanning the response\n".to_owned();
+
+    let text = super::render_live_tail(&state, 80)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(text.contains("Thought"));
+    assert!(text.contains("Planning the response"));
+    assert!(!text.contains("thoughtPlanning"));
+}
+
+#[test]
 fn assistant_messages_use_a_gutter_after_soft_reflow() {
     use super::{AssistantRenderOptions, render_assistant_message};
 
