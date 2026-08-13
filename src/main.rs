@@ -165,6 +165,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    raw_cli::run_interactive_cli(
+        model_override.as_deref(),
+        cli_args.resume || cli_args.continue_session,
+    )
+    .await?;
+    crate::config::flush_history();
+    return Ok(());
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -208,6 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app_state_struct.api_base_url = profile.url.clone();
         app_state_struct.model_name = profile.model.clone();
     }
+
     let app_state = Arc::new(Mutex::new(app_state_struct));
 
     let client = reqwest::Client::builder()
