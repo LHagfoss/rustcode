@@ -572,9 +572,23 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
     assert!(super::is_hidden_system_notice(
         "[harness: stopped after 10 tool round(s) — 4 consecutive malformed tool-call blocks the harness could not parse. The task is NOT complete. Review the transcript above; if the remaining work is still valid, resume it in a new turn.]"
     ));
+    assert!(super::is_hidden_system_notice(
+        "[Oversized response: only the first 1 tool calls were kept (use_skill); 1 more were dropped. Anything the response claimed about their results was imagined — continue from the real results below.]"
+    ));
     assert!(!super::is_hidden_system_notice(
         "Notice: background task finished"
     ));
+}
+
+#[test]
+fn assistant_oversized_response_notice_renders_empty_block() {
+    let mut state = crate::app::AppState::new();
+    state.history.push(crate::app::ChatMessage::new(
+        "assistant",
+        "[Oversized response: only the first 1 tool calls were kept (use_skill); 1 more were dropped. Anything the response claimed about their results was imagined — continue from the real results below.]",
+    ));
+    let block = super::render_committed_history_block(&state, 0, 80);
+    assert!(block.is_empty());
 }
 
 #[test]

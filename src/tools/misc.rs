@@ -86,13 +86,13 @@ fn use_skill_schema() -> Value {
 
 pub const USE_SKILL: Tool = Tool {
     name: "use_skill",
-    description: "Load a skill by name to get its instructions and available files. Control-plane call: emit it ALONE in its response — any other tool calls batched with it are dropped.",
+    description: "Load a skill by name to get its instructions and available files. Read-only call: can be issued in parallel with other read operations or multiple skills.",
     arguments: r#"{"name": "skill name"}"#,
     handler: use_skill,
     requires_confirmation: false,
     schema: use_skill_schema,
     capabilities: &[ToolCapability::SessionState],
-    safety: ToolSafety::ControlPlane,
+    safety: ToolSafety::ReadOnly,
 };
 
 pub fn ask_question(args: &Value) -> Result<String, String> {

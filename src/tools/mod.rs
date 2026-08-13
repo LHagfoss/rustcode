@@ -585,6 +585,7 @@ pub fn is_agent_tool(name: &str) -> bool {
 /// default and must not be parallelized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSafety {
+    #[allow(dead_code)]
     ControlPlane,
     ReadOnly,
     WorkspaceMutation,
@@ -883,7 +884,7 @@ pub fn tool_system_prompt(
 - A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
 - Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
 - Editing an existing file: use `replace_file_content` (for a single edit, pass `target_content` and `replacement_content` with `start_line` and `end_line`; for multiple edits, pass an `edits` array with `old_string` and `new_string`). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
-- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, and `search_web` run in parallel when emitted in the same response, so when you need several facts at once, ask for them at once — searching four paths is one thought, not four turns. Reads whose arguments depend on an earlier result must of course wait for it. Exception: `use_skill` is a control-plane call and must always be emitted ALONE — any calls batched with it are dropped.\n\
+- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel when emitted in the same response, so when you need several facts or skills at once, ask for them at once — searching four paths or loading two skills is one thought, not two turns. Reads whose arguments depend on an earlier result must of course wait for it.\n\
 - ONE CHANGE AT A TIME: anything that writes, runs a command, or delegates (`replace_file_content`, `write_to_file`, `run_command`, `spawn_agent`, …) executes alone and must be grounded in results you already have. Emit at most 4 such calls in a response, and prefer one. Never output a speculative chain that predicts its own results — edits, builds, commits, and a PR in a single turn is a story about what might happen, not work.\n\
 - Chaining shell commands is different from speculative tool batching: it is encouraged for small, related, inspectable command sequences, especially status/log/diff checks and the verified publish sequence. Inspect output before deciding the next mutation.\n\
 - DO NOT use `run_command` with `cat`, `sed`, `head`, `tail`, or `less`/`more` to read/search files. Always use the native `view_file` or `grep` tools.\n\
@@ -1551,7 +1552,7 @@ mod tests {
         assert!(needs_confirmation("run_command"));
 
         assert_eq!(tool_capabilities("use_skill"), &[SessionState]);
-        assert_eq!(tool_safety("use_skill"), ToolSafety::ControlPlane);
+        assert_eq!(tool_safety("use_skill"), ToolSafety::ReadOnly);
         assert!(!needs_confirmation("use_skill"));
 
         // manage_task deliberately stays Unknown (confirmation via authorize_tool).
@@ -2009,8 +2010,9 @@ mod tests {
 
     #[test]
     fn tool_safety_is_conservative_and_parallelizes_only_reads() {
-        assert_eq!(tool_safety("use_skill"), ToolSafety::ControlPlane);
+        assert_eq!(tool_safety("use_skill"), ToolSafety::ReadOnly);
         assert_eq!(tool_safety("grep"), ToolSafety::ReadOnly);
+        assert!(supports_parallel_execution("use_skill"));
         assert!(supports_parallel_execution("view_file"));
         assert_eq!(tool_safety("write_to_file"), ToolSafety::WorkspaceMutation);
         assert!(!supports_parallel_execution("write_to_file"));
@@ -2020,7 +2022,7 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_calls_are_isolated_from_side_effects() {
+    fn skills_are_read_only_and_not_isolated_as_control_plane() {
         let calls = vec![
             ToolCall {
                 name: "use_skill".to_string(),
@@ -2034,9 +2036,8 @@ mod tests {
 
         let (isolated, deferred) = isolate_control_plane_call(calls);
 
-        assert_eq!(isolated.len(), 1);
-        assert_eq!(isolated[0].name, "use_skill");
-        assert_eq!(deferred, 1);
+        assert_eq!(isolated.len(), 2);
+        assert_eq!(deferred, 0);
     }
 
     // Regression: session 1785595713111. Asked to plan a --json flag, the model
@@ -2366,26 +2367,21 @@ mod tests {
     }
 
     #[test]
-    fn truncate_isolates_control_plane_calls() {
+    fn truncate_allows_multiple_skills_and_parallel_reads() {
         let call = |name: &str| ToolCall {
             name: name.to_string(),
             arguments: serde_json::json!({}),
         };
 
-        // Leading control-plane call runs alone.
-        let (kept, dropped) =
-            truncate_tool_batch(vec![call("use_skill"), call("grep"), call("run_command")]);
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].name, "use_skill");
-        assert_eq!(dropped, 2);
-
-        // A control-plane call later in the batch is the boundary: the prefix
-        // before it is kept so the remainder can be re-emitted next turn.
-        let (kept, dropped) =
-            truncate_tool_batch(vec![call("grep"), call("use_skill"), call("run_command")]);
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].name, "grep");
-        assert_eq!(dropped, 2);
+        // Multiple use_skill calls and read tools run together in parallel.
+        let (kept, dropped) = truncate_tool_batch(vec![
+            call("use_skill"),
+            call("use_skill"),
+            call("grep"),
+            call("run_command"),
+        ]);
+        assert_eq!(kept.len(), 4);
+        assert_eq!(dropped, 0);
     }
 
     #[test]
@@ -2438,7 +2434,7 @@ mod tests {
                     arguments: serde_json::json!({"pattern": "x"}),
                 },
             ])
-            .is_err()
+            .is_ok()
         );
     }
 

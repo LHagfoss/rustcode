@@ -36,8 +36,8 @@ in [`src/network.rs`](src/network.rs) and
 
 Tool calls are validated against the registered schema before execution. The
 batch is truncated to the executor's limit rather than allowing the model's
-prose to describe results for calls that did not run. Control-plane calls such
-as `use_skill` are isolated from workspace calls.
+prose to describe results for calls that did not run. Read-only calls such
+as `use_skill` execute concurrently with other read operations.
 
 Every execution produces authoritative `ToolResultMetadata` alongside display
 text. The metadata records success, exit code, changed paths, truncation,
