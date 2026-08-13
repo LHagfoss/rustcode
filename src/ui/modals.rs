@@ -316,6 +316,120 @@ mod tests {
         assert_eq!(header_row, Some(24));
         assert!(header_row.unwrap() < input_area.y);
     }
+
+    #[test]
+    fn single_confirmation_with_preview_renders_in_short_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "list_directory".to_string(),
+            path: "src/".to_string(),
+            content_preview: "src/main.rs".to_string(),
+            content_bytes: 11,
+        }]);
+
+        let input_area = Rect::new(10, 5, 80, 6);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let confirmation_row = (0..12).find(|y| {
+            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
+            row.contains("Execute tool")
+        });
+        let rendered = (0..12)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(confirmation_row.is_some(), "rendered modal:\n{rendered}");
+        assert!(confirmation_row.unwrap() < input_area.y);
+        assert!(rendered.contains("src/"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
+        assert!(!rendered.contains("scroll"), "rendered modal:\n{rendered}");
+    }
+
+    #[test]
+    fn single_confirmation_keeps_scope_at_compact_height_boundary() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "list_directory".to_string(),
+            path: "src/".to_string(),
+            content_preview: "src/main.rs".to_string(),
+            content_bytes: 11,
+        }]);
+
+        let input_area = Rect::new(10, 7, 80, 6);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..14)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Execute tool"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("src/"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
+    }
+
+    #[test]
+    fn batch_confirmation_renders_in_short_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 11)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![
+            ToolConfirmation {
+                tool_name: "list_directory".to_string(),
+                path: "src/".to_string(),
+                content_preview: String::new(),
+                content_bytes: 0,
+            },
+            ToolConfirmation {
+                tool_name: "read_file".to_string(),
+                path: "Cargo.toml".to_string(),
+                content_preview: String::new(),
+                content_bytes: 0,
+            },
+        ]);
+
+        let input_area = Rect::new(10, 5, 80, 5);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let header_row = (0..11).find(|y| {
+            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
+            row.contains("Approve 2 tool calls in parallel?")
+        });
+        let rendered = (0..11)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(header_row.is_some(), "rendered modal:\n{rendered}");
+        assert!(header_row.unwrap() < input_area.y);
+        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
+    }
 }
 
 pub(super) fn render_thinking_picker_modal(
@@ -1327,7 +1441,9 @@ pub(super) fn render_tool_confirmation_modal(
         let has_preview = !confirmation.content_preview.trim().is_empty();
         let preview_lines = confirmation.content_preview.lines().count();
         let height = if has_preview {
-            ((preview_lines as u16) + 8).clamp(9, (screen_height.saturating_sub(4)).min(22))
+            ((preview_lines as u16) + 8)
+                .max(9)
+                .min((screen_height.saturating_sub(4)).min(22))
         } else {
             7
         };
@@ -1347,18 +1463,32 @@ pub(super) fn render_tool_confirmation_modal(
             horizontal: 2,
         });
 
+        let compact = inner_area.height < 5;
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),                               // 0: Header
-                Constraint::Length(1),                               // 1: Spacer
-                Constraint::Length(1),                               // 2: Tool & target line
-                Constraint::Length(1),                               // 3: Auto-confirm status
-                Constraint::Length(1),                               // 4: Spacer
-                Constraint::Min(if has_preview { 2 } else { 0 }),    // 5: Preview Diff / Content
-                Constraint::Length(if has_preview { 1 } else { 0 }), // 6: Spacer
-                Constraint::Length(1),                               // 7: Footer buttons
-            ])
+            .constraints(if compact {
+                [
+                    Constraint::Length(1), // 0: Tool & target line
+                    Constraint::Length(0), // 1: Spacer
+                    Constraint::Length(0), // 2: Tool & target line
+                    Constraint::Length(0), // 3: Auto-confirm status
+                    Constraint::Length(0), // 4: Spacer
+                    Constraint::Length(0), // 5: Preview Diff / Content
+                    Constraint::Length(0), // 6: Spacer
+                    Constraint::Length(1), // 7: Footer buttons
+                ]
+            } else {
+                [
+                    Constraint::Length(1),                               // 0: Header
+                    Constraint::Length(1),                               // 1: Spacer
+                    Constraint::Length(1),                               // 2: Tool & target line
+                    Constraint::Length(1),                               // 3: Auto-confirm status
+                    Constraint::Length(1),                               // 4: Spacer
+                    Constraint::Min(if has_preview { 2 } else { 0 }),    // 5: Preview Diff / Content
+                    Constraint::Length(if has_preview { 1 } else { 0 }), // 6: Spacer
+                    Constraint::Length(1),                               // 7: Footer buttons
+                ]
+            })
             .split(inner_area);
 
         let action_label = match confirmation.tool_name.as_str() {
@@ -1412,7 +1542,12 @@ pub(super) fn render_tool_confirmation_modal(
             ),
             Span::styled(size_str, Style::default().fg(COLOR_MUTED())),
         ]);
-        f.render_widget(Paragraph::new(tool_line), modal_chunks[2]);
+        let tool_area = if compact {
+            modal_chunks[0]
+        } else {
+            modal_chunks[2]
+        };
+        f.render_widget(Paragraph::new(tool_line), tool_area);
 
         let auto_confirm_status = if state.auto_confirm {
             "[x] Auto-confirm future tool calls"
@@ -1501,7 +1636,9 @@ pub(super) fn render_tool_confirmation_modal(
         }
 
         let total_lines = confirmation.content_preview.lines().count();
-        let scroll_info = if modal_chunks.len() > 5 && total_lines > modal_chunks[5].height as usize
+        let scroll_info = if modal_chunks.len() > 5
+            && modal_chunks[5].height > 0
+            && total_lines > modal_chunks[5].height as usize
         {
             format!(
                 "  ↑/↓ scroll ({}/{})",
@@ -1539,8 +1676,9 @@ pub(super) fn render_tool_confirmation_modal(
         f.render_widget(Paragraph::new(footer_line), modal_chunks[7]);
     } else {
         // Render batch confirmation modal
-        let height =
-            (confirmations.len() as u16 + 7).clamp(8, (screen_height.saturating_sub(4)).min(22));
+        let height = (confirmations.len() as u16 + 7)
+            .max(8)
+            .min((screen_height.saturating_sub(4)).min(22));
         let modal_area = input_anchor_rect(f, input_area, height);
         f.render_widget(Clear, modal_area);
         let modal_block = Block::default()
@@ -1555,16 +1693,28 @@ pub(super) fn render_tool_confirmation_modal(
             horizontal: 2,
         });
 
+        let compact = inner_area.height < (confirmations.len() as u16).saturating_add(5);
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),                       // Header
-                Constraint::Length(1),                       // Spacer
-                Constraint::Min(confirmations.len() as u16), // List of tools
-                Constraint::Length(1),                       // Auto-confirm option
-                Constraint::Length(1),                       // Spacer
-                Constraint::Length(1),                       // Footer/Actions
-            ])
+            .constraints(if compact {
+                [
+                    Constraint::Length(1), // Header
+                    Constraint::Length(0), // Spacer
+                    Constraint::Min(0),    // Truncated list of tools
+                    Constraint::Length(0), // Auto-confirm option
+                    Constraint::Length(0), // Spacer
+                    Constraint::Length(1), // Footer/Actions
+                ]
+            } else {
+                [
+                    Constraint::Length(1),                       // Header
+                    Constraint::Length(1),                       // Spacer
+                    Constraint::Min(confirmations.len() as u16), // List of tools
+                    Constraint::Length(1),                       // Auto-confirm option
+                    Constraint::Length(1),                       // Spacer
+                    Constraint::Length(1),                       // Footer/Actions
+                ]
+            })
             .split(inner_area);
 
         let header_line = Line::from(vec![Span::styled(
