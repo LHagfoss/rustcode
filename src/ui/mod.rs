@@ -1013,64 +1013,93 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Shows the most recently queued prompt on a thin line directly above the
-/// input box, padded with a blank row above and below, so a prompt typed and
-/// enqueued mid-stream doesn't vanish from view until it's actually sent.
-/// Renders nothing when the queue is empty — the caller already collapses
-/// this block to zero height in that case.
+/// Maximum queued user prompts previewed above the composer.
+const MAX_QUEUE_PREVIEW_ROWS: usize = 3;
+
+fn queued_user_prompts(state: &AppState) -> Vec<&str> {
+    state
+        .pending_queue
+        .iter()
+        .filter(|prompt| !prompt.starts_with("__task_wakeup__:"))
+        .rev()
+        .take(MAX_QUEUE_PREVIEW_ROWS)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn queue_preview_height(state: &AppState) -> u16 {
+    let rows = queued_user_prompts(state).len();
+    if rows == 0 { 0 } else { rows as u16 + 1 }
+}
+
+fn truncate_queue_prompt(prompt: &str, max_width: usize) -> String {
+    if prompt.width() <= max_width {
+        return prompt.to_owned();
+    }
+    let ellipsis_width = "…".width();
+    let mut text = String::new();
+    let mut width = 0;
+    for ch in prompt.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width + ellipsis_width > max_width {
+            break;
+        }
+        text.push(ch);
+        width += ch_width;
+    }
+    text.push('…');
+    text
+}
+
+/// Shows the most recent queued user prompts directly above the input box.
+/// Internal wakeups stay queued but never consume composer space or leak into
+/// this transcript-like preview.
 fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
-    let Some(latest) = state.pending_queue.last() else {
+    let prompts = queued_user_prompts(state);
+    if prompts.is_empty() {
         return;
-    };
+    }
     let block = chunks[1];
-    if block.height < 3 {
+    if block.height == 0 {
         return;
     }
     let show_picker = state.modal_open();
-    let area = ratatui::layout::Rect::new(block.x, block.y + 1, block.width, 1);
-
-    let label = format!("queued ({}): ", state.pending_queue.len());
-    let hint = "press ↑ to edit";
-    let max_text_width = (area.width as usize).saturating_sub(label.len() + hint.len() + 2);
-    let preview: String = latest.chars().take(max_text_width).collect();
-    let truncated = latest.chars().count() > max_text_width;
-    let text = if truncated {
-        format!("{preview}…")
-    } else {
-        preview
-    };
-
-    let left_spans = vec![
-        Span::styled(
-            label,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-        Span::styled(
-            text,
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-    ];
-    let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
-
+    let queued_count = state
+        .pending_queue
+        .iter()
+        .filter(|prompt| !prompt.starts_with("__task_wakeup__:"))
+        .count();
+    let header = Line::from(Span::styled(
+        format!("queued ({queued_count}) · ↑ edit last"),
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    ));
     f.render_widget(
-        Paragraph::new(Line::from(left_spans)).style(Style::default().bg(COLOR_BG())),
-        area,
+        Paragraph::new(header).style(Style::default().bg(COLOR_BG())),
+        ratatui::layout::Rect::new(block.x, block.y, block.width, 1),
     );
 
-    if area.width as usize > left_width + hint.len() {
-        let hint_area = ratatui::layout::Rect::new(
-            area.x + area.width - hint.len() as u16,
-            area.y,
-            hint.len() as u16,
-            1,
+    for (row, prompt) in prompts.into_iter().enumerate() {
+        let prefix = "  › ";
+        let preview = truncate_queue_prompt(
+            prompt,
+            (block.width as usize).saturating_sub(prefix.width()),
         );
+        let line = Line::from(vec![
+            Span::styled(
+                prefix,
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+            Span::styled(
+                preview,
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ]);
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                hint,
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-            )))
-            .style(Style::default().bg(COLOR_BG())),
-            hint_area,
+            Paragraph::new(line).style(Style::default().bg(COLOR_BG())),
+            ratatui::layout::Rect::new(block.x, block.y + row as u16 + 1, block.width, 1),
         );
     }
 }
@@ -2458,7 +2487,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
     let input_lines = raw_input_lines.min(8);
     let input_height = input_lines + 2;
-    let queue_block_height = if state.pending_queue.is_empty() { 0 } else { 3 };
+    let queue_block_height = queue_preview_height(state);
 
     let max_chat_height = f
         .area()
