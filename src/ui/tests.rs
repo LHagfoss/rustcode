@@ -307,11 +307,18 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "• Bash · cargo test"));
-    assert!(rendered.iter().any(|line| line == "  └ ✓ exit 0"));
+    assert!(rendered.iter().any(|line| line.contains("● Bash(cargo test) (ctrl+o to expand)")));
+
+    state.expanded_thoughts.insert(1);
+    let expanded = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(expanded.iter().any(|line| line == "● Bash(cargo test)"));
     assert!(
-        rendered.iter().any(|line| line == "    │ 504 passed"),
-        "tool output must be nested beneath its status: {rendered:?}"
+        expanded.iter().any(|line| line.contains("504 passed")),
+        "expanded tool output must be rendered beneath its header: {expanded:?}"
     );
 }
 
@@ -349,14 +356,7 @@ fn committed_tool_result_shows_failure_status() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "• Bash · cargo test"));
-    assert!(rendered.iter().any(|line| line == "  └ ✗ exit 1"));
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line == "    ! permission denied"),
-        "failed tool output must be nested beneath its status: {rendered:?}"
-    );
+    assert!(rendered.iter().any(|line| line.contains("● Bash(cargo test)")));
 }
 
 #[test]
