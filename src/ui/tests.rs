@@ -307,18 +307,10 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("● Bash(cargo test) (ctrl+o to expand)")));
-
-    state.expanded_thoughts.insert(1);
-    let expanded = super::render_committed_history_block(&state, 1, 80)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-
-    assert!(expanded.iter().any(|line| line == "● Bash(cargo test)"));
+    assert!(rendered.iter().any(|line| line == "• Ran cargo test"));
     assert!(
-        expanded.iter().any(|line| line.contains("504 passed")),
-        "expanded tool output must be rendered beneath its header: {expanded:?}"
+        rendered.iter().any(|line| line.contains("504 passed")),
+        "command output must be rendered beneath its header: {rendered:?}"
     );
 }
 
@@ -356,7 +348,7 @@ fn committed_tool_result_shows_failure_status() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("● Bash(cargo test)")));
+    assert!(rendered.iter().any(|line| line.contains("• Ran cargo test")));
 }
 
 #[test]
@@ -390,7 +382,201 @@ fn use_skill_renders_in_committed_history() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("● UseSkill(clockify)")));
+    assert!(rendered.iter().any(|line| line == "• Tool"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.starts_with("  └ UseSkill clockify"))
+    );
+}
+
+#[test]
+fn exploration_results_group_and_deduplicate_child_rows() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-list-1".to_owned(),
+                name: "list_directory".to_owned(),
+                arguments: r#"{"path":"src"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-search".to_owned(),
+                name: "grep".to_owned(),
+                arguments: r#"{"pattern":"renderer","path":"src"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-list-2".to_owned(),
+                name: "list_directory".to_owned(),
+                arguments: r#"{"path":"src"}"#.to_owned(),
+            },
+        ]));
+    for (id, name, content) in [
+        ("call-list-1", "list_directory", "list_directory: ui/"),
+        ("call-search", "grep", "grep: src/ui/mod.rs:1"),
+        ("call-list-2", "list_directory", "list_directory: ui/"),
+    ] {
+        state.history.push(
+            ChatMessage::new("tool", content)
+                .answering(Some(id.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: name.to_owned(),
+                    arguments_hash: String::new(),
+                    success: true,
+                    exit_code: None,
+                    changed_paths: Vec::new(),
+                    truncated: false,
+                    full_output_artifact: None,
+                }),
+        );
+    }
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1, 2, 3], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Explored");
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|line| *line == "  └ List src")
+            .count(),
+        1
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line == "    Search renderer in src")
+    );
+}
+
+#[test]
+fn exploration_results_match_repeated_calls_without_ids_in_order() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "unused-1".to_owned(),
+                name: "list_directory".to_owned(),
+                arguments: r#"{"path":"src"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "unused-2".to_owned(),
+                name: "list_directory".to_owned(),
+                arguments: r#"{"path":"tests"}"#.to_owned(),
+            },
+        ]));
+    for content in ["list_directory: ui/", "list_directory: fixtures/"] {
+        state.history.push(
+            ChatMessage::new("tool", content).with_tool_result(ToolResultRecord {
+                tool_name: "list_directory".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                exit_code: None,
+                changed_paths: Vec::new(),
+                truncated: false,
+                full_output_artifact: None,
+            }),
+        );
+    }
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line == "  └ List src"));
+    assert!(rendered.iter().any(|line| line == "    List tests"));
+}
+
+#[test]
+fn command_preview_preserves_the_output_tail() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"cargo test"}"#.to_owned(),
+        }]),
+    );
+    let body = (0..20)
+        .map(|index| format!("line {index}"))
+        .chain(std::iter::once("error: build failed".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            format!("run_command: exit code: 1\nstderr:\n{body}"),
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            arguments_hash: String::new(),
+            success: false,
+            exit_code: Some(1),
+            changed_paths: Vec::new(),
+            truncated: false,
+            full_output_artifact: None,
+        }),
+    );
+
+    let rendered = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line.contains("… +")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("error: build failed"))
+    );
+}
+
+#[test]
+fn expanded_generic_tool_preserves_its_result_body() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "custom_lookup".to_owned(),
+            arguments: r#"{"query":"renderer"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "custom_lookup: first result\nsecond result")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "custom_lookup".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                exit_code: None,
+                changed_paths: Vec::new(),
+                truncated: false,
+                full_output_artifact: None,
+            }),
+    );
+    state.expanded_thoughts.insert(1);
+
+    let rendered = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line.contains("first result")));
+    assert!(rendered.iter().any(|line| line.contains("second result")));
 }
 
 #[test]
@@ -1056,7 +1242,7 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
         .iter()
         .filter(|line| !line.spans.is_empty())
         .collect();
-    assert_eq!(prose[0].spans[0].content, "  ");
+    assert_eq!(prose[0].spans[0].content, "• ");
     let first_line = prose[0]
         .spans
         .iter()
@@ -1064,6 +1250,17 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
         .collect::<String>();
     assert!(first_line.contains("one two"));
     assert_eq!(prose[1].spans[0].content, "  ");
+}
+
+#[test]
+fn streamed_assistant_chunks_only_bullet_the_first_chunk() {
+    let state = AppState::new();
+    let first = super::render_committed_assistant_chunk(&state, "first line\n", 80, false);
+    let continuation =
+        super::render_committed_assistant_chunk(&state, "second line\n", 80, true);
+
+    assert_eq!(first[0].spans[0].content, "• ");
+    assert_eq!(continuation[0].spans[0].content, "  ");
 }
 
 #[test]
@@ -1088,14 +1285,15 @@ fn assistant_message_uses_one_gutter_across_paragraphs() {
         },
     );
 
-    let prefixes: Vec<_> = lines
+    let prefixes = lines
         .iter()
+        .filter(|line| !line.spans.is_empty())
         .filter_map(|line| line.spans.first())
         .map(|span| span.content.as_ref())
-        .filter(|prefix| *prefix == "  ")
-        .collect();
+        .collect::<Vec<_>>();
 
-    assert_eq!(prefixes.len(), 2);
+    assert_eq!(prefixes.first(), Some(&"• "));
+    assert!(prefixes.iter().skip(1).all(|prefix| *prefix == "  "));
 }
 
 #[test]
@@ -1132,7 +1330,7 @@ fn committed_assistant_message_has_one_trailing_separator() {
     let block = super::render_committed_assistant_text(&state, "Finished.", 80);
 
     assert_eq!(block.len(), 2);
-    assert_eq!(block[0].spans[0].content, "  ");
+    assert_eq!(block[0].spans[0].content, "• ");
     assert!(block[1].spans.is_empty());
 }
 
