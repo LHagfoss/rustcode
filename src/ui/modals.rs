@@ -533,7 +533,7 @@ pub(super) fn render_protocol_picker_modal(
     );
 }
 
-/// Render the model picker modal overlay.
+/// Render the model picker directly above the chat input.
 pub(super) fn render_model_picker_modal(
     f: &mut Frame,
     state: &AppState,
@@ -545,98 +545,47 @@ pub(super) fn render_model_picker_modal(
         .model_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    let modal_area = input_anchor_rect(f, input_area, 14);
+    let picker_area = input_anchor_rect(f, input_area, 14);
+    let header_area = ratatui::layout::Rect::new(
+        picker_area.x,
+        picker_area.y,
+        picker_area.width,
+        1,
+    );
+    let list_area = ratatui::layout::Rect::new(
+        picker_area.x,
+        picker_area.y.saturating_add(1),
+        picker_area.width,
+        picker_area.height.saturating_sub(1),
+    );
 
-    // Clear the background to prevent text bleed-through
-    f.render_widget(Clear, modal_area);
-
-    let modal_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(COLOR_PANEL()));
-
-    f.render_widget(modal_block, modal_area);
-
-    let inner_area = modal_area.inner(Margin {
-        vertical: 1,
-        horizontal: 3,
-    });
-
-    // Layout constraints inside modal: Header (1), Search (1), List (Min), Footer (1)
-    let modal_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // Header
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Search
-            Constraint::Length(1), // Spacer
-            Constraint::Min(3),    // List area
-            Constraint::Length(1), // Footer
-        ])
-        .split(inner_area);
-
-    // 1. Modal Header
-    let header_line = Line::from(vec![
+    let search = if state.model_picker_search.is_empty() {
+        "type to search".to_owned()
+    } else {
+        state.model_picker_search.clone()
+    };
+    let header = Line::from(vec![
         Span::styled(
             "Select model",
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(15) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(format!(" · {search}"), Style::default().fg(COLOR_MUTED())),
+        Span::styled(" · ↑↓ enter esc", Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
-        modal_chunks[0],
+        Paragraph::new(header).style(Style::default().bg(COLOR_PANEL())),
+        header_area,
     );
 
-    // 2. Search Box with cursor (flashing peach block)
-    let search_line = if state.model_picker_search.is_empty() {
-        Line::from(vec![
-            Span::styled("█", Style::default().fg(COLOR_PRIMARY())),
-            Span::styled("Search", Style::default().fg(COLOR_MUTED())),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                state.model_picker_search.clone(),
-                Style::default().fg(COLOR_TEXT()),
-            ),
-            Span::styled("█", Style::default().fg(COLOR_PRIMARY())),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(search_line).style(Style::default().bg(COLOR_PANEL())),
-        modal_chunks[2],
-    );
-
-    // 3. Models List
     let mut list_lines = Vec::new();
-    let mut current_group = String::new();
-
     for (idx, item) in filtered_items.iter().enumerate() {
-        if item.group != current_group {
-            current_group = item.group.clone();
-            list_lines.push(Line::from("")); // spacer
-            list_lines.push(Line::from(Span::styled(
-                current_group.clone(),
-                Style::default()
-                    .fg(COLOR_PRIMARY())
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-
         let is_selected = selected_idx == idx;
         let line = if is_selected {
-            // Selected row: solid Peach background block
             let left_text = format!(" ● {}", item.name);
             let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.len() + item.desc.len());
+                (list_area.width as usize).saturating_sub(left_text.len() + item.desc.len());
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -657,7 +606,7 @@ pub(super) fn render_model_picker_modal(
         } else {
             let left_text = format!("   {}", item.name);
             let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.len() + item.desc.len());
+                (list_area.width as usize).saturating_sub(left_text.len() + item.desc.len());
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -667,48 +616,20 @@ pub(super) fn render_model_picker_modal(
         list_lines.push(line);
     }
 
-    // Scrollable widget viewport
-    let list_height = modal_chunks[4].height as usize;
-    // Find the actual line index in list_lines for the selected item (accounting for group headers)
-    let mut list_line_idx = 0;
-    let mut target_list_idx: usize = 0;
-    for (i, item) in filtered_items.iter().enumerate() {
-        if i == 0 || item.group != filtered_items[i - 1].group {
-            list_line_idx += 2; // blank line + group header
-        }
-        if i == selected_idx {
-            target_list_idx = list_line_idx;
-            break;
-        }
-        list_line_idx += 1;
-    }
+    let list_height = list_area.height as usize;
     let total_lines = list_lines.len();
     let scroll_y: u16 = if total_lines <= list_height {
         0
     } else {
-        let ideal = target_list_idx.saturating_sub(list_height / 3);
-        let lo = target_list_idx.saturating_sub(list_height - 1);
-        let hi = target_list_idx.min(total_lines - list_height);
+        let ideal = selected_idx.saturating_sub(list_height / 3);
+        let lo = selected_idx.saturating_sub(list_height.saturating_sub(1));
+        let hi = selected_idx.min(total_lines - list_height);
         ideal.clamp(lo, hi)
     } as u16;
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(list_paragraph, modal_chunks[4]);
-
-    // 4. Modal Footer
-    let footer_line = Line::from(vec![
-        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
-        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
-        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
-        Span::styled("search ", Style::default().fg(COLOR_TEXT())),
-        Span::styled("type", Style::default().fg(COLOR_MUTED())),
-    ]);
-    f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
-        modal_chunks[5],
-    );
+    f.render_widget(list_paragraph, list_area);
 }
 
 /// Render the session history picker modal overlay (/history).
@@ -1300,91 +1221,46 @@ pub(super) fn render_command_picker_modal(
         .command_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    let modal_area = input_anchor_rect(f, input_area, 14);
-
-    f.render_widget(Clear, modal_area);
-
-    let modal_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(COLOR_BG()));
-
-    f.render_widget(modal_block, modal_area);
-
-    let inner_area = modal_area.inner(Margin {
-        vertical: 1,
-        horizontal: 3,
-    });
-
-    let modal_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(3),
-        ])
-        .split(inner_area);
-
-    let header_line = Line::from(vec![
+    let picker_area = input_anchor_rect(f, input_area, 14);
+    let header_area = ratatui::layout::Rect::new(
+        picker_area.x,
+        picker_area.y,
+        picker_area.width,
+        1,
+    );
+    let list_area = ratatui::layout::Rect::new(
+        picker_area.x,
+        picker_area.y.saturating_add(1),
+        picker_area.width,
+        picker_area.height.saturating_sub(1),
+    );
+    let search_label = if state.command_picker_search.is_empty() {
+        "type to search".to_owned()
+    } else {
+        state.command_picker_search.clone()
+    };
+    let header = Line::from(vec![
         Span::styled(
             "Commands",
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(12) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(format!(" · {search_label}"), Style::default().fg(COLOR_MUTED())),
+        Span::styled(" · ↑↓ enter esc", Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
-        modal_chunks[0],
-    );
-
-    let search_line = if state.command_picker_search.is_empty() {
-        Line::from(vec![
-            Span::styled("█", Style::default().fg(COLOR_PRIMARY())),
-            Span::styled("Search", Style::default().fg(COLOR_MUTED())),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                state.command_picker_search.clone(),
-                Style::default().fg(COLOR_TEXT()),
-            ),
-            Span::styled("█", Style::default().fg(COLOR_PRIMARY())),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(search_line).style(Style::default().bg(COLOR_PANEL())),
-        modal_chunks[2],
+        Paragraph::new(header).style(Style::default().bg(COLOR_PANEL())),
+        header_area,
     );
 
     let mut list_lines = Vec::new();
-    let mut current_group = String::new();
-
     for (idx, item) in filtered_items.iter().enumerate() {
-        if item.group != current_group {
-            current_group = item.group.to_string();
-            list_lines.push(Line::from(""));
-            list_lines.push(Line::from(Span::styled(
-                current_group.clone(),
-                Style::default()
-                    .fg(COLOR_PRIMARY())
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-
         let is_selected = selected_idx == idx;
         let line = if is_selected {
             let name_part = format!(" {}", item.name);
             let padding_len =
-                (inner_area.width as usize).saturating_sub(name_part.len() + item.shortcut.len());
+                (list_area.width as usize).saturating_sub(name_part.len() + item.shortcut.len());
             Line::from(vec![
                 Span::styled(
                     name_part,
@@ -1405,7 +1281,7 @@ pub(super) fn render_command_picker_modal(
         } else {
             let name_part = format!("  {}", item.name);
             let padding_len =
-                (inner_area.width as usize).saturating_sub(name_part.len() + item.shortcut.len());
+                (list_area.width as usize).saturating_sub(name_part.len() + item.shortcut.len());
             Line::from(vec![
                 Span::styled(name_part, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -1418,33 +1294,20 @@ pub(super) fn render_command_picker_modal(
         list_lines.push(line);
     }
 
-    let list_height = modal_chunks[4].height as usize;
-    // Find the actual line index in list_lines for the selected item (accounting for group headers)
-    let mut list_line_idx = 0;
-    let mut target_list_idx: usize = 0;
-    for (i, item) in filtered_items.iter().enumerate() {
-        if i == 0 || item.group != filtered_items[i - 1].group {
-            list_line_idx += 2; // blank line + group header
-        }
-        if i == selected_idx {
-            target_list_idx = list_line_idx;
-            break;
-        }
-        list_line_idx += 1;
-    }
+    let list_height = list_area.height as usize;
     let total_lines = list_lines.len();
     let scroll_y: u16 = if total_lines <= list_height {
         0
     } else {
-        let ideal = target_list_idx.saturating_sub(list_height / 3);
-        let lo = target_list_idx.saturating_sub(list_height - 1);
-        let hi = target_list_idx.min(total_lines - list_height);
+        let ideal = selected_idx.saturating_sub(list_height / 3);
+        let lo = selected_idx.saturating_sub(list_height.saturating_sub(1));
+        let hi = selected_idx.min(total_lines - list_height);
         ideal.clamp(lo, hi)
     } as u16;
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(list_paragraph, modal_chunks[4]);
+    f.render_widget(list_paragraph, list_area);
 }
 
 pub(super) fn render_tool_confirmation_modal(
