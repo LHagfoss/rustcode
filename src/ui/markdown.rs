@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::lru::LruCache;
 use super::{
-    COLOR_BG, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP,
+    COLOR_BG, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT,
     get_themed_style,
 };
 
@@ -62,13 +62,16 @@ impl InlineStyle {
         if self.strike {
             modifier |= Modifier::CROSSED_OUT;
         }
+        if self.link {
+            modifier |= Modifier::UNDERLINED;
+        }
         modifier
     }
 }
 
 fn text_style(style: InlineStyle, show_picker: bool) -> ratatui::style::Style {
     let fg = if style.code {
-        COLOR_GREEN()
+        COLOR_SECONDARY()
     } else if style.link {
         COLOR_PRIMARY()
     } else {
@@ -79,13 +82,13 @@ fn text_style(style: InlineStyle, show_picker: bool) -> ratatui::style::Style {
 }
 
 fn heading_style(level: HeadingLevel, show_picker: bool) -> ratatui::style::Style {
-    let fg = match level {
-        HeadingLevel::H1 => COLOR_PRIMARY(),
-        HeadingLevel::H2 => COLOR_SECONDARY(),
-        HeadingLevel::H3 => COLOR_TIP(),
-        _ => COLOR_TEXT(),
+    let modifier = match level {
+        HeadingLevel::H1 => Modifier::BOLD | Modifier::UNDERLINED,
+        HeadingLevel::H2 => Modifier::BOLD,
+        HeadingLevel::H3 => Modifier::BOLD | Modifier::ITALIC,
+        HeadingLevel::H4 | HeadingLevel::H5 | HeadingLevel::H6 => Modifier::ITALIC,
     };
-    get_themed_style(fg, COLOR_BG(), Modifier::BOLD, show_picker)
+    get_themed_style(COLOR_TEXT(), COLOR_BG(), modifier, show_picker)
 }
 
 fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width: usize) {
@@ -184,6 +187,124 @@ pub(super) fn render_markdown<'a>(
     let lines = render_markdown_uncached(content, width, show_picker);
     cache.lock().unwrap().insert(key, lines.clone());
     lines
+}
+
+/// Unwrap a closed `md`/`markdown` fence only when its body contains a real
+/// Markdown table. Models sometimes fence tables for presentation, which
+/// would otherwise turn them into literal code instead of the width-aware
+/// table rendering used by the transcript.
+pub(super) fn unwrap_markdown_table_fences(content: &str) -> std::borrow::Cow<'_, str> {
+    if !content.contains("```") && !content.contains("~~~") {
+        return std::borrow::Cow::Borrowed(content);
+    }
+
+    #[derive(Clone, Copy)]
+    struct Fence {
+        marker: char,
+        len: usize,
+        blockquoted: bool,
+    }
+
+    fn strip_blockquote_prefix(line: &str) -> &str {
+        let mut rest = line.trim_start();
+        while let Some(stripped) = rest.strip_prefix('>') {
+            rest = stripped.trim_start();
+        }
+        rest
+    }
+
+    fn scan_fence(line: &str) -> Option<(char, usize, &str, bool)> {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let leading = line.bytes().take_while(|byte| *byte == b' ').count();
+        if leading > 3 {
+            return None;
+        }
+        let trimmed = &line[leading..];
+        let blockquoted = trimmed.starts_with('>');
+        let scan = strip_blockquote_prefix(trimmed);
+        let marker = scan.chars().next()?;
+        if marker != '`' && marker != '~' {
+            return None;
+        }
+        let len = scan
+            .chars()
+            .take_while(|character| *character == marker)
+            .count();
+        (len >= 3).then_some((marker, len, &scan[len..], blockquoted))
+    }
+
+    let is_table_delimiter = |line: &str| {
+        let trimmed = strip_blockquote_prefix(line).trim().trim_matches('|');
+        let cells = trimmed.split('|').map(str::trim).collect::<Vec<_>>();
+        !cells.is_empty()
+            && cells.iter().all(|cell| {
+                let dashes = cell.trim_matches(':');
+                dashes.len() >= 3 && dashes.chars().all(|character| character == '-')
+            })
+    };
+    let contains_table = |body: &[&str]| {
+        body.windows(2).any(|pair| {
+            let header = strip_blockquote_prefix(pair[0]).trim();
+            header.contains('|') && !is_table_delimiter(header) && is_table_delimiter(pair[1])
+        })
+    };
+
+    let lines = content.split_inclusive('\n').collect::<Vec<_>>();
+    let mut output = String::with_capacity(content.len());
+    let mut changed = false;
+    let mut index = 0;
+    while index < lines.len() {
+        let Some((marker, len, info, blockquoted)) = scan_fence(lines[index]) else {
+            output.push_str(lines[index]);
+            index += 1;
+            continue;
+        };
+        let info = info.split_whitespace().next().unwrap_or_default();
+        if !info.eq_ignore_ascii_case("md") && !info.eq_ignore_ascii_case("markdown") {
+            output.push_str(lines[index]);
+            index += 1;
+            continue;
+        }
+        let fence = Fence {
+            marker,
+            len,
+            blockquoted,
+        };
+
+        let close = (index + 1..lines.len()).find(|&line_index| {
+            scan_fence(lines[line_index]).is_some_and(
+                |(close_marker, close_len, trailing, close_blockquoted)| {
+                    close_marker == fence.marker
+                        && close_len >= fence.len
+                        && trailing.trim().is_empty()
+                        && (!fence.blockquoted || close_blockquoted)
+                },
+            )
+        });
+        let Some(close) = close else {
+            for line in &lines[index..] {
+                output.push_str(line);
+            }
+            break;
+        };
+        if contains_table(&lines[index + 1..close]) {
+            for line in &lines[index + 1..close] {
+                output.push_str(line);
+            }
+            changed = true;
+        } else {
+            for line in &lines[index..=close] {
+                output.push_str(line);
+            }
+        }
+        index = close + 1;
+    }
+
+    if changed {
+        std::borrow::Cow::Owned(output)
+    } else {
+        std::borrow::Cow::Borrowed(content)
+    }
 }
 
 fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
@@ -290,9 +411,9 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 .or_else(|| {
                     (quote_depth > 0).then(|| {
                         Span::styled(
-                            "│ ".repeat(quote_depth),
+                            "> ".repeat(quote_depth),
                             get_themed_style(
-                                COLOR_MUTED(),
+                                COLOR_GREEN(),
                                 COLOR_BG(),
                                 Modifier::empty(),
                                 show_picker,
@@ -560,7 +681,8 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         )));
     };
 
-    let sanitized = sanitize_markdown(content);
+    let normalized = unwrap_markdown_table_fences(content);
+    let sanitized = sanitize_markdown(&normalized);
     for event in Parser::new_ext(&sanitized, Options::all()) {
         match event {
             Event::Start(Tag::Paragraph) => {}
@@ -583,6 +705,10 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     list_continuation.as_deref(),
                 );
                 heading = Some(level);
+                paragraph.push(Span::styled(
+                    format!("{} ", "#".repeat(level as usize)),
+                    heading_style(level, show_picker),
+                ));
             }
             Event::End(TagEnd::Heading { .. }) => {
                 if !paragraph.is_empty() {
@@ -648,7 +774,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 } else {
                     format!("{}• ", indent)
                 };
-                let quote_prefix = "│ ".repeat(quote_depth);
+                let quote_prefix = "> ".repeat(quote_depth);
                 list_continuation = Some(format!("{quote_prefix}{}", " ".repeat(marker.width())));
                 if !quote_prefix.is_empty() {
                     paragraph.push(Span::styled(
@@ -663,7 +789,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 }
                 paragraph.push(Span::styled(
                     marker,
-                    get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ));
             }
             Event::End(TagEnd::Item) => {
@@ -725,8 +851,8 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 }
                 if quote_depth > 0 && paragraph.is_empty() {
                     paragraph.push(Span::styled(
-                        "│ ".repeat(quote_depth),
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                        "> ".repeat(quote_depth),
+                        get_themed_style(COLOR_GREEN(), COLOR_BG(), Modifier::empty(), show_picker),
                     ));
                 }
                 let span_style = if let Some(level) = heading {
@@ -944,7 +1070,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(rendered.len() > 1, "fixture must wrap: {rendered:?}");
-        assert!(rendered.iter().all(|line| line.starts_with("│ ")));
+        assert!(rendered.iter().all(|line| line.starts_with("> ")));
     }
 
     #[test]
@@ -990,17 +1116,17 @@ mod tests {
     }
 
     #[test]
-    fn renders_lists_and_headings_without_markdown_tokens() {
+    fn renders_lists_and_keeps_codex_heading_markers() {
         let lines = render_markdown("# Title\n\n- one\n- two", 80, false, false);
         let text: String = lines
             .iter()
             .flat_map(|line| line.spans.iter())
             .map(|span| span.content.as_ref())
             .collect();
-        assert!(text.contains("Title"));
+        assert!(text.contains("# Title"));
         assert!(text.contains('•'));
         assert!(text.contains("one"));
-        assert!(!text.contains("# "));
+        assert!(text.contains("# "));
     }
 
     #[test]
@@ -1094,6 +1220,29 @@ mod tests {
         assert!(text.contains("agents-sdk"));
         assert!(text.contains("clockify"));
         assert!(text.contains("┌") || text.contains("Skill"));
+    }
+
+    #[test]
+    fn markdown_fenced_table_renders_as_a_table() {
+        let md = "```markdown\n| Tool | Purpose |\n| --- | --- |\n| grep | Search files |\n```";
+        let rendered = render_markdown(md, 80, false, false)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.starts_with('┌')));
+        assert!(rendered.iter().any(|line| line.contains("grep")));
+        assert!(rendered.iter().all(|line| !line.contains("```")));
+    }
+
+    #[test]
+    fn longer_blockquoted_markdown_fence_unwraps_a_table() {
+        let md =
+            "> ````markdown\n> | Tool | Purpose |\n> | --- | --- |\n> | grep | Search |\n> ````";
+        let normalized = super::unwrap_markdown_table_fences(md);
+
+        assert!(!normalized.contains("````"));
+        assert!(normalized.contains("> | Tool | Purpose |"));
     }
 
     #[test]

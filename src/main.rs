@@ -361,10 +361,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stable_rows = transcript_cursor.pending_stable_stream(&guard.current_response);
             if !stable_rows.is_empty() {
                 let stable = format!("{}\n", stable_rows.join("\n"));
+                let is_continuation = transcript_cursor.has_committed_stream();
                 let lines = crate::ui::render_committed_assistant_chunk(
                     &guard,
                     &stable,
                     terminal_width,
+                    is_continuation,
                 );
                 if !lines.is_empty() {
                     let height = Paragraph::new(lines.clone())
@@ -388,9 +390,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     blocks.push(banner);
                 }
             }
-            for index in history_range.clone() {
+            let mut index = history_range.start;
+            while index < history_range.end {
                 let message = &guard.history[index];
-                if message.role == "assistant" {
+                if message.role == "tool" {
+                    let group_end = (index + 1..history_range.end)
+                        .find(|&next| guard.history[next].role != "tool")
+                        .unwrap_or(history_range.end);
+                    let indices = (index..group_end).collect::<Vec<_>>();
+                    let mut block = crate::ui::render_committed_tool_result_group(
+                        &guard,
+                        &indices,
+                        terminal_width,
+                        false,
+                    );
+                    if !block.is_empty() {
+                        block.push(ratatui::text::Line::from(""));
+                        blocks.push(block);
+                    }
+                    index = group_end;
+                    continue;
+                } else if message.role == "assistant" {
+                    let is_continuation = transcript_cursor.has_committed_stream();
                     if let Some(remainder) =
                         transcript_cursor.take_final_stream_remainder(&message.content)
                     {
@@ -399,6 +420,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 &guard,
                                 &remainder,
                                 terminal_width,
+                                is_continuation,
                             );
                             if !chunk.is_empty() {
                                 chunk.push(ratatui::text::Line::from(""));
@@ -418,6 +440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         blocks.push(block);
                     }
                 }
+                index += 1;
             }
             for lines in blocks {
                 let height = Paragraph::new(lines.clone())

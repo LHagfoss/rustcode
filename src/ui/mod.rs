@@ -9,7 +9,7 @@ use highlight::{
     highlight_code_block, highlight_code_line, highlight_diff_line, render_unified_diff,
     wrap_code_spans,
 };
-use markdown::render_markdown;
+use markdown::{render_markdown, unwrap_markdown_table_fences};
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
 use modals::{
@@ -438,6 +438,39 @@ fn strip_rendered_tool_blocks(content: &str) -> String {
     output
 }
 
+fn push_assistant_content_line<'a>(
+    lines: &mut Vec<Line<'a>>,
+    mut line: Line<'a>,
+    emitted_gutter: &mut bool,
+    show_picker: bool,
+) {
+    if line.spans.is_empty() {
+        lines.push(line);
+        return;
+    }
+
+    let prefix = if *emitted_gutter { "  " } else { "• " };
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+    spans.push(Span::styled(
+        prefix,
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    ));
+    spans.append(&mut line.spans);
+    line.spans = spans;
+    *emitted_gutter = true;
+    lines.push(line);
+}
+
+fn demote_assistant_bullet(lines: &mut [Line<'_>]) {
+    if let Some(prefix) = lines
+        .iter_mut()
+        .filter_map(|line| line.spans.first_mut())
+        .find(|span| span.content == "• ")
+    {
+        prefix.content = "  ".into();
+    }
+}
+
 fn render_assistant_message<'a>(
     content: &'a str,
     lines: &mut Vec<Line<'a>>,
@@ -522,6 +555,8 @@ fn render_assistant_message<'a>(
     }
 
     let main_content = strip_rendered_tool_blocks(main_content);
+    let normalized_main_content = unwrap_markdown_table_fences(&main_content);
+    let main_content = normalized_main_content.as_ref();
     if !main_content.trim().is_empty() || is_generating {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
@@ -558,7 +593,7 @@ fn render_assistant_message<'a>(
         // rather than sitting only behind the glyphs, and the copy button is
         // right-aligned using display width — not byte length, which overcounts
         // the 📋 emoji and knocked the button out of alignment.
-        let box_width = (viewport_width as usize).max(10);
+        let box_width = content_width;
         let mut i = 0;
         let mut emitted_assistant_gutter = false;
         let mut fence_open = false;
@@ -647,7 +682,12 @@ fn render_assistant_message<'a>(
                             ),
                         ];
                         copy_registry.push((lines.len(), code_text.clone()));
-                        lines.push(Line::from(spans));
+                        push_assistant_content_line(
+                            lines,
+                            Line::from(spans),
+                            &mut emitted_assistant_gutter,
+                            show_picker,
+                        );
                         if !is_plain_lang(&current_lang) && !is_diff_lang(&current_lang) {
                             for body_spans in
                                 highlight_code_block(&code_text, &current_lang, show_picker)
@@ -664,12 +704,16 @@ fn render_assistant_message<'a>(
                                 content_spans.extend(body_spans.into_iter().map(|span| {
                                     Span::styled(span.content, span.style.bg(code_bg))
                                 }));
-                                lines.extend(wrap_code_spans(
-                                    content_spans,
-                                    box_width,
-                                    code_bg,
-                                    show_picker,
-                                ));
+                                for line in
+                                    wrap_code_spans(content_spans, box_width, code_bg, show_picker)
+                                {
+                                    push_assistant_content_line(
+                                        lines,
+                                        line,
+                                        &mut emitted_assistant_gutter,
+                                        show_picker,
+                                    );
+                                }
                             }
                             i = j.saturating_sub(1);
                         }
@@ -691,7 +735,12 @@ fn render_assistant_message<'a>(
                         || line_str.starts_with("--- ")
                         || line_str.starts_with("+++ ");
                     if !is_diff_metadata {
-                        lines.push(highlight_diff_line(line_str, box_width, show_picker));
+                        push_assistant_content_line(
+                            lines,
+                            highlight_diff_line(line_str, box_width, show_picker),
+                            &mut emitted_assistant_gutter,
+                            show_picker,
+                        );
                     }
                 } else {
                     // Body line: leading gutter space, per-language rendering,
@@ -725,12 +774,14 @@ fn render_assistant_message<'a>(
                         );
                         s
                     };
-                    lines.extend(wrap_code_spans(
-                        content_spans,
-                        box_width,
-                        COLOR_BG(),
-                        show_picker,
-                    ));
+                    for line in wrap_code_spans(content_spans, box_width, COLOR_BG(), show_picker) {
+                        push_assistant_content_line(
+                            lines,
+                            line,
+                            &mut emitted_assistant_gutter,
+                            show_picker,
+                        );
+                    }
                 }
                 i += 1;
             } else {
@@ -758,19 +809,12 @@ fn render_assistant_message<'a>(
                         continue;
                     }
 
-                    let prefix = "  ";
-                    emitted_assistant_gutter = true;
-                    let mut spans = vec![Span::styled(
-                        prefix,
-                        get_themed_style(
-                            COLOR_PRIMARY(),
-                            COLOR_BG(),
-                            Modifier::BOLD,
-                            show_picker,
-                        ),
-                    )];
-                    spans.extend(markdown_line.spans);
-                    lines.push(Line::from(spans));
+                    push_assistant_content_line(
+                        lines,
+                        markdown_line,
+                        &mut emitted_assistant_gutter,
+                        show_picker,
+                    );
                 }
             }
         }
@@ -1715,41 +1759,10 @@ fn tool_result_is_hidden(tool_name: &str) -> bool {
 }
 
 fn tool_result_action(state: &AppState, message_index: usize, tool_name: &str) -> (String, String) {
-    let tool_call_id = state
-        .history
-        .get(message_index)
-        .and_then(|message| message.tool_call_id.as_deref());
-    let structured_call = state.history[..message_index]
-        .iter()
-        .rev()
-        .filter(|message| message.role == "assistant")
-        .flat_map(|message| message.tool_calls.iter().rev())
-        .find(|call| match tool_call_id {
-            Some(id) => call.id == id,
-            None => call.name == tool_name,
-        });
-
-    if let Some(call) = structured_call {
-        let args = serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null);
-        return format_pi_tool_action(&call.name, &args);
-    }
-
-    let parsed_call = state.history[..message_index]
-        .iter()
-        .rev()
-        .filter(|message| message.role == "assistant")
-        .flat_map(|message| {
-            message
-                .resolved_tool_calls(state.active_tool_protocol())
-                .into_iter()
-                .rev()
-        })
-        .find(|call| call.name == tool_name);
-    if let Some(call) = parsed_call {
-        return format_pi_tool_action(&call.name, &call.arguments);
-    }
-
-    format_pi_tool_action(tool_name, &serde_json::Value::Null)
+    format_pi_tool_action(
+        tool_name,
+        &tool_call_arguments(state, message_index, tool_name),
+    )
 }
 
 fn tool_result_status(message: &ChatMessage, tool_name: &str, result: &str) -> (bool, String) {
@@ -1785,7 +1798,7 @@ fn tool_result_status(message: &ChatMessage, tool_name: &str, result: &str) -> (
 }
 
 fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Line<'static>> {
-    lines
+    let filtered = lines
         .into_iter()
         .filter(|line| {
             tool_name != "run_command"
@@ -1794,12 +1807,301 @@ fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Li
                     .iter()
                     .any(|span| span.content.trim_start().starts_with('✗'))
         })
+        .collect::<Vec<_>>();
+    let omitted = filtered.len().saturating_sub(6);
+    let visible = if omitted == 0 {
+        filtered
+    } else {
+        filtered[..3]
+            .iter()
+            .chain(&filtered[filtered.len() - 3..])
+            .cloned()
+            .collect()
+    };
+    let mut indented = visible
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if line.spans.is_empty() {
+                return line;
+            }
+            let mut spans = Vec::with_capacity(line.spans.len() + 1);
+            spans.push(Span::styled(
+                if index == 0 { "  └ " } else { "    " },
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+            ));
+            spans.extend(line.spans);
+            let mut indented = Line::from(spans);
+            indented.style = line.style;
+            indented.alignment = line.alignment;
+            indented
+        })
+        .collect::<Vec<_>>();
+    if omitted > 0 {
+        indented.insert(
+            3,
+            Line::from(Span::styled(
+                format!("    … +{omitted} lines"),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, false),
+            )),
+        );
+    }
+    indented
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolTranscriptKind {
+    Explored,
+    Command,
+    Tool,
+}
+
+fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
+    if crate::app::activity::is_exploration_tool(tool_name) {
+        ToolTranscriptKind::Explored
+    } else if tool_name == "run_command" {
+        ToolTranscriptKind::Command
+    } else {
+        ToolTranscriptKind::Tool
+    }
+}
+
+fn format_exploration_action(name: &str, args: &serde_json::Value) -> (String, String) {
+    match name {
+        "view_file" => {
+            let path = args
+                .get("TargetFile")
+                .or_else(|| args.get("AbsolutePath"))
+                .or_else(|| args.get("path"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("?");
+            ("Read".to_string(), contract_home_path(path))
+        }
+        "list_directory" | "list_dir" | "glob" => {
+            let path = args
+                .get("DirectoryPath")
+                .or_else(|| args.get("SearchPath"))
+                .or_else(|| args.get("path"))
+                .or_else(|| args.get("pattern"))
+                .and_then(|value| value.as_str())
+                .unwrap_or(".");
+            ("List".to_string(), contract_home_path(path))
+        }
+        "grep" | "grep_search" => {
+            let query = args
+                .get("Query")
+                .or_else(|| args.get("query"))
+                .or_else(|| args.get("pattern"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("?");
+            let path = args
+                .get("SearchPath")
+                .or_else(|| args.get("path"))
+                .and_then(|value| value.as_str())
+                .filter(|path| !path.is_empty() && *path != ".");
+            let target = path
+                .map(|path| format!("{query} in {}", contract_home_path(path)))
+                .unwrap_or_else(|| query.to_string());
+            ("Search".to_string(), target)
+        }
+        "find_symbol" | "codebase_search" | "codebase_symbol" => {
+            let query = args
+                .get("query")
+                .or_else(|| args.get("Query"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("?");
+            ("Search".to_string(), query.to_string())
+        }
+        "get_project_map" => ("Read".to_string(), "project map".to_string()),
+        _ => format_pi_tool_action(name, args),
+    }
+}
+
+struct ToolTranscriptEntry {
+    message_index: usize,
+    tool_name: String,
+    action: String,
+    target: String,
+    success: bool,
+    body: Vec<Line<'static>>,
+    kind: ToolTranscriptKind,
+}
+
+fn tool_call_arguments(
+    state: &AppState,
+    message_index: usize,
+    tool_name: &str,
+) -> serde_json::Value {
+    let message = &state.history[message_index];
+    if let Some(call_id) = message.tool_call_id.as_deref() {
+        return state.history[..message_index]
+            .iter()
+            .rev()
+            .filter(|message| message.role == "assistant")
+            .flat_map(|message| message.tool_calls.iter().rev())
+            .find(|call| call.id == call_id)
+            .and_then(|call| serde_json::from_str(&call.arguments).ok())
+            .unwrap_or(serde_json::Value::Null);
+    }
+
+    for (assistant_index, assistant) in state.history[..message_index].iter().enumerate().rev() {
+        if assistant.role != "assistant" {
+            continue;
+        }
+        let calls = assistant.resolved_tool_calls(state.active_tool_protocol());
+        if !calls.iter().any(|call| call.name == tool_name) {
+            continue;
+        }
+        let prior_same_name_results = state.history[assistant_index + 1..message_index]
+            .iter()
+            .filter(|message| {
+                message.role == "tool"
+                    && resolve_tool_result_name(
+                        None,
+                        message
+                            .tool_result
+                            .as_ref()
+                            .map(|result| result.tool_name.as_str()),
+                        &message.content,
+                    )
+                    .as_deref()
+                        == Some(tool_name)
+            })
+            .count();
+        if let Some(call) = calls
+            .into_iter()
+            .filter(|call| call.name == tool_name)
+            .nth(prior_same_name_results)
+        {
+            return call.arguments;
+        }
+    }
+
+    serde_json::Value::Null
+}
+
+fn tool_transcript_entry(
+    state: &AppState,
+    message_index: usize,
+    width: u16,
+    show_picker: bool,
+) -> Option<ToolTranscriptEntry> {
+    let message = state.history.get(message_index)?;
+    if message.role != "tool" {
+        return None;
+    }
+    let tool_name = resolve_tool_result_name(
+        None,
+        message
+            .tool_result
+            .as_ref()
+            .map(|result| result.tool_name.as_str()),
+        &message.content,
+    )
+    .unwrap_or_else(|| "Tool".to_owned());
+    if tool_result_is_hidden(&tool_name) {
+        return None;
+    }
+
+    let result = message
+        .content
+        .split_once(": ")
+        .map(|(_, result)| result)
+        .unwrap_or(&message.content);
+    let kind = tool_transcript_kind(&tool_name);
+    let (action, target) = if kind == ToolTranscriptKind::Explored {
+        let args = tool_call_arguments(state, message_index, &tool_name);
+        format_exploration_action(&tool_name, &args)
+    } else {
+        tool_result_action(state, message_index, &tool_name)
+    };
+    let (success, _) = tool_result_status(message, &tool_name, result);
+    let body = cached_tool_result(
+        &tool_name,
+        result,
+        width as usize,
+        &state.verbosity,
+        show_picker,
+    );
+
+    Some(ToolTranscriptEntry {
+        message_index,
+        tool_name,
+        action,
+        target,
+        success,
+        body,
+        kind,
+    })
+}
+
+fn tool_group_header(title: &str, success: bool, show_picker: bool) -> Line<'static> {
+    let bullet_color = if success {
+        COLOR_GREEN()
+    } else {
+        Color::Rgb(229, 123, 123)
+    };
+    Line::from(vec![
+        Span::styled(
+            "• ",
+            get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+        Span::styled(
+            title.to_owned(),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ),
+    ])
+}
+
+fn tool_child_line(
+    entry: &ToolTranscriptEntry,
+    first: bool,
+    show_hint: bool,
+    show_picker: bool,
+) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(
+            if first { "  └ " } else { "    " },
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ),
+        Span::styled(
+            entry.action.clone(),
+            get_themed_style(
+                COLOR_SECONDARY(),
+                COLOR_BG(),
+                Modifier::empty(),
+                show_picker,
+            ),
+        ),
+    ];
+    if !entry.target.is_empty() && entry.target != "?" {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            entry.target.clone(),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+    if show_hint {
+        spans.push(Span::styled(
+            " (ctrl+o to expand)",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn indent_generic_tool_body(lines: Vec<Line<'static>>, show_picker: bool) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
         .map(|line| {
             if line.spans.is_empty() {
                 return line;
             }
             let mut spans = Vec::with_capacity(line.spans.len() + 1);
-            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                "    ",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
             spans.extend(line.spans);
             let mut indented = Line::from(spans);
             indented.style = line.style;
@@ -1809,65 +2111,88 @@ fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Li
         .collect()
 }
 
-fn render_committed_tool_result(
+pub(crate) fn render_committed_tool_result_group(
     state: &AppState,
-    message_index: usize,
-    tool_name: &str,
-    result: &str,
+    message_indices: &[usize],
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(state.verbosity, crate::app::Verbosity::High) || tool_result_is_hidden(tool_name) {
+    if matches!(state.verbosity, crate::app::Verbosity::High) {
         return Vec::new();
     }
 
-    let message = &state.history[message_index];
-    let (action, target) = tool_result_action(state, message_index, tool_name);
-    let (success, _status) = tool_result_status(message, tool_name, result);
-    let bullet_color = if success {
-        COLOR_GREEN()
-    } else {
-        Color::Rgb(229, 123, 123)
-    };
+    let entries = message_indices
+        .iter()
+        .filter_map(|&index| tool_transcript_entry(state, index, width, show_picker))
+        .collect::<Vec<_>>();
+    let mut lines = Vec::new();
+    let mut index = 0;
+    while index < entries.len() {
+        let kind = entries[index].kind;
+        let group_end = if kind == ToolTranscriptKind::Command {
+            index + 1
+        } else {
+            (index + 1..entries.len())
+                .find(|&next| entries[next].kind != kind)
+                .unwrap_or(entries.len())
+        };
+        let group = &entries[index..group_end];
+        let success = group.iter().all(|entry| entry.success);
 
-    let mut header = vec![
-        Span::styled(
-            "● ",
-            get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-        Span::styled(
-            action,
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-        ),
-    ];
-    if !target.is_empty() && target != "?" {
-        header.push(Span::styled(
-            format!("({target})"),
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-    }
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        if kind == ToolTranscriptKind::Command {
+            let entry = &group[0];
+            let command = if entry.target.is_empty() || entry.target == "?" {
+                entry.action.clone()
+            } else {
+                entry.target.clone()
+            };
+            let title = format!("Ran {command}");
+            lines.push(tool_group_header(&title, success, show_picker));
+            lines.extend(indent_tool_result_body(
+                entry.body.clone(),
+                &entry.tool_name,
+            ));
+        } else {
+            let title = if kind == ToolTranscriptKind::Explored {
+                "Explored"
+            } else {
+                "Tool"
+            };
+            lines.push(tool_group_header(title, success, show_picker));
+            let mut seen = std::collections::HashSet::new();
+            let mut first_child = true;
+            for entry in group {
+                let identity = format!("{}\0{}", entry.action, entry.target);
+                if kind != ToolTranscriptKind::Explored || seen.insert(identity) {
+                    let is_expanded = state.expanded_thoughts.contains(&entry.message_index);
+                    let show_hint =
+                        kind == ToolTranscriptKind::Tool && !entry.body.is_empty() && !is_expanded;
+                    lines.push(tool_child_line(entry, first_child, show_hint, show_picker));
+                    first_child = false;
+                    if kind == ToolTranscriptKind::Tool && is_expanded {
+                        lines.extend(indent_generic_tool_body(entry.body.clone(), show_picker));
+                    }
+                }
+            }
+        }
 
-    let body = cached_tool_result(
-        tool_name,
-        result,
-        width as usize,
-        &state.verbosity,
-        show_picker,
-    );
-    let is_expanded = state.expanded_thoughts.contains(&message_index);
-
-    if !body.is_empty() && !is_expanded {
-        header.push(Span::styled(
-            " (ctrl+o to expand)",
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-        ));
-    }
-
-    let mut lines = vec![Line::from(header)];
-    if is_expanded {
-        lines.extend(indent_tool_result_body(body, tool_name));
+        index = group_end;
     }
     lines
+}
+
+fn render_committed_tool_result(
+    state: &AppState,
+    message_index: usize,
+    _tool_name: &str,
+    _result: &str,
+    width: u16,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    render_committed_tool_result_group(state, &[message_index], width, show_picker)
 }
 
 fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
@@ -2313,6 +2638,9 @@ pub(crate) fn render_live_tail(
                     last_copy_text: None,
                 },
             );
+            if scrollback::mutable_stream_is_continuation(&state.current_response) {
+                demote_assistant_bullet(&mut lines);
+            }
         }
     }
 
@@ -2421,6 +2749,7 @@ pub(crate) fn render_committed_assistant_chunk(
     _state: &AppState,
     content: &str,
     width: u16,
+    is_continuation: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut copy_clicks = Vec::new();
@@ -2439,6 +2768,9 @@ pub(crate) fn render_committed_assistant_chunk(
             last_copy_text: None,
         },
     );
+    if is_continuation {
+        demote_assistant_bullet(&mut lines);
+    }
     while lines.last().is_some_and(|l| l.spans.is_empty()) {
         lines.pop();
     }
