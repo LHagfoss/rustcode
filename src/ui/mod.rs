@@ -1889,8 +1889,13 @@ fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: b
     lines.push(Line::from(""));
 }
 
-fn push_new_chat_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
-    let label = " ✨ NEW CHAT ";
+fn push_centered_separator<'a>(
+    lines: &mut Vec<Line<'a>>,
+    label_text: &str,
+    width: u16,
+    show_picker: bool,
+) {
+    let label = format!(" {} ", label_text.trim());
     let remaining = (width as usize).saturating_sub(label.width());
     let left = remaining / 2;
     let right = remaining - left;
@@ -1900,6 +1905,10 @@ fn push_new_chat_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picke
         Span::styled(label, style),
         Span::styled("─".repeat(right), style),
     ]));
+}
+
+fn push_new_chat_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
+    push_centered_separator(lines, "✨ NEW CHAT", width, show_picker);
     lines.push(Line::from(""));
 }
 
@@ -1951,6 +1960,15 @@ fn render_status_panel<'a>(
 ) {
     let version = env!("CARGO_PKG_VERSION");
     let lower = content.to_ascii_lowercase();
+
+    if lower.starts_with("resumed session") {
+        push_centered_separator(lines, "Resumed Session", width, show_picker);
+        return;
+    }
+    if lower.contains("new chat started") {
+        push_centered_separator(lines, "✨ New Chat Started", width, show_picker);
+        return;
+    }
 
     let is_info_notice = lower.starts_with("session status")
         || lower.starts_with("session usage")

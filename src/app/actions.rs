@@ -1226,9 +1226,8 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     s.history_index = None;
     s.temp_input.clear();
     s.status = AppStatus::Idle;
-    let count = s.history.len();
-    let notice_text = format!("Resumed session \"{}\" ({} messages)", meta.title, count);
-    s.set_notice(notice_text);
+    s.history
+        .push(ChatMessage::new("system", format!("Resumed session \"{}\"", meta.title)));
     crate::config::save_session_history(&s.active_session_id, &s.history);
 }
 
