@@ -904,6 +904,26 @@ fn live_tail_excludes_committed_history() {
 }
 
 #[test]
+fn reasoning_prefixed_stream_keeps_completed_answer_lines_live() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.current_response =
+        "<think>\nPlanning\n</think>\n\nFirst answer line\nSecond answer line".to_owned();
+
+    let text = super::render_live_tail(&state, 80)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(
+        text.contains("First answer line"),
+        "completed answer rows must remain visible while the next row streams: {text:?}"
+    );
+    assert!(text.contains("Second answer line"));
+}
+
+#[test]
 fn assistant_messages_use_a_gutter_after_soft_reflow() {
     use super::{AssistantRenderOptions, render_assistant_message};
 
@@ -1022,6 +1042,46 @@ fn live_tail_uses_formatted_working_status() {
     assert!(text.contains("• Working"));
     assert!(text.contains("esc interrupt"));
     assert!(!text.contains("Working..."));
+}
+
+#[test]
+fn live_tail_adds_one_blank_row_below_working_status() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+
+    let lines = super::render_live_tail(&state, 80);
+
+    assert!(
+        lines.last().is_some_and(|line| line.spans.is_empty()),
+        "Working must have one blank row before the composer: {lines:?}"
+    );
+    let status_text = lines[lines.len() - 2]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(status_text.contains("Working"));
+}
+
+#[test]
+fn codex_shimmer_moves_a_visible_gradient_across_working() {
+    let early = super::shimmer_spans_at("Working", std::time::Duration::from_millis(850));
+    let later = super::shimmer_spans_at("Working", std::time::Duration::from_millis(1100));
+    let early_colors = early.iter().map(|span| span.style.fg).collect::<Vec<_>>();
+    let later_colors = later.iter().map(|span| span.style.fg).collect::<Vec<_>>();
+
+    assert!(
+        early_colors.iter().any(|color| *color != early_colors[0]),
+        "a visible frame must not paint the whole word one color: {early_colors:?}"
+    );
+    assert!(
+        later_colors.iter().any(|color| *color != later_colors[0]),
+        "a visible frame must not paint the whole word one color: {later_colors:?}"
+    );
+    assert_ne!(
+        early_colors, later_colors,
+        "the gradient must travel over time"
+    );
 }
 
 #[test]

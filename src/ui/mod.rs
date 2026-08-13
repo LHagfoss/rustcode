@@ -30,6 +30,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn safe_byte_index(s: &str, char_pos: usize) -> usize {
@@ -855,50 +857,55 @@ fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
     (r, g, b)
 }
 
-fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>> {
+static SHIMMER_START: OnceLock<Instant> = OnceLock::new();
+
+fn shimmer_rgb(color: Color, fallback: (u8, u8, u8)) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => fallback,
+    }
+}
+
+fn shimmer_spans_at(text: &str, elapsed: Duration) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
         return Vec::new();
     }
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as f32
-        / 1000.0;
-    let padding = 6.0f32;
-    let period = chars.len() as f32 + padding * 2.0;
-    let sweep_seconds = 2.0f32;
-    let pos_f = (elapsed % sweep_seconds) / sweep_seconds * period;
-    let band_half_width = 4.0f32;
 
-    let base_rgb = (130, 135, 145);
-    let highlight_rgb = (255, 255, 255);
+    let padding = 10usize;
+    let period = chars.len() + padding * 2;
+    let sweep_seconds = 2.0f32;
+    let pos = ((elapsed.as_secs_f32() % sweep_seconds) / sweep_seconds * period as f32) as isize;
+    let band_half_width = 5.0f32;
+
+    let base_rgb = shimmer_rgb(COLOR_MUTED(), (128, 128, 128));
+    let highlight_rgb = shimmer_rgb(COLOR_TEXT(), (255, 255, 255));
 
     chars
         .iter()
         .enumerate()
         .map(|(i, ch)| {
-            let i_pos = i as f32 + padding;
-            let dist = (i_pos - pos_f).abs();
+            let i_pos = i as isize + padding as isize;
+            let dist = (i_pos - pos).abs() as f32;
             let t = if dist <= band_half_width {
                 0.5 * (1.0 + (std::f32::consts::PI * (dist / band_half_width)).cos())
             } else {
                 0.0
             };
             let (r, g, b) = blend_rgb(highlight_rgb, base_rgb, t * 0.9);
-            let modifier = if t > 0.4 {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            };
             Span::styled(
                 ch.to_string(),
                 Style::default()
                     .fg(Color::Rgb(r, g, b))
-                    .add_modifier(modifier),
+                    .add_modifier(Modifier::BOLD),
             )
         })
         .collect()
+}
+
+fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>> {
+    let elapsed = SHIMMER_START.get_or_init(Instant::now).elapsed();
+    shimmer_spans_at(text, elapsed)
 }
 
 fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
@@ -2322,7 +2329,7 @@ pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static
         return build_claude_startup_banner(state, width as usize);
     }
 
-    let (_, tail) = scrollback::split_stable_rows(&state.current_response);
+    let tail = scrollback::mutable_stream_text(&state.current_response);
     let mut lines = Vec::new();
     let mut copy_clicks = Vec::new();
 
@@ -2359,6 +2366,7 @@ pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static
         || !state.running_tools.is_empty()
     {
         lines.push(activity_status_line(state, false));
+        lines.push(Line::from(""));
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
