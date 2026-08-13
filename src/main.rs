@@ -22,7 +22,6 @@ use crossterm::{
     cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
 use std::io;
@@ -173,7 +172,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::config::flush_history();
     return Ok(());
 
-    enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
         stdout,
@@ -2076,7 +2074,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shutdown: nothing queued may be lost, so write it out synchronously.
     crate::config::flush_history();
 
-    disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
         crossterm::event::DisableBracketedPaste,
