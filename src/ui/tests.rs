@@ -1102,22 +1102,63 @@ fn live_tail_uses_formatted_working_status() {
 }
 
 #[test]
-fn live_tail_adds_one_blank_row_below_working_status() {
+fn live_tail_does_not_add_padding_row_below_working_status() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
 
     let lines = super::render_live_tail(&state, 80, 24);
 
-    assert!(
-        lines.last().is_some_and(|line| line.spans.is_empty()),
-        "Working must have one blank row before the composer: {lines:?}"
-    );
-    let status_text = lines[lines.len() - 2]
+    let status_text = lines
+        .last()
+        .expect("Working status should be the final live row")
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
     assert!(status_text.contains("Working"));
+}
+
+#[test]
+fn live_tail_keeps_working_for_the_final_painted_frame() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Idle;
+    state.working_status_pending = true;
+
+    let text = super::render_live_tail(&state, 80, 24)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(text.contains("Working"), "rendered live tail: {text:?}");
+}
+
+#[test]
+fn empty_composer_has_no_extra_blank_rows() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut state = AppState::new();
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut state))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let prompt_row = (0..12).find(|y| {
+        (0..100)
+            .map(|x| buffer[(x, *y)].symbol())
+            .collect::<String>()
+            .contains("Ask a question")
+    });
+    let bottom_border_row = (0..12).find(|y| {
+        (0..100)
+            .map(|x| buffer[(x, *y)].symbol())
+            .collect::<String>()
+            .contains("Auto-Confirm")
+    });
+
+    let prompt_row = prompt_row.expect("composer prompt should be rendered");
+    assert_eq!(bottom_border_row, Some(prompt_row + 1));
 }
 
 #[test]

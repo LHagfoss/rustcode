@@ -1069,6 +1069,7 @@ pub fn start_new_session(s: &mut AppState) {
     }
     s.pending_queue.clear();
     s.current_response.clear();
+    s.working_status_pending = false;
     s.current_token_usage = None;
     s.response_time = None;
     s.history_index = None;
@@ -1217,6 +1218,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     s.history_display_start = 0;
     s.pending_queue.clear();
     s.current_response.clear();
+    s.working_status_pending = false;
     s.current_token_usage = None;
     s.response_time = None;
     s.history_index = None;
