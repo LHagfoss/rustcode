@@ -89,6 +89,23 @@ fn heading_style(level: HeadingLevel, show_picker: bool) -> ratatui::style::Styl
 }
 
 fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width: usize) {
+    push_wrapped_with_continuation(lines, spans, width, None);
+}
+
+fn continuation_line(prefix: Option<&Span<'static>>) -> (Vec<Span<'static>>, usize) {
+    let Some(prefix) = prefix else {
+        return (Vec::new(), 0);
+    };
+    let width = prefix.content.width();
+    (vec![prefix.clone()], width)
+}
+
+fn push_wrapped_with_continuation(
+    lines: &mut Vec<Line<'static>>,
+    spans: Vec<Span<'static>>,
+    width: usize,
+    continuation: Option<Span<'static>>,
+) {
     if spans.is_empty() {
         lines.push(Line::from(""));
         return;
@@ -113,7 +130,7 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
                             current.push(Span::styled(std::mem::take(&mut chunk), style));
                         }
                         lines.push(Line::from(std::mem::take(&mut current)));
-                        current_width = 0;
+                        (current, current_width) = continuation_line(continuation.as_ref());
                         chunk_w = 0;
                     }
                     chunk.push(ch);
@@ -131,7 +148,7 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
             } else {
                 if current_width > 0 && current_width + word_width > width {
                     lines.push(Line::from(std::mem::take(&mut current)));
-                    current_width = 0;
+                    (current, current_width) = continuation_line(continuation.as_ref());
                 }
                 current.push(Span::styled(word.to_string(), style));
                 current_width += word_width;
@@ -177,6 +194,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let mut quote_depth = 0usize;
     let mut list_depth = 0usize;
     let mut ordered_index = Vec::<Option<u64>>::new();
+    let mut list_continuation = None::<String>;
 
     let mut in_table = false;
     let mut table_rows: Vec<(Vec<String>, bool)> = Vec::new(); // (cells, is_header)
@@ -185,12 +203,38 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let flush = |lines: &mut Vec<Line<'static>>,
                  paragraph: &mut Vec<Span<'static>>,
                  quote_depth: usize,
-                 list_depth: usize| {
+                 list_continuation: Option<&str>| {
         if !paragraph.is_empty() {
-            push_wrapped(
+            let continuation = list_continuation
+                .map(|prefix| {
+                    Span::styled(
+                        prefix.to_owned(),
+                        get_themed_style(
+                            COLOR_MUTED(),
+                            COLOR_BG(),
+                            Modifier::empty(),
+                            show_picker,
+                        ),
+                    )
+                })
+                .or_else(|| {
+                    (quote_depth > 0).then(|| {
+                        Span::styled(
+                            "│ ".repeat(quote_depth),
+                            get_themed_style(
+                                COLOR_MUTED(),
+                                COLOR_BG(),
+                                Modifier::empty(),
+                                show_picker,
+                            ),
+                        )
+                    })
+                });
+            push_wrapped_with_continuation(
                 lines,
                 std::mem::take(paragraph),
-                width.saturating_sub(quote_depth * 2 + list_depth * 2),
+                width,
+                continuation,
             );
         }
     };
@@ -450,11 +494,21 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         match event {
             Event::Start(Tag::Paragraph) => {}
             Event::End(TagEnd::Paragraph) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 lines.push(Line::from(""));
             }
             Event::Start(Tag::Heading { level, .. }) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 heading = Some(level);
             }
             Event::End(TagEnd::Heading { .. }) => {
@@ -470,21 +524,41 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 lines.push(Line::from(""));
             }
             Event::Start(Tag::BlockQuote(_)) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 quote_depth += 1;
             }
             Event::End(TagEnd::BlockQuote(_)) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 quote_depth = quote_depth.saturating_sub(1);
                 lines.push(Line::from(""));
             }
             Event::Start(Tag::List(first)) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 list_depth += 1;
                 ordered_index.push(first);
             }
             Event::End(TagEnd::List(_)) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 list_depth = list_depth.saturating_sub(1);
                 ordered_index.pop();
                 lines.push(Line::from(""));
@@ -496,16 +570,35 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 } else {
                     format!("{}• ", indent)
                 };
+                let quote_prefix = "│ ".repeat(quote_depth);
+                list_continuation = Some(format!("{quote_prefix}{}", " ".repeat(marker.width())));
+                if !quote_prefix.is_empty() {
+                    paragraph.push(Span::styled(
+                        quote_prefix,
+                        get_themed_style(
+                            COLOR_MUTED(),
+                            COLOR_BG(),
+                            Modifier::empty(),
+                            show_picker,
+                        ),
+                    ));
+                }
                 paragraph.push(Span::styled(
                     marker,
                     get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ));
             }
             Event::End(TagEnd::Item) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 if let Some(Some(index)) = ordered_index.last_mut() {
                     *index += 1;
                 }
+                list_continuation = None;
             }
             Event::Start(Tag::Strong) => inline.bold = true,
             Event::End(TagEnd::Strong) => inline.bold = false,
@@ -572,17 +665,32 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 }
             }
             Event::HardBreak => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
             }
             Event::Rule => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 lines.push(Line::from(Span::styled(
                     "─".repeat(width.max(1)),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 )));
             }
             Event::Start(Tag::CodeBlock(kind)) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 let language = match kind {
                     pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
                     pulldown_cmark::CodeBlockKind::Indented => String::new(),
@@ -599,12 +707,22 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 )));
             }
             Event::Start(Tag::Table(_)) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 in_table = true;
                 table_rows.clear();
             }
             Event::End(TagEnd::Table) => {
-                flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+                flush(
+                    &mut lines,
+                    &mut paragraph,
+                    quote_depth,
+                    list_continuation.as_deref(),
+                );
                 flush_table(&mut lines, &table_rows, width, show_picker);
                 table_rows.clear();
                 in_table = false;
@@ -641,7 +759,12 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             _ => {}
         }
     }
-    flush(&mut lines, &mut paragraph, quote_depth, list_depth);
+    flush(
+        &mut lines,
+        &mut paragraph,
+        quote_depth,
+        list_continuation.as_deref(),
+    );
     while lines
         .last()
         .is_some_and(|line| line.spans.iter().all(|span| span.content.trim().is_empty()))
@@ -669,6 +792,39 @@ mod tests {
             .collect();
         assert!(all.contains("Header 1 │ Header 2"));
         assert!(all.contains('┌') && all.contains('┐') && all.contains('└'));
+    }
+
+    #[test]
+    fn wrapped_list_items_keep_a_hanging_indent() {
+        let lines = render_markdown("- one two three four five six seven", 24, false, false);
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+
+        assert!(rendered.len() > 1, "fixture must wrap: {rendered:?}");
+        assert!(rendered[0].starts_with("• "));
+        assert!(rendered[1].starts_with("  "));
+        assert!(!rendered[1].starts_with("• "));
+    }
+
+    #[test]
+    fn wrapped_blockquotes_keep_their_gutter() {
+        let lines = render_markdown(
+            "> one two three four five six seven eight",
+            24,
+            false,
+            false,
+        );
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+
+        assert!(rendered.len() > 1, "fixture must wrap: {rendered:?}");
+        assert!(rendered.iter().all(|line| line.starts_with("│ ")));
     }
 
     #[test]
