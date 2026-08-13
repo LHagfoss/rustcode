@@ -20,7 +20,7 @@ use modals::{
 };
 use tool_result::render_tool_result;
 
-use crate::app::activity::{ActivityKind, classify_activity};
+use crate::app::activity::{ActivityKind, ActivitySnapshot, classify_activity};
 use crate::app::{AppState, AppStatus, ChatMessage, NoticeKind};
 use ratatui::{
     Frame,
@@ -966,7 +966,16 @@ fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 }
 
 fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
-    let activity = classify_activity(&state.status, &state.running_tools);
+    let activity = if state.working_status_pending {
+        ActivitySnapshot {
+            kind: ActivityKind::Working,
+            label: "Working".to_string(),
+            detail: None,
+            animated: true,
+        }
+    } else {
+        classify_activity(&state.status, &state.running_tools)
+    };
     let action_detail = state
         .pending_tool_confirmation
         .as_ref()
@@ -997,7 +1006,11 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
     ));
     spans.push(Span::raw(" "));
 
-    let label_text = activity_status_label(state);
+    let label_text = if state.working_status_pending {
+        "Working".to_string()
+    } else {
+        activity_status_label(state)
+    };
     if matches!(
         activity.kind,
         ActivityKind::Working | ActivityKind::RunningTool
@@ -2226,6 +2239,7 @@ pub(crate) fn render_live_tail(
     if !has_conversation
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
+        && !state.working_status_pending
     {
         return build_claude_startup_banner(state, width as usize, height as usize);
     }
@@ -2264,10 +2278,10 @@ pub(crate) fn render_live_tail(
     }
 
     if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
+        || state.working_status_pending
         || !state.running_tools.is_empty()
     {
         lines.push(activity_status_line(state, false));
-        lines.push(Line::from(""));
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
@@ -2421,7 +2435,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         };
 
     let inner_width = f.area().width.saturating_sub(4).max(1);
-    let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize) + 3;
+    let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize);
     let input_lines = raw_input_lines.min(8);
     let input_height = input_lines + 2;
     let queue_block_height = queue_preview_height(state);
@@ -2545,6 +2559,10 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     }
 
     render_notice(f, state);
+    // The final Working row is only needed for the frame that paints the
+    // finalized reply. New turns clear this at queue start if another prompt
+    // is already waiting.
+    state.working_status_pending = false;
 }
 
 /// How long a notice toast stays on screen before it fades out.
