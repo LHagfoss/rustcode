@@ -186,6 +186,45 @@ pub(super) fn render_markdown<'a>(
     lines
 }
 
+fn sanitize_markdown_tables(content: &str) -> std::borrow::Cow<'_, str> {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let is_table_line = |line: &str| -> bool {
+        let t = line.trim();
+        t.starts_with('|') || (t.contains('|') && t.contains("---"))
+    };
+
+    let mut needs_sanitization = false;
+    for i in 0..lines.len() {
+        if lines[i].trim().is_empty() && i > 0 && i + 1 < lines.len() {
+            if is_table_line(lines[i - 1]) && is_table_line(lines[i + 1]) {
+                needs_sanitization = true;
+                break;
+            }
+        }
+    }
+
+    if !needs_sanitization {
+        return std::borrow::Cow::Borrowed(content);
+    }
+
+    let mut output = String::with_capacity(content.len());
+    for i in 0..lines.len() {
+        if lines[i].trim().is_empty() && i > 0 && i + 1 < lines.len() {
+            if is_table_line(lines[i - 1]) && is_table_line(lines[i + 1]) {
+                continue;
+            }
+        }
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(lines[i]);
+    }
+    std::borrow::Cow::Owned(output)
+}
+
 fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut paragraph = Vec::<Span<'static>>::new();
@@ -490,7 +529,8 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         )));
     };
 
-    for event in Parser::new_ext(content, Options::all()) {
+    let sanitized = sanitize_markdown_tables(content);
+    for event in Parser::new_ext(&sanitized, Options::all()) {
         match event {
             Event::Start(Tag::Paragraph) => {}
             Event::End(TagEnd::Paragraph) => {
@@ -1009,5 +1049,19 @@ mod tests {
         // assertion above is meaningful rather than vacuous.
         render_markdown("settled message", width, false, true);
         assert_eq!(global_entries_at_width(width), 1);
+    }
+
+    #[test]
+    fn renders_loose_table_with_blank_lines() {
+        let md = "Here are my skills:\n\n| Skill | Purpose |\n| --- | --- |\n\n| agents-sdk | Build AI agents |\n| clockify | Time tracking |\n";
+        let lines = render_markdown(md, 80, false, false);
+        let text = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("agents-sdk"));
+        assert!(text.contains("clockify"));
+        assert!(text.contains("┌") || text.contains("Skill"));
     }
 }
