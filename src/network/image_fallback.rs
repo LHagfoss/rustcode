@@ -58,39 +58,39 @@ where
                 }
             };
             let hash = image_hash(&bytes);
-            let analysis =
-                if let Some(value) = cache.get(&hash).or_else(|| pending_cache.get(&hash)) {
-                    value.clone()
-                } else {
-                    match request(vision_profile, bytes).await {
-                        Ok(value) if !value.trim().is_empty() => {
-                            pending_cache.insert(hash.clone(), value.clone());
-                            value
-                        }
-                        Ok(_) => {
-                            if is_latest {
-                                return Err(
-                                    "image analysis failed: vision model returned empty output"
-                                        .to_string(),
-                                );
-                            } else {
-                                let fallback = "[Attached image analysis unavailable]".to_string();
-                                pending_cache.insert(hash.clone(), fallback.clone());
-                                fallback
-                            }
-                        }
-                        Err(e) => {
-                            if is_latest {
-                                return Err(format!("image analysis failed: {e}"));
-                            } else {
-                                let fallback =
-                                    format!("[Attached image analysis unavailable: {e}]");
-                                pending_cache.insert(hash.clone(), fallback.clone());
-                                fallback
-                            }
+            let analysis = if let Some(value) =
+                cache.get(&hash).or_else(|| pending_cache.get(&hash))
+            {
+                value.clone()
+            } else {
+                match request(vision_profile, bytes).await {
+                    Ok(value) if !value.trim().is_empty() => {
+                        pending_cache.insert(hash.clone(), value.clone());
+                        value
+                    }
+                    Ok(_) => {
+                        if is_latest {
+                            return Err(
+                                "image analysis failed: vision model returned empty output"
+                                    .to_string(),
+                            );
+                        } else {
+                            let fallback = "[Attached image analysis unavailable]".to_string();
+                            pending_cache.insert(hash.clone(), fallback.clone());
+                            fallback
                         }
                     }
-                };
+                    Err(e) => {
+                        if is_latest {
+                            return Err(format!("image analysis failed: {e}"));
+                        } else {
+                            let fallback = format!("[Attached image analysis unavailable: {e}]");
+                            pending_cache.insert(hash.clone(), fallback.clone());
+                            fallback
+                        }
+                    }
+                }
+            };
             image_number += 1;
             output.push_str(&format_analysis(image_number, &analysis));
             remaining = &after_marker[end + 1..];
@@ -395,7 +395,10 @@ mod tests {
     async fn missing_image_in_older_history_does_not_abort_the_new_turn() {
         let missing = std::env::temp_dir().join("rustcode-missing-image.png");
         let mut history = vec![
-            ChatMessage::new("user", format!("Earlier attachment: ![image](file://{})", missing.display())),
+            ChatMessage::new(
+                "user",
+                format!("Earlier attachment: ![image](file://{})", missing.display()),
+            ),
             ChatMessage::new("user", "What time is it?"),
         ];
         let mut cache = HashMap::new();
@@ -415,9 +418,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(calls, 0);
-        assert!(history[0]
-            .content
-            .contains("[Attached image analysis unavailable: image missing]"));
+        assert!(
+            history[0]
+                .content
+                .contains("[Attached image analysis unavailable: image missing]")
+        );
         assert_eq!(history[1].content, "What time is it?");
     }
 
@@ -446,9 +451,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(calls, 1);
-        assert!(history[0]
-            .content
-            .contains("[Attached image analysis unavailable: cancelled]"));
+        assert!(
+            history[0]
+                .content
+                .contains("[Attached image analysis unavailable: cancelled]")
+        );
         assert_eq!(history[1].content, "What time is it?");
         assert_eq!(cache.len(), 1);
     }

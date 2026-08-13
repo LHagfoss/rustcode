@@ -825,7 +825,10 @@ pub fn load_session_history_direct(session_id: &str) -> Vec<ChatMessage> {
     Vec::new()
 }
 
-pub fn save_session_image_cache(session_id: &str, cache: &std::collections::HashMap<String, String>) {
+pub fn save_session_image_cache(
+    session_id: &str,
+    cache: &std::collections::HashMap<String, String>,
+) {
     if cache.is_empty() {
         return;
     }
@@ -840,7 +843,10 @@ pub fn save_session_image_cache(session_id: &str, cache: &std::collections::Hash
 
 pub fn load_session_image_cache(session_id: &str) -> std::collections::HashMap<String, String> {
     if let Some(dir) = get_config_dir() {
-        let path = dir.join(SESSIONS_DIR).join(session_id).join("image_cache.json");
+        let path = dir
+            .join(SESSIONS_DIR)
+            .join(session_id)
+            .join("image_cache.json");
         if path.exists() {
             if let Ok(content) = fs::read_to_string(path) {
                 if let Ok(cache) = serde_json::from_str(&content) {
@@ -1750,7 +1756,11 @@ mod tests {
 
     #[test]
     fn test_provider_supports_function_calling_includes_zai() {
-        assert!(provider_supports_function_calling("https://open.bigmodel.cn/api/paas/v4/chat/completions"));
-        assert!(provider_supports_function_calling("https://api.z.ai/v1/chat/completions"));
+        assert!(provider_supports_function_calling(
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        ));
+        assert!(provider_supports_function_calling(
+            "https://api.z.ai/v1/chat/completions"
+        ));
     }
 }

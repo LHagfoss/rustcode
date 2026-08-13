@@ -661,11 +661,7 @@ mod tests {
         let md = "one two three\nfour five six\nseven eight nine";
         let lines = render_markdown(md, 80, false, false);
         assert_eq!(lines.len(), 1, "soft breaks must not force new lines");
-        let text: String = lines[0]
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "one two three four five six seven eight nine");
     }
 

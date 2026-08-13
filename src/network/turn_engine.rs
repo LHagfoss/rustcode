@@ -282,72 +282,71 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let request_api_url = api_base_url.clone();
     let request_model = model_name.clone();
     let request_msgs = msgs.clone();
-    let collected_response =
-        match runner::collect_response(move |previous| {
-            let mut current_msgs = request_msgs.clone();
-            if !previous.is_empty() {
-                let nudge = continuation_nudge(&previous);
-                current_msgs.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": previous
-                }));
-                current_msgs.push(serde_json::json!({
-                    "role": "user",
-                    "content": nudge
-                }));
+    let collected_response = match runner::collect_response(move |previous| {
+        let mut current_msgs = request_msgs.clone();
+        if !previous.is_empty() {
+            let nudge = continuation_nudge(&previous);
+            current_msgs.push(serde_json::json!({
+                "role": "assistant",
+                "content": previous
+            }));
+            current_msgs.push(serde_json::json!({
+                "role": "user",
+                "content": nudge
+            }));
+        }
+        let request_client = request_client.clone();
+        let request_state = Arc::clone(&request_state);
+        let request_cancel = request_cancel.clone();
+        let request_buffer = Arc::clone(&request_buffer);
+        let request_api_url = request_api_url.clone();
+        let request_model = request_model.clone();
+        async move {
+            request_buffer.lock().await.reset();
+            let finish_reason = stream_request(
+                &request_client,
+                request_state.clone(),
+                request_cancel,
+                &request_api_url,
+                &request_model,
+                &current_msgs,
+                Arc::clone(&request_buffer),
+                false,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            let buffer = request_buffer.lock().await;
+            Ok(runner::ResponseChunk {
+                content: buffer.content.clone(),
+                finish_reason,
+                has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
+                thought_time_ms: buffer.thought_time_ms,
+                thought_tokens: buffer.thought_tokens,
+            })
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            ctx.turn_machine.recover_error();
+            dbg_log!("Stream request failed: {}", e);
+            if e == "cancelled" {
+                ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
+            } else {
+                record_provider_error(ctx, &e);
             }
-            let request_client = request_client.clone();
-            let request_state = Arc::clone(&request_state);
-            let request_cancel = request_cancel.clone();
-            let request_buffer = Arc::clone(&request_buffer);
-            let request_api_url = request_api_url.clone();
-            let request_model = request_model.clone();
-            async move {
-                request_buffer.lock().await.reset();
-                let finish_reason = stream_request(
-                    &request_client,
-                    request_state.clone(),
-                    request_cancel,
-                    &request_api_url,
-                    &request_model,
-                    &current_msgs,
-                    Arc::clone(&request_buffer),
-                    false,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                let buffer = request_buffer.lock().await;
-                Ok(runner::ResponseChunk {
-                    content: buffer.content.clone(),
-                    finish_reason,
-                    has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
-                    thought_time_ms: buffer.thought_time_ms,
-                    thought_tokens: buffer.thought_tokens,
-                })
-            }
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                ctx.turn_machine.recover_error();
-                dbg_log!("Stream request failed: {}", e);
-                if e == "cancelled" {
-                    ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
-                } else {
-                    record_provider_error(ctx, &e);
-                }
-                let mut s = state.lock().await;
-                let notice = if e == "cancelled" {
-                    "Request cancelled by user".to_string()
-                } else {
-                    format!("Error from LLM Provider: {e}")
-                };
-                s.history.push(ChatMessage::new("system", notice));
-                s.current_token_usage = None;
-                return false;
-            }
-        };
+            let mut s = state.lock().await;
+            let notice = if e == "cancelled" {
+                "Request cancelled by user".to_string()
+            } else {
+                format!("Error from LLM Provider: {e}")
+            };
+            s.history.push(ChatMessage::new("system", notice));
+            s.current_token_usage = None;
+            return false;
+        }
+    };
     let runner::CollectedResponse {
         content: accumulated_content,
         finish_reason: response_finish_reason,

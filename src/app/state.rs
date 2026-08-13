@@ -1634,7 +1634,6 @@ impl AppState {
         });
         self.redraw_requested = true;
     }
-
 }
 
 #[cfg(test)]
@@ -1714,10 +1713,12 @@ mod protocol_tests {
         question.move_cursor_word_right();
 
         assert_eq!(question.custom_cursor, "one  ".len());
-        assert!(question
-            .custom_input
-            .as_ref()
-            .is_some_and(|text| text.is_char_boundary(question.custom_cursor)));
+        assert!(
+            question
+                .custom_input
+                .as_ref()
+                .is_some_and(|text| text.is_char_boundary(question.custom_cursor))
+        );
 
         question.move_cursor_word_right();
         assert_eq!(question.custom_cursor, "one  😀".len());
