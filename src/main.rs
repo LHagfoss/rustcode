@@ -24,13 +24,18 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use ratatui::{
+    Terminal, TerminalOptions, Viewport,
+    backend::CrosstermBackend,
+    widgets::{Paragraph, Widget, Wrap},
+};
 use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smooth scrolling
+const LIVE_VIEWPORT_ROWS: u16 = 12;
 
 /// Frame budget while a response is in flight: 60Hz, so streamed tokens,
 /// spinners, the elapsed-second counter and the rotating status label (which
@@ -183,11 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let backend = CrosstermBackend::new(stdout);
-    let terminal_height = crossterm::terminal::size()?.1;
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
-            viewport: Viewport::Inline(terminal_height),
+            viewport: Viewport::Inline(LIVE_VIEWPORT_ROWS),
         },
     )?;
     terminal.clear()?;
@@ -308,6 +312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scroll_coalesce: i32 = 0;
     const SCROLL_COALESCE_WINDOW: Duration = Duration::from_millis(16);
     let mut last_scroll_time = Instant::now();
+    let mut transcript_cursor = crate::ui::scrollback::TranscriptCursor::default();
 
     loop {
         let (response_active, background_redraw, active_notice) = {
@@ -354,6 +359,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if should_draw {
             let mut guard = app_state.lock().await;
+
+            let history_range = transcript_cursor.pending_history_range(guard.history.len());
+            let terminal_width = terminal.size()?.width;
+            let blocks: Vec<_> = history_range
+                .clone()
+                .map(|index| crate::ui::render_committed_history_block(&guard, index, terminal_width))
+                .filter(|lines| !lines.is_empty())
+                .collect();
+            for lines in blocks {
+                let height = Paragraph::new(lines.clone())
+                    .wrap(Wrap { trim: false })
+                    .line_count(terminal_width)
+                    .max(1) as u16;
+                terminal.insert_before(height, |buffer| {
+                    Paragraph::new(lines)
+                        .wrap(Wrap { trim: false })
+                        .render(buffer.area, buffer);
+                })?;
+            }
+            transcript_cursor.commit_history_through(history_range.end);
 
             // Update terminal title based on the same activity snapshot used by
             // the footer, so state and animation stay synchronized.
