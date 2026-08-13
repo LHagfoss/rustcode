@@ -25,6 +25,22 @@ pub enum AnimationCell {
     Lead,
 }
 
+pub fn is_exploration_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "view_file"
+            | "list_directory"
+            | "list_dir"
+            | "glob"
+            | "grep"
+            | "grep_search"
+            | "find_symbol"
+            | "codebase_search"
+            | "codebase_symbol"
+            | "get_project_map"
+    )
+}
+
 pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> ActivitySnapshot {
     let action_required = matches!(
         status,
@@ -45,10 +61,24 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
     }
 
     if let Some(tool_name) = running_tools.first() {
+        let all_exploration = running_tools
+            .iter()
+            .all(|tool_name| is_exploration_tool(tool_name));
+        let representative = running_tools
+            .iter()
+            .find(|tool_name| !is_exploration_tool(tool_name))
+            .unwrap_or(tool_name);
+        let (label, detail) = if all_exploration {
+            ("Exploring".to_string(), None)
+        } else if representative == "run_command" {
+            ("Running".to_string(), Some(representative.clone()))
+        } else {
+            ("Tool".to_string(), Some(representative.clone()))
+        };
         return ActivitySnapshot {
             kind: ActivityKind::RunningTool,
-            label: "Running".to_string(),
-            detail: Some(tool_name.clone()),
+            label,
+            detail,
             animated: true,
         };
     }
@@ -173,6 +203,22 @@ mod tests {
         assert_eq!(
             classify_activity(&AppStatus::Queued, &[]).kind,
             ActivityKind::Queued
+        );
+        assert_eq!(
+            classify_activity(&AppStatus::Streaming, &["list_directory".into()]).label,
+            "Exploring"
+        );
+        assert_eq!(
+            classify_activity(&AppStatus::Streaming, &["use_skill".into()]).label,
+            "Tool"
+        );
+        assert_eq!(
+            classify_activity(
+                &AppStatus::Streaming,
+                &["list_directory".into(), "run_command".into()]
+            )
+            .label,
+            "Running"
         );
     }
 
