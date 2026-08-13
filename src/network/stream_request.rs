@@ -403,7 +403,12 @@ pub async fn stream_request(
                                         }
                                          let delta = choices[0].get("delta");
                                          let reasoning = delta
-                                             .and_then(|d| d.get("reasoning").or_else(|| d.get("reasoning_content")))
+                                             .and_then(|d| {
+                                                 d.get("reasoning")
+                                                     .or_else(|| d.get("reasoning_content"))
+                                                     .or_else(|| d.get("thought"))
+                                                     .or_else(|| d.get("thinking"))
+                                             })
                                              .and_then(|r| r.as_str());
                                          let content = delta
                                              .and_then(|d| d.get("content").or_else(|| d.get("text")))
