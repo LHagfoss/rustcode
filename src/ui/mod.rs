@@ -2428,10 +2428,6 @@ fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &
         }
         _ => {}
     }
-
-    let _conv = chunks[0];
-    let _view_h = inner_area.height;
-    let _content_h = total_wrapped_lines.max(1);
 }
 
 pub fn render(f: &mut Frame, state: &mut AppState) {
