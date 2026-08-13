@@ -500,7 +500,9 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     quote_depth,
                     list_continuation.as_deref(),
                 );
-                lines.push(Line::from(""));
+                if list_depth == 0 {
+                    lines.push(Line::from(""));
+                }
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 flush(
