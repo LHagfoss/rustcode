@@ -195,6 +195,89 @@ fn persisted_edit_result_resolves_tool_name_without_previous_call() {
 }
 
 #[test]
+fn committed_tool_result_shows_action_status_and_indented_output() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"cargo test"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "run_command: exit code: 0\n504 passed")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                exit_code: Some(0),
+                changed_paths: Vec::new(),
+                truncated: false,
+                full_output_artifact: None,
+            }),
+    );
+
+    let rendered = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line == "• Bash · cargo test"));
+    assert!(rendered.iter().any(|line| line == "  └ ✓ exit 0"));
+    assert!(
+        rendered.iter().any(|line| line == "    │ 504 passed"),
+        "tool output must be nested beneath its status: {rendered:?}"
+    );
+}
+
+#[test]
+fn committed_tool_result_shows_failure_status() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"cargo test"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new(
+            "tool",
+            "run_command: exit code: 1\nstderr:\npermission denied",
+        )
+        .answering(Some("call-1".to_owned()))
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            arguments_hash: String::new(),
+            success: false,
+            exit_code: Some(1),
+            changed_paths: Vec::new(),
+            truncated: false,
+            full_output_artifact: None,
+        }),
+    );
+
+    let rendered = super::render_committed_history_block(&state, 1, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line == "• Bash · cargo test"));
+    assert!(rendered.iter().any(|line| line == "  └ ✗ exit 1"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line == "    ! permission denied"),
+        "failed tool output must be nested beneath its status: {rendered:?}"
+    );
+}
+
+#[test]
 fn collapses_image_markers_to_chips() {
     // Plain text is untouched.
     assert_eq!(collapse_image_markers("hello world"), "hello world");
