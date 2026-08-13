@@ -201,7 +201,11 @@ fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
             || t.starts_with("* ")
             || t.starts_with("+ ")
             || t.starts_with("• ")
+            || t.starts_with("•")
             || t.starts_with("· ")
+            || t.starts_with("·")
+            || t.starts_with("● ")
+            || t.starts_with("●")
             || (t.chars().next().is_some_and(|c| c.is_ascii_digit())
                 && t.find(". ").is_some_and(|idx| idx <= 4))
     };
@@ -212,19 +216,20 @@ fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
         let line = lines[i];
         let trimmed = line.trim();
 
-        // Drop empty line between table rows
-        if trimmed.is_empty() && i > 0 && i + 1 < lines.len() {
-            if is_table_line(lines[i - 1]) && is_table_line(lines[i + 1]) {
-                i += 1;
-                continue;
-            }
-        }
-
-        // Drop empty line between list items
-        if trimmed.is_empty() && i > 0 && i + 1 < lines.len() {
-            if is_list_item(lines[i - 1]) && is_list_item(lines[i + 1]) {
-                i += 1;
-                continue;
+        if trimmed.is_empty() {
+            let next_non_empty = (i + 1..lines.len()).find(|&j| !lines[j].trim().is_empty());
+            let prev_non_empty = (0..i).rfind(|&j| !lines[j].trim().is_empty());
+            if let (Some(prev_idx), Some(next_idx)) = (prev_non_empty, next_non_empty) {
+                // Drop blank lines between table rows
+                if is_table_line(lines[prev_idx]) && is_table_line(lines[next_idx]) {
+                    i += 1;
+                    continue;
+                }
+                // Drop blank lines between list items
+                if is_list_item(lines[prev_idx]) && is_list_item(lines[next_idx]) {
+                    i += 1;
+                    continue;
+                }
             }
         }
 
@@ -232,12 +237,13 @@ fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
             output.push('\n');
         }
 
-        // Normalize bullet character to '-' so pulldown_cmark parses list items
+        // Normalize bullet character to '- ' so pulldown_cmark parses list items
         let trimmed_start = line.trim_start();
-        if trimmed_start.starts_with("• ") || trimmed_start.starts_with("· ") {
+        let bullet_prefixes = ["• ", "•", "· ", "·", "● ", "●"];
+        if let Some(matched_prefix) = bullet_prefixes.iter().find(|&&p| trimmed_start.starts_with(p)) {
             let indent_len = line.len() - trimmed_start.len();
             let indent = &line[..indent_len];
-            let rest = &trimmed_start[trimmed_start.find(' ').unwrap() + 1..];
+            let rest = trimmed_start[matched_prefix.len()..].trim_start();
             output.push_str(indent);
             output.push_str("- ");
             output.push_str(rest);
@@ -1103,5 +1109,19 @@ mod tests {
             .filter(|l| l.spans.iter().any(|s| s.content.contains('•')))
             .count();
         assert_eq!(bullet_count, 3);
+    }
+
+    #[test]
+    fn renders_mixed_spaced_bullet_lists_without_intermediate_gaps() {
+        let md = "File System Operations\n\n• Read/write/edit files\n• Create directories\n\n\n• Move, copy, delete files\n• List directory contents\n";
+        let lines = render_markdown(md, 80, false, false);
+        let non_empty: Vec<_> = lines.iter().filter(|l| !l.spans.is_empty()).collect();
+        // 1 heading + 4 bullet lines = 5 non-empty lines
+        assert_eq!(non_empty.len(), 5);
+        let bullet_count = lines
+            .iter()
+            .filter(|l| l.spans.iter().any(|s| s.content.contains('•')))
+            .count();
+        assert_eq!(bullet_count, 4);
     }
 }
