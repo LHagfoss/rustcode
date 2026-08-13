@@ -24,6 +24,17 @@ pub(crate) fn split_stable_rows(text: &str) -> (Vec<String>, String) {
     )
 }
 
+/// Return the portion that must remain in the mutable viewport. Reasoning-led
+/// responses are held out of terminal scrollback until finalization, so their
+/// complete formatted answer must stay live instead of only the final row.
+pub(crate) fn mutable_stream_text(text: &str) -> String {
+    if stream_starts_with_thought(text) {
+        text.to_owned()
+    } else {
+        split_stable_rows(text).1
+    }
+}
+
 /// Tracks transcript content already handed to the terminal's scrollback.
 #[derive(Default)]
 pub(crate) struct TranscriptCursor {
