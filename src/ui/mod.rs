@@ -2305,7 +2305,7 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
     if available_height == 0 {
         return 0;
     }
-    content_height.clamp(3.min(available_height), available_height)
+    content_height.min(available_height)
 }
 
 /// Render only the mutable portion of the current turn. Completed history is
@@ -2398,7 +2398,14 @@ pub(crate) fn render_committed_history_block(
             if is_hidden_system_notice(&message.content) {
                 return Vec::new();
             }
-            return render_committed_assistant_text(state, &message.content, width);
+            return render_committed_assistant_text_with_metrics(
+                &message.content,
+                width,
+                message.token_usage.clone(),
+                message.response_time_ms,
+                message.thought_time_ms,
+                message.thought_tokens,
+            );
         }
         "tool" => {
             let tool_name = resolve_tool_result_name(
@@ -2443,6 +2450,17 @@ pub(crate) fn render_committed_assistant_text(
     content: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
+    render_committed_assistant_text_with_metrics(content, width, None, None, None, None)
+}
+
+fn render_committed_assistant_text_with_metrics(
+    content: &str,
+    width: u16,
+    token_usage: Option<crate::app::TokenUsage>,
+    response_time_ms: Option<u64>,
+    thought_time_ms: Option<u64>,
+    thought_tokens: Option<u32>,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut copy_clicks = Vec::new();
     render_assistant_message(
@@ -2450,17 +2468,16 @@ pub(crate) fn render_committed_assistant_text(
         &mut lines,
         &mut copy_clicks,
         AssistantRenderOptions {
-            token_usage: None,
-            response_time_ms: None,
-            thought_time_ms: None,
-            thought_tokens: None,
+            token_usage,
+            response_time_ms,
+            thought_time_ms,
+            thought_tokens,
             is_generating: false,
             viewport_width: width,
             show_picker: false,
             last_copy_text: None,
         },
     );
-    lines.push(Line::from(""));
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
