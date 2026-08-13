@@ -901,6 +901,9 @@ pub struct AppState {
     pub scroll_row: u16,
     pub is_scroll_locked_to_bottom: bool,
     pub last_max_scroll: u16,
+    /// Wrapped transcript height from the latest conversation render. The UI
+    /// uses this to keep the composer close to short conversations.
+    pub conversation_content_height: u16,
     pub viewport_height: u16,
     pub mouse_capture_enabled: bool,
     pub agent_mode: crate::config::AgentMode,
@@ -1101,6 +1104,7 @@ impl AppState {
             session_title_cache: None,
             redraw_requested: false,
             last_max_scroll: 0,
+            conversation_content_height: 0,
             viewport_height: 0,
             mouse_capture_enabled: true,
             agent_mode,
