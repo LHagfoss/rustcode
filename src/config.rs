@@ -825,6 +825,33 @@ pub fn load_session_history_direct(session_id: &str) -> Vec<ChatMessage> {
     Vec::new()
 }
 
+pub fn save_session_image_cache(session_id: &str, cache: &std::collections::HashMap<String, String>) {
+    if cache.is_empty() {
+        return;
+    }
+    if let Some(dir) = get_config_dir() {
+        let session_dir = dir.join(SESSIONS_DIR).join(session_id);
+        let _ = fs::create_dir_all(&session_dir);
+        if let Ok(json) = serde_json::to_string_pretty(cache) {
+            let _ = fs::write(session_dir.join("image_cache.json"), json);
+        }
+    }
+}
+
+pub fn load_session_image_cache(session_id: &str) -> std::collections::HashMap<String, String> {
+    if let Some(dir) = get_config_dir() {
+        let path = dir.join(SESSIONS_DIR).join(session_id).join("image_cache.json");
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(path) {
+                if let Ok(cache) = serde_json::from_str(&content) {
+                    return cache;
+                }
+            }
+        }
+    }
+    std::collections::HashMap::new()
+}
+
 pub fn get_active_session_dir(session_id: &str) -> Option<PathBuf> {
     let dir = get_config_dir()?;
     Some(dir.join(SESSIONS_DIR).join(session_id))
