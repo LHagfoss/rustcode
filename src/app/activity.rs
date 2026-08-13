@@ -63,7 +63,7 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
         AppStatus::Streaming => ActivitySnapshot {
             kind: ActivityKind::Working,
             label: "Working".to_string(),
-            detail: Some("Responding".to_string()),
+            detail: None,
             animated: true,
         },
         AppStatus::Idle => ActivitySnapshot {
