@@ -742,3 +742,23 @@ fn transcript_cursor_retries_pending_content_until_acknowledged() {
     cursor.commit_stable_stream("line\n");
     assert!(cursor.pending_stable_stream("line\ntail").is_empty());
 }
+
+#[test]
+fn live_tail_excludes_committed_history() {
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("assistant", "old completed answer"));
+    state.status = AppStatus::Streaming;
+    state.current_response = "stable line\nunclosed tail".to_owned();
+
+    let text = super::render_live_tail(&state, 80)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(text.contains("Working..."));
+    assert!(text.contains("unclosed tail"));
+    assert!(!text.contains("old completed answer"));
+}

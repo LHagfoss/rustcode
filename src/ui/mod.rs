@@ -2095,6 +2095,152 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
     content_height.clamp(3.min(available_height), available_height)
 }
 
+/// Render only the mutable portion of the current turn. Completed history is
+/// deliberately excluded: it will be committed to terminal scrollback.
+pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static>> {
+    let (_, tail) = scrollback::split_stable_rows(&state.current_response);
+    let mut lines = Vec::new();
+    let mut copy_clicks = Vec::new();
+
+    if !tail.is_empty() {
+        let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());
+        let is_tool_syntax = crate::tools::is_tool_call_start(&tail);
+        let should_hide_stream = match parsed_tool {
+            Some(ref tool_call) => !crate::tools::is_code_editing_tool(&tool_call.name),
+            None => is_tool_syntax,
+        };
+
+        if !should_hide_stream {
+            render_assistant_message(
+                &tail,
+                &mut lines,
+                &mut copy_clicks,
+                AssistantRenderOptions {
+                    token_usage: None,
+                    response_time_ms: state
+                        .generation_start_time
+                        .map(|started| started.elapsed().as_millis() as u64),
+                    thought_time_ms: None,
+                    thought_tokens: None,
+                    is_generating: true,
+                    viewport_width: width,
+                    show_picker: false,
+                    last_copy_text: None,
+                },
+            );
+        }
+    }
+
+    if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
+        || !state.running_tools.is_empty()
+    {
+        lines.push(Line::from("Working..."));
+    }
+
+    lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+/// Render one finalized history entry for insertion into terminal scrollback.
+pub(crate) fn render_committed_history_block(
+    state: &AppState,
+    message_index: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let Some(message) = state.history.get(message_index) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    let show_picker = false;
+
+    match message.role.as_str() {
+        "user" => {
+            let content = collapse_image_markers(&message.content);
+            for (index, text) in content.lines().enumerate() {
+                let prefix = if index == 0 { "❯ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        prefix,
+                        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+                    ),
+                    Span::styled(
+                        text.to_owned(),
+                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+                    ),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+        "assistant" => {
+            let mut copy_clicks = Vec::new();
+            render_assistant_message(
+                &message.content,
+                &mut lines,
+                &mut copy_clicks,
+                AssistantRenderOptions {
+                    token_usage: message.token_usage.clone(),
+                    response_time_ms: message.response_time_ms,
+                    thought_time_ms: message.thought_time_ms,
+                    thought_tokens: message.thought_tokens,
+                    is_generating: false,
+                    viewport_width: width,
+                    show_picker,
+                    last_copy_text: None,
+                },
+            );
+            lines.push(Line::from(""));
+        }
+        "tool" => {
+            let tool_name = resolve_tool_result_name(
+                None,
+                message.tool_result.as_ref().map(|result| result.tool_name.as_str()),
+                &message.content,
+            )
+            .unwrap_or_else(|| "Tool".to_owned());
+            let result = message
+                .content
+                .split_once(": ")
+                .map(|(_, result)| result)
+                .unwrap_or(&message.content);
+            lines.extend(cached_tool_result(
+                &tool_name,
+                result,
+                width as usize,
+                &state.verbosity,
+                show_picker,
+            ));
+            lines.push(Line::from(""));
+        }
+        "system" if !is_hidden_system_notice(&message.content) => {
+            render_status_panel(&message.content, width, show_picker, &mut lines);
+            lines.push(Line::from(""));
+        }
+        _ => {}
+    }
+
+    lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+fn render_live_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
+    let area = chunks[0].inner(Margin {
+        vertical: 0,
+        horizontal: 1,
+    });
+    let lines = render_live_tail(state, area.width);
+    state.conversation_content_height = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(area.width) as u16;
+    state.viewport_height = area.height;
+    state.last_max_scroll = 0;
+    state.scroll_row = 0;
+    state.chat_area = Some(area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(COLOR_BG())),
+        area,
+    );
+}
+
 fn render_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
     let inner_area = chunks[0].inner(Margin {
         vertical: 0,
@@ -2735,7 +2881,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     // Measure first at the maximum available height. Short conversations then
     // shrink to their wrapped content height, while long ones retain the full
     // scrollable viewport.
-    render_conversation(f, &max_chunks, state);
+    render_live_conversation(f, &max_chunks, state);
     let chat_height = conversation_area_height(state.conversation_content_height, max_chat_height);
     let chunks = if chat_height == max_chat_height {
         max_chunks
@@ -2750,7 +2896,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
                 Constraint::Length(input_height),
             ])
             .split(f.area());
-        render_conversation(f, &compact_chunks, state);
+        render_live_conversation(f, &compact_chunks, state);
         compact_chunks
     };
 
