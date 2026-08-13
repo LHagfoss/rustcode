@@ -29,7 +29,7 @@ pub(crate) fn split_stable_rows(text: &str) -> (Vec<String>, String) {
 /// complete formatted answer must stay live instead of only the final row.
 pub(crate) fn mutable_stream_text(text: &str) -> String {
     if stream_starts_with_thought(text) {
-        text.to_owned()
+        crate::network::text::promote_bare_thought_markers(text)
     } else {
         split_stable_rows(text).1
     }
