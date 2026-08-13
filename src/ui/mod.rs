@@ -752,7 +752,9 @@ fn render_assistant_message<'a>(
                 );
                 for markdown_line in markdown_lines {
                     if markdown_line.spans.is_empty() {
-                        lines.push(markdown_line);
+                        if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                            lines.push(markdown_line);
+                        }
                         continue;
                     }
 
