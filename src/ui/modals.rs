@@ -328,7 +328,7 @@ mod tests {
             content_bytes: 11,
         }]);
 
-        let input_area = Rect::new(10, 8, 80, 3);
+        let input_area = Rect::new(10, 5, 80, 6);
         terminal
             .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
             .unwrap();
@@ -349,6 +349,9 @@ mod tests {
 
         assert!(confirmation_row.is_some(), "rendered modal:\n{rendered}");
         assert!(confirmation_row.unwrap() < input_area.y);
+        assert!(rendered.contains("src/"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
     }
 
     #[test]
@@ -370,7 +373,7 @@ mod tests {
             },
         ]);
 
-        let input_area = Rect::new(10, 7, 80, 3);
+        let input_area = Rect::new(10, 5, 80, 5);
         terminal
             .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
             .unwrap();
@@ -1427,18 +1430,32 @@ pub(super) fn render_tool_confirmation_modal(
             horizontal: 2,
         });
 
+        let compact = inner_area.height < 4;
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),                               // 0: Header
-                Constraint::Length(1),                               // 1: Spacer
-                Constraint::Length(1),                               // 2: Tool & target line
-                Constraint::Length(1),                               // 3: Auto-confirm status
-                Constraint::Length(1),                               // 4: Spacer
-                Constraint::Min(if has_preview { 2 } else { 0 }),    // 5: Preview Diff / Content
-                Constraint::Length(if has_preview { 1 } else { 0 }), // 6: Spacer
-                Constraint::Length(1),                               // 7: Footer buttons
-            ])
+            .constraints(if compact {
+                [
+                    Constraint::Length(1), // 0: Tool & target line
+                    Constraint::Length(0), // 1: Spacer
+                    Constraint::Length(0), // 2: Tool & target line
+                    Constraint::Length(0), // 3: Auto-confirm status
+                    Constraint::Length(0), // 4: Spacer
+                    Constraint::Length(0), // 5: Preview Diff / Content
+                    Constraint::Length(0), // 6: Spacer
+                    Constraint::Length(1), // 7: Footer buttons
+                ]
+            } else {
+                [
+                    Constraint::Length(1),                               // 0: Header
+                    Constraint::Length(1),                               // 1: Spacer
+                    Constraint::Length(1),                               // 2: Tool & target line
+                    Constraint::Length(1),                               // 3: Auto-confirm status
+                    Constraint::Length(1),                               // 4: Spacer
+                    Constraint::Min(if has_preview { 2 } else { 0 }),    // 5: Preview Diff / Content
+                    Constraint::Length(if has_preview { 1 } else { 0 }), // 6: Spacer
+                    Constraint::Length(1),                               // 7: Footer buttons
+                ]
+            })
             .split(inner_area);
 
         let action_label = match confirmation.tool_name.as_str() {
@@ -1492,7 +1509,12 @@ pub(super) fn render_tool_confirmation_modal(
             ),
             Span::styled(size_str, Style::default().fg(COLOR_MUTED())),
         ]);
-        f.render_widget(Paragraph::new(tool_line), modal_chunks[2]);
+        let tool_area = if compact {
+            modal_chunks[0]
+        } else {
+            modal_chunks[2]
+        };
+        f.render_widget(Paragraph::new(tool_line), tool_area);
 
         let auto_confirm_status = if state.auto_confirm {
             "[x] Auto-confirm future tool calls"
@@ -1643,7 +1665,7 @@ pub(super) fn render_tool_confirmation_modal(
                 [
                     Constraint::Length(1), // Header
                     Constraint::Length(0), // Spacer
-                    Constraint::Min(1),    // Truncated list of tools
+                    Constraint::Min(0),    // Truncated list of tools
                     Constraint::Length(0), // Auto-confirm option
                     Constraint::Length(0), // Spacer
                     Constraint::Length(1), // Footer/Actions
