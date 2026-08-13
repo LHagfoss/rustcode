@@ -752,9 +752,106 @@ fn live_tail_excludes_committed_history() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
 
-    assert!(text.contains("Working..."));
+    assert!(text.contains("Working"));
     assert!(text.contains("unclosed tail"));
     assert!(!text.contains("old completed answer"));
+}
+
+#[test]
+fn assistant_messages_use_a_gutter_after_soft_reflow() {
+    use super::{AssistantRenderOptions, render_assistant_message};
+
+    let mut lines = Vec::new();
+    let mut copies = Vec::new();
+    render_assistant_message(
+        "one two three four five six seven",
+        &mut lines,
+        &mut copies,
+        AssistantRenderOptions {
+            token_usage: None,
+            response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
+            is_generating: false,
+            viewport_width: 20,
+            show_picker: false,
+            last_copy_text: None,
+        },
+    );
+
+    let prose: Vec<_> = lines
+        .iter()
+        .filter(|line| !line.spans.is_empty())
+        .collect();
+    assert_eq!(prose[0].spans[0].content, "• ");
+    let first_line = prose[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(first_line.contains("one two"));
+    assert_eq!(prose[1].spans[0].content, "  ");
+}
+
+#[test]
+fn assistant_message_uses_one_gutter_across_paragraphs() {
+    use super::{AssistantRenderOptions, render_assistant_message};
+
+    let mut lines = Vec::new();
+    let mut copies = Vec::new();
+    render_assistant_message(
+        "first paragraph\n\n```text\ncode\n```\n\nsecond paragraph",
+        &mut lines,
+        &mut copies,
+        AssistantRenderOptions {
+            token_usage: None,
+            response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
+            is_generating: false,
+            viewport_width: 80,
+            show_picker: false,
+            last_copy_text: None,
+        },
+    );
+
+    let prefixes: Vec<_> = lines
+        .iter()
+        .filter_map(|line| line.spans.first())
+        .map(|span| span.content.as_ref())
+        .filter(|prefix| *prefix == "• ")
+        .collect();
+
+    assert_eq!(prefixes, vec!["• "]);
+}
+
+#[test]
+fn committed_user_messages_keep_regular_body_text() {
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("user", "inspect the parser"));
+
+    let block = super::render_committed_history_block(&state, 0, 80);
+
+    assert_eq!(block[0].spans[0].content, "❯ ");
+    assert!(!block[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn live_tail_uses_formatted_working_status() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+
+    let text = super::render_live_tail(&state, 80)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(text.contains("• Working"));
+    assert!(text.contains("esc interrupt"));
+    assert!(!text.contains("Working..."));
 }
 
 #[test]

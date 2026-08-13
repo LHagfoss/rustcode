@@ -478,7 +478,7 @@ fn render_assistant_message<'a>(
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
-        let content_width = (viewport_width as usize).saturating_sub(8).max(10);
+        let content_width = (viewport_width as usize).saturating_sub(2).max(10);
         let mut processed_lines: Vec<(bool, String)> = Vec::new();
         let mut in_code_block = false;
 
@@ -490,25 +490,7 @@ fn render_assistant_message<'a>(
             } else if in_code_block {
                 processed_lines.push((true, raw_line.to_string()));
             } else {
-                if raw_line.trim().is_empty() {
-                    processed_lines.push((false, String::new()));
-                } else {
-                    let mut current = String::new();
-                    for word in raw_line.split_whitespace() {
-                        if current.is_empty() {
-                            current.push_str(word);
-                        } else if current.width() + 1 + word.width() <= content_width {
-                            current.push(' ');
-                            current.push_str(word);
-                        } else {
-                            processed_lines.push((false, current));
-                            current = word.to_string();
-                        }
-                    }
-                    if !current.is_empty() {
-                        processed_lines.push((false, current));
-                    }
-                }
+                processed_lines.push((false, raw_line.to_string()));
             }
         }
 
@@ -530,6 +512,7 @@ fn render_assistant_message<'a>(
         // the 📋 emoji and knocked the button out of alignment.
         let box_width = (viewport_width as usize).max(10);
         let mut i = 0;
+        let mut emitted_assistant_gutter = false;
         let mut fence_open = false;
         let mut current_lang = String::new();
         while i < processed_lines.len() {
@@ -713,12 +696,32 @@ fn render_assistant_message<'a>(
                 if lines.last().is_some_and(|l| !l.spans.is_empty()) {
                     lines.push(Line::from(""));
                 }
-                lines.extend(render_markdown(
+                let markdown_lines = render_markdown(
                     &normal_text,
                     content_width,
                     show_picker,
                     !is_generating,
-                ));
+                );
+                for markdown_line in markdown_lines {
+                    if markdown_line.spans.is_empty() {
+                        lines.push(markdown_line);
+                        continue;
+                    }
+
+                    let prefix = if emitted_assistant_gutter { "  " } else { "• " };
+                    emitted_assistant_gutter = true;
+                    let mut spans = vec![Span::styled(
+                        prefix,
+                        get_themed_style(
+                            COLOR_PRIMARY(),
+                            COLOR_BG(),
+                            Modifier::BOLD,
+                            show_picker,
+                        ),
+                    )];
+                    spans.extend(markdown_line.spans);
+                    lines.push(Line::from(spans));
+                }
             }
         }
         lines.push(Line::from(""));
@@ -2150,7 +2153,7 @@ pub(crate) fn render_live_tail(state: &AppState, width: u16) -> Vec<Line<'static
     if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
         || !state.running_tools.is_empty()
     {
-        lines.push(Line::from("Working..."));
+        lines.push(activity_status_line(state, false));
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
@@ -2180,7 +2183,7 @@ pub(crate) fn render_committed_history_block(
                     ),
                     Span::styled(
                         text.to_owned(),
-                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                     ),
                 ]));
             }
