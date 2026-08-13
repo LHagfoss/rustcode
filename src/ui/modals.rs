@@ -352,6 +352,39 @@ mod tests {
         assert!(rendered.contains("src/"), "rendered modal:\n{rendered}");
         assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
         assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
+        assert!(!rendered.contains("scroll"), "rendered modal:\n{rendered}");
+    }
+
+    #[test]
+    fn single_confirmation_keeps_scope_at_compact_height_boundary() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "list_directory".to_string(),
+            path: "src/".to_string(),
+            content_preview: "src/main.rs".to_string(),
+            content_bytes: 11,
+        }]);
+
+        let input_area = Rect::new(10, 7, 80, 6);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..14)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Execute tool"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("src/"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
     }
 
     #[test]
@@ -1430,7 +1463,7 @@ pub(super) fn render_tool_confirmation_modal(
             horizontal: 2,
         });
 
-        let compact = inner_area.height < 4;
+        let compact = inner_area.height < 5;
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(if compact {
@@ -1603,7 +1636,9 @@ pub(super) fn render_tool_confirmation_modal(
         }
 
         let total_lines = confirmation.content_preview.lines().count();
-        let scroll_info = if modal_chunks.len() > 5 && total_lines > modal_chunks[5].height as usize
+        let scroll_info = if modal_chunks.len() > 5
+            && modal_chunks[5].height > 0
+            && total_lines > modal_chunks[5].height as usize
         {
             format!(
                 "  ↑/↓ scroll ({}/{})",
