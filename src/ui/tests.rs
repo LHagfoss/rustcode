@@ -745,6 +745,22 @@ fn new_chat_separator_spans_width_and_centers_label() {
     assert!((left as isize - right as isize).abs() <= 1);
 }
 
+#[test]
+fn resumed_session_separator_spans_width_and_centers_label() {
+    use unicode_width::UnicodeWidthStr;
+
+    let mut lines = Vec::new();
+    super::render_status_panel("Resumed session \"My Test Session\"", 60, false, &mut lines);
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].width(), 60);
+    assert_eq!(lines[0].spans[1].content, " Resumed Session ");
+
+    let left = lines[0].spans[0].content.width();
+    let right = lines[0].spans[2].content.width();
+    assert!((left as isize - right as isize).abs() <= 1);
+}
+
 // Regression: a short transcript used to receive the entire remaining frame,
 // pinning the input box to the bottom and leaving a large empty gap.
 #[test]
