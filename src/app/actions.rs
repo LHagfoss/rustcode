@@ -1213,6 +1213,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     }
 
     s.history = loaded;
+    s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
     s.pending_queue.clear();
     s.current_response.clear();
