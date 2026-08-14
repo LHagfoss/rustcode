@@ -10,3 +10,10 @@ debug.log
 /clewdr_data/
 
 AGENTS.md
+
+# superpowers local state
+.superpowers/
+docs/superpowers/
+/bench/
+/tests/
+/AGENT_HARNESS_CONTRACTS.md

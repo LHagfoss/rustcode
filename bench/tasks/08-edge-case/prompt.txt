@@ -1,1 +1,0 @@
-The `count_vowels` function in src/lib.rs fails on uppercase input. Fix it so all tests pass with `cargo test`, without breaking the cases that already pass. Do not change the tests.
