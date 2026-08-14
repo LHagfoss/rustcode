@@ -358,7 +358,8 @@ mod tests {
     #[test]
     fn settings_picker_uses_codex_selection_rows_without_a_box() {
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
-        let state = AppState::new();
+        let mut state = AppState::new();
+        state.modal_picker_index = 1;
         terminal
             .draw(|frame| render_verbosity_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
             .unwrap();
@@ -366,7 +367,7 @@ mod tests {
             .map(|cell| cell.symbol()).collect::<String>();
 
         assert!(rendered.contains("Select Output Verbosity"));
-        assert!(rendered.contains("› Low"));
+        assert!(rendered.contains("› High"));
         assert!(!rendered.contains('╭') && !rendered.contains('╰'));
     }
 }

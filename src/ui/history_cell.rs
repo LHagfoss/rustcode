@@ -5,7 +5,7 @@
 //! gives the TUI the same lifecycle shape without serializing terminal state or
 //! making provider code depend on ratatui.
 
-use crate::app::LiveToolCall;
+use crate::app::{LiveToolCall, Verbosity};
 use ratatui::{
     style::Modifier,
     text::{Line, Span},
@@ -102,6 +102,29 @@ impl TranscriptState {
             self.revision = self.revision.saturating_add(1);
             self.active = Some(ActiveHistoryCell::Tools(LiveToolCell {
                 calls: calls.to_vec(),
+                verbosity: Verbosity::Low,
+            }));
+        }
+        self.active_key = Some(ActiveHistoryCellKind::Tools);
+    }
+
+    pub(crate) fn set_tools_with_verbosity(
+        &mut self,
+        calls: &[LiveToolCall],
+        verbosity: &Verbosity,
+    ) {
+        let changed = self.active_key != Some(ActiveHistoryCellKind::Tools)
+            || match self.active.as_ref() {
+                Some(ActiveHistoryCell::Tools(cell)) => {
+                    cell.calls != calls || cell.verbosity != *verbosity
+                }
+                _ => true,
+            };
+        if changed {
+            self.revision = self.revision.saturating_add(1);
+            self.active = Some(ActiveHistoryCell::Tools(LiveToolCell {
+                calls: calls.to_vec(),
+                verbosity: verbosity.clone(),
             }));
         }
         self.active_key = Some(ActiveHistoryCellKind::Tools);
@@ -136,11 +159,12 @@ pub(super) struct AssistantMarkdownCell {
 
 struct LiveToolCell {
     calls: Vec<LiveToolCall>,
+    verbosity: Verbosity,
 }
 
 impl HistoryCell for LiveToolCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        render_live_tool_cell(&self.calls, width, false)
+        render_live_tool_cell_with_verbosity(&self.calls, width, &self.verbosity, false)
     }
 }
 
@@ -263,6 +287,15 @@ pub(super) fn render_live_tool_cell(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
+    render_live_tool_cell_with_verbosity(calls, width, &Verbosity::Low, show_picker)
+}
+
+pub(super) fn render_live_tool_cell_with_verbosity(
+    calls: &[LiveToolCall],
+    width: u16,
+    verbosity: &Verbosity,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
     if calls.is_empty() || width == 0 {
         return Vec::new();
     }
@@ -296,6 +329,10 @@ pub(super) fn render_live_tool_cell(
                 ),
             ),
         ])];
+
+        if matches!(verbosity, Verbosity::High) {
+            return lines;
+        }
 
         let mut output = Vec::<(String, bool)>::new();
         for chunk in &call.output {

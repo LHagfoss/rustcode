@@ -280,6 +280,10 @@ pub async fn handle_enter(
                 let mut changed = false;
                 match tokens.get(1) {
                     None => {
+                        s.modal_picker_index = match s.verbosity {
+                            Verbosity::Low => 0,
+                            Verbosity::High => 1,
+                        };
                         s.status = AppStatus::VerbosityPicker;
                     }
                     Some(&"low") => {
@@ -2135,6 +2139,30 @@ mod tests {
             assert!(s.history[0].content.contains("New chat"));
             assert_eq!(s.history_display_start, 0);
         }
+    }
+
+    #[tokio::test]
+    async fn verbosity_command_opens_picker_on_the_active_value() {
+        use crate::app::{AppStatus, Verbosity};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+
+        {
+            let mut s = state.lock().await;
+            s.verbosity = Verbosity::High;
+            s.input_buffer = "/verbosity".to_owned();
+        }
+
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+
+        let s = state.lock().await;
+        assert_eq!(s.status, AppStatus::VerbosityPicker);
+        assert_eq!(s.modal_picker_index, 1);
     }
 
     #[tokio::test]
