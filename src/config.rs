@@ -74,23 +74,26 @@ pub struct ContextBudget {
 
 impl ModelProfile {
     pub fn context_budget(&self) -> ContextBudget {
-        let context_window = self.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW).max(512);
+        // Keep the effective value bounded and honest. In particular, do not
+        // inflate a deliberately small profile and then send a request that
+        // cannot fit the provider's configured window.
+        let context_window = self.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW).max(1);
         let configured_completion = self.max_tokens.unwrap_or(DEFAULT_REQUEST_MAX_TOKENS);
         let requested_completion = configured_completion
-            .min((context_window / 4).max(256))
-            .max(256);
+            .min((context_window / 4).max(1))
+            .max(1);
         let requested_thinking = if self.enable_thinking == Some(true) {
-            (context_window / 8).clamp(128, 2048)
+            (context_window / 8).clamp(1, 2048)
         } else {
             0
         };
-        let requested_tool = (context_window / 16).clamp(256, 4096);
-        let requested_safety = (context_window / 32).clamp(64, 1024);
+        let requested_tool = (context_window / 16).clamp(1, 4096);
+        let requested_safety = (context_window / 32).clamp(1, 1024);
 
         // Keep the fields honest even for synthetic or unusually small model
         // profiles: the published reserves must never add up to more than the
         // context window, and history always retains a small inspectable tail.
-        let history_floor = context_window.min(256);
+        let history_floor = (context_window / 4).min(256);
         let mut reserve_capacity = context_window.saturating_sub(history_floor);
         let completion_reserve = requested_completion.min(reserve_capacity);
         reserve_capacity = reserve_capacity.saturating_sub(completion_reserve);
@@ -1502,6 +1505,40 @@ mod tests {
                 + tiny.safety_reserve,
             tiny.context_window
         );
+    }
+
+    #[test]
+    fn context_budget_scales_without_double_reserving_large_or_small_windows() {
+        let mut profile = AppConfig::default().models[0].clone();
+        profile.max_tokens = Some(u32::MAX);
+        for window in [1, 32, 64, 128, 256, 512, 4_096, 8_192, 32_768, 128_000, 262_144] {
+            profile.context_window = Some(window);
+            profile.enable_thinking = Some(false);
+            let budget = profile.context_budget();
+            assert_eq!(budget.context_window, window.max(1));
+            assert_eq!(
+                budget.history_tokens
+                    + budget.completion_reserve
+                    + budget.thinking_reserve
+                    + budget.tool_reserve
+                    + budget.safety_reserve,
+                budget.context_window
+            );
+            assert!(
+                budget.context_window < 4
+                    || budget.completion_reserve <= budget.context_window / 4
+            );
+            if window > 1 {
+                assert!(budget.history_tokens > 0);
+            }
+
+            profile.enable_thinking = Some(true);
+            let thinking = profile.context_budget();
+            if window >= 64 {
+                assert!(thinking.thinking_reserve > 0);
+                assert!(thinking.history_tokens < budget.history_tokens);
+            }
+        }
     }
 
     #[test]

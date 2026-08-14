@@ -1,13 +1,11 @@
-pub(crate) const RESPONSE_RESERVE_TOKENS: u32 = 1024;
-
 /// Flat per-image estimate used when budgeting multimodal messages. Providers
 /// bill images by tiles (a few hundred tokens each), not by the size of the
 /// base64 payload, so counting the data URL as text would wildly overstate the
 /// cost (a 400 KiB screenshot is ~260k base64 "tokens" but ~1-2k billed).
 const IMAGE_PART_TOKEN_ESTIMATE: u32 = 2048;
 
-fn estimate_msg_tokens(msg: &serde_json::Value) -> u32 {
-    match msg.get("content") {
+pub(crate) fn estimate_msg_tokens(msg: &serde_json::Value) -> u32 {
+    let content_tokens = match msg.get("content") {
         Some(serde_json::Value::String(s)) => crate::network::count_tokens(s),
         Some(serde_json::Value::Array(parts)) => parts
             .iter()
@@ -23,7 +21,19 @@ fn estimate_msg_tokens(msg: &serde_json::Value) -> u32 {
             .sum(),
         Some(other) => crate::network::count_tokens(&other.to_string()),
         None => 0,
-    }
+    };
+    let tool_call_tokens = msg
+        .get("tool_calls")
+        .map(|calls| crate::network::count_tokens(&calls.to_string()))
+        .unwrap_or(0);
+    let tool_call_id_tokens = msg
+        .get("tool_call_id")
+        .and_then(|id| id.as_str())
+        .map(crate::network::count_tokens)
+        .unwrap_or(0);
+    content_tokens
+        .saturating_add(tool_call_tokens)
+        .saturating_add(tool_call_id_tokens)
 }
 
 /// Drop complete oldest conversation exchanges until the payload fits the
@@ -36,31 +46,41 @@ pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_toke
     while total > budget_tokens && msgs.len() > 3 {
         let Some(start) = msgs
             .iter()
-            .position(|m| m.get("role").and_then(|r| r.as_str()) != Some("system"))
+            .position(is_user_turn_boundary)
         else {
             break;
         };
 
-        // Remove from the first user turn through the message before the next
-        // user turn. This keeps each assistant/tool response attached to the
-        // request that produced it.
+        // Remove one complete old user turn through the message before the
+        // next real user turn. Tool results in the text protocol also use the
+        // user role, so they are explicitly excluded from the boundary search.
         let end = msgs
             .iter()
             .enumerate()
             .skip(start + 1)
-            .find(|(_, m)| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-            .map(|(i, _)| i)
-            .unwrap_or(start + 1);
-        let remove_end = end.min(msgs.len().saturating_sub(2));
-        if remove_end <= start {
+            .find(|(_, m)| is_user_turn_boundary(m))
+            .map(|(i, _)| i);
+        let Some(remove_end) = end else {
+            // The only remaining user turn is the current one. Never drop its
+            // user prompt or its assistant/tool pairing just to make progress;
+            // deterministic tool pruning should have reduced oversized results
+            // before this final fallback.
             break;
-        }
+        };
         for msg in msgs.drain(start..remove_end) {
             total = total.saturating_sub(estimate_msg_tokens(&msg));
             dropped += 1;
         }
     }
     dropped
+}
+
+fn is_user_turn_boundary(message: &serde_json::Value) -> bool {
+    message.get("role").and_then(|role| role.as_str()) == Some("user")
+        && !message
+            .get("content")
+            .and_then(|content| content.as_str())
+            .is_some_and(|content| content.starts_with("<tool_result>"))
 }
 
 /// Append `text` to the content of the last message in `msgs`.
@@ -186,6 +206,49 @@ mod tests {
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["content"], "old tool result");
         assert_eq!(msgs[2]["content"], "latest answer");
+    }
+
+    #[test]
+    fn trim_never_drops_the_only_current_user_turn() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "system", "content": "system"}),
+            serde_json::json!({"role": "user", "content": "current task"}),
+            serde_json::json!({"role": "assistant", "content": "large response"}),
+            serde_json::json!({"role": "tool", "tool_call_id": "call-1", "content": "large result"}),
+        ];
+        let dropped = trim_msgs_to_budget(&mut msgs, 1);
+        assert_eq!(dropped, 0);
+        assert_eq!(msgs[1]["content"], "current task");
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert_eq!(msgs[3]["tool_call_id"], "call-1");
+    }
+
+    #[test]
+    fn structured_tool_call_arguments_count_toward_trim_budget() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "system", "content": "system"}),
+            serde_json::json!({"role": "user", "content": "old task"}),
+            serde_json::json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call-old",
+                    "type": "function",
+                    "function": {
+                        "name": "edit_file",
+                        "arguments": format!("{{\"content\":\"{}\"}}", "x".repeat(4000))
+                    }
+                }]
+            }),
+            serde_json::json!({"role": "tool", "tool_call_id": "call-old", "content": "ok"}),
+            serde_json::json!({"role": "user", "content": "current task"}),
+        ];
+
+        let dropped = trim_msgs_to_budget(&mut msgs, 100);
+
+        assert_eq!(dropped, 3);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[1]["content"], "current task");
     }
 
     #[test]

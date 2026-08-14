@@ -2,6 +2,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
@@ -760,6 +761,25 @@ fn mcp_canonical_name(server: &str, tool: &str) -> String {
     format!("mcp__{server}__{tool}")
 }
 
+fn mcp_canonical_name_for_clients(
+    server: &str,
+    tool: &str,
+    clients: &[Arc<crate::mcp::McpClient>],
+) -> String {
+    let base = mcp_canonical_name(server, tool);
+    let collides = clients
+        .iter()
+        .filter(|client| mcp_canonical_name(&client.name, tool) == base)
+        .count()
+        > 1;
+    if !collides {
+        return base;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    server.hash(&mut hasher);
+    format!("{base}__{:016x}", hasher.finish())
+}
+
 fn mcp_raw_name_is_unique(
     name: &str,
     clients: &[Arc<crate::mcp::McpClient>],
@@ -780,9 +800,11 @@ fn mcp_raw_name_is_unique(
 
 fn collect_mcp_tools() -> Vec<(String, String, Value)> {
     let mut discovered = Vec::new();
+    let mut clients_for_names = Vec::new();
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
         let mut clients = reg.values().cloned().collect::<Vec<_>>();
         clients.sort_by(|a, b| a.name.cmp(&b.name));
+        clients_for_names = clients.clone();
         for client in &clients {
             if let Ok(mcp_tools) = client.get_tools() {
                 for tool in mcp_tools {
@@ -822,7 +844,7 @@ fn collect_mcp_tools() -> Vec<(String, String, Value)> {
             || TOOLS.iter().any(|tool| tool.name == raw_name)
             || AGENT_TOOL_SPECS.iter().any(|(name, _, _)| *name == raw_name);
         let name = if qualified {
-            mcp_canonical_name(&server, &raw_name)
+            mcp_canonical_name_for_clients(&server, &raw_name, &clients_for_names)
         } else {
             raw_name
         };
@@ -1480,7 +1502,8 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
                     .iter()
                     .find_map(|t| {
                         let raw = t.get("name").and_then(|n| n.as_str())?;
-                        let canonical = mcp_canonical_name(&client.name, raw);
+                        let canonical =
+                            mcp_canonical_name_for_clients(&client.name, raw, &clients);
                         (name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients)))
                             .then_some(raw)
                     })
@@ -1494,7 +1517,8 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
                     .iter()
                     .find_map(|tool| {
                         let raw = tool.get("name").and_then(|n| n.as_str())?;
-                        let canonical = mcp_canonical_name(&client.name, raw);
+                        let canonical =
+                            mcp_canonical_name_for_clients(&client.name, raw, &clients);
                         (name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients)))
                             .then_some(raw.to_string())
                     })

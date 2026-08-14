@@ -171,6 +171,30 @@ impl TurnContext {
     }
 }
 
+/// Persist every result that actually completed before cancellation, then
+/// close any remaining native calls with typed cancellation results. Dropping
+/// the completed prefix and marking the whole batch cancelled would lie about
+/// successful work and lose the provider call/result pairing on reload.
+pub(crate) fn append_cancelled_batch_results(
+    history: &mut Vec<ChatMessage>,
+    results: Vec<ToolResult>,
+    call_refs: &[crate::app::ToolCallRef],
+) {
+    let executed = results.len();
+    for (position, mut result) in results.into_iter().enumerate() {
+        let answered_call = call_refs.get(position).map(|call| call.id.clone());
+        result.metadata.call_id = answered_call.clone();
+        history.push(tool_result_history_message(result, answered_call));
+    }
+    if executed < call_refs.len() {
+        history.extend(unanswered_call_results_with_kind(
+            &call_refs[executed..],
+            "interrupted by the user",
+            crate::tools::ToolErrorKind::Cancelled,
+        ));
+    }
+}
+
 /// Record a tool-call protocol failure and return whether it is identical to
 /// the immediately preceding malformed request. Parsed calls use a stable
 /// name/arguments fingerprint; unparseable fences fall back to their bounded
@@ -773,17 +797,12 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 dbg_log!("Orchestrator: Cancelled during tool execution");
                 ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
                 let mut s = state.lock().await;
-                for message in unanswered_call_results_with_kind(
-                    &call_refs,
-                    "interrupted by the user",
-                    crate::tools::ToolErrorKind::Cancelled,
-                ) {
-                    s.history.push(message);
-                }
+                append_cancelled_batch_results(&mut s.history, results, &call_refs);
                 if call_refs.is_empty() {
                     s.history
                         .push(ChatMessage::new("system", "Request cancelled by user"));
                 }
+                crate::config::save_history(&s.history);
                 ctx.turn_machine.finish_tools_if_executing();
                 return false;
             }
@@ -891,6 +910,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     .unwrap_or_else(|| {
                         loop_detect::stable_hash(loop_detect::stagnation_key(&content))
                     });
+                let action = call
+                    .map(|call| loop_detect::signatures(&call.name, &call.arguments).0)
+                    .unwrap_or_else(|| name.clone());
                 let failure_fingerprint = (!metadata.success).then(|| {
                     loop_detect::stable_hash(&format!(
                         "{name}:{}:{}",
@@ -900,7 +922,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 });
                 let assessment = ctx.progress_ledger.observe(
                     &loop_detect::ProgressObservation {
-                        action: name.clone(),
+                        action,
                         output_fingerprint,
                         state_fingerprint,
                         failure_fingerprint,
@@ -909,6 +931,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         search_result,
                         no_result,
                         verification: verification_command,
+                        read_only: loop_detect::is_read_only(&name),
+                        replayed: metadata.replayed,
                         success: metadata.success,
                     },
                 );

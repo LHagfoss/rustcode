@@ -137,6 +137,14 @@ pub(crate) async fn estimate_token_usage(
                 prompt_text.push('\n');
             }
         }
+        if let Some(tool_calls) = msg.get("tool_calls") {
+            prompt_text.push_str(&tool_calls.to_string());
+            prompt_text.push('\n');
+        }
+        if let Some(tool_call_id) = msg.get("tool_call_id").and_then(|id| id.as_str()) {
+            prompt_text.push_str(tool_call_id);
+            prompt_text.push('\n');
+        }
     }
     let prompt = count_tokens(&prompt_text);
     let full = prompt_text + reply + "\n";
@@ -170,7 +178,10 @@ pub async fn stream_request(
             .config
             .models
             .iter()
-            .find(|p| p.model == model && p.endpoint_url() == url)
+            .find(|p| {
+                (p.model == model || p.name == model)
+                    && (p.url == url || p.endpoint_url() == url)
+            })
             .cloned()
     };
     let max_tokens = profile

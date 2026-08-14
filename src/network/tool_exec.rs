@@ -727,7 +727,9 @@ pub(crate) fn tool_result_history_message_with_prefix(
             changed_paths: envelope.changed_paths,
             truncated: envelope.truncated,
             full_output_artifact: envelope.full_output_artifact,
-            error_kind: envelope.error_kind.map(|kind| format!("{kind:?}")),
+            error_kind: envelope
+                .error_kind
+                .map(|kind| kind.as_str().to_string()),
             retryable: envelope.retryable,
             replayed: envelope.replayed,
         })
@@ -747,12 +749,13 @@ pub(crate) fn subagent_tool_history_message(
     args: &serde_json::Value,
     execution: crate::tools::ToolExecutionOutput,
     diff: Option<String>,
+    answered_call: Option<String>,
 ) -> ChatMessage {
     let prefix = format!("{tool_name}: ");
     bounded_tool_result_history_message(
         tool_result_from_execution(tool_name, args, execution, diff),
         &prefix,
-        None,
+        answered_call,
     )
 }
 
@@ -779,6 +782,8 @@ pub(crate) async fn execute_tool_batch(
                 file_preview: None,
                 metadata: ToolResultMetadata {
                     success: false,
+                    error_kind: Some(crate::tools::ToolErrorKind::PermissionDenied),
+                    retryable: false,
                     ..Default::default()
                 },
             })
@@ -930,8 +935,8 @@ Re-reading will not produce anything new; if an edit failed to match, expand sta
                                 exit_code: previous.exit_code,
                                 truncated: previous.truncated,
                                 replayed: true,
-                                error_kind: None,
-                                retryable: false,
+                                error_kind: previous.error_kind,
+                                retryable: previous.retryable,
                             },
                             None,
                         )
@@ -1008,6 +1013,8 @@ different, read another range or make an edit first; repeating this call returns
                             exit_code: execution.exit_code,
                             truncated: execution.truncated,
                             full_output_artifact: None,
+                            error_kind: execution.error_kind,
+                            retryable: execution.retryable,
                         },
                     );
                     if !s.recent_read_calls.contains(&sig) {
@@ -1089,6 +1096,8 @@ different, read another range or make an edit first; repeating this call returns
                 cached.success = result.metadata.success;
                 cached.exit_code = result.metadata.exit_code;
                 cached.truncated = result.metadata.truncated;
+                cached.error_kind = result.metadata.error_kind;
+                cached.retryable = result.metadata.retryable;
                 if result.metadata.full_output_artifact.is_some() {
                     cached.full_output_artifact = result.metadata.full_output_artifact.clone();
                 }

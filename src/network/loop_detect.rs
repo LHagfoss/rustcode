@@ -207,6 +207,8 @@ pub struct ProgressObservation {
     pub search_result: bool,
     pub no_result: bool,
     pub verification: bool,
+    pub read_only: bool,
+    pub replayed: bool,
     pub success: bool,
 }
 
@@ -276,7 +278,16 @@ impl ProgressLedger {
     pub const RECOVERY_STREAK: usize = 3;
 
     pub fn observe(&mut self, observation: &ProgressObservation) -> ProgressAssessment {
-        let new_output = remember(&mut self.seen_outputs, observation.output_fingerprint);
+        // Include the normalized action in the novelty key. Two different
+        // successful commands often produce the same empty/stdout text, and
+        // treating that as a replay would misclassify legitimate progress.
+        // Exact and semantic repeats are still handled by LoopDetector and by
+        // the repeated key for the same action here.
+        let action_output = stable_hash(&format!(
+            "{}:{}",
+            observation.action, observation.output_fingerprint
+        ));
+        let new_output = remember(&mut self.seen_outputs, action_output);
         let new_failure = observation
             .failure_fingerprint
             .is_some_and(|hash| remember(&mut self.seen_failures, hash));
@@ -302,6 +313,8 @@ impl ProgressLedger {
             (false, ProgressReason::Churn)
         } else if observation.changed_workspace {
             (true, ProgressReason::WorkspaceChanged)
+        } else if observation.read_only && observation.replayed {
+            (false, ProgressReason::NoNewInformation)
         } else if observation.fresh_read && new_output {
             (true, ProgressReason::FreshRead)
         } else if observation.search_result && observation.success && observation.no_result {
@@ -314,7 +327,9 @@ impl ProgressLedger {
             (true, ProgressReason::NewInformation)
         } else if !observation.success {
             (false, ProgressReason::RepeatedFailure)
-        } else if !new_output || !state_changed {
+        } else if new_output {
+            (true, ProgressReason::NewInformation)
+        } else if !state_changed {
             (false, ProgressReason::NoNewInformation)
         } else {
             (true, ProgressReason::NewInformation)
@@ -330,7 +345,10 @@ impl ProgressLedger {
             meaningful,
             reason,
             streak: self.no_progress_streak,
-            suppress_stagnation: stable_verification || observation.verification,
+            // A successful verification may repeat harmlessly. A failed
+            // verification must remain visible to the failure/stagnation
+            // guards so an agent cannot loop forever on the same broken test.
+            suppress_stagnation: stable_verification,
         }
     }
 
@@ -830,6 +848,8 @@ mod tests {
             search_result: false,
             no_result: false,
             verification: false,
+            read_only: false,
+            replayed: false,
             success: true,
         }
     }
@@ -872,6 +892,43 @@ mod tests {
         assert!(ledger.observe(&check).suppress_stagnation);
         assert!(ledger.observe(&check).suppress_stagnation);
         assert_eq!(ledger.no_progress_streak(), 0);
+    }
+
+    #[test]
+    fn failed_verification_is_not_exempt_from_stagnation() {
+        let mut ledger = ProgressLedger::default();
+        let mut check = observation("cargo test: failed", None, Some("cargo test: failed"));
+        check.verification = true;
+        check.success = false;
+        assert!(!ledger.observe(&check).suppress_stagnation);
+        let repeated = ledger.observe(&check);
+        assert_eq!(repeated.reason, ProgressReason::RepeatedFailure);
+        assert!(ledger.no_progress_streak() > 0);
+    }
+
+    #[test]
+    fn different_successful_actions_with_identical_output_are_progress() {
+        let mut ledger = ProgressLedger::default();
+        let first = observation("", None, None);
+        assert!(ledger.observe(&first).meaningful);
+
+        let mut second = first.clone();
+        second.action = "different-action".to_string();
+        assert!(ledger.observe(&second).meaningful);
+    }
+
+    #[test]
+    fn replayed_reads_do_not_count_as_new_information() {
+        let mut ledger = ProgressLedger::default();
+        let mut first = observation("file", None, None);
+        first.read_only = true;
+        first.fresh_read = true;
+        assert!(ledger.observe(&first).meaningful);
+
+        let mut replay = first.clone();
+        replay.replayed = true;
+        replay.fresh_read = false;
+        assert!(!ledger.observe(&replay).meaningful);
     }
 
     #[test]
