@@ -5,7 +5,7 @@
 //! module and are pulled in via the `super::*` glob; diff highlighting comes
 //! from the sibling `highlight` module.
 
-use super::highlight::highlight_diff_line;
+use super::highlight::{highlight_diff_line, highlight_shell_command};
 use super::*;
 use crate::app::AppState;
 use ratatui::{
@@ -284,7 +284,7 @@ mod tests {
         let panel = COLOR_PANEL();
         state.pending_tool_confirmation = Some(vec![ToolConfirmation {
             tool_name: "run_command".to_string(),
-            path: "cargo test".to_string(),
+            path: "git commit --message \"hello\"".to_string(),
             content_preview: String::new(),
             content_bytes: 0,
         }]);
@@ -303,7 +303,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("Would you like to run the following command?"));
-        assert!(rendered.contains("$ cargo test"), "rendered modal:\n{rendered}");
+        assert!(
+            rendered.contains("$ git commit --message \"hello\""),
+            "rendered modal:\n{rendered}"
+        );
         assert!(rendered.contains("› 1. Yes, proceed"));
         assert!(rendered.contains("2. No, cancel this tool call"));
 
@@ -313,10 +316,23 @@ mod tests {
                 (0..100)
                     .map(|x| buffer[(x, *y)].symbol())
                     .collect::<String>()
-                    .contains("$ cargo test")
+                    .contains("$ git commit --message \"hello\"")
             })
             .expect("dynamic command row");
         assert!((0..100).all(|x| buffer[(x, command_row)].bg == panel));
+        let mut command_foregrounds = Vec::new();
+        for foreground in (0..100)
+            .filter(|x| !buffer[(*x, command_row)].symbol().trim().is_empty())
+            .map(|x| buffer[(x, command_row)].fg)
+        {
+            if !command_foregrounds.contains(&foreground) {
+                command_foregrounds.push(foreground);
+            }
+        }
+        assert!(
+            command_foregrounds.len() > 1,
+            "command should contain syntax colors: {command_foregrounds:?}"
+        );
         assert!((0..100).all(|x| buffer[(x, 2)].bg == panel));
         assert!((0..100).all(|x| buffer[(x, 11)].bg == panel));
     }
@@ -1404,10 +1420,17 @@ pub(super) fn render_tool_confirmation_modal(
 
     if single {
         if is_command {
-            lines.push(Line::from(vec![
-                Span::raw("  $ "),
-                Span::styled(first.path.clone(), Style::default().fg(COLOR_SECONDARY())),
-            ]));
+            for (index, command) in highlight_shell_command(&first.path, COLOR_PANEL(), false)
+                .into_iter()
+                .enumerate()
+            {
+                let mut spans = vec![Span::styled(
+                    if index == 0 { "  $ " } else { "    " },
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                )];
+                spans.extend(command.spans);
+                lines.push(Line::from(spans));
+            }
         } else {
             lines.push(Line::from(vec![
                 Span::raw("  "),
@@ -1427,13 +1450,30 @@ pub(super) fn render_tool_confirmation_modal(
         }
     } else {
         for confirmation in confirmations.iter().take(8) {
-            let command = if confirmation.tool_name == "run_command" { "$ " } else { "" };
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::raw("  • "),
                 Span::styled(confirmation.tool_name.clone(), Style::default().fg(COLOR_SECONDARY())),
                 Span::raw(" "),
-                Span::styled(format!("{command}{}", confirmation.path), Style::default().fg(COLOR_TEXT())),
-            ]));
+            ];
+            if confirmation.tool_name == "run_command" {
+                spans.push(Span::styled(
+                    "$ ",
+                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                ));
+                if let Some(command) =
+                    highlight_shell_command(&confirmation.path, COLOR_PANEL(), false)
+                        .into_iter()
+                        .next()
+                {
+                    spans.extend(command.spans);
+                }
+            } else {
+                spans.push(Span::styled(
+                    confirmation.path.clone(),
+                    Style::default().fg(COLOR_TEXT()),
+                ));
+            }
+            lines.push(Line::from(spans));
         }
     }
 

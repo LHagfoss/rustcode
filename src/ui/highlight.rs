@@ -36,6 +36,10 @@ fn syntax_theme() -> &'static Theme {
 }
 
 fn syntect_style(style: SyntectStyle, show_picker: bool) -> Style {
+    syntect_style_with_bg(style, COLOR_BG(), show_picker)
+}
+
+fn syntect_style_with_bg(style: SyntectStyle, background: Color, show_picker: bool) -> Style {
     let mut modifier = Modifier::empty();
     if style.font_style.contains(FontStyle::BOLD) {
         modifier |= Modifier::BOLD;
@@ -45,10 +49,79 @@ fn syntect_style(style: SyntectStyle, show_picker: bool) -> Style {
     }
     get_themed_style(
         Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b),
-        COLOR_BG(),
+        background,
         modifier,
         show_picker,
     )
+}
+
+/// Highlight a shell command with Bash grammar while preserving its exact text.
+/// Callers choose the surface background so transcript and modal cells remain opaque.
+pub(super) fn highlight_shell_command(
+    command: &str,
+    background: Color,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    const MAX_COMMAND_BYTES: usize = 512 * 1024;
+    const MAX_COMMAND_LINES: usize = 10_000;
+    const MAX_COMMAND_LINE_BYTES: usize = 4 * 1024;
+
+    let plain = || {
+        let mut lines = command
+            .lines()
+            .map(|line| {
+                Line::from(Span::styled(
+                    line.to_owned(),
+                    get_themed_style(COLOR_TEXT(), background, Modifier::empty(), show_picker),
+                ))
+            })
+            .collect::<Vec<_>>();
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                String::new(),
+                get_themed_style(COLOR_TEXT(), background, Modifier::empty(), show_picker),
+            )));
+        }
+        lines
+    };
+
+    if command.len() > MAX_COMMAND_BYTES
+        || command.lines().count() > MAX_COMMAND_LINES
+        || command
+            .lines()
+            .any(|line| line.len() > MAX_COMMAND_LINE_BYTES)
+    {
+        return plain();
+    }
+
+    let Some(syntax) = syntax_set().find_syntax_by_token("bash") else {
+        return plain();
+    };
+    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    let mut lines = Vec::new();
+    for line in command.lines() {
+        let Ok(ranges) = highlighter.highlight_line(line, syntax_set()) else {
+            return plain();
+        };
+        lines.push(Line::from(
+            ranges
+                .into_iter()
+                .map(|(style, text)| {
+                    Span::styled(
+                        text.to_owned(),
+                        syntect_style_with_bg(style, background, show_picker),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            String::new(),
+            get_themed_style(COLOR_TEXT(), background, Modifier::empty(), show_picker),
+        )));
+    }
+    lines
 }
 
 /// Highlight one code line using the fenced block's language identifier.
@@ -646,9 +719,55 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::COLOR_PANEL;
 
     fn row_width(line: &Line) -> usize {
         line.spans.iter().map(|s| s.content.width()).sum()
+    }
+
+    #[test]
+    fn shell_highlighting_preserves_text_and_applies_token_styles() {
+        let command = "git commit --message \"release build\" && echo \"$HOME\"";
+        let lines = highlight_shell_command(command, COLOR_PANEL(), false);
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut foregrounds = Vec::new();
+        for foreground in lines
+            .iter()
+            .flat_map(|line| line.spans.iter().filter_map(|span| span.style.fg))
+        {
+            if !foregrounds.contains(&foreground) {
+                foregrounds.push(foreground);
+            }
+        }
+
+        assert_eq!(rendered, command);
+        assert!(
+            foregrounds.len() > 1,
+            "Bash tokens should not all use one foreground: {lines:?}"
+        );
+        assert!(lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .all(|span| span.style.bg == Some(COLOR_PANEL())));
+    }
+
+    #[test]
+    fn shell_highlighting_keeps_multiline_commands_and_bounds_long_lines() {
+        let multiline = "printf '%s\\n' one\nprintf '%s\\n' two";
+        let lines = highlight_shell_command(multiline, COLOR_BG(), false);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].to_string(), "printf '%s\\n' one");
+        assert_eq!(lines[1].to_string(), "printf '%s\\n' two");
+
+        let long = "x".repeat(4 * 1024 + 1);
+        let fallback = highlight_shell_command(&long, COLOR_BG(), false);
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].to_string(), long);
+        assert_eq!(fallback[0].spans.len(), 1);
     }
 
     #[test]
