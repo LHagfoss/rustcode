@@ -76,6 +76,7 @@ async fn denied_tool_batch_records_permission_denied_metadata() {
     let calls = vec![crate::tools::ToolCall {
         name: "run_command".to_string(),
         arguments: serde_json::json!({"command": "true"}),
+        call_id: None,
     }];
     let mut dirty = false;
     let mut cache = None;
@@ -99,6 +100,37 @@ async fn denied_tool_batch_records_permission_denied_metadata() {
         Some(crate::tools::ToolErrorKind::PermissionDenied)
     );
     assert!(!results[0].metadata.success);
+}
+
+#[tokio::test]
+async fn cancelled_tool_batch_removes_its_live_projection() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let calls = vec![crate::tools::ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "true"}),
+        call_id: None,
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+
+    let _ = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        true,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+
+    assert!(state.lock().await.live_tool_calls.is_empty());
 }
 
 #[tokio::test]
@@ -395,6 +427,7 @@ fn call_refs_are_empty_without_provider_ids() {
     let calls = vec![crate::tools::ToolCall {
         name: "grep".to_string(),
         arguments: serde_json::json!({"pattern": "x"}),
+        call_id: None,
     }];
 
     // Text protocols supply no ids, so nothing structured is recorded.
@@ -403,6 +436,18 @@ fn call_refs_are_empty_without_provider_ids() {
     let refs = call_refs_for(&calls, &["call_9".to_string()]);
     assert_eq!(refs[0].id, "call_9");
     assert_eq!(refs[0].name, "grep");
+}
+
+#[test]
+fn call_refs_prefer_the_embedded_provider_id() {
+    let calls = vec![crate::tools::ToolCall {
+        name: "grep".to_string(),
+        arguments: serde_json::json!({"pattern": "x"}),
+        call_id: Some("native-call-1".to_string()),
+    }];
+
+    let refs = call_refs_for(&calls, &["positional-fallback".to_string()]);
+    assert_eq!(refs[0].id, "native-call-1");
 }
 
 #[test]
@@ -430,10 +475,12 @@ fn truncated_batch_summary_keeps_shape_and_drops_prose() {
         crate::tools::ToolCall {
             name: "grep".to_string(),
             arguments: serde_json::json!({"pattern": "duct::cmd"}),
+            call_id: None,
         },
         crate::tools::ToolCall {
             name: "run_command".to_string(),
             arguments: serde_json::json!({"command": "cargo check"}),
+            call_id: None,
         },
     ];
 
@@ -1743,6 +1790,7 @@ fn identical_malformed_tool_calls_are_counted_as_repeats() {
     let call = crate::tools::ToolCall {
         name: "replace_file_content".to_string(),
         arguments: serde_json::json!({"path":"src/store.ts","edits":"[]"}),
+        call_id: None,
     };
 
     assert!(!super::turn_engine::record_malformed_call(
@@ -1763,6 +1811,7 @@ fn identical_malformed_tool_calls_are_counted_as_repeats() {
         &[crate::tools::ToolCall {
             name: "replace_file_content".to_string(),
             arguments: serde_json::json!({"path":"src/other.ts","edits":"[]"}),
+            call_id: None,
         }]
     ));
     assert_eq!(ctx.consecutive_malformed_calls, 1);
@@ -2011,6 +2060,7 @@ fn test_tool_call(name: &str, args: serde_json::Value) -> crate::tools::ToolCall
     crate::tools::ToolCall {
         name: name.to_string(),
         arguments: args,
+        call_id: None,
     }
 }
 

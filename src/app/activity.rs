@@ -1,4 +1,4 @@
-use super::AppStatus;
+use super::{AppStatus, LiveToolCall};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
@@ -39,6 +39,135 @@ pub fn is_exploration_tool(tool_name: &str) -> bool {
             | "codebase_symbol"
             | "get_project_map"
     )
+}
+
+fn compact_target(raw: &str) -> String {
+    let compacted = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut target = compacted.chars().take(120).collect::<String>();
+    if compacted.chars().count() > 120 {
+        target.push('…');
+    }
+    target
+}
+
+/// Return the small semantic label shown for a live tool. This is shared by
+/// the executor and TUI so the network layer records no terminal formatting.
+pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, String) {
+    let value = |keys: &[&str], fallback: &str| -> String {
+        keys.iter()
+            .find_map(|key| args.get(*key).and_then(|value| value.as_str()))
+            .unwrap_or(fallback)
+            .to_string()
+    };
+    let (action, target) = match name {
+        "view_file" => ("Read", value(&["TargetFile", "AbsolutePath", "path"], "?")),
+        "list_directory" | "list_dir" | "glob" => (
+            "List",
+            value(&["DirectoryPath", "SearchPath", "path", "pattern"], "."),
+        ),
+        "grep" | "grep_search" => {
+            let query = value(&["Query", "query", "pattern"], "?");
+            let path = args
+                .get("SearchPath")
+                .or_else(|| args.get("path"))
+                .and_then(|value| value.as_str())
+                .filter(|path| !path.is_empty() && *path != ".");
+            return (
+                "Search".to_string(),
+                compact_target(
+                    &path
+                        .map(|path| format!("{query} in {path}"))
+                        .unwrap_or(query),
+                ),
+            );
+        }
+        "find_symbol" | "codebase_search" | "codebase_symbol" | "search_web" => {
+            ("Search", value(&["query", "Query"], "?"))
+        }
+        "run_command" => ("Bash", value(&["CommandLine", "command"], "?")),
+        "replace_file_content" | "multi_replace_file_content" => {
+            ("Edit", value(&["TargetFile", "AbsolutePath", "path"], "?"))
+        }
+        "write_to_file" => ("Write", value(&["TargetFile", "AbsolutePath", "path"], "?")),
+        "delete_file" => (
+            "Delete",
+            value(&["TargetFile", "AbsolutePath", "path"], "?"),
+        ),
+        "move_file" | "copy_file" => {
+            let src = value(&["src"], "?");
+            let dest = value(&["dest"], "?");
+            return (
+                to_pascal_action(name),
+                compact_target(&format!("{src} → {dest}")),
+            );
+        }
+        "get_project_map" => ("Read", "project map".to_string()),
+        _ => {
+            let target = value(&["path", "target", "query", "name", "command"], "");
+            return (to_pascal_action(name), compact_target(&target));
+        }
+    };
+    (action.to_string(), compact_target(&target))
+}
+
+fn to_pascal_action(name: &str) -> String {
+    name.split(['_', '-'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// Collapse multiple active calls into the one status snapshot shown below
+/// the live assistant tail. Individual targets remain available for grouped
+/// exploration and parallel command activity.
+pub fn classify_live_tools(calls: &[LiveToolCall]) -> Option<ActivitySnapshot> {
+    if calls.is_empty() {
+        return None;
+    }
+    let all_exploration = calls
+        .iter()
+        .all(|call| is_exploration_tool(&call.tool_name));
+    let detail = if all_exploration {
+        let details = calls
+            .iter()
+            .filter(|call| !call.target.is_empty() && call.target != "?")
+            .map(|call| format!("{} {}", call.action, call.target))
+            .take(3)
+            .collect::<Vec<_>>();
+        (!details.is_empty()).then(|| details.join(", "))
+    } else {
+        let details = calls
+            .iter()
+            .take(2)
+            .map(|call| {
+                if call.target.is_empty() || call.target == "?" {
+                    call.action.clone()
+                } else {
+                    format!("{} {}", call.action, call.target)
+                }
+            })
+            .collect::<Vec<_>>();
+        (!details.is_empty()).then(|| details.join(", "))
+    };
+    let label = if all_exploration {
+        "Exploring"
+    } else if calls.iter().any(|call| call.tool_name == "run_command") {
+        "Running"
+    } else {
+        "Using"
+    };
+    Some(ActivitySnapshot {
+        kind: ActivityKind::RunningTool,
+        label: label.to_string(),
+        detail,
+        animated: true,
+    })
 }
 
 pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> ActivitySnapshot {
@@ -185,8 +314,8 @@ pub fn format_terminal_title(kind: ActivityKind, session_name: &str, frame: u64)
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivityKind, AnimationCell, animation_trail, classify_activity, format_terminal_title,
-        sanitize_session_name,
+        ActivityKind, AnimationCell, LiveToolCall, animation_trail, classify_activity,
+        classify_live_tools, format_terminal_title, sanitize_session_name, summarize_tool_call,
     };
     use crate::app::AppStatus;
 
@@ -305,5 +434,52 @@ mod tests {
     #[test]
     fn idle_activity_is_labeled_idle() {
         assert_eq!(classify_activity(&AppStatus::Idle, &[]).label, "Idle");
+    }
+
+    #[test]
+    fn live_tool_activity_preserves_action_and_target() {
+        let (action, target) = summarize_tool_call(
+            "run_command",
+            &serde_json::json!({"command": "cargo test --lib"}),
+        );
+        let activity = classify_live_tools(&[LiveToolCall {
+            key: "call-1".to_string(),
+            provider_call_id: None,
+            tool_name: "run_command".to_string(),
+            action,
+            target,
+        }])
+        .expect("live activity");
+
+        assert_eq!(activity.kind, ActivityKind::RunningTool);
+        assert_eq!(activity.label, "Running");
+        assert_eq!(activity.detail.as_deref(), Some("Bash cargo test --lib"));
+    }
+
+    #[test]
+    fn live_exploration_activity_groups_targets() {
+        let calls = [
+            LiveToolCall {
+                key: "read".to_string(),
+                provider_call_id: None,
+                tool_name: "view_file".to_string(),
+                action: "Read".to_string(),
+                target: "src/main.rs".to_string(),
+            },
+            LiveToolCall {
+                key: "search".to_string(),
+                provider_call_id: None,
+                tool_name: "grep".to_string(),
+                action: "Search".to_string(),
+                target: "renderer in src".to_string(),
+            },
+        ];
+        let activity = classify_live_tools(&calls).expect("live activity");
+
+        assert_eq!(activity.label, "Exploring");
+        assert_eq!(
+            activity.detail.as_deref(),
+            Some("Read src/main.rs, Search renderer in src")
+        );
     }
 }

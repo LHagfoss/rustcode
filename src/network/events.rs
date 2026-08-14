@@ -462,6 +462,7 @@ mod tests {
             vec![ToolCall {
                 name: "grep".to_string(),
                 arguments: serde_json::json!({"pattern": "x"}),
+                call_id: None,
             }],
         );
         assert_eq!(response.source, ResponseSource::Native);
