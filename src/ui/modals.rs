@@ -51,16 +51,16 @@ pub(super) fn render_popup_menu(
                 left_text,
                 Style::default()
                     .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
-                    .bg(COLOR_BG())
+                    .bg(COLOR_PANEL())
                     .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
             ),
-            Span::styled(desc_text, Style::default().fg(COLOR_MUTED()).bg(COLOR_BG())),
-            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
+            Span::styled(desc_text, Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL())),
+            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
         ]);
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
 }
@@ -92,15 +92,15 @@ pub(super) fn render_at_popup_menu(
                 left_text,
                 Style::default()
                     .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
-                    .bg(COLOR_BG())
+                    .bg(COLOR_PANEL())
                     .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
             ),
-            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
+            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
         ]);
         popup_lines.push(line);
     }
     f.render_widget(
-        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_BG())),
+        Paragraph::new(popup_lines).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
 }
@@ -168,7 +168,7 @@ pub(super) fn render_verbosity_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -198,7 +198,7 @@ pub(super) fn render_verbosity_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[0],
     );
 
@@ -231,7 +231,7 @@ pub(super) fn render_verbosity_picker_modal(
                 format!("{}{}", text, " ".repeat(padding)),
                 Style::default()
                     .fg(p.primary)
-                    .bg(p.bg)
+                    .bg(COLOR_PANEL())
                     .add_modifier(Modifier::BOLD),
             )])
         } else {
@@ -242,7 +242,7 @@ pub(super) fn render_verbosity_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
+        Paragraph::new(list_lines).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[2],
     );
 
@@ -251,7 +251,7 @@ pub(super) fn render_verbosity_picker_modal(
         Style::default().fg(p.muted),
     )]);
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],
     );
 }
@@ -314,6 +314,30 @@ mod tests {
     }
 
     #[test]
+    fn approval_selection_visibly_moves_to_deny() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        let mut state = AppState::new();
+        state.tool_confirmation_selected = 1;
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "run_command".to_owned(),
+            path: "cargo test".to_owned(),
+            content_preview: String::new(),
+            content_bytes: 0,
+        }]);
+        terminal
+            .draw(|frame| {
+                render_tool_confirmation_modal(frame, &state, Rect::new(0, 1, 80, 10))
+            })
+            .unwrap();
+        let rendered = terminal.backend().buffer().content.iter()
+            .map(|cell| cell.symbol()).collect::<String>();
+
+        assert!(rendered.contains("› 2. No, cancel this tool call"));
+        assert!(!rendered.contains("› 1. Yes, proceed"));
+        assert_eq!(terminal.backend().buffer()[(79, 1)].bg, COLOR_PANEL());
+    }
+
+    #[test]
     fn batch_approval_lists_each_tool_in_the_bottom_pane() {
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         let mut state = AppState::new();
@@ -345,6 +369,7 @@ mod tests {
         assert!(rendered.contains("Select Output Verbosity"));
         assert!(rendered.contains("› Low"));
         assert!(!rendered.contains('╭') && !rendered.contains('╰'));
+        assert_eq!(terminal.backend().buffer()[(99, 3)].bg, COLOR_PANEL());
     }
 }
 
@@ -358,7 +383,7 @@ pub(super) fn render_thinking_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -388,7 +413,7 @@ pub(super) fn render_thinking_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[0],
     );
 
@@ -425,7 +450,7 @@ pub(super) fn render_thinking_picker_modal(
                 format!("{}{}", text, " ".repeat(padding)),
                 Style::default()
                     .fg(p.primary)
-                    .bg(p.bg)
+                    .bg(COLOR_PANEL())
                     .add_modifier(Modifier::BOLD),
             )])
         } else {
@@ -436,7 +461,7 @@ pub(super) fn render_thinking_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
+        Paragraph::new(list_lines).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[2],
     );
 
@@ -445,7 +470,7 @@ pub(super) fn render_thinking_picker_modal(
         Style::default().fg(p.muted),
     )]);
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],
     );
 }
@@ -460,7 +485,7 @@ pub(super) fn render_protocol_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -490,7 +515,7 @@ pub(super) fn render_protocol_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[0],
     );
 
@@ -530,7 +555,7 @@ pub(super) fn render_protocol_picker_modal(
                 format!("{}{}", text, " ".repeat(padding)),
                 Style::default()
                     .fg(p.primary)
-                    .bg(p.bg)
+                    .bg(COLOR_PANEL())
                     .add_modifier(Modifier::BOLD),
             )])
         } else {
@@ -541,7 +566,7 @@ pub(super) fn render_protocol_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
+        Paragraph::new(list_lines).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[2],
     );
 
@@ -550,7 +575,7 @@ pub(super) fn render_protocol_picker_modal(
         Style::default().fg(p.muted),
     )]);
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],
     );
 }
@@ -650,7 +675,7 @@ pub(super) fn render_history_picker_modal(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(COLOR_PRIMARY()))
-                .style(Style::default().bg(COLOR_BG())),
+                .style(Style::default().bg(COLOR_PANEL())),
             modal_area,
         );
 
@@ -677,7 +702,7 @@ pub(super) fn render_history_picker_modal(
                 .add_modifier(Modifier::BOLD),
         )]);
         f.render_widget(
-            Paragraph::new(header_line).style(Style::default().bg(COLOR_BG())),
+            Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
             modal_chunks[0],
         );
 
@@ -692,7 +717,7 @@ pub(super) fn render_history_picker_modal(
                 ),
             ]);
             f.render_widget(
-                Paragraph::new(title_line).style(Style::default().bg(COLOR_BG())),
+                Paragraph::new(title_line).style(Style::default().bg(COLOR_PANEL())),
                 modal_chunks[2],
             );
 
@@ -704,7 +729,7 @@ pub(super) fn render_history_picker_modal(
                 ),
             ]);
             f.render_widget(
-                Paragraph::new(info_line).style(Style::default().bg(COLOR_BG())),
+                Paragraph::new(info_line).style(Style::default().bg(COLOR_PANEL())),
                 modal_chunks[3],
             );
         }
@@ -726,7 +751,7 @@ pub(super) fn render_history_picker_modal(
             Span::styled(" cancel", Style::default().fg(COLOR_MUTED())),
         ]);
         f.render_widget(
-            Paragraph::new(footer_line).style(Style::default().bg(COLOR_BG())),
+            Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
             modal_chunks[5],
         );
 
@@ -745,7 +770,7 @@ pub(super) fn render_history_picker_modal(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_BG())),
+            .style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
@@ -870,7 +895,7 @@ pub(super) fn render_mcp_config_modal(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_BG())),
+            .style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
@@ -1373,13 +1398,31 @@ pub(super) fn render_tool_confirmation_modal(
     }
 
     lines.push(Line::from(""));
+    let approve_selected = state.tool_confirmation_selected == 0;
     lines.push(Line::from(vec![
-        Span::styled("› ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
-        Span::styled("1. Yes, proceed", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            if approve_selected { "› " } else { "  " },
+            Style::default().fg(if approve_selected { COLOR_PRIMARY() } else { COLOR_MUTED() })
+                .add_modifier(if approve_selected { Modifier::BOLD } else { Modifier::empty() }),
+        ),
+        Span::styled(
+            "1. Yes, proceed",
+            Style::default().fg(COLOR_TEXT())
+                .add_modifier(if approve_selected { Modifier::BOLD } else { Modifier::empty() }),
+        ),
         Span::styled(" (y)", Style::default().fg(COLOR_MUTED())),
     ]));
     lines.push(Line::from(vec![
-        Span::raw("  2. No, cancel this tool call "),
+        Span::styled(
+            if approve_selected { "  " } else { "› " },
+            Style::default().fg(if approve_selected { COLOR_MUTED() } else { COLOR_PRIMARY() })
+                .add_modifier(if approve_selected { Modifier::empty() } else { Modifier::BOLD }),
+        ),
+        Span::styled(
+            "2. No, cancel this tool call ",
+            Style::default().fg(COLOR_TEXT())
+                .add_modifier(if approve_selected { Modifier::empty() } else { Modifier::BOLD }),
+        ),
         Span::styled("(esc)", Style::default().fg(COLOR_MUTED())),
     ]));
     lines.push(Line::from(""));
@@ -1433,7 +1476,7 @@ pub(super) fn render_tool_confirmation_modal(
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(COLOR_BG())),
+            .style(Style::default().bg(COLOR_PANEL())),
         area,
     );
 }
@@ -1948,7 +1991,7 @@ pub(super) fn render_question_modal(
 
     lines.truncate(area.height as usize);
     f.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).style(Style::default().bg(COLOR_BG())),
+        Paragraph::new(lines).wrap(Wrap { trim: false }).style(Style::default().bg(COLOR_PANEL())),
         area,
     );
     if let (Some(row), Some(custom)) = (custom_row, question.custom_input.as_ref())
@@ -2215,7 +2258,7 @@ pub(super) fn render_theme_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default().style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
@@ -2245,7 +2288,7 @@ pub(super) fn render_theme_picker_modal(
         Span::styled("esc", Style::default().fg(p.muted)),
     ]);
     f.render_widget(
-        Paragraph::new(header_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[0],
     );
 
@@ -2265,15 +2308,15 @@ pub(super) fn render_theme_picker_modal(
             let padding = (inner_area.width as usize).saturating_sub(text.len());
             Line::from(Span::styled(
                 format!("{}{}", text, " ".repeat(padding)),
-                Style::default().fg(p.primary).bg(p.bg).add_modifier(Modifier::BOLD),
+                Style::default().fg(p.primary).bg(COLOR_PANEL()).add_modifier(Modifier::BOLD),
             ))
         } else {
             let left = format!("   {:<12} — {}", theme.name, theme.description);
             Line::from(vec![
-                Span::styled(left, Style::default().fg(p.text).bg(p.bg)),
+                Span::styled(left, Style::default().fg(p.text).bg(COLOR_PANEL())),
                 Span::styled(
                     active_badge.to_string(),
-                    Style::default().fg(p.muted).bg(p.bg),
+                    Style::default().fg(p.muted).bg(COLOR_PANEL()),
                 ),
             ])
         };
@@ -2281,7 +2324,7 @@ pub(super) fn render_theme_picker_modal(
     }
 
     f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(p.bg)),
+        Paragraph::new(list_lines).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[2],
     );
 
@@ -2290,7 +2333,7 @@ pub(super) fn render_theme_picker_modal(
         Style::default().fg(p.muted),
     ));
     f.render_widget(
-        Paragraph::new(footer_line).style(Style::default().bg(p.bg)),
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],
     );
 }

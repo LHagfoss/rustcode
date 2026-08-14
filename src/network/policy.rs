@@ -84,6 +84,7 @@ impl TurnPolicy for InteractivePolicy {
             {
                 let mut s = state.lock().await;
                 s.modal_scroll_row = 0;
+                s.tool_confirmation_selected = 0;
                 s.pending_tool_confirmation = Some(confirmations);
                 s.tool_confirmation_response = Some(tx);
                 s.status = AppStatus::AwaitingToolConfirmation;
