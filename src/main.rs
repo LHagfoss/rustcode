@@ -36,7 +36,11 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smooth scrolling
-const LIVE_VIEWPORT_ROWS: u16 = 12;
+/// Let the inline viewport use the terminal's available height. Ratatui clamps
+/// this request to the real screen size while preserving inline scrollback.
+/// A fixed 12-row viewport left only four to six rows for streamed assistant
+/// text after the composer, footer, margins, and activity status were laid out.
+const LIVE_VIEWPORT_ROWS: u16 = u16::MAX;
 
 /// Frame budget while a response is in flight: 60Hz, so streamed tokens,
 /// spinners, the elapsed-second counter and the rotating status label (which
@@ -2101,8 +2105,8 @@ fn print_goodbye() {
 #[cfg(test)]
 mod draw_loop_tests {
     use super::{
-        STREAM_FRAME_INTERVAL, background_task_history_message, goodbye_cursor_position,
-        queue_background_wakeup, should_draw,
+        LIVE_VIEWPORT_ROWS, STREAM_FRAME_INTERVAL, background_task_history_message,
+        goodbye_cursor_position, queue_background_wakeup, should_draw,
     };
     use std::time::Duration;
 
@@ -2111,6 +2115,21 @@ mod draw_loop_tests {
         assert_eq!(goodbye_cursor_position(24), (0, 23));
         assert_eq!(goodbye_cursor_position(1), (0, 0));
         assert_eq!(goodbye_cursor_position(0), (0, 0));
+    }
+
+    #[test]
+    fn live_viewport_uses_the_available_terminal_height() {
+        use ratatui::{Terminal, TerminalOptions, Viewport, backend::TestBackend};
+
+        let mut terminal = Terminal::with_options(
+            TestBackend::new(80, 30),
+            TerminalOptions {
+                viewport: Viewport::Inline(LIVE_VIEWPORT_ROWS),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(terminal.get_frame().area().height, 30);
     }
 
     #[test]
