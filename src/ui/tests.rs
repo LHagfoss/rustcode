@@ -1329,6 +1329,60 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
 }
 
 #[test]
+fn live_history_cell_keeps_identical_invocations_visible_separately() {
+    let calls = vec![
+        crate::app::LiveToolCall {
+            key: "local:1".to_owned(),
+            provider_call_id: None,
+            tool_name: "run_command".to_owned(),
+            action: "Bash".to_owned(),
+            target: "cargo test".to_owned(),
+        },
+        crate::app::LiveToolCall {
+            key: "local:2".to_owned(),
+            provider_call_id: None,
+            tool_name: "run_command".to_owned(),
+            action: "Bash".to_owned(),
+            target: "cargo test".to_owned(),
+        },
+    ];
+
+    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(rendered[0], "• Running");
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|line| line.contains("Bash cargo test"))
+            .count(),
+        2,
+        "the live cell must not deduplicate distinct invocation identities"
+    );
+}
+
+#[test]
+fn live_tool_cell_is_a_projection_not_history() {
+    let mut state = AppState::new();
+    state.live_tool_calls.push(crate::app::LiveToolCall {
+        key: "local:1".to_owned(),
+        provider_call_id: None,
+        tool_name: "view_file".to_owned(),
+        action: "Read".to_owned(),
+        target: "src/main.rs".to_owned(),
+    });
+
+    let text = super::render_live_tail(&state, 80, 24)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Exploring"));
+    assert!(state.history.is_empty());
+}
+
+#[test]
 fn action_required_status_wins_over_a_live_question_tool() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingQuestion;
