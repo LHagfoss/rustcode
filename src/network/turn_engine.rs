@@ -490,6 +490,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             .map(|call| crate::tools::ToolCall {
                 name: call.tool_name,
                 arguments: call.arguments,
+                call_id: Some(call.call_id),
             })
             .collect();
         events::native_response(
@@ -1448,7 +1449,7 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
         crate::config::flush_history_async();
 
         s.current_response.clear();
-        s.live_tool_calls.clear();
+        s.clear_live_tool_calls();
         s.status = AppStatus::Idle;
         s.request_redraw();
 

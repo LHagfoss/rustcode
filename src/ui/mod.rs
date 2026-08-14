@@ -2122,8 +2122,29 @@ fn tool_child_line(
     Line::from(spans)
 }
 
-fn indent_generic_tool_body(lines: Vec<Line<'static>>, show_picker: bool) -> Vec<Line<'static>> {
-    lines
+fn indent_generic_tool_body(
+    lines: Vec<Line<'static>>,
+    verbosity: &crate::app::Verbosity,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let max_visible = if matches!(verbosity, crate::app::Verbosity::High) {
+        20
+    } else {
+        6
+    };
+    let omitted = lines.len().saturating_sub(max_visible);
+    let head_count = max_visible / 2;
+    let tail_count = max_visible - head_count;
+    let visible = if omitted == 0 {
+        lines
+    } else {
+        lines[..head_count]
+            .iter()
+            .chain(&lines[lines.len() - tail_count..])
+            .cloned()
+            .collect()
+    };
+    let mut indented = visible
         .into_iter()
         .map(|line| {
             if line.spans.is_empty() {
@@ -2140,7 +2161,17 @@ fn indent_generic_tool_body(lines: Vec<Line<'static>>, show_picker: bool) -> Vec
             indented.alignment = line.alignment;
             indented
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if omitted > 0 {
+        indented.insert(
+            head_count,
+            Line::from(Span::styled(
+                format!("    … +{omitted} lines"),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
+            )),
+        );
+    }
+    indented
 }
 
 pub(crate) fn render_committed_tool_result_group(
@@ -2209,7 +2240,11 @@ pub(crate) fn render_committed_tool_result_group(
                     if kind == ToolTranscriptKind::Tool
                         && (is_expanded || matches!(state.verbosity, crate::app::Verbosity::High))
                     {
-                        lines.extend(indent_generic_tool_body(entry.body.clone(), show_picker));
+                        lines.extend(indent_generic_tool_body(
+                            entry.body.clone(),
+                            &state.verbosity,
+                            show_picker,
+                        ));
                     }
                 }
             }

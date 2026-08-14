@@ -856,11 +856,10 @@ pub(crate) async fn execute_tool_batch(
     for call in tool_calls {
         let name = &call.name;
         let args = &call.arguments;
-        let live_key = format!("{}:{}", name, stable_arguments_hash(args));
-        {
+        let live_key = {
             let mut s = state.lock().await;
-            s.begin_live_tool_call(live_key.clone(), name, args);
-        }
+            s.begin_live_tool_call(call.call_id.as_deref(), name, args)
+        };
         let client_clone = client.clone();
         let state_clone = Arc::clone(state);
         let cancel_token_clone = cancel_token.clone();
