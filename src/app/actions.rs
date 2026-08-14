@@ -94,7 +94,20 @@ pub async fn handle_enter(
 
         match cmd {
             "/memory" => {
-                check_memory_usage(&mut s);
+                let root = s
+                    .workspace_root
+                    .clone()
+                    .or_else(|| std::env::current_dir().ok());
+                match tokens.get(1).copied() {
+                    None => check_memory_usage(&mut s),
+                    Some(_) => {
+                        if let Some(message) =
+                            crate::memory::command(root.as_deref(), &tokens[1..])
+                        {
+                            s.history.push(ChatMessage::new("system", message));
+                        }
+                    }
+                }
             }
             "/clear" => {
                 // Hide the existing transcript without deleting it. The model
@@ -1472,7 +1485,7 @@ pub fn build_help_text() -> String {
                 ("/delegate", "Allow subagents for next task only"),
                 ("/skills", "Discover and list custom skills"),
                 ("/copy", "Copy last assistant reply to clipboard"),
-                ("/memory", "Show process RAM usage"),
+                ("/memory", "Inspect or update bounded project memory"),
                 ("/changelog", "Show recent changelog updates"),
             ],
         ),

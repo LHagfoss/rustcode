@@ -7,6 +7,7 @@ mod clipboard;
 mod config;
 mod context;
 mod mcp;
+mod memory;
 mod network;
 mod notifications;
 mod raw_cli;
@@ -87,6 +88,9 @@ fn background_task_history_message(
                 success: output.success,
                 exit_code: output.exit_code,
                 truncated: output.truncated,
+                replayed: output.replayed,
+                error_kind: output.error_kind,
+                retryable: output.retryable,
                 ..Default::default()
             },
         },
@@ -2088,6 +2092,9 @@ mod draw_loop_tests {
                 success: false,
                 exit_code: Some(9),
                 truncated: false,
+                replayed: false,
+                error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
+                retryable: false,
             },
         );
 
@@ -2116,6 +2123,9 @@ mod draw_loop_tests {
                 success: false,
                 exit_code: Some(11),
                 truncated: false,
+                replayed: false,
+                error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
+                retryable: false,
             },
         );
 

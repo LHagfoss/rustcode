@@ -54,7 +54,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/memory",
-        desc: "Show current process RAM usage",
+        desc: "Inspect or update bounded project memory (no option shows RAM)",
     },
     CommandInfo {
         name: "/mcp",

@@ -99,6 +99,10 @@ fn classify_command(command: &str) -> Option<VerificationKind> {
     }
 }
 
+pub(crate) fn is_verification_command(command: &str) -> bool {
+    classify_command(command).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::VerificationLedger;
