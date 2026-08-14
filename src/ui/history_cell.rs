@@ -15,7 +15,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP,
-    get_themed_style,
+    get_themed_style, highlight_shell_command,
 };
 
 const MAX_LIVE_CHILDREN: usize = 8;
@@ -308,7 +308,13 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             Modifier::BOLD,
             show_picker,
         );
-        let mut lines = vec![Line::from(vec![
+        let command = truncate_to_width(&call.target, (width as usize).saturating_sub(10).max(1));
+        let command_spans = highlight_shell_command(&command, COLOR_BG(), show_picker)
+            .into_iter()
+            .next()
+            .map(|line| line.spans)
+            .unwrap_or_default();
+        let mut header = vec![
             Span::styled(
                 "• ",
                 get_themed_style(
@@ -319,16 +325,9 @@ pub(super) fn render_live_tool_cell_with_verbosity(
                 ),
             ),
             Span::styled("Running ", title_style),
-            Span::styled(
-                truncate_to_width(&call.target, (width as usize).saturating_sub(10).max(1)),
-                get_themed_style(
-                    COLOR_TEXT(),
-                    COLOR_BG(),
-                    Modifier::empty(),
-                    show_picker,
-                ),
-            ),
-        ])];
+        ];
+        header.extend(command_spans);
+        let mut lines = vec![Line::from(header)];
 
         if matches!(verbosity, Verbosity::High) {
             return lines;
@@ -446,18 +445,8 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 
     let child_width = (width as usize).saturating_sub(6).max(1);
     for (index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
-        let target = if call.target.is_empty() || call.target == "?" {
-            String::new()
-        } else if call.action == "Bash" {
-            format!(
-                " $ {}",
-                truncate_to_width(&call.target, child_width.saturating_sub(2))
-            )
-        } else {
-            format!(" {}", truncate_to_width(&call.target, child_width))
-        };
         let prefix = if index == 0 { "  └ " } else { "    " };
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 prefix,
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
@@ -466,11 +455,28 @@ pub(super) fn render_live_tool_cell_with_verbosity(
                 call.action.clone(),
                 get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
             ),
-            Span::styled(
-                target,
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-        ]));
+        ];
+        if !call.target.is_empty() && call.target != "?" {
+            if call.action == "Bash" {
+                spans.push(Span::styled(
+                    " $ ",
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ));
+                let command =
+                    truncate_to_width(&call.target, child_width.saturating_sub(2));
+                if let Some(command_line) =
+                    highlight_shell_command(&command, COLOR_BG(), show_picker).into_iter().next()
+                {
+                    spans.extend(command_line.spans);
+                }
+            } else {
+                spans.push(Span::styled(
+                    format!(" {}", truncate_to_width(&call.target, child_width)),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
     }
     if calls.len() > MAX_LIVE_CHILDREN {
         lines.push(Line::from(Span::styled(

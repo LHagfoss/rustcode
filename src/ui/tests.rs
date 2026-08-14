@@ -89,7 +89,7 @@ fn inline_command_suggestions_render_below_the_composer() {
             .collect::<String>()
     };
     let composer_row = (0..20)
-        .find(|row| row_text(*row).contains("? for shortcuts"))
+        .find(|row| row_text(*row).contains("context left"))
         .expect("composer status row should be visible");
     let popup_row = (0..20)
         .find(|row| row_text(*row).contains("/cancel"))
@@ -2121,7 +2121,7 @@ fn empty_composer_has_painted_padding_and_model_footer() {
         (0..100)
             .map(|x| buffer[(x, *y)].symbol())
             .collect::<String>()
-            .contains("? for shortcuts")
+            .contains("context left")
     });
 
     let prompt_row = prompt_row.expect("composer prompt should be rendered");
@@ -2131,6 +2131,7 @@ fn empty_composer_has_painted_padding_and_model_footer() {
         .map(|x| buffer[(x, footer_row)].symbol())
         .collect::<String>();
     assert!(footer.contains(&state.model_name), "composer footer: {footer:?}");
+    assert!(!footer.contains("? for shortcuts"), "composer footer: {footer:?}");
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row + 1)].bg, COLOR_PANEL());

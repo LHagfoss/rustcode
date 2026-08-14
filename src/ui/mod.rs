@@ -10,8 +10,8 @@ pub(crate) mod scrollback;
 mod tool_result;
 
 use highlight::{
-    highlight_code_block, highlight_code_line, highlight_diff_line, render_unified_diff,
-    wrap_code_spans,
+    highlight_code_block, highlight_code_line, highlight_diff_line, highlight_shell_command,
+    render_unified_diff, wrap_code_spans,
 };
 use markdown::{
     render_markdown, unwrap_markdown_table_fences, wrap_prefixed_plain_text,
@@ -1354,14 +1354,14 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let remaining = 100u32.saturating_sub(
             ((used as f64 / window as f64) * 100.0).round().clamp(0.0, 100.0) as u32,
         );
-        let hint = if matches!(state.status, AppStatus::Idle) {
-            "  ? for shortcuts".to_owned()
+        let left_content = if matches!(state.status, AppStatus::Idle) {
+            format!("  {}", state.model_name)
         } else {
-            "  tab to queue message".to_owned()
+            format!("  tab to queue message · {}", state.model_name)
         };
         let right = format!("{remaining}% context left  ");
         let left = fit_to_width(
-            &format!("{hint} · {}", state.model_name),
+            &left_content,
             (footer_area.width as usize).saturating_sub(right.width()),
         );
         let padding = (footer_area.width as usize)
@@ -2113,19 +2113,116 @@ fn tool_child_line(
     Line::from(spans)
 }
 
-fn command_child_line(
+fn command_child_lines(
     entry: &ToolTranscriptEntry,
     first: bool,
     show_picker: bool,
-) -> Line<'static> {
-    let mut line = tool_child_line(entry, first, false, show_picker);
-    if !entry.success {
-        line.spans.push(Span::styled(
-            format!(" · {}", entry.status),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
+) -> Vec<Line<'static>> {
+    let mut commands = highlight_shell_command(&entry.target, COLOR_BG(), show_picker);
+    if commands.is_empty() {
+        commands.push(Line::default());
     }
-    line
+    let mut lines = Vec::with_capacity(commands.len());
+    for (command_index, command) in commands.into_iter().enumerate() {
+        let mut spans = vec![Span::styled(
+            if first && command_index == 0 {
+                "  └ "
+            } else {
+                "    "
+            },
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        )];
+        if command_index == 0 {
+            spans.push(Span::styled(
+                entry.action.clone(),
+                get_themed_style(
+                    COLOR_SECONDARY(),
+                    COLOR_BG(),
+                    Modifier::empty(),
+                    show_picker,
+                ),
+            ));
+            if !entry.target.is_empty() && entry.target != "?" {
+                spans.push(Span::styled(
+                    " ",
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                ));
+            }
+        }
+        if entry.target != "?" {
+            spans.extend(command.spans);
+        }
+        lines.push(Line::from(spans));
+    }
+    if !entry.success {
+        if let Some(line) = lines.last_mut() {
+            line.spans.push(Span::styled(
+                format!(" · {}", entry.status),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
+    }
+    lines
+}
+
+fn command_summary_lines(
+    entry: &ToolTranscriptEntry,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let bullet_color = if entry.success {
+        COLOR_GREEN()
+    } else {
+        Color::Rgb(229, 123, 123)
+    };
+    let has_command = !entry.target.is_empty() && entry.target != "?";
+    let mut commands = highlight_shell_command(&entry.target, COLOR_BG(), show_picker);
+    if commands.is_empty() {
+        commands.push(Line::default());
+    }
+    let last = commands.len().saturating_sub(1);
+    commands
+        .into_iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let mut spans = if index == 0 {
+                vec![
+                    Span::styled(
+                        "• ",
+                        get_themed_style(
+                            bullet_color,
+                            COLOR_BG(),
+                            Modifier::BOLD,
+                            show_picker,
+                        ),
+                    ),
+                    Span::styled(
+                        if has_command { "Ran $ " } else { "Ran Bash" },
+                        get_themed_style(
+                            COLOR_TEXT(),
+                            COLOR_BG(),
+                            Modifier::BOLD,
+                            show_picker,
+                        ),
+                    ),
+                ]
+            } else {
+                vec![Span::styled(
+                    "    ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                )]
+            };
+            if has_command {
+                spans.extend(command.spans);
+            }
+            if index == last {
+                spans.push(Span::styled(
+                    format!(" · {}", entry.status),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn indent_generic_tool_body(
@@ -2213,17 +2310,11 @@ pub(crate) fn render_committed_tool_result_group(
             if matches!(state.verbosity, crate::app::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
-                    lines.push(command_child_line(entry, child_index == 0, show_picker));
+                    lines.extend(command_child_lines(entry, child_index == 0, show_picker));
                 }
             } else {
                 let entry = &group[0];
-                let command = if entry.target.is_empty() || entry.target == "?" {
-                    entry.action.clone()
-                } else {
-                    format!("$ {}", entry.target)
-                };
-                let title = format!("Ran {command} · {}", entry.status);
-                lines.push(tool_group_header(&title, success, show_picker));
+                lines.extend(command_summary_lines(entry, show_picker));
                 lines.extend(indent_tool_result_body(
                     entry.body.clone(),
                     &entry.tool_name,
