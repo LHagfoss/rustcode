@@ -16,6 +16,90 @@ use super::{COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, g
 
 const MAX_LIVE_CHILDREN: usize = 8;
 
+/// Presentation cells keep semantic source separate from terminal rows.
+/// Replaying a cell at a new width therefore re-renders the same Markdown
+/// instead of trying to resize already-wrapped ANSI-like output.
+pub(super) trait HistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
+}
+
+pub(super) struct AssistantMarkdownCell {
+    source: String,
+    token_usage: Option<crate::app::TokenUsage>,
+    response_time_ms: Option<u64>,
+    thought_time_ms: Option<u64>,
+    thought_tokens: Option<u32>,
+    generating: bool,
+    continuation: bool,
+}
+
+impl AssistantMarkdownCell {
+    pub(super) fn committed(
+        source: &str,
+        token_usage: Option<crate::app::TokenUsage>,
+        response_time_ms: Option<u64>,
+        thought_time_ms: Option<u64>,
+        thought_tokens: Option<u32>,
+    ) -> Self {
+        Self {
+            source: source.to_owned(),
+            token_usage,
+            response_time_ms,
+            thought_time_ms,
+            thought_tokens,
+            generating: false,
+            continuation: false,
+        }
+    }
+
+    pub(super) fn streaming(
+        source: &str,
+        continuation: bool,
+        response_time_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            source: source.to_owned(),
+            token_usage: None,
+            response_time_ms,
+            thought_time_ms: None,
+            thought_tokens: None,
+            generating: true,
+            continuation,
+        }
+    }
+}
+
+impl HistoryCell for AssistantMarkdownCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let mut copy_clicks = Vec::new();
+        super::render_assistant_message(
+            &self.source,
+            &mut lines,
+            &mut copy_clicks,
+            super::AssistantRenderOptions {
+                token_usage: self.token_usage.clone(),
+                response_time_ms: self.response_time_ms,
+                thought_time_ms: self.thought_time_ms,
+                thought_tokens: self.thought_tokens,
+                is_generating: self.generating,
+                viewport_width: width,
+                show_picker: false,
+                last_copy_text: None,
+            },
+        );
+        if self.continuation {
+            super::demote_assistant_bullet(&mut lines);
+        }
+        if self.generating {
+            while lines.last().is_some_and(|line| line.spans.is_empty()) {
+                lines.pop();
+            }
+        }
+        lines.into_iter().map(|line| super::own_line(&line)).collect()
+    }
+}
+
 fn is_exploration_tool(name: &str) -> bool {
     crate::app::activity::is_exploration_tool(name)
 }
@@ -79,6 +163,11 @@ pub(super) fn render_live_tool_cell(
     for (index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
         let target = if call.target.is_empty() || call.target == "?" {
             String::new()
+        } else if call.action == "Bash" {
+            format!(
+                " $ {}",
+                truncate_to_width(&call.target, child_width.saturating_sub(2))
+            )
         } else {
             format!(" {}", truncate_to_width(&call.target, child_width))
         };

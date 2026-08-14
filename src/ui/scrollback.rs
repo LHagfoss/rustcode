@@ -28,43 +28,51 @@ pub(crate) fn split_stable_rows(text: &str) -> (Vec<String>, String) {
 /// block mutable lets the Markdown renderer see its opener and body together;
 /// otherwise terminal scrollback would render each streamed code line as a
 /// separate paragraph before the closing fence arrives.
+pub(crate) fn fence_line_info(line: &str) -> Option<(u8, usize, &str)> {
+    let content = line.strip_suffix('\n').unwrap_or(line);
+    let content = content.strip_suffix('\r').unwrap_or(content);
+    let indentation = content.len() - content.trim_start_matches(' ').len();
+    if indentation > 3 {
+        return None;
+    }
+    let bytes = content.as_bytes();
+    let marker_position = indentation;
+    let marker = *bytes.get(marker_position)?;
+    if marker != b'`' && marker != b'~' {
+        return None;
+    }
+    let mut marker_length = 0;
+    while bytes.get(marker_position + marker_length) == Some(&marker) {
+        marker_length += 1;
+    }
+    if marker_length < 3 {
+        return None;
+    }
+    let rest = &content[marker_position + marker_length..];
+    if marker == b'`' && rest.contains('`') {
+        return None;
+    }
+    Some((marker, marker_length, rest))
+}
+
 fn unfinished_fence_start(text: &str) -> Option<usize> {
     let mut open: Option<(u8, usize, usize)> = None;
     let mut line_start = 0;
     for line in text.split_inclusive('\n') {
-        let content = line
-            .strip_suffix('\n')
-            .unwrap_or(line)
-            .strip_suffix('\r')
-            .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line));
-        let indentation = content.len() - content.trim_start_matches(' ').len();
-        let bytes = content.as_bytes();
-        if indentation <= 3 {
-            let marker_position = indentation;
-            if let Some(&marker) = bytes.get(marker_position)
-                && (marker == b'`' || marker == b'~')
-            {
-                let mut marker_length = 0;
-                while bytes.get(marker_position + marker_length) == Some(&marker) {
-                    marker_length += 1;
+        if let Some((marker, marker_length, rest)) = fence_line_info(line) {
+            if let Some((open_marker, open_length, _)) = open {
+                // A closing fence must use the same marker, be at least as
+                // long as its opener, and have no info text.
+                if marker == open_marker
+                    && marker_length >= open_length
+                    && rest.trim().is_empty()
+                {
+                    open = None;
                 }
-                let rest = &content[marker_position + marker_length..];
-                if marker_length >= 3 {
-                    if let Some((open_marker, open_length, _)) = open {
-                        // A closing fence must use the same marker, be at
-                        // least as long as its opener, and have no info text.
-                        if marker == open_marker
-                            && marker_length >= open_length
-                            && rest.trim().is_empty()
-                        {
-                            open = None;
-                        }
-                        // Fence-like lines inside an open block are content;
-                        // they must not toggle the block state.
-                    } else if marker != b'`' || !rest.contains('`') {
-                        open = Some((marker, marker_length, line_start));
-                    }
-                }
+                // Fence-like lines inside an open block are content; they
+                // must not toggle the block state.
+            } else {
+                open = Some((marker, marker_length, line_start));
             }
         }
         line_start += line.len();
@@ -210,6 +218,30 @@ mod tests {
         assert_eq!(
             unfinished_fence_start("````rust\n```\n````\n```\n"),
             Some(18)
+        );
+    }
+
+    #[test]
+    fn streaming_fence_holdback_releases_only_after_the_matching_close() {
+        let mut cursor = super::TranscriptCursor::default();
+        let before_close = "intro\n~~~rust\nlet value = 1;\n";
+
+        assert_eq!(cursor.pending_stable_source(before_close), "intro\n");
+        assert_eq!(super::mutable_stream_text(before_close), "~~~rust\nlet value = 1;\n");
+        cursor.commit_stable_stream("intro\n");
+
+        let after_close = "intro\n~~~rust\nlet value = 1;\n~~~\nAfter";
+        assert_eq!(
+            cursor.pending_stable_source(after_close),
+            "~~~rust\nlet value = 1;\n~~~\n"
+        );
+        assert_eq!(super::mutable_stream_text(after_close), "After");
+
+        cursor.commit_stable_stream("~~~rust\nlet value = 1;\n~~~\n");
+        cursor.reset();
+        assert_eq!(
+            cursor.pending_stable_source(after_close),
+            "intro\n~~~rust\nlet value = 1;\n~~~\n"
         );
     }
 
