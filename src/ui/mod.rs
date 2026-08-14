@@ -1332,69 +1332,10 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         lines.push(Line::from(current_line_spans));
     }
 
-    let text_area_height = input_inner.height.saturating_sub(1);
-    let text_area = ratatui::layout::Rect::new(
-        input_inner.x,
-        input_inner.y,
-        input_inner.width,
-        text_area_height,
-    );
+    let text_area_height = input_inner.height;
+    let text_area = input_inner;
     let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(paragraph, text_area);
-
-    if input_inner.height > 0 {
-        let footer_area = ratatui::layout::Rect::new(
-            input_inner.x,
-            input_inner.y + input_inner.height.saturating_sub(1),
-            input_inner.width,
-            1,
-        );
-        let (used, _) = context_usage(state);
-        let window = state.active_context_window().max(1);
-        let remaining = 100u32.saturating_sub(
-            ((used as f64 / window as f64) * 100.0).round().clamp(0.0, 100.0) as u32,
-        );
-        let left_content = if matches!(state.status, AppStatus::Idle) {
-            format!("  {}", state.model_name)
-        } else {
-            format!("  tab to queue message · {}", state.model_name)
-        };
-        let right = format!("{remaining}% context left  ");
-        let left = fit_to_width(
-            &left_content,
-            (footer_area.width as usize).saturating_sub(right.width()),
-        );
-        let padding = (footer_area.width as usize)
-            .saturating_sub(left.width() + right.width());
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    left,
-                    get_themed_style(
-                        COLOR_MUTED(),
-                        COLOR_PANEL(),
-                        Modifier::empty(),
-                        show_picker,
-                    ),
-                ),
-                Span::styled(
-                    " ".repeat(padding),
-                    Style::default().bg(COLOR_PANEL()),
-                ),
-                Span::styled(
-                    right,
-                    get_themed_style(
-                        COLOR_MUTED(),
-                        COLOR_PANEL(),
-                        Modifier::empty(),
-                        show_picker,
-                    ),
-                ),
-            ]))
-            .style(Style::default().bg(COLOR_PANEL())),
-            footer_area,
-        );
-    }
 
     if inner_width > 0 && !show_picker {
         f.set_cursor_position((
@@ -1404,6 +1345,47 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     }
 
     input_margin
+}
+
+fn composer_footer_visible(
+    state: &AppState,
+    has_command_completions: bool,
+    has_file_completions: bool,
+) -> bool {
+    !state.modal_open() && !has_command_completions && !has_file_completions
+}
+
+fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let (used, _) = context_usage(state);
+    let window = state.active_context_window().max(1);
+    let remaining = 100u32.saturating_sub(
+        ((used as f64 / window as f64) * 100.0).round().clamp(0.0, 100.0) as u32,
+    );
+    let left_content = if matches!(state.status, AppStatus::Idle) {
+        format!("  {}", state.model_name)
+    } else {
+        format!("  tab to queue message · {}", state.model_name)
+    };
+    let right = format!("{remaining}% context left  ");
+    let left = fit_to_width(
+        &left_content,
+        (area.width as usize).saturating_sub(right.width()),
+    );
+    let padding = (area.width as usize).saturating_sub(left.width() + right.width());
+    let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(left, style),
+            Span::styled(" ".repeat(padding), Style::default().bg(COLOR_BG())),
+            Span::styled(right, style),
+        ]))
+        .style(Style::default().bg(COLOR_BG())),
+        area,
+    );
 }
 
 /// snake_case / kebab-case → PascalCase, e.g. `use_skill` → `UseSkill`. Used so
@@ -3129,7 +3111,7 @@ pub fn render_with_transcript(
             f.area().height.saturating_sub(2),
         )
     } else {
-        input_lines + 4
+        input_lines + 2
     };
     let queue_block_height = queue_preview_height(state);
 
@@ -3152,6 +3134,9 @@ pub fn render_with_transcript(
     } else {
         0
     };
+    let footer_visible =
+        composer_footer_visible(state, !filtered_cmds.is_empty(), !at_files.is_empty());
+    let footer_height = u16::from(footer_visible);
     // Keep completion rows below the composer, matching Codex's bottom-pane
     // layout. Reserve the space before sizing the conversation so the popup
     // never overwrites transcript or the input bar.
@@ -3160,7 +3145,8 @@ pub fn render_with_transcript(
             .height
             .saturating_sub(2)
             .saturating_sub(queue_block_height)
-            .saturating_sub(input_height),
+            .saturating_sub(input_height)
+            .saturating_sub(footer_height),
     );
 
     let max_chat_height = f
@@ -3169,6 +3155,7 @@ pub fn render_with_transcript(
         .saturating_sub(2)
         .saturating_sub(queue_block_height)
         .saturating_sub(input_height)
+        .saturating_sub(footer_height)
         .saturating_sub(popup_height);
     let max_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -3178,18 +3165,14 @@ pub fn render_with_transcript(
             Constraint::Length(max_chat_height),
             Constraint::Length(queue_block_height),
             Constraint::Length(input_height),
+            Constraint::Length(footer_height),
             Constraint::Length(popup_height),
         ])
         .split(f.area());
 
     render_live_conversation(f, &max_chunks, state, transcript);
 
-    let picker_active = state.show_model_picker
-        || state.show_theme_picker
-        || state.show_command_picker
-        || state.show_history_picker
-        || state.show_mcp_config
-        || state.status == AppStatus::AwaitingToolConfirmation
+    let picker_active = state.modal_open()
         || !filtered_cmds.is_empty()
         || !at_files.is_empty();
 
@@ -3212,6 +3195,7 @@ pub fn render_with_transcript(
                 Constraint::Length(chat_height),
                 Constraint::Length(queue_block_height),
                 Constraint::Length(input_height),
+                Constraint::Length(footer_height),
                 Constraint::Length(popup_height),
             ])
             .split(f.area());
@@ -3229,23 +3213,26 @@ pub fn render_with_transcript(
     } else {
         render_input(f, &chunks, state)
     };
+    if footer_visible {
+        render_composer_footer(f, chunks[3], state);
+    }
 
     if !filtered_cmds.is_empty() {
         let input_inner = chunks[2].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[3].y,
+            chunks[4].y,
             input_inner.width,
-            chunks[3].height,
+            chunks[4].height,
         );
         render_popup_menu(f, state, &filtered_cmds, popup_area);
     } else if !at_files.is_empty() {
         let input_inner = chunks[2].inner(input_margin);
         let popup_area = ratatui::layout::Rect::new(
             input_inner.x,
-            chunks[3].y,
+            chunks[4].y,
             input_inner.width,
-            chunks[3].height,
+            chunks[4].height,
         );
         render_at_popup_menu(f, state, &at_files, popup_area);
     }
