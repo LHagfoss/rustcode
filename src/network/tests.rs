@@ -1,5 +1,38 @@
 use super::*;
 
+#[tokio::test]
+async fn request_snapshot_consumes_wakeups_for_background_results_it_observes() {
+    let mut app = AppState::new();
+    app.history.push(ChatMessage::new(
+        "tool",
+        "background_task: Task first completed. Output:\ncheck passed",
+    ));
+    app.history.push(ChatMessage::new(
+        "tool",
+        "background_task: Task second completed. Output:\ntests passed",
+    ));
+    app.pending_queue = vec![
+        "__task_wakeup__:first".to_string(),
+        "queued user prompt".to_string(),
+        "__task_wakeup__:second".to_string(),
+    ];
+    let state = Arc::new(Mutex::new(app));
+
+    let messages = prepare_turn_request(
+        &reqwest::Client::new(),
+        &state,
+        1,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("request preparation");
+
+    let request_text = serde_json::to_string(&messages).expect("serialize request");
+    assert!(request_text.contains("check passed"));
+    assert!(request_text.contains("tests passed"));
+    assert_eq!(state.lock().await.pending_queue, ["queued user prompt"]);
+}
+
 #[test]
 fn execution_envelope_keeps_typed_state_separate_from_display_text() {
     let result = ToolResult {
