@@ -47,6 +47,12 @@ pub(crate) struct TranscriptCursor {
 }
 
 impl TranscriptCursor {
+    /// Forget terminal-specific progress so the canonical transcript can be
+    /// rendered again after an inline viewport resize.
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
     pub(crate) fn begin_stream(&mut self, stream: &str) {
         // Finalizing a response clears the live buffer before its matching
         // history message reaches the draw loop. Keep the committed prefix
