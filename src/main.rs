@@ -1640,52 +1640,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Up => {
                             let mut s = app_state.lock().await;
-                            if s.active_suggestion_index.is_some() {
-                                let filtered_len =
-                                    crate::app::get_filtered_cmds_len(&s.input_buffer);
-                                if filtered_len > 0 {
-                                    let current = s.active_suggestion_index.unwrap_or(0);
-                                    s.active_suggestion_index = Some(if current == 0 {
-                                        filtered_len - 1
-                                    } else {
-                                        current - 1
-                                    });
-                                }
-                            } else if s.input_buffer.is_empty() || s.history_index.is_some() {
-                                // With an empty buffer, Up first pulls the most
-                                // recent queued prompt back for editing; only
-                                // when nothing is queued does it recall history.
-                                // Once recall has started, keep walking it —
-                                // without this, the recalled text made the buffer
-                                // non-empty and the next Up fell through to
-                                // cursor movement, pinning recall on the most
-                                // recent entry.
-                                let pulled = s.history_index.is_none() && s.pop_queued_prompt();
-                                if !pulled {
-                                    s.history_up();
-                                }
+                            let completion_len = crate::app::get_completion_len(
+                                &s.input_buffer,
+                                s.cursor_position,
+                            );
+                            if s.active_suggestion_index.is_some() && completion_len > 0 {
+                                let current = s.active_suggestion_index.unwrap_or(0);
+                                s.active_suggestion_index = Some(if current == 0 {
+                                    completion_len - 1
+                                } else {
+                                    current - 1
+                                });
                             } else {
-                                s.move_cursor_line_up();
+                                s.active_suggestion_index = None;
+                                if s.input_buffer.is_empty() || s.history_index.is_some() {
+                                    // With an empty buffer, Up first pulls the most
+                                    // recent queued prompt back for editing; only
+                                    // when nothing is queued does it recall history.
+                                    // Once recall has started, keep walking it —
+                                    // without this, the recalled text made the buffer
+                                    // non-empty and the next Up fell through to
+                                    // cursor movement, pinning recall on the most
+                                    // recent entry.
+                                    let pulled = s.history_index.is_none() && s.pop_queued_prompt();
+                                    if !pulled {
+                                        s.history_up();
+                                    }
+                                } else {
+                                    s.move_cursor_line_up();
+                                }
                             }
                         }
                         KeyCode::Down => {
                             let mut s = app_state.lock().await;
-                            if s.active_suggestion_index.is_some() {
-                                let filtered_len =
-                                    crate::app::get_filtered_cmds_len(&s.input_buffer);
-                                if filtered_len > 0 {
-                                    let current = s.active_suggestion_index.unwrap_or(0);
-                                    s.active_suggestion_index =
-                                        Some(if current + 1 >= filtered_len {
-                                            0
-                                        } else {
-                                            current + 1
-                                        });
-                                }
-                            } else if s.history_index.is_some() {
-                                s.history_down();
+                            let completion_len = crate::app::get_completion_len(
+                                &s.input_buffer,
+                                s.cursor_position,
+                            );
+                            if s.active_suggestion_index.is_some() && completion_len > 0 {
+                                let current = s.active_suggestion_index.unwrap_or(0);
+                                s.active_suggestion_index = Some(if current + 1 >= completion_len {
+                                    0
+                                } else {
+                                    current + 1
+                                });
                             } else {
-                                s.move_cursor_line_down();
+                                s.active_suggestion_index = None;
+                                if s.history_index.is_some() {
+                                    s.history_down();
+                                } else {
+                                    s.move_cursor_line_down();
+                                }
                             }
                         }
                         KeyCode::Tab => {

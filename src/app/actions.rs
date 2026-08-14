@@ -1017,6 +1017,16 @@ pub fn get_filtered_cmds_len(input_buffer: &str) -> usize {
     }
 }
 
+pub fn get_completion_len(input_buffer: &str, cursor_position: usize) -> usize {
+    if input_buffer.starts_with('/') && !input_buffer.contains(' ') {
+        return get_filtered_cmds_len(input_buffer);
+    }
+
+    crate::app::get_at_word_query(input_buffer, cursor_position)
+        .map(|(_, query)| crate::app::list_project_file_paths(&query).len())
+        .unwrap_or(0)
+}
+
 pub fn apply_autocomplete(s: &mut AppState) {
     if s.input_buffer.starts_with('/') && !s.input_buffer.contains(' ') {
         let filtered_cmds: Vec<&crate::app::suggestion::CommandInfo> =

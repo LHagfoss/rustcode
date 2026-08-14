@@ -1389,7 +1389,11 @@ impl AppState {
     }
 
     pub fn reset_suggestion_index(&mut self) {
-        if self.input_buffer.starts_with('/') && !self.input_buffer.contains(' ') {
+        let command_completion =
+            self.input_buffer.starts_with('/') && !self.input_buffer.contains(' ');
+        let file_completion =
+            crate::app::get_at_word_query(&self.input_buffer, self.cursor_position).is_some();
+        if command_completion || file_completion {
             if self.active_suggestion_index.is_none() {
                 self.active_suggestion_index = Some(0);
             }
