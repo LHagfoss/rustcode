@@ -22,11 +22,11 @@ use crossterm::{
     cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
-    backend::CrosstermBackend,
+    backend::{Backend, CrosstermBackend},
     widgets::{Paragraph, Widget, Wrap},
 };
 use std::io;
@@ -41,6 +41,25 @@ const LIVE_VIEWPORT_ROWS: u16 = 12;
 /// spinners, the elapsed-second counter and the rotating status label (which
 /// changes every two seconds) all stay live.
 const STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+fn insert_scrollback_lines<B: Backend>(
+    terminal: &mut Terminal<B>,
+    lines: Vec<ratatui::text::Line<'static>>,
+    width: u16,
+) -> Result<(), B::Error> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let height = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .max(1) as u16;
+    terminal.insert_before(height, |buffer| {
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(buffer.area, buffer);
+    })
+}
 
 /// Whether the next loop iteration should render.
 ///
@@ -309,8 +328,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut was_responding = false;
     let mut terminal_focused = true;
     let mut transcript_cursor = crate::ui::scrollback::TranscriptCursor::default();
+    let mut terminal_size = terminal.size()?;
+    let mut replay_history = false;
 
     loop {
+        // Ratatui's inline viewport grows/shrinks by appending and clearing
+        // terminal rows. Once scrollback has been emitted those rows cannot be
+        // reflowed in place, so a resize must purge the visible transcript and
+        // replay it from the durable history plus the current stream.
+        let observed_size = terminal.size()?;
+        if observed_size != terminal_size {
+            terminal.autoresize()?;
+            execute!(terminal.backend_mut(), Clear(ClearType::Purge), Clear(ClearType::All))?;
+            terminal.clear()?;
+            transcript_cursor.reset();
+            replay_history = true;
+            terminal_size = observed_size;
+            needs_redraw = true;
+        }
+
         let (response_active, background_redraw, active_notice) = {
             let mut s = app_state.lock().await;
             (
@@ -358,7 +394,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let terminal_width = terminal.size()?.width;
             transcript_cursor.begin_stream(&guard.current_response);
-            let stable_rows = transcript_cursor.pending_stable_stream(&guard.current_response);
+            let stable_rows = if replay_history {
+                Vec::new()
+            } else {
+                transcript_cursor.pending_stable_stream(&guard.current_response)
+            };
             if !stable_rows.is_empty() {
                 let stable = format!("{}\n", stable_rows.join("\n"));
                 let is_continuation = transcript_cursor.has_committed_stream();
@@ -369,22 +409,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     is_continuation,
                 );
                 if !lines.is_empty() {
-                    let height = Paragraph::new(lines.clone())
-                        .wrap(Wrap { trim: false })
-                        .line_count(terminal_width)
-                        .max(1) as u16;
-                    terminal.insert_before(height, |buffer| {
-                        Paragraph::new(lines)
-                            .wrap(Wrap { trim: false })
-                            .render(buffer.area, buffer);
-                    })?;
+                    insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
                 }
                 transcript_cursor.commit_stable_stream(&stable);
             }
 
-            let history_range = transcript_cursor.pending_history_range(guard.history.len());
+            let history_range = if replay_history {
+                0..guard.history.len()
+            } else {
+                transcript_cursor.pending_history_range(guard.history.len())
+            };
             let mut blocks = Vec::new();
-            if transcript_cursor.is_at_start() && !history_range.is_empty() {
+            if !replay_history && transcript_cursor.is_at_start() && !history_range.is_empty() {
                 let banner = crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
                 if !banner.is_empty() {
                     blocks.push(banner);
@@ -450,15 +486,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 index += 1;
             }
             for lines in blocks {
-                let height = Paragraph::new(lines.clone())
-                    .wrap(Wrap { trim: false })
-                    .line_count(terminal_width)
-                    .max(1) as u16;
-                terminal.insert_before(height, |buffer| {
-                    Paragraph::new(lines)
-                        .wrap(Wrap { trim: false })
-                        .render(buffer.area, buffer);
-                })?;
+                insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
+            }
+
+            // During a resize, history must be inserted before the still-live
+            // response. Re-emit the stable prefix only after the history pass.
+            if replay_history {
+                let stable_rows = transcript_cursor.pending_stable_stream(&guard.current_response);
+                if !stable_rows.is_empty() {
+                    let stable = format!("{}\n", stable_rows.join("\n"));
+                    let lines = crate::ui::render_committed_assistant_chunk(
+                        &guard,
+                        &stable,
+                        terminal_width,
+                        false,
+                    );
+                    insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
+                    transcript_cursor.commit_stable_stream(&stable);
+                }
             }
             transcript_cursor.commit_history_through(history_range.end);
 
@@ -499,6 +544,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             terminal.draw(|f| ui::render(f, &mut guard))?;
+            replay_history = false;
             drop(guard);
             last_draw = std::time::Instant::now();
             needs_redraw = false;
