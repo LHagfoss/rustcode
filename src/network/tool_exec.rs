@@ -856,6 +856,11 @@ pub(crate) async fn execute_tool_batch(
     for call in tool_calls {
         let name = &call.name;
         let args = &call.arguments;
+        let live_key = format!("{}:{}", name, stable_arguments_hash(args));
+        {
+            let mut s = state.lock().await;
+            s.begin_live_tool_call(live_key.clone(), name, args);
+        }
         let client_clone = client.clone();
         let state_clone = Arc::clone(state);
         let cancel_token_clone = cancel_token.clone();
@@ -1038,6 +1043,10 @@ different, read another range or make an edit first; repeating this call returns
             (name_clone, execution, diff_opt, replay_artifact, user_wait)
         }
         .await;
+        {
+            let mut s = state.lock().await;
+            s.finish_live_tool_call(&live_key);
+        }
         *user_wait_duration += user_wait;
         let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content) {
             None

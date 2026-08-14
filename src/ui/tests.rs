@@ -430,6 +430,77 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
 }
 
 #[test]
+fn high_verbosity_expands_generic_tool_details() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::High;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "mcp_custom_tool".to_owned(),
+            arguments: r#"{"path":"src"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "mcp_custom_tool: completed\nline 1\nline 2")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "mcp_custom_tool".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(rendered.iter().any(|line| line.contains("completed")));
+    assert!(rendered.iter().any(|line| line.contains("line 2")));
+    assert!(!rendered.iter().any(|line| line.contains("ctrl+o")));
+}
+
+#[test]
+fn completed_edits_have_a_distinct_transcript_heading() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "replace_file_content".to_owned(),
+            arguments: r#"{"path":"src/main.rs"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "replace_file_content: successfully edited")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "replace_file_content".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                changed_paths: vec!["src/main.rs".to_owned()],
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Edited");
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Edit src/main.rs"))
+    );
+}
+
+#[test]
 fn exploration_results_group_and_deduplicate_child_rows() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
 
@@ -1160,6 +1231,38 @@ fn input_bar_contains_live_status_and_command_hint() {
 }
 
 #[test]
+fn live_tool_activity_is_rendered_without_protocol_text() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.live_tool_calls.push(crate::app::LiveToolCall {
+        key: "call-1".to_owned(),
+        tool_name: "run_command".to_owned(),
+        action: "Bash".to_owned(),
+        target: "cargo test".to_owned(),
+    });
+
+    let line = super::activity_status_line(&state, false).to_string();
+
+    assert!(line.contains("Running"));
+    assert!(line.contains("Bash cargo test"));
+    assert!(!line.contains("tool_calls"));
+}
+
+#[test]
+fn action_required_status_wins_over_a_live_question_tool() {
+    let mut state = AppState::new();
+    state.status = AppStatus::AwaitingQuestion;
+    state.live_tool_calls.push(crate::app::LiveToolCall {
+        key: "question".to_owned(),
+        tool_name: "ask_question".to_owned(),
+        action: "AskQuestion".to_owned(),
+        target: "continue?".to_owned(),
+    });
+
+    assert_eq!(super::activity_status_label(&state), "Action Required");
+}
+
+#[test]
 fn split_stable_rows_keeps_only_the_incomplete_suffix_live() {
     let (stable, tail) = super::scrollback::split_stable_rows("first\nsecond\nthird");
 
@@ -1215,6 +1318,31 @@ fn transcript_cursor_holds_thought_stream_until_finalized() {
     assert!(cursor
         .pending_stable_stream("thoughtPlanning the response\n")
         .is_empty());
+}
+
+#[test]
+fn transcript_cursor_keeps_an_incomplete_code_fence_together() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    let stream = "intro\n```rust\nfn main() {\n";
+
+    assert_eq!(
+        cursor.pending_stable_source(stream),
+        "intro\n".to_owned()
+    );
+    assert_eq!(cursor.pending_stable_stream(stream), vec!["intro"]);
+    assert_eq!(
+        super::scrollback::mutable_stream_text(stream),
+        "```rust\nfn main() {\n".to_owned()
+    );
+
+    cursor.commit_stable_stream("intro\n");
+    assert!(cursor.pending_stable_stream(stream).is_empty());
+
+    let completed = "intro\n```rust\nfn main() {}\n```\n";
+    assert_eq!(
+        cursor.pending_stable_source(completed),
+        "```rust\nfn main() {}\n```\n".to_owned()
+    );
 }
 
 #[test]
