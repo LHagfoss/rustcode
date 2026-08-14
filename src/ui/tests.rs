@@ -1185,6 +1185,21 @@ fn transcript_cursor_retries_pending_content_until_acknowledged() {
 }
 
 #[test]
+fn transcript_cursor_reset_replays_history_after_resize() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    cursor.commit_history_through(4);
+    cursor.commit_stable_stream("already rendered\n");
+
+    cursor.reset();
+
+    assert_eq!(cursor.pending_history_range(4), 0..4);
+    assert_eq!(
+        cursor.pending_stable_stream("already rendered\nnext row"),
+        vec!["already rendered"]
+    );
+}
+
+#[test]
 fn transcript_cursor_holds_thought_stream_until_finalized() {
     let cursor = super::scrollback::TranscriptCursor::default();
 
