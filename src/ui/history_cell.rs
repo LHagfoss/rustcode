@@ -13,7 +13,10 @@ use ratatui::{
 use std::cell::RefCell;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, get_themed_style};
+use super::{
+    COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP,
+    get_themed_style,
+};
 
 const MAX_LIVE_CHILDREN: usize = 8;
 
@@ -262,6 +265,104 @@ pub(super) fn render_live_tool_cell(
 ) -> Vec<Line<'static>> {
     if calls.is_empty() || width == 0 {
         return Vec::new();
+    }
+
+    if calls.len() == 1 && calls[0].tool_name == "run_command" {
+        let call = &calls[0];
+        let title_style = get_themed_style(
+            COLOR_TEXT(),
+            COLOR_BG(),
+            Modifier::BOLD,
+            show_picker,
+        );
+        let mut lines = vec![Line::from(vec![
+            Span::styled(
+                "• ",
+                get_themed_style(
+                    COLOR_MUTED(),
+                    COLOR_BG(),
+                    Modifier::empty(),
+                    show_picker,
+                ),
+            ),
+            Span::styled("Running ", title_style),
+            Span::styled(
+                truncate_to_width(&call.target, (width as usize).saturating_sub(10).max(1)),
+                get_themed_style(
+                    COLOR_TEXT(),
+                    COLOR_BG(),
+                    Modifier::empty(),
+                    show_picker,
+                ),
+            ),
+        ])];
+
+        let mut output = Vec::<(String, bool)>::new();
+        for chunk in &call.output {
+            let clean = crate::network::text::strip_ansi_escapes(&chunk.text);
+            output.extend(
+                clean
+                    .split('\n')
+                    .filter(|line| !line.is_empty())
+                    .map(|line| (line.to_owned(), chunk.stderr)),
+            );
+        }
+        const MAX_PREVIEW_LINES: usize = 5;
+        let omitted_lines = output.len().saturating_sub(MAX_PREVIEW_LINES);
+        let visible = if omitted_lines == 0 {
+            output
+        } else {
+            output[..2]
+                .iter()
+                .chain(output[output.len() - 2..].iter())
+                .cloned()
+                .collect()
+        };
+        for (index, (text, stderr)) in visible.into_iter().enumerate() {
+            if omitted_lines > 0 && index == 2 {
+                lines.push(Line::from(Span::styled(
+                    format!("    … +{omitted_lines} lines"),
+                    get_themed_style(
+                        COLOR_MUTED(),
+                        COLOR_BG(),
+                        Modifier::ITALIC,
+                        show_picker,
+                    ),
+                )));
+            }
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if lines.len() == 1 { "  └ " } else { "    " },
+                    get_themed_style(
+                        COLOR_MUTED(),
+                        COLOR_BG(),
+                        Modifier::empty(),
+                        show_picker,
+                    ),
+                ),
+                Span::styled(
+                    truncate_to_width(&text, (width as usize).saturating_sub(4).max(1)),
+                    get_themed_style(
+                        if stderr { COLOR_TIP() } else { COLOR_MUTED() },
+                        COLOR_BG(),
+                        Modifier::empty(),
+                        show_picker,
+                    ),
+                ),
+            ]));
+        }
+        if call.omitted_output_bytes > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("  └ … {} earlier bytes omitted", call.omitted_output_bytes),
+                get_themed_style(
+                    COLOR_MUTED(),
+                    COLOR_BG(),
+                    Modifier::ITALIC,
+                    show_picker,
+                ),
+            )));
+        }
+        return lines;
     }
 
     let all_exploration = calls.iter().all(|call| is_exploration_tool(&call.tool_name));

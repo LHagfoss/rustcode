@@ -16,7 +16,10 @@ mod search;
 #[allow(unused_imports)]
 pub use envelope::{ToolCallEnvelope, ToolErrorKind, ToolResultEnvelope};
 
-pub(crate) use exec::{command_confirmation_preview, command_requires_confirmation};
+pub(crate) use exec::{
+    CommandProgressCallback, command_confirmation_preview, command_requires_confirmation,
+    run_command_output_with_progress,
+};
 
 pub(crate) use filesystem::edit_target_and_replacement;
 
