@@ -315,6 +315,30 @@ mod tests {
 
         assert_eq!(header_row, Some(24));
         assert!(header_row.unwrap() < input_area.y);
+        let rendered = (0..40)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("› 1. Write to file"),
+            "rendered modal:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("2. Run command") && rendered.contains("$ cargo check"),
+            "rendered modal:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("to confirm all"),
+            "rendered modal:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("to cancel all"),
+            "rendered modal:\n{rendered}"
+        );
     }
 
     #[test]
@@ -429,6 +453,34 @@ mod tests {
         assert!(header_row.unwrap() < input_area.y);
         assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
         assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
+    }
+
+    #[test]
+    fn single_command_confirmation_uses_codex_command_prompt() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "run_command".to_string(),
+            path: "cargo test".to_string(),
+            content_preview: String::new(),
+            content_bytes: 0,
+        }]);
+
+        let input_area = Rect::new(10, 7, 80, 6);
+        terminal
+            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .unwrap();
+
+        let rendered = (0..14)
+            .map(|y| {
+                (0..100)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Would you like to run the following command?"));
+        assert!(rendered.contains("Run command     $ cargo test"), "rendered modal:\n{rendered}");
     }
 }
 
@@ -1464,13 +1516,25 @@ pub(super) fn render_tool_confirmation_modal(
         });
 
         let compact = inner_area.height < 5;
+        let very_compact = inner_area.height < 3;
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(if compact {
+            .constraints(if very_compact {
                 [
-                    Constraint::Length(1), // 0: Tool & target line
+                    Constraint::Length(1), // 0: Combined header and target
                     Constraint::Length(0), // 1: Spacer
                     Constraint::Length(0), // 2: Tool & target line
+                    Constraint::Length(0), // 3: Auto-confirm status
+                    Constraint::Length(0), // 4: Spacer
+                    Constraint::Length(0), // 5: Preview Diff / Content
+                    Constraint::Length(0), // 6: Spacer
+                    Constraint::Length(1), // 7: Footer buttons
+                ]
+            } else if compact {
+                [
+                    Constraint::Length(1), // 0: Header
+                    Constraint::Length(0), // 1: Spacer
+                    Constraint::Length(1), // 2: Tool & target line
                     Constraint::Length(0), // 3: Auto-confirm status
                     Constraint::Length(0), // 4: Spacer
                     Constraint::Length(0), // 5: Preview Diff / Content
@@ -1503,14 +1567,17 @@ pub(super) fn render_tool_confirmation_modal(
             "run_command" => "Run command",
             _ => "Execute tool",
         };
+        let header_text = if confirmation.tool_name == "run_command" {
+            "⚠ Would you like to run the following command?".to_owned()
+        } else {
+            format!("⚠ {action_label}?")
+        };
         let header_line = Line::from(vec![Span::styled(
-            format!("⚠ {action_label}?"),
+            header_text,
             Style::default()
                 .fg(COLOR_TIP())
                 .add_modifier(Modifier::BOLD),
         )]);
-        f.render_widget(Paragraph::new(header_line), modal_chunks[0]);
-
         let path_display = if confirmation.path.len() > inner_area.width as usize - 22 {
             let cut = (inner_area.width as usize).saturating_sub(25).max(5);
             format!(
@@ -1528,6 +1595,7 @@ pub(super) fn render_tool_confirmation_modal(
             String::new()
         };
 
+        let command_prefix = (confirmation.tool_name == "run_command").then_some("$ ");
         let tool_line = Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
@@ -1537,17 +1605,20 @@ pub(super) fn render_tool_confirmation_modal(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" {}", path_display),
+                format!(" {}{}", command_prefix.unwrap_or(""), path_display),
                 Style::default().fg(COLOR_PRIMARY()),
             ),
             Span::styled(size_str, Style::default().fg(COLOR_MUTED())),
         ]);
-        let tool_area = if compact {
-            modal_chunks[0]
+        if very_compact {
+            let mut compact_spans = header_line.spans;
+            compact_spans.push(Span::raw(" "));
+            compact_spans.extend(tool_line.spans);
+            f.render_widget(Paragraph::new(Line::from(compact_spans)), modal_chunks[0]);
         } else {
-            modal_chunks[2]
-        };
-        f.render_widget(Paragraph::new(tool_line), tool_area);
+            f.render_widget(Paragraph::new(header_line), modal_chunks[0]);
+            f.render_widget(Paragraph::new(tool_line), modal_chunks[2]);
+        }
 
         let auto_confirm_status = if state.auto_confirm {
             "[x] Auto-confirm future tool calls"
@@ -1747,8 +1818,13 @@ pub(super) fn render_tool_confirmation_modal(
                 c.path.clone()
             };
 
+            let marker = if i == 0 { "›" } else { " " };
+            let command_prefix = (c.tool_name == "run_command").then_some("$ ");
             let line = Line::from(vec![
-                Span::styled(format!("  {}. ", i + 1), Style::default().fg(COLOR_MUTED())),
+                Span::styled(
+                    format!("{} {}. ", marker, i + 1),
+                    Style::default().fg(if i == 0 { COLOR_PRIMARY() } else { COLOR_MUTED() }),
+                ),
                 Span::styled(
                     format!("{:<15}", action),
                     Style::default()
@@ -1756,7 +1832,7 @@ pub(super) fn render_tool_confirmation_modal(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(" {}", path_display),
+                    format!(" {}{}", command_prefix.unwrap_or(""), path_display),
                     Style::default().fg(COLOR_PRIMARY()),
                 ),
             ]);
@@ -1789,14 +1865,14 @@ pub(super) fn render_tool_confirmation_modal(
                     .fg(COLOR_GREEN())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" approve all  ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" to confirm all  ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "n / esc",
                 Style::default()
                     .fg(COLOR_PRIMARY())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" deny all  ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" to cancel all  ", Style::default().fg(COLOR_MUTED())),
             Span::styled(
                 "tab",
                 Style::default()

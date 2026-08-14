@@ -426,6 +426,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 chunk.push(ratatui::text::Line::from(""));
                                 blocks.push(chunk);
                             }
+                        } else {
+                            // Stable stream rows were already inserted above the live viewport.
+                            // They do not carry a trailing separator while the response is
+                            // streaming, so add one when the finalized history entry hands off
+                            // to the next message. Without this row a follow-up prompt can sit
+                            // directly on the last table/multiline response row.
+                            blocks.push(vec![ratatui::text::Line::from("")]);
                         }
                     } else {
                         blocks.push(crate::ui::render_committed_history_block(
