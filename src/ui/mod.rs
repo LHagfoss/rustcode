@@ -2117,10 +2117,6 @@ pub(crate) fn render_committed_tool_result_group(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    if matches!(state.verbosity, crate::app::Verbosity::High) {
-        return Vec::new();
-    }
-
     let entries = message_indices
         .iter()
         .filter_map(|&index| tool_transcript_entry(state, index, width, show_picker))
