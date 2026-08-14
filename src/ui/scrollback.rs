@@ -29,20 +29,72 @@ pub(crate) fn split_stable_rows(text: &str) -> (Vec<String>, String) {
 /// otherwise terminal scrollback would render each streamed code line as a
 /// separate paragraph before the closing fence arrives.
 fn unfinished_fence_start(text: &str) -> Option<usize> {
-    let mut open = None;
+    let mut open: Option<(u8, usize, usize)> = None;
     let mut line_start = 0;
     for line in text.split_inclusive('\n') {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            open = if open.is_some() {
-                None
-            } else {
-                Some(line_start)
-            };
+        let content = line
+            .strip_suffix('\n')
+            .unwrap_or(line)
+            .strip_suffix('\r')
+            .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line));
+        let indentation = content.len() - content.trim_start_matches(' ').len();
+        let bytes = content.as_bytes();
+        if indentation <= 3 {
+            let marker_position = indentation;
+            if let Some(&marker) = bytes.get(marker_position)
+                && (marker == b'`' || marker == b'~')
+            {
+                let mut marker_length = 0;
+                while bytes.get(marker_position + marker_length) == Some(&marker) {
+                    marker_length += 1;
+                }
+                let rest = &content[marker_position + marker_length..];
+                if marker_length >= 3 {
+                    if let Some((open_marker, open_length, _)) = open {
+                        // A closing fence must use the same marker, be at
+                        // least as long as its opener, and have no info text.
+                        if marker == open_marker
+                            && marker_length >= open_length
+                            && rest.trim().is_empty()
+                        {
+                            open = None;
+                        }
+                        // Fence-like lines inside an open block are content;
+                        // they must not toggle the block state.
+                    } else if marker != b'`' || !rest.contains('`') {
+                        open = Some((marker, marker_length, line_start));
+                    }
+                }
+            }
         }
         line_start += line.len();
     }
-    open
+    open.map(|(_, _, start)| start)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unfinished_fence_start;
+
+    #[test]
+    fn fenced_stream_scanner_respects_marker_type_and_length() {
+        assert_eq!(unfinished_fence_start("```rust\nbody\n```\n"), None);
+        assert_eq!(
+            unfinished_fence_start("```rust\nfirst\n```\n```json\nsecond\n```\n"),
+            None
+        );
+        assert_eq!(unfinished_fence_start("```a\nx\n```\n```b\ny\n"), Some(11));
+        assert_eq!(unfinished_fence_start("~~~rust\nbody\n"), Some(0));
+        assert_eq!(unfinished_fence_start("```rust\n~~~\n"), Some(0));
+        assert_eq!(unfinished_fence_start("````rust\n```\nbody\n"), Some(0));
+        assert_eq!(unfinished_fence_start("````rust\n```\nbody\n````\n"), None);
+    }
+
+    #[test]
+    fn completed_fences_do_not_toggle_on_backticks_in_the_info_string() {
+        assert_eq!(unfinished_fence_start("```has`backtick\nbody\n"), None);
+        assert_eq!(unfinished_fence_start("````rust\n```\n````\n```\n"), Some(18));
+    }
 }
 
 /// Return the portion that must remain in the mutable viewport. Reasoning-led

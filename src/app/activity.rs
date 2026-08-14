@@ -444,6 +444,7 @@ mod tests {
         );
         let activity = classify_live_tools(&[LiveToolCall {
             key: "call-1".to_string(),
+            provider_call_id: None,
             tool_name: "run_command".to_string(),
             action,
             target,
@@ -460,12 +461,14 @@ mod tests {
         let calls = [
             LiveToolCall {
                 key: "read".to_string(),
+                provider_call_id: None,
                 tool_name: "view_file".to_string(),
                 action: "Read".to_string(),
                 target: "src/main.rs".to_string(),
             },
             LiveToolCall {
                 key: "search".to_string(),
+                provider_call_id: None,
                 tool_name: "grep".to_string(),
                 action: "Search".to_string(),
                 target: "renderer in src".to_string(),

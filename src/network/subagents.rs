@@ -265,6 +265,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         crate::tools::ToolCall {
                             name: call.tool_name,
                             arguments: call.arguments,
+                            call_id: Some(call_id.clone()),
                         },
                         Some(call_id),
                     )

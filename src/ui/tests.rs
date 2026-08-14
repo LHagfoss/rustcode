@@ -464,6 +464,54 @@ fn high_verbosity_expands_generic_tool_details() {
 }
 
 #[test]
+fn verbosity_changes_bounded_tool_presentation_without_mutating_history() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+        ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "mcp_custom_tool".to_owned(),
+            arguments: r#"{"path":"src"}"#.to_owned(),
+        },
+    ]));
+    let body = (0..50)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.history.push(
+        ChatMessage::new("tool", format!("mcp_custom_tool: completed\n{body}"))
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "mcp_custom_tool".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    let history = state.history.clone();
+
+    state.verbosity = Verbosity::Low;
+    let low = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    state.verbosity = Verbosity::High;
+    let high = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(!low.iter().any(|line| line.contains("line 25")));
+    assert!(!low.iter().any(|line| line.contains("line 49")));
+    assert!(high.iter().any(|line| line.contains("line 49")));
+    assert!(high.iter().any(|line| line.contains("… +31 lines")));
+    assert!(!high.iter().any(|line| line.contains("line 25")));
+    assert!(low.len() < high.len());
+    assert!(state.history == history);
+}
+
+#[test]
 fn completed_edits_have_a_distinct_transcript_heading() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
 
@@ -1236,6 +1284,7 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
     state.status = AppStatus::Streaming;
     state.live_tool_calls.push(crate::app::LiveToolCall {
         key: "call-1".to_owned(),
+        provider_call_id: None,
         tool_name: "run_command".to_owned(),
         action: "Bash".to_owned(),
         target: "cargo test".to_owned(),
@@ -1254,6 +1303,7 @@ fn action_required_status_wins_over_a_live_question_tool() {
     state.status = AppStatus::AwaitingQuestion;
     state.live_tool_calls.push(crate::app::LiveToolCall {
         key: "question".to_owned(),
+        provider_call_id: None,
         tool_name: "ask_question".to_owned(),
         action: "AskQuestion".to_owned(),
         target: "continue?".to_owned(),
@@ -1342,6 +1392,39 @@ fn transcript_cursor_keeps_an_incomplete_code_fence_together() {
     assert_eq!(
         cursor.pending_stable_source(completed),
         "```rust\nfn main() {}\n```\n".to_owned()
+    );
+}
+
+#[test]
+fn transcript_cursor_releases_completed_fence_and_replays_after_resize() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    let before_close = "intro\n````rust\nlet text = \"```\";\n";
+
+    assert_eq!(
+        cursor.pending_stable_source(before_close),
+        "intro\n".to_owned()
+    );
+    assert_eq!(
+        super::scrollback::mutable_stream_text(before_close),
+        "````rust\nlet text = \"```\";\n".to_owned()
+    );
+    cursor.commit_stable_stream("intro\n");
+
+    let after_close = "intro\n````rust\nlet text = \"```\";\n````\nnext row";
+    assert_eq!(
+        cursor.pending_stable_source(after_close),
+        "````rust\nlet text = \"```\";\n````\n".to_owned()
+    );
+    assert_eq!(
+        super::scrollback::mutable_stream_text(after_close),
+        "next row".to_owned()
+    );
+
+    cursor.commit_stable_stream("````rust\nlet text = \"```\";\n````\n");
+    cursor.reset();
+    assert_eq!(
+        cursor.pending_stable_source(after_close),
+        "intro\n````rust\nlet text = \"```\";\n````\n".to_owned()
     );
 }
 

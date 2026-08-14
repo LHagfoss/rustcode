@@ -25,6 +25,9 @@ pub(crate) use filesystem::edit_target_and_replacement;
 pub struct ToolCall {
     pub name: String,
     pub arguments: Value,
+    /// Provider/native identity when the source supplied one. Text protocols
+    /// leave this unset and the execution boundary supplies a local identity.
+    pub call_id: Option<String>,
 }
 
 /// Authoritative facts returned by a tool invocation alongside its display
@@ -1268,6 +1271,7 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<ToolCall>) {
                     calls.push(ToolCall {
                         name,
                         arguments: json_val,
+                        call_id: None,
                     });
                 } else {
                     let pattern = &*BRACE_OBJ_RE;
@@ -1277,6 +1281,7 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<ToolCall>) {
                         calls.push(ToolCall {
                             name,
                             arguments: json_val,
+                            call_id: None,
                         });
                     }
                 }
@@ -1308,6 +1313,7 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<ToolCall>) {
                 calls.push(ToolCall {
                     name: call.0,
                     arguments: call.1,
+                    call_id: None,
                 });
             }
         }
@@ -1354,6 +1360,7 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
                         if let Err(err) = validate_tool_calls(&[ToolCall {
                             name: name.clone(),
                             arguments: args,
+                            call_id: None,
                         }]) {
                             let snippet: String = block.trim().chars().take(240).collect();
                             return Some(format!(
@@ -1413,6 +1420,7 @@ fn parse_tool_calls_impl(text: &str, protocol: crate::config::ToolProtocol) -> V
             calls.push(ToolCall {
                 name: call.0,
                 arguments: call.1,
+                call_id: None,
             });
         }
     }
@@ -1428,6 +1436,7 @@ fn parse_tool_calls_impl(text: &str, protocol: crate::config::ToolProtocol) -> V
                 calls.push(ToolCall {
                     name: call.0,
                     arguments: call.1,
+                    call_id: None,
                 });
             }
         }
@@ -1916,6 +1925,7 @@ mod tests {
                 "path": "src/store.ts",
                 "edits": "[]"
             }),
+            call_id: None,
         }])
         .expect_err("a stringified edits array must remain invalid");
 
@@ -2186,10 +2196,12 @@ mod tests {
             ToolCall {
                 name: "use_skill".to_string(),
                 arguments: serde_json::json!({"name": "spotify"}),
+                call_id: None,
             },
             ToolCall {
                 name: "run_command".to_string(),
                 arguments: serde_json::json!({"command": "spotify-cli p volume 3"}),
+                call_id: None,
             },
         ];
 
@@ -2488,6 +2500,7 @@ mod tests {
         let call = |name: &str| ToolCall {
             name: name.to_string(),
             arguments: serde_json::json!({}),
+            call_id: None,
         };
 
         // Under the limit: nothing is touched.
@@ -2530,6 +2543,7 @@ mod tests {
         let call = |name: &str| ToolCall {
             name: name.to_string(),
             arguments: serde_json::json!({}),
+            call_id: None,
         };
 
         // Multiple use_skill calls and read tools run together in parallel.
@@ -2548,6 +2562,7 @@ mod tests {
         let valid = ToolCall {
             name: "grep".to_string(),
             arguments: serde_json::json!({"pattern": "TODO"}),
+            call_id: None,
         };
         assert!(validate_tool_calls(std::slice::from_ref(&valid)).is_ok());
         assert!(
@@ -2557,6 +2572,7 @@ mod tests {
                     "path": "src/store.ts",
                     "edits": [{"old_string": "old", "new_string": "new"}]
                 }),
+                call_id: None,
             }])
             .is_ok()
         );
@@ -2565,6 +2581,7 @@ mod tests {
             validate_tool_calls(&[ToolCall {
                 name: "not_registered".to_string(),
                 arguments: serde_json::json!({}),
+                call_id: None,
             }])
             .is_err()
         );
@@ -2572,6 +2589,7 @@ mod tests {
             .map(|_| ToolCall {
                 name: "grep".to_string(),
                 arguments: serde_json::json!({"pattern": "TODO"}),
+                call_id: None,
             })
             .collect::<Vec<_>>();
         assert!(validate_tool_calls(&calls).is_err());
@@ -2579,6 +2597,7 @@ mod tests {
             validate_tool_calls(&[ToolCall {
                 name: "run_command".to_string(),
                 arguments: serde_json::json!({}),
+                call_id: None,
             }])
             .is_err()
         );
@@ -2587,10 +2606,12 @@ mod tests {
                 ToolCall {
                     name: "use_skill".to_string(),
                     arguments: serde_json::json!({"name": "x"}),
+                    call_id: None,
                 },
                 ToolCall {
                     name: "grep".to_string(),
                     arguments: serde_json::json!({"pattern": "x"}),
+                    call_id: None,
                 },
             ])
             .is_ok()
