@@ -18,8 +18,7 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
 pub(crate) use messages::{
-    RESPONSE_RESERVE_TOKENS, append_to_last_message, inject_system_reminder, trim_msgs_to_budget,
-    wrap_runtime_context,
+    append_to_last_message, inject_system_reminder, trim_msgs_to_budget, wrap_runtime_context,
 };
 
 #[path = "network/text.rs"]
@@ -100,7 +99,8 @@ pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
 #[path = "network/context_tail.rs"]
 pub(crate) mod context_tail;
 pub(crate) use context_tail::{
-    build_dynamic_context_tail, build_volatile_context_block, format_read_file_context_entry,
+    build_dynamic_context_tail, build_dynamic_context_tail_with_memory,
+    build_volatile_context_block, format_read_file_context_entry,
 };
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -206,9 +206,6 @@ pub(crate) fn accumulate_tokens_used(
 /// exceeded, if any. Order matters only for which reason is reported when
 /// several trip on the same round — all are equally terminal.
 pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
-    if ctx.tool_rounds >= ctx.max_tool_rounds {
-        return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
-    }
     if ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET {
         return Some(TurnBudgetLimit::Tokens(ctx.tokens_used));
     }
@@ -234,6 +231,13 @@ pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit>
         return Some(TurnBudgetLimit::MalformedCalls(
             ctx.consecutive_malformed_calls,
         ));
+    }
+    // The round count is intentionally last: evidence-aware recovery and
+    // focused failure guards get a chance to act first. This remains the hard
+    // final backstop for a model that keeps producing novel but unproductive
+    // actions which evade the more specific deterministic signals.
+    if ctx.tool_rounds >= ctx.max_tool_rounds {
+        return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
     }
     None
 }
@@ -400,7 +404,197 @@ async fn prune_class(
     }
 }
 
-pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budget: u32) {
+const DETERMINISTIC_CONTEXT_RECORD: &str = "[Deterministic context record]";
+const DETERMINISTIC_RECORD_MAX_CHARS: usize = 6_000;
+
+fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
+    if history.len() < 4 {
+        return false;
+    }
+
+    let keep_target = (budget / 3).max(64);
+    let mut suffix_tokens = 0u32;
+    let mut suffix_messages = 0usize;
+    let mut suffix_start = history.len();
+    for index in (0..history.len()).rev() {
+        let message_tokens = u32::try_from(
+            crate::network::compaction::estimate_message_tokens(&history[index]),
+        )
+        .unwrap_or(u32::MAX);
+        if suffix_messages < crate::network::compaction::KEEP_RECENT_TURNS
+            || suffix_tokens.saturating_add(message_tokens) <= keep_target
+        {
+            suffix_start = index;
+            suffix_tokens = suffix_tokens.saturating_add(message_tokens);
+            suffix_messages += 1;
+        } else {
+            break;
+        }
+    }
+    if suffix_start == 0 {
+        return false;
+    }
+
+    // Never split an old conversation in the middle of a user turn when a
+    // clean boundary is available. The retained suffix therefore keeps the
+    // current follow-up and its recent tool activity together.
+    let boundary = (0..=suffix_start)
+        .rev()
+        .find(|&index| {
+            history[index].role == "user"
+                && !history[index].content.starts_with("<tool_result>")
+        })
+        .unwrap_or(suffix_start);
+    if boundary == 0 {
+        return false;
+    }
+
+    let record_limit = budget
+        .saturating_mul(3)
+        .min(DETERMINISTIC_RECORD_MAX_CHARS as u32) as usize;
+    let record = deterministic_context_record(&history[..boundary], record_limit);
+    history.splice(
+        0..boundary,
+        [ChatMessage::new("system", record)],
+    );
+    true
+}
+
+fn deterministic_context_record(history: &[ChatMessage], max_chars: usize) -> String {
+    let first_user = history
+        .iter()
+        .find(|message| message.role == "user" && !message.content.starts_with("<tool_result>"))
+        .map(|message| compact_context_line(&message.content, 700))
+        .unwrap_or_else(|| "(not recorded)".to_string());
+    let latest_user = history
+        .iter()
+        .rev()
+        .find(|message| message.role == "user" && !message.content.starts_with("<tool_result>"))
+        .map(|message| compact_context_line(&message.content, 700));
+    let constraints = history
+        .iter()
+        .filter(|message| {
+            message.role == "system"
+                && !message.content.starts_with('[')
+                && !message
+                    .content
+                    .starts_with(crate::network::compaction::SUMMARY_MARKER)
+        })
+        .map(|message| compact_context_block(&message.content, 900))
+        .filter(|line| !line.is_empty())
+        .take(4)
+        .collect::<Vec<_>>();
+
+    let mut changed_paths = std::collections::BTreeSet::new();
+    let mut failures = Vec::new();
+    let mut verification = Vec::new();
+    let mut decisions = Vec::new();
+    for message in history {
+        if let Some(result) = &message.tool_result {
+            changed_paths.extend(result.changed_paths.iter().cloned());
+            if !result.success || result.error_kind.is_some() {
+                failures.push(format!(
+                    "{} ({}, exit={:?})",
+                    result.tool_name,
+                    result.error_kind.as_deref().unwrap_or("failed"),
+                    result.exit_code
+                ));
+            }
+            if result.tool_name == "run_command" {
+                verification.push(format!(
+                    "{} ({}, exit={:?})",
+                    result.tool_name,
+                    if result.success { "success" } else { "failed" },
+                    result.exit_code
+                ));
+            }
+        }
+        if message.role == "assistant" {
+            for call in &message.tool_calls {
+                if call.name == "run_command"
+                    && let Ok(arguments) = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                    && let Some(command) = arguments.get("command").and_then(|value| value.as_str())
+                {
+                    verification.push(compact_context_line(command, 240));
+                }
+            }
+            let line = compact_context_line(&message.content, 320);
+            if !line.is_empty() && !line.starts_with("```tool") {
+                decisions.push(line);
+            }
+        }
+    }
+
+    let mut record = format!(
+        "{DETERMINISTIC_CONTEXT_RECORD}\nGoal: {first_user}\n"
+    );
+    if let Some(latest_user) = latest_user
+        && latest_user != first_user
+    {
+        record.push_str(&format!("Current follow-up: {latest_user}\n"));
+    }
+    record.push_str(&format!(
+        "Project instructions/constraints: {}\n",
+        if constraints.is_empty() {
+            "none recorded".to_string()
+        } else {
+            constraints.join("; ")
+        }
+    ));
+    record.push_str(&format!(
+        "Modified files: {}\n",
+        if changed_paths.is_empty() {
+            "none recorded".to_string()
+        } else {
+            changed_paths.into_iter().take(32).collect::<Vec<_>>().join(", ")
+        }
+    ));
+    record.push_str(&format!(
+        "Failures/unresolved work: {}\n",
+        if failures.is_empty() {
+            "none recorded".to_string()
+        } else {
+            failures.into_iter().rev().take(8).collect::<Vec<_>>().join("; ")
+        }
+    ));
+    record.push_str(&format!(
+        "Verification state: {}\n",
+        if verification.is_empty() {
+            "none recorded".to_string()
+        } else {
+            verification.into_iter().rev().take(8).collect::<Vec<_>>().join("; ")
+        }
+    ));
+    if !decisions.is_empty() {
+        record.push_str(&format!(
+            "Architecture/decisions/next steps: {}\n",
+            decisions.into_iter().rev().take(8).collect::<Vec<_>>().join("; ")
+        ));
+    }
+    record.chars().take(max_chars).collect()
+}
+
+fn compact_context_line(content: &str, max_chars: usize) -> String {
+    let line = content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    line.chars().take(max_chars).collect()
+}
+
+fn compact_context_block(content: &str, max_chars: usize) -> String {
+    let block = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    block.chars().take(max_chars).collect()
+}
+
+pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, budget: u32) {
     if history.is_empty() {
         return;
     }
@@ -412,12 +606,17 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
         }
     }
 
-    // Drop superseded reads of the same file before measuring tokens.
-    // dedup disabled
+    // Deterministic, content-aware pruning runs before the class-based fallback
+    // below. Keep the newest raw suffix and only collapse exact unchanged reads;
+    // a read with different content may reflect a real edit and must survive.
+    let duplicate_reads = crate::network::compaction::prune_duplicate_tool_results(
+        history,
+        crate::network::compaction::KEEP_RECENT_TURNS,
+    );
 
     let mut tokens = Vec::with_capacity(history.len());
     for m in history.iter() {
-        tokens.push(count_tokens(&m.content));
+        tokens.push(crate::network::compaction::estimate_message_tokens(m) as u32);
     }
     let mut total: u32 = tokens.iter().sum();
     if total <= budget {
@@ -436,10 +635,37 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
     prune_class(history, &mut tokens, &mut total, budget, "file").await;
     prune_class(history, &mut tokens, &mut total, budget, "other").await;
 
-    dbg_log!("Compact finished. New history tokens: {}", total);
+    let deterministic_record = if total > budget {
+        compact_history_deterministically(history, budget)
+    } else {
+        false
+    };
+    if deterministic_record {
+        tokens = history
+            .iter()
+            .map(|m| crate::network::compaction::estimate_message_tokens(m) as u32)
+            .collect();
+        total = tokens.iter().sum();
+        prune_class(history, &mut tokens, &mut total, budget, "throwaway").await;
+        prune_class(history, &mut tokens, &mut total, budget, "file").await;
+        prune_class(history, &mut tokens, &mut total, budget, "other").await;
+    }
+
+    dbg_log!(
+        "Compact finished. New history tokens: {} (deterministic_record={})",
+        total,
+        deterministic_record
+    );
     crate::logger::operational_event(
         "context.compaction",
-        serde_json::json!({"history_tokens": total, "budget": budget}),
+        serde_json::json!({
+            "history_tokens": total,
+            "budget": budget,
+            "duplicate_reads_collapsed": duplicate_reads,
+            "summary_generated": false,
+            "deterministic_record": deterministic_record,
+            "hard_trim": false,
+        }),
     );
 }
 
@@ -819,12 +1045,21 @@ pub(crate) async fn prepare_turn_request(
     // under a short lock, compact the owned copy with the lock released, then
     // re-acquire and merge the result back in.
     {
-        let (api_url, model_name, budget, active_session_id, captured_history) = {
+        let (api_url, model_name, budget, local_model, active_session_id, captured_history) = {
             let s = state.lock().await;
+            let local_model = s.active_model_profile().is_some_and(|profile| {
+                profile.engine.as_deref().is_some_and(|engine| {
+                    matches!(
+                        engine.to_ascii_lowercase().as_str(),
+                        "local" | "ollama" | "llama.cpp" | "llama_cpp" | "lmstudio"
+                    )
+                })
+            });
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
                 s.get_history_token_budget() as usize,
+                local_model,
                 s.active_session_id.clone(),
                 s.history.clone(),
             )
@@ -833,13 +1068,14 @@ pub(crate) async fn prepare_turn_request(
         let mut working_history = captured_history.clone();
 
         // Lock released here: this await performs I/O.
-        let compacted = compaction::maybe_compact(
+        let compacted = compaction::maybe_compact_with_local_policy(
             client,
             &api_url,
             &model_name,
             &mut working_history,
             budget,
             cancel_token,
+            local_model,
         )
         .await;
 
@@ -866,12 +1102,18 @@ pub(crate) async fn prepare_turn_request(
             if s.history.len() > pre_len {
                 working_history.extend(s.history.drain(pre_len..));
             }
+            let history_changed = working_history != s.history;
             s.history = working_history;
             if compacted {
-                dbg_log!("History compacted via AI summarization. Clearing read/dedup cache.");
+                dbg_log!("History compacted. Clearing read/dedup cache.");
                 s.recent_read_calls.clear();
                 s.recent_read_outputs.clear();
                 s.read_file_mtimes.clear();
+                crate::config::save_history(&s.history);
+            } else if history_changed {
+                // Deterministic pruning can change the request history without
+                // invoking the summarizer. Persist that rewrite as well, but
+                // keep the read cache: no filesystem state changed.
                 crate::config::save_history(&s.history);
             }
         } else {
@@ -889,7 +1131,16 @@ pub(crate) async fn prepare_turn_request(
     // Everything the request needs from AppState is read in one guarded block so
     // the lock is taken a couple of times instead of once per field. The
     // environment snapshot is captured first because it touches the filesystem.
-    let current_snapshot = crate::context::ContextSnapshot::capture();
+    let workspace_root = {
+        let s = state.lock().await;
+        s.workspace_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+    };
+    let current_snapshot = workspace_root
+        .as_deref()
+        .map(crate::context::ContextSnapshot::capture_at)
+        .unwrap_or_else(crate::context::ContextSnapshot::capture);
     let (
         mut history_snapshot,
         budget_token_limit,
@@ -898,7 +1149,7 @@ pub(crate) async fn prepare_turn_request(
         volatile_usage,
         volatile_quota,
         volatile_window,
-        context_section,
+        mut context_section,
         system_prompt,
         active_profile,
         vision_profile,
@@ -923,7 +1174,10 @@ pub(crate) async fn prepare_turn_request(
             Some(prev) => prev
                 .diff(&current_snapshot)
                 .unwrap_or_else(|| "# Environment\n(unchanged since session start)".to_string()),
-            None => crate::context::environment_context(),
+            None => workspace_root
+                .as_deref()
+                .map(crate::context::environment_context_at)
+                .unwrap_or_else(crate::context::environment_context),
         };
         let protocol = s.active_tool_protocol();
         let agent_mode = s.agent_mode;
@@ -934,7 +1188,7 @@ pub(crate) async fn prepare_turn_request(
             .to_string();
         // Store the snapshot if this is the first turn.
         if s.context_snapshot.is_none() {
-            s.context_snapshot = Some(current_snapshot);
+            s.context_snapshot = Some(current_snapshot.clone());
         }
         (
             history_snapshot,
@@ -951,6 +1205,17 @@ pub(crate) async fn prepare_turn_request(
             s.image_analysis_cache.clone(),
         )
     };
+
+    // ContextSnapshot deliberately emits only environment deltas after the
+    // first request. Project instructions are different: they are durable
+    // constraints, so keep the current bounded document available after
+    // compaction/resume without putting it into every summary message.
+    if let Some(instructions) = current_snapshot.project_instructions()
+        && !context_section.contains("# Project instructions")
+    {
+        context_section.push_str("\n\n");
+        context_section.push_str(&instructions);
+    }
 
     compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
@@ -1019,7 +1284,24 @@ pub(crate) async fn prepare_turn_request(
     // after the history is assembled, to preserve the cached prefix). The
     // volatile runtime block (clock/cwd/quota) goes last, as the explicit cache
     // divider at the very end of the payload.
-    let mut dynamic_context = build_dynamic_context_tail(context_section, &read_files, &todos);
+    let memory_query = history_snapshot
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.clone())
+        .unwrap_or_default();
+    let project_memory = crate::memory::render_relevant_async(
+        workspace_root.clone(),
+        memory_query,
+        (budget_token_limit / 8).min(768) as usize,
+    )
+    .await;
+    let mut dynamic_context = build_dynamic_context_tail_with_memory(
+        context_section,
+        &read_files,
+        &todos,
+        project_memory,
+    );
     let volatile_block =
         build_volatile_context_block(volatile_usage.as_ref(), volatile_quota, volatile_window);
     if !dynamic_context.is_empty() {
@@ -1033,16 +1315,25 @@ pub(crate) async fn prepare_turn_request(
     // toward the budget.
     append_to_last_message(&mut msgs, &wrap_runtime_context(&dynamic_context));
 
-    let budget = volatile_window
-        .saturating_sub(RESPONSE_RESERVE_TOKENS)
-        .max(512);
-    let dropped = trim_msgs_to_budget(&mut msgs, budget);
+    // `budget_token_limit` already reserves completion, thinking, tool-schema,
+    // and provider safety headroom from the active model profile. Keep this
+    // final trim on the same budget used by automatic compaction.
     inject_system_reminder(&mut msgs);
+    let budget = budget_token_limit;
+    let dropped = trim_msgs_to_budget(&mut msgs, budget);
     if dropped > 0 {
         dbg_log!(
             "context budget {} tokens exceeded: dropped {} oldest message(s)",
             budget,
             dropped
+        );
+        crate::logger::operational_event(
+            "context.hard_trim",
+            serde_json::json!({
+                "reason": "model_aware_history_budget_after_deterministic_pruning",
+                "budget": budget,
+                "dropped_messages": dropped,
+            }),
         );
         if tool_rounds == 0 {
             let mut s = state.lock().await;
@@ -1180,11 +1471,30 @@ pub(crate) fn unanswered_call_results(
     calls: &[crate::app::ToolCallRef],
     reason: &str,
 ) -> Vec<ChatMessage> {
+    unanswered_call_results_with_kind(calls, reason, crate::tools::ToolErrorKind::Internal)
+}
+
+pub(crate) fn unanswered_call_results_with_kind(
+    calls: &[crate::app::ToolCallRef],
+    reason: &str,
+    error_kind: crate::tools::ToolErrorKind,
+) -> Vec<ChatMessage> {
     calls
         .iter()
         .map(|call| {
             ChatMessage::new("tool", format!("{}: error: {reason}", call.name))
                 .answering(Some(call.id.clone()))
+                .with_tool_result(crate::app::ToolResultRecord {
+                    tool_name: call.name.clone(),
+                    success: false,
+                    error_kind: Some(format!("{error_kind:?}")),
+                    retryable: matches!(
+                        error_kind,
+                        crate::tools::ToolErrorKind::Cancelled
+                            | crate::tools::ToolErrorKind::Internal
+                    ),
+                    ..Default::default()
+                })
         })
         .collect()
 }

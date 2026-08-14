@@ -58,6 +58,66 @@ pub struct ModelProfile {
 /// Fallback `max_tokens` used when a `ModelProfile` doesn't set its own.
 pub const DEFAULT_REQUEST_MAX_TOKENS: u32 = 32768;
 
+/// The portion of a model context that is intentionally unavailable to the
+/// conversation history. Tool schemas, completion/tool-call output, and (when
+/// enabled) reasoning all compete with the transcript for the same provider
+/// context window, so history must not be budgeted as a fixed percentage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextBudget {
+    pub context_window: u32,
+    pub completion_reserve: u32,
+    pub thinking_reserve: u32,
+    pub tool_reserve: u32,
+    pub safety_reserve: u32,
+    pub history_tokens: u32,
+}
+
+impl ModelProfile {
+    pub fn context_budget(&self) -> ContextBudget {
+        // Keep the effective value bounded and honest. In particular, do not
+        // inflate a deliberately small profile and then send a request that
+        // cannot fit the provider's configured window.
+        let context_window = self.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW).max(1);
+        let configured_completion = self.max_tokens.unwrap_or(DEFAULT_REQUEST_MAX_TOKENS);
+        let requested_completion = configured_completion
+            .min((context_window / 4).max(1))
+            .max(1);
+        let requested_thinking = if self.enable_thinking == Some(true) {
+            (context_window / 8).clamp(1, 2048)
+        } else {
+            0
+        };
+        let requested_tool = (context_window / 16).clamp(1, 4096);
+        let requested_safety = (context_window / 32).clamp(1, 1024);
+
+        // Keep the fields honest even for synthetic or unusually small model
+        // profiles: the published reserves must never add up to more than the
+        // context window, and history always retains a small inspectable tail.
+        let history_floor = (context_window / 4).min(256);
+        let mut reserve_capacity = context_window.saturating_sub(history_floor);
+        let completion_reserve = requested_completion.min(reserve_capacity);
+        reserve_capacity = reserve_capacity.saturating_sub(completion_reserve);
+        let thinking_reserve = requested_thinking.min(reserve_capacity);
+        reserve_capacity = reserve_capacity.saturating_sub(thinking_reserve);
+        let tool_reserve = requested_tool.min(reserve_capacity);
+        reserve_capacity = reserve_capacity.saturating_sub(tool_reserve);
+        let safety_reserve = requested_safety.min(reserve_capacity);
+        let reserved = completion_reserve
+            .saturating_add(thinking_reserve)
+            .saturating_add(tool_reserve)
+            .saturating_add(safety_reserve);
+        let history_tokens = context_window.saturating_sub(reserved);
+        ContextBudget {
+            context_window,
+            completion_reserve,
+            thinking_reserve,
+            tool_reserve,
+            safety_reserve,
+            history_tokens,
+        }
+    }
+}
+
 impl ModelProfile {
     pub fn image_input_supported(&self) -> Option<bool> {
         self.supports_vision
@@ -1412,6 +1472,73 @@ mod tests {
                 .context_window,
             Some(4096)
         );
+    }
+
+    #[test]
+    fn context_budget_reserves_completion_thinking_tools_and_safety() {
+        let mut profile = AppConfig::default().models[0].clone();
+        profile.context_window = Some(4096);
+        profile.max_tokens = Some(2048);
+        profile.enable_thinking = Some(true);
+        let budget = profile.context_budget();
+        assert_eq!(budget.context_window, 4096);
+        assert!(budget.completion_reserve > 0);
+        assert!(budget.thinking_reserve > 0);
+        assert!(budget.tool_reserve > 0);
+        assert!(budget.history_tokens < budget.context_window);
+        assert_eq!(
+            budget.history_tokens
+                + budget.completion_reserve
+                + budget.thinking_reserve
+                + budget.tool_reserve
+                + budget.safety_reserve,
+            budget.context_window
+        );
+
+        profile.context_window = Some(512);
+        let tiny = profile.context_budget();
+        assert_eq!(
+            tiny.history_tokens
+                + tiny.completion_reserve
+                + tiny.thinking_reserve
+                + tiny.tool_reserve
+                + tiny.safety_reserve,
+            tiny.context_window
+        );
+    }
+
+    #[test]
+    fn context_budget_scales_without_double_reserving_large_or_small_windows() {
+        let mut profile = AppConfig::default().models[0].clone();
+        profile.max_tokens = Some(u32::MAX);
+        for window in [1, 32, 64, 128, 256, 512, 4_096, 8_192, 32_768, 128_000, 262_144] {
+            profile.context_window = Some(window);
+            profile.enable_thinking = Some(false);
+            let budget = profile.context_budget();
+            assert_eq!(budget.context_window, window.max(1));
+            assert_eq!(
+                budget.history_tokens
+                    + budget.completion_reserve
+                    + budget.thinking_reserve
+                    + budget.tool_reserve
+                    + budget.safety_reserve,
+                budget.context_window
+            );
+            assert!(
+                budget.context_window < 4
+                    || budget.completion_reserve <= budget.context_window / 4
+            );
+            if window > 1 {
+                assert!(budget.history_tokens > 0);
+            }
+
+            profile.enable_thinking = Some(true);
+            let thinking = profile.context_budget();
+            if window >= 64 {
+                assert!(thinking.thinking_reserve > 0);
+                assert!(thinking.history_tokens < budget.history_tokens);
+            }
+        }
     }
 
     #[test]

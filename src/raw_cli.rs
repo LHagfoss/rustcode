@@ -103,6 +103,16 @@ pub async fn run_raw_cli(
     prompt: &str,
     model_override: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let tokens = prompt.split_whitespace().collect::<Vec<_>>();
+    if tokens.first() == Some(&"/memory") && tokens.len() > 1 {
+        if let Some(message) =
+            crate::memory::command(std::env::current_dir().ok().as_deref(), &tokens[1..])
+        {
+            println!("{message}");
+            return Ok(());
+        }
+    }
+
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;

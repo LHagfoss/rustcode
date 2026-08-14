@@ -194,6 +194,8 @@ pub(crate) fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: 
     result
         .content
         .push_str(&compiler_diagnostics_with_snippets(diagnostics));
+    result.metadata.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
+    result.metadata.retryable = true;
 }
 
 fn compiler_diagnostic_locations(diagnostics: &str) -> Vec<(String, usize, usize)> {

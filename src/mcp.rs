@@ -210,14 +210,22 @@ impl McpClient {
             "params": params
         });
 
-        self.tx
-            .send(req)
-            .await
-            .map_err(|e| format!("Failed to send request: {e}"))?;
+        if let Err(error) = self.tx.send(req).await {
+            self.pending.lock().await.remove(&id);
+            return Err(format!("Failed to send request: {error}"));
+        }
 
-        let resp = rx
-            .await
-            .map_err(|_| "Server closed connection before responding".to_string())?;
+        let resp = match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(_)) => {
+                self.pending.lock().await.remove(&id);
+                return Err("Server closed connection before responding".to_string());
+            }
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                return Err("MCP request timed out".to_string());
+            }
+        };
         if let Some(err) = resp.get("error") {
             let msg = err
                 .get("message")

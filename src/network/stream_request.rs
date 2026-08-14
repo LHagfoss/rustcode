@@ -137,6 +137,14 @@ pub(crate) async fn estimate_token_usage(
                 prompt_text.push('\n');
             }
         }
+        if let Some(tool_calls) = msg.get("tool_calls") {
+            prompt_text.push_str(&tool_calls.to_string());
+            prompt_text.push('\n');
+        }
+        if let Some(tool_call_id) = msg.get("tool_call_id").and_then(|id| id.as_str()) {
+            prompt_text.push_str(tool_call_id);
+            prompt_text.push('\n');
+        }
     }
     let prompt = count_tokens(&prompt_text);
     let full = prompt_text + reply + "\n";
@@ -170,13 +178,32 @@ pub async fn stream_request(
             .config
             .models
             .iter()
-            .find(|p| p.model == model && p.endpoint_url() == url)
+            .find(|p| {
+                (p.model == model || p.name == model)
+                    && (p.url == url || p.endpoint_url() == url)
+            })
             .cloned()
     };
     let max_tokens = profile
         .as_ref()
-        .and_then(|p| p.max_tokens)
-        .unwrap_or(crate::config::DEFAULT_REQUEST_MAX_TOKENS);
+        .map(|p| p.context_budget().completion_reserve)
+        .unwrap_or_else(|| {
+            crate::config::ModelProfile {
+                name: model.to_string(),
+                url: url.to_string(),
+                model: model.to_string(),
+                context_window: Some(crate::config::DEFAULT_CONTEXT_WINDOW),
+                engine: None,
+                api_key: None,
+                env_key: None,
+                tool_protocol: None,
+                enable_thinking: None,
+                max_tokens: None,
+                supports_vision: None,
+            }
+            .context_budget()
+            .completion_reserve
+        });
 
     let mut payload = serde_json::json!({
         "model": model,

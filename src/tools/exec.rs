@@ -572,6 +572,9 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
                                 success,
                                 exit_code,
                                 truncated: false,
+                                replayed: false,
+                                error_kind: (!success).then_some(super::ToolErrorKind::CommandFailed),
+                                retryable: false,
                             }
                         }
                         Err(e) => {
@@ -598,6 +601,9 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
             success: true,
             exit_code: None,
             truncated: false,
+            replayed: false,
+            error_kind: None,
+            retryable: false,
         });
     }
 
@@ -635,6 +641,9 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
         success: !failed,
         exit_code: Some(exit_code),
         truncated,
+        replayed: false,
+        error_kind: failed.then_some(super::ToolErrorKind::CommandFailed),
+        retryable: false,
     })
 }
 
@@ -794,7 +803,7 @@ fn truncate_bytes(bytes: &[u8], max: usize, keep_tail_priority: bool) -> String 
 mod tests {
     use super::{
         command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
-        has_interactive_sudo, reject_broad_git_stage, run_command,
+        has_interactive_sudo, reject_broad_git_stage, run_command, run_command_output,
     };
 
     #[test]
@@ -833,6 +842,22 @@ mod tests {
         .expect("shell command should succeed");
 
         assert!(result.contains("firstsecond"));
+    }
+
+    #[test]
+    fn command_execution_metadata_classifies_nonzero_exit_only() {
+        let failed = run_command_output(&serde_json::json!({"command": "false"}))
+            .expect("false should return a structured command result");
+        assert!(!failed.success);
+        assert_eq!(
+            failed.error_kind,
+            Some(super::super::ToolErrorKind::CommandFailed)
+        );
+
+        let passed = run_command_output(&serde_json::json!({"command": "true"}))
+            .expect("true should return a structured command result");
+        assert!(passed.success);
+        assert_eq!(passed.error_kind, None);
     }
 
     #[test]
