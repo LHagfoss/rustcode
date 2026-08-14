@@ -1816,7 +1816,7 @@ fn live_tail_excludes_committed_history() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
 
-    assert!(text.contains("Working"));
+    assert!(!text.contains("Working"));
     assert!(text.contains("unclosed tail"));
     assert!(!text.contains("old completed answer"));
 }
@@ -2028,6 +2028,26 @@ fn live_tail_includes_working_status_with_trailing_gap() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
     assert!(status_text.contains("Working"));
+}
+
+#[test]
+fn visible_streaming_text_replaces_working_status_without_extra_gaps() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.current_response = (1..=10)
+        .map(|line| format!("streamed line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let lines = super::render_live_tail(&state, 30, 24);
+    let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
+    let text = rendered.join(" ");
+
+    assert!(text.contains("streamed line 1"), "streaming lines: {rendered:?}");
+    assert!(text.contains("line 10"), "streaming lines: {rendered:?}");
+    assert!(rendered.len() > 5, "streaming lines: {rendered:?}");
+    assert!(!rendered.iter().any(|line| line.contains("Working")));
+    assert!(lines.last().is_some_and(|line| !line.spans.is_empty()));
 }
 
 #[test]
