@@ -1354,12 +1354,16 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let remaining = 100u32.saturating_sub(
             ((used as f64 / window as f64) * 100.0).round().clamp(0.0, 100.0) as u32,
         );
-        let left = if matches!(state.status, AppStatus::Idle) {
+        let hint = if matches!(state.status, AppStatus::Idle) {
             "  ? for shortcuts".to_owned()
         } else {
             "  tab to queue message".to_owned()
         };
         let right = format!("{remaining}% context left  ");
+        let left = fit_to_width(
+            &format!("{hint} · {}", state.model_name),
+            (footer_area.width as usize).saturating_sub(right.width()),
+        );
         let padding = (footer_area.width as usize)
             .saturating_sub(left.width() + right.width());
         f.render_widget(
@@ -3030,7 +3034,7 @@ pub fn render_with_transcript(
             f.area().height.saturating_sub(2),
         )
     } else {
-        input_lines + 3
+        input_lines + 4
     };
     let queue_block_height = queue_preview_height(state);
 

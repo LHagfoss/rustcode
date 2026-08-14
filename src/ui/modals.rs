@@ -151,7 +151,7 @@ pub(super) fn input_anchor_rect(
 ) -> ratatui::layout::Rect {
     let screen = f.area();
     let width = input_area.width.clamp(40, screen.width.saturating_sub(4));
-    let available_h = input_area.y.saturating_sub(1);
+    let available_h = input_area.y;
     let height = max_height.min(available_h).max(4);
     let x = input_area.x + (input_area.width.saturating_sub(width)) / 2;
     let y = input_area.y.saturating_sub(height);
