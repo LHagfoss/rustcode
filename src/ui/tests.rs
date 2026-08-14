@@ -71,6 +71,37 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
 }
 
 #[test]
+fn inline_command_suggestions_render_below_the_composer() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let mut state = AppState::new();
+    state.input_buffer = "/".to_owned();
+    state.cursor_position = 1;
+    state.active_suggestion_index = Some(0);
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let row_text = |row: u16| {
+        (0..100)
+            .map(|column| buffer[(column, row)].symbol())
+            .collect::<String>()
+    };
+    let composer_row = (0..20)
+        .find(|row| row_text(*row).contains("Auto-Confirm"))
+        .expect("composer status row should be visible");
+    let popup_row = (0..20)
+        .find(|row| row_text(*row).contains("/cancel"))
+        .expect("inline command popup should be visible");
+
+    assert!(
+        popup_row > composer_row,
+        "popup should be below the composer: composer={composer_row}, popup={popup_row}"
+    );
+}
+
+#[test]
 fn welcome_banner_renders_without_a_conversation() {
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -1392,6 +1423,47 @@ fn transcript_cursor_keeps_an_incomplete_code_fence_together() {
     assert_eq!(
         cursor.pending_stable_source(completed),
         "```rust\nfn main() {}\n```\n".to_owned()
+    );
+}
+
+#[test]
+fn transcript_cursor_keeps_streamed_tables_mutable_until_finalization() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    let header = "intro\n| Name | Value |\n";
+    let with_delimiter = "intro\n| Name | Value |\n| --- | --- |\n";
+    let with_row = "intro\n| Name | Value |\n| --- | --- |\n| one | two |\n";
+
+    assert_eq!(cursor.pending_stable_source(header), "intro\n");
+    assert_eq!(
+        super::scrollback::mutable_stream_text(header),
+        "| Name | Value |\n"
+    );
+    cursor.commit_stable_stream("intro\n");
+
+    assert!(cursor.pending_stable_stream(with_delimiter).is_empty());
+    assert_eq!(
+        super::scrollback::mutable_stream_text(with_row),
+        "| Name | Value |\n| --- | --- |\n| one | two |\n"
+    );
+    assert!(cursor.pending_stable_stream(with_row).is_empty());
+
+    let remainder = cursor
+        .take_final_stream_remainder(with_row)
+        .expect("stream prefix should be acknowledged");
+    assert_eq!(remainder, with_row.strip_prefix("intro\n").unwrap());
+
+    cursor.reset();
+    assert_eq!(cursor.pending_stable_source(with_row), "intro\n");
+}
+
+#[test]
+fn transcript_cursor_does_not_hold_pipe_text_without_a_table_delimiter() {
+    let cursor = super::scrollback::TranscriptCursor::default();
+    let stream = "A | B\nThis is ordinary prose\n";
+
+    assert_eq!(
+        cursor.pending_stable_stream(stream),
+        vec!["A | B", "This is ordinary prose"]
     );
 }
 
