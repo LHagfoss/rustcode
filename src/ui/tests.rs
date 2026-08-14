@@ -339,7 +339,9 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "• Ran cargo test"));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("• Ran $ cargo test · exit 0")));
     assert!(
         rendered.iter().any(|line| line.contains("504 passed")),
         "command output must be rendered beneath its header: {rendered:?}"
@@ -381,7 +383,9 @@ fn committed_tool_result_shows_failure_status() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("• Ran cargo test")));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("• Ran $ cargo test · exit 1")));
 }
 
 #[test]
@@ -835,6 +839,76 @@ fn code_block_rows_fill_full_width() {
             "ordinary code fences should use the code panel background"
         );
     }
+}
+
+#[test]
+fn streamed_markdown_fences_keep_adversarial_content_in_the_code_cell() {
+    use super::{AssistantRenderOptions, render_assistant_message};
+
+    let streaming = concat!(
+        "Before\n\n",
+        "````rust\n",
+        "let marker = \"```\";\n",
+        "```\n",
+        "let still_code = true;\n"
+    );
+    let mut lines = Vec::new();
+    let mut copies = Vec::new();
+    render_assistant_message(
+        streaming,
+        &mut lines,
+        &mut copies,
+        AssistantRenderOptions {
+            token_usage: None,
+            response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
+            is_generating: true,
+            viewport_width: 80,
+            show_picker: false,
+            last_copy_text: None,
+        },
+    );
+    let streaming_text: String = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(streaming_text.contains("let marker = \"```\";"));
+    assert!(streaming_text.contains("let still_code = true;"));
+
+    let completed = concat!(
+        "Before\n\n",
+        "~~~text\nfirst\n~~~\n\n",
+        "```rust\nsecond\n```\n\n",
+        "After"
+    );
+    lines.clear();
+    copies.clear();
+    render_assistant_message(
+        completed,
+        &mut lines,
+        &mut copies,
+        AssistantRenderOptions {
+            token_usage: None,
+            response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
+            is_generating: false,
+            viewport_width: 80,
+            show_picker: false,
+            last_copy_text: None,
+        },
+    );
+    let completed_text: String = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(completed_text.contains("first"));
+    assert!(completed_text.contains("second"));
+    assert!(completed_text.contains("After"));
+    assert_eq!(copies.len(), 2, "both completed fences need copy targets");
 }
 
 #[test]
@@ -1355,7 +1429,7 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
     assert_eq!(
         rendered
             .iter()
-            .filter(|line| line.contains("Bash cargo test"))
+            .filter(|line| line.contains("Bash $ cargo test"))
             .count(),
         2,
         "the live cell must not deduplicate distinct invocation identities"

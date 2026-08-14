@@ -3,6 +3,8 @@ mod history_cell;
 mod lru;
 mod markdown;
 mod modals;
+
+use history_cell::HistoryCell;
 pub(crate) mod scrollback;
 mod tool_result;
 
@@ -37,11 +39,12 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-fn safe_byte_index(s: &str, char_pos: usize) -> usize {
-    s.char_indices()
-        .nth(char_pos)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len())
+fn safe_byte_index(s: &str, byte_pos: usize) -> usize {
+    let mut position = byte_pos.min(s.len());
+    while !s.is_char_boundary(position) {
+        position = position.saturating_sub(1);
+    }
+    position
 }
 
 /// Max visible rows in the slash-command popup; longer lists scroll internally.
@@ -474,6 +477,30 @@ fn demote_assistant_bullet(lines: &mut [Line<'_>]) {
     }
 }
 
+/// Apply one Markdown fence transition to the mutable assistant stream. The
+/// opener length is part of the state: a three-backtick line cannot close a
+/// four-backtick block, and fence-like content inside a longer block remains
+/// code rather than toggling the renderer.
+fn assistant_fence_transition(
+    open: Option<(u8, usize)>,
+    line: &str,
+) -> (bool, Option<(u8, usize)>, Option<String>) {
+    let Some((marker, marker_length, rest)) = scrollback::fence_line_info(line) else {
+        return (false, open, None);
+    };
+    if let Some((open_marker, open_length)) = open {
+        if marker == open_marker && marker_length >= open_length && rest.trim().is_empty() {
+            return (true, None, None);
+        }
+        return (false, open, None);
+    }
+    (
+        true,
+        Some((marker, marker_length)),
+        Some(rest.trim().to_owned()),
+    )
+}
+
 fn render_assistant_message<'a>(
     content: &'a str,
     lines: &mut Vec<Line<'a>>,
@@ -566,18 +593,16 @@ fn render_assistant_message<'a>(
         }
         let content_width = (viewport_width as usize).saturating_sub(2).max(10);
         let mut processed_lines: Vec<(bool, String)> = Vec::new();
-        let mut in_code_block = false;
+        let mut stream_fence = None;
 
         for raw_line in main_content.lines() {
-            let is_code_fence = raw_line.trim_start().starts_with("```");
-            if is_code_fence {
-                in_code_block = !in_code_block;
-                processed_lines.push((true, raw_line.to_string()));
-            } else if in_code_block {
-                processed_lines.push((true, raw_line.to_string()));
-            } else {
-                processed_lines.push((false, raw_line.to_string()));
-            }
+            let (is_fence_boundary, next_fence, _) =
+                assistant_fence_transition(stream_fence, raw_line);
+            processed_lines.push((
+                is_fence_boundary || stream_fence.is_some(),
+                raw_line.to_string(),
+            ));
+            stream_fence = next_fence;
         }
 
         // Languages we render as plain text (no Rust syntax highlighting), so
@@ -599,29 +624,32 @@ fn render_assistant_message<'a>(
         let box_width = content_width;
         let mut i = 0;
         let mut emitted_assistant_gutter = false;
-        let mut fence_open = false;
+        let mut fence_open = None;
         let mut current_lang = String::new();
         while i < processed_lines.len() {
             if processed_lines[i].0 {
                 let line_str = &processed_lines[i].1;
-                let is_code_fence = line_str.trim_start().starts_with("```");
+                let (is_code_fence, next_fence, language) =
+                    assistant_fence_transition(fence_open, line_str);
                 if is_code_fence {
-                    let opening = !fence_open;
-                    fence_open = !fence_open;
-                    let fence_text = line_str.trim();
+                    let opening = fence_open.is_none();
                     if opening {
                         if lines.last().is_some_and(|line| {
                             line.spans.iter().any(|span| !span.content.is_empty())
                         }) {
                             lines.push(Line::from(""));
                         }
-                        current_lang = fence_text.trim_start_matches('`').trim().to_lowercase();
+                        current_lang = language.unwrap_or_default();
 
                         let mut code_text = String::new();
                         let mut j = i + 1;
+                        let open_fence = next_fence.expect("opening fence has state");
                         while j < processed_lines.len()
-                            && !(processed_lines[j].0
-                                && processed_lines[j].1.trim_start().starts_with("```"))
+                            && !assistant_fence_transition(
+                                Some(open_fence),
+                                &processed_lines[j].1,
+                            )
+                            .0
                         {
                             if !code_text.is_empty() {
                                 code_text.push('\n');
@@ -729,6 +757,7 @@ fn render_assistant_message<'a>(
                         }
                         current_lang.clear();
                     }
+                    fence_open = next_fence;
                 } else if is_diff_lang(&current_lang)
                     && (line_str.starts_with('+')
                         || line_str.starts_with('-')
@@ -1956,6 +1985,7 @@ struct ToolTranscriptEntry {
     action: String,
     target: String,
     success: bool,
+    status: String,
     body: Vec<Line<'static>>,
     kind: ToolTranscriptKind,
 }
@@ -2048,7 +2078,7 @@ fn tool_transcript_entry(
     } else {
         tool_result_action(state, message_index, &tool_name)
     };
-    let (success, _) = tool_result_status(message, &tool_name, result);
+    let (success, status) = tool_result_status(message, &tool_name, result);
     let body = cached_tool_result(
         &tool_name,
         result,
@@ -2063,6 +2093,7 @@ fn tool_transcript_entry(
         action,
         target,
         success,
+        status,
         body,
         kind,
     })
@@ -2207,9 +2238,9 @@ pub(crate) fn render_committed_tool_result_group(
             let command = if entry.target.is_empty() || entry.target == "?" {
                 entry.action.clone()
             } else {
-                entry.target.clone()
+                format!("$ {}", entry.target)
             };
-            let title = format!("Ran {command}");
+            let title = format!("Ran {command} · {}", entry.status);
             lines.push(tool_group_header(&title, success, show_picker));
             lines.extend(indent_tool_result_body(
                 entry.body.clone(),
@@ -2684,7 +2715,6 @@ pub(crate) fn render_live_tail(
 
     let tail = scrollback::mutable_stream_text(&state.current_response);
     let mut lines = Vec::new();
-    let mut copy_clicks = Vec::new();
 
     if !tail.is_empty() {
         let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());
@@ -2695,26 +2725,14 @@ pub(crate) fn render_live_tail(
         };
 
         if !should_hide_stream {
-            render_assistant_message(
+            let cell = history_cell::AssistantMarkdownCell::streaming(
                 &tail,
-                &mut lines,
-                &mut copy_clicks,
-                AssistantRenderOptions {
-                    token_usage: None,
-                    response_time_ms: state
-                        .generation_start_time
-                        .map(|started| started.elapsed().as_millis() as u64),
-                    thought_time_ms: None,
-                    thought_tokens: None,
-                    is_generating: true,
-                    viewport_width: width,
-                    show_picker: false,
-                    last_copy_text: None,
-                },
+                scrollback::mutable_stream_is_continuation(&state.current_response),
+                state
+                    .generation_start_time
+                    .map(|started| started.elapsed().as_millis() as u64),
             );
-            if scrollback::mutable_stream_is_continuation(&state.current_response) {
-                demote_assistant_bullet(&mut lines);
-            }
+            lines.extend(cell.display_lines(width));
         }
     }
 
@@ -2776,14 +2794,14 @@ pub(crate) fn render_committed_history_block(
             if is_hidden_system_notice(&message.content) {
                 return Vec::new();
             }
-            return render_committed_assistant_text_with_metrics(
+            return history_cell::AssistantMarkdownCell::committed(
                 &message.content,
-                width,
                 message.token_usage.clone(),
                 message.response_time_ms,
                 message.thought_time_ms,
                 message.thought_tokens,
-            );
+            )
+            .display_lines(width);
         }
         "tool" => {
             let tool_name = resolve_tool_result_name(
@@ -2835,30 +2853,8 @@ pub(crate) fn render_committed_assistant_chunk(
     width: u16,
     is_continuation: bool,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let mut copy_clicks = Vec::new();
-    render_assistant_message(
-        content,
-        &mut lines,
-        &mut copy_clicks,
-        AssistantRenderOptions {
-            token_usage: None,
-            response_time_ms: None,
-            thought_time_ms: None,
-            thought_tokens: None,
-            is_generating: true,
-            viewport_width: width,
-            show_picker: false,
-            last_copy_text: None,
-        },
-    );
-    if is_continuation {
-        demote_assistant_bullet(&mut lines);
-    }
-    while lines.last().is_some_and(|l| l.spans.is_empty()) {
-        lines.pop();
-    }
-    lines.into_iter().map(|line| own_line(&line)).collect()
+    history_cell::AssistantMarkdownCell::streaming(content, is_continuation, None)
+        .display_lines(width)
 }
 
 pub(crate) fn render_committed_assistant_text(
