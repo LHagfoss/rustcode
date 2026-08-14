@@ -889,6 +889,7 @@ async fn test_confirm_and_execute_bypassed() {
         "write_to_file",
         true,
         None,
+        None,
     )
     .await;
     assert!(

@@ -333,6 +333,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal_focused = true;
     let mut transcript_cursor = crate::ui::scrollback::TranscriptCursor::default();
     let mut transcript_state = crate::ui::TranscriptState::default();
+    let mut stream_commits = crate::ui::scrollback::StreamCommitQueue::default();
     let mut terminal_size = terminal.size()?;
     let mut replay_history = false;
 
@@ -348,6 +349,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             terminal.clear()?;
             transcript_cursor.reset();
             transcript_state.reset();
+            stream_commits.reset();
             replay_history = true;
             terminal_size = observed_size;
             needs_redraw = true;
@@ -414,7 +416,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     is_continuation,
                 );
                 if !lines.is_empty() {
-                    insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
+                    stream_commits.push(lines);
                 }
                 transcript_cursor.commit_stable_stream(&stable_source);
             }
@@ -424,6 +426,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 transcript_cursor.pending_history_range(guard.history.len())
             };
+            let stable_lines = stream_commits.take_ready(
+                replay_history || !history_range.is_empty() || !response_active,
+            );
+            if !stable_lines.is_empty() {
+                insert_scrollback_lines(&mut terminal, stable_lines, terminal_width)?;
+            }
             let mut blocks = Vec::new();
             if !replay_history && transcript_cursor.is_at_start() && !history_range.is_empty() {
                 let banner = crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
@@ -1628,7 +1636,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Esc => {
                             let mut s = app_state.lock().await;
-                            if s.sel_start.is_some() || s.sel_end.is_some() {
+                            if s.dismiss_completion() {
+                                // Popup dismissal keeps the draft intact. Typing or moving
+                                // to another token makes completion eligible again.
+                            } else if s.sel_start.is_some() || s.sel_end.is_some() {
                                 s.clear_selection();
                             } else if !s.input_buffer.is_empty() {
                                 s.input_buffer.clear();
@@ -1697,6 +1708,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Tab => {
                             let mut s = app_state.lock().await;
+                            s.dismissed_completion = None;
                             let has_at =
                                 crate::app::get_at_word_query(&s.input_buffer, s.cursor_position)
                                     .is_some();
@@ -1816,13 +1828,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s.reset_suggestion_cycle();
                             }
                         }
-                        KeyCode::Char('p')
+                        KeyCode::Char('p') | KeyCode::Char('n')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
                             let mut s = app_state.lock().await;
-                            s.show_command_picker = true;
-                            s.command_picker_index = 0;
-                            s.command_picker_search.clear();
+                            let completion_len = crate::app::get_completion_len(
+                                &s.input_buffer,
+                                s.cursor_position,
+                            );
+                            if s.active_suggestion_index.is_some() && completion_len > 0 {
+                                let current = s.active_suggestion_index.unwrap_or(0);
+                                s.active_suggestion_index = Some(if key.code == KeyCode::Char('p') {
+                                    if current == 0 { completion_len - 1 } else { current - 1 }
+                                } else if current + 1 >= completion_len {
+                                    0
+                                } else {
+                                    current + 1
+                                });
+                            } else if key.code == KeyCode::Char('p') {
+                                s.show_command_picker = true;
+                                s.command_picker_index = 0;
+                                s.command_picker_search.clear();
+                            }
                         }
 
                         KeyCode::Char(c) => {

@@ -374,6 +374,7 @@ pub(crate) async fn confirm_and_execute(
     display_name: &str,
     bypass_confirm: bool,
     workspace_root: Option<std::path::PathBuf>,
+    live_key: Option<&str>,
 ) -> (
     crate::tools::ToolExecutionOutput,
     Option<String>,
@@ -443,28 +444,56 @@ pub(crate) async fn confirm_and_execute(
         let args_owned = args.clone();
         let session_id = { state.lock().await.active_session_id.clone() };
         let workspace_root_for_task = workspace_root.clone();
+        let live_key_owned = live_key.map(str::to_owned);
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let run_fut = tokio::task::spawn_blocking(move || {
             crate::tools::set_active_session_id(Some(session_id));
             crate::tools::set_active_workspace_root(workspace_root_for_task);
-            let result = crate::tools::execute_with_metadata(&name_owned, &args_owned);
+            let result = if name_owned == "run_command" && live_key_owned.is_some() {
+                let callback: crate::tools::CommandProgressCallback = Arc::new(move |bytes, stderr| {
+                    let _ = progress_tx.send((bytes.to_vec(), stderr));
+                });
+                crate::tools::run_command_output_with_progress(&args_owned, callback)
+                    .unwrap_or_else(|error| {
+                        crate::tools::ToolExecutionOutput::failure_with_kind(
+                            format!("error: {error}"),
+                            crate::tools::ToolErrorKind::CommandFailed,
+                            true,
+                        )
+                    })
+            } else {
+                crate::tools::execute_with_metadata(&name_owned, &args_owned)
+            };
             crate::tools::set_active_workspace_root(None);
             crate::tools::set_active_session_id(None);
             result
         });
-
-        tokio::select! {
-            res = run_fut => {
-                res.unwrap_or_else(|e| {
-                    crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
-                })
-            }
-            _ = cancel_token.cancelled() => {
-                dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
-                crate::tools::ToolExecutionOutput::failure_with_kind(
-                    "error: tool execution cancelled by user".to_string(),
-                    crate::tools::ToolErrorKind::Cancelled,
-                    true,
-                )
+        tokio::pin!(run_fut);
+        let mut progress_open = true;
+        loop {
+            tokio::select! {
+                res = &mut run_fut => {
+                    break res.unwrap_or_else(|e| {
+                        crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
+                    });
+                }
+                event = progress_rx.recv(), if progress_open => {
+                    if let Some((bytes, stderr)) = event {
+                        if let Some(key) = live_key {
+                            state.lock().await.append_live_tool_output(key, &bytes, stderr);
+                        }
+                    } else {
+                        progress_open = false;
+                    }
+                }
+                _ = cancel_token.cancelled() => {
+                    dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
+                    break crate::tools::ToolExecutionOutput::failure_with_kind(
+                        "error: tool execution cancelled by user".to_string(),
+                        crate::tools::ToolErrorKind::Cancelled,
+                        true,
+                    );
+                }
             }
         }
     } else {
@@ -869,6 +898,7 @@ pub(crate) async fn execute_tool_batch(
             let plan_mode = state.lock().await.agent_mode == crate::config::AgentMode::Plan;
             plan_mode && !crate::tools::allowed_in_plan_mode(name)
         };
+        let execution_live_key = live_key.clone();
         let (executed_name, execution, diff_opt, replay_artifact, user_wait) = async move {
             let is_read_only = is_read_only_tool(&name_clone);
             let mut replay_artifact = None;
@@ -990,6 +1020,7 @@ different, read another range or make an edit first; repeating this call returns
                     &name_clone,
                     true, // bypass confirmation
                     workspace_root,
+                    Some(&execution_live_key),
                 )
                 .await
             };

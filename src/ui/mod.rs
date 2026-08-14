@@ -13,14 +13,18 @@ use highlight::{
     highlight_code_block, highlight_code_line, highlight_diff_line, render_unified_diff,
     wrap_code_spans,
 };
-use markdown::{render_markdown, unwrap_markdown_table_fences};
+use markdown::{
+    render_markdown, unwrap_markdown_table_fences, wrap_prefixed_plain_text,
+    wrap_styled_spans,
+};
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
 use modals::{
-    render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
+    question_height, render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
     render_protocol_picker_modal, render_question_modal, render_theme_picker_modal,
     render_thinking_picker_modal, render_tool_confirmation_modal, render_verbosity_picker_modal,
+    tool_confirmation_height,
 };
 use tool_result::render_tool_result;
 
@@ -33,7 +37,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Clear, Paragraph, Wrap},
 };
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
@@ -617,11 +621,10 @@ fn render_assistant_message<'a>(
         };
         let is_diff_lang = |lang: &str| -> bool { matches!(lang, "diff" | "patch" | "udiff") };
 
-        // Code blocks render as one solid full-width panel. Every row is padded
-        // (or wrapped) to `box_width` so the panel background fills the whole box
-        // rather than sitting only behind the glyphs, and the copy button is
-        // right-aligned using display width — not byte length, which overcounts
-        // the 📋 emoji and knocked the button out of alignment.
+        // Keep fenced code source-backed while streaming, but render the body
+        // directly in the transcript like Codex. A language/copy header and a
+        // full-width panel add visual weight that ordinary coding replies do not
+        // need; syntax colour and the existing copy registry remain available.
         let box_width = content_width;
         let mut i = 0;
         let mut emitted_assistant_gutter = false;
@@ -659,86 +662,38 @@ fn render_assistant_message<'a>(
                             j += 1;
                         }
 
-                        let lang_label = if current_lang.is_empty() {
-                            "code".to_string()
-                        } else {
-                            current_lang.clone()
-                        };
-                        let is_copied_recently =
-                            last_copy_text.as_ref().is_some_and(|(t_text, t)| {
-                                t_text == &code_text && t.elapsed().as_secs() < 2
+                        if !code_text.is_empty() {
+                            let _copied_recently = last_copy_text.as_ref().is_some_and(|(text, at)| {
+                                text == &code_text && at.elapsed().as_secs() < 2
                             });
-                        let button_badge = if is_copied_recently {
-                            " Copied! 📋 "
-                        } else {
-                            " Copy 📋 "
-                        };
-                        let button_color = if is_copied_recently {
-                            COLOR_GREEN()
-                        } else {
-                            COLOR_SECONDARY()
-                        };
-                        // Keep code on a subtle panel so syntax spans remain visually grouped;
-                        // the Copy badge uses the same panel with a stronger foreground.
-                        let code_bg = COLOR_BG();
-                        let left_text = format!(" {lang_label} ");
-                        let pad_len =
-                            box_width.saturating_sub(left_text.width() + button_badge.width());
-                        let spans = vec![
-                            Span::styled(
-                                left_text,
-                                get_themed_style(
-                                    COLOR_MUTED(),
-                                    code_bg,
-                                    Modifier::BOLD,
-                                    show_picker,
-                                ),
-                            ),
-                            Span::styled(
-                                " ".repeat(pad_len),
-                                get_themed_style(
-                                    COLOR_MUTED(),
-                                    code_bg,
-                                    Modifier::empty(),
-                                    show_picker,
-                                ),
-                            ),
-                            Span::styled(
-                                button_badge,
-                                get_themed_style(
-                                    button_color,
-                                    COLOR_BG(),
-                                    Modifier::BOLD,
-                                    show_picker,
-                                ),
-                            ),
-                        ];
-                        copy_registry.push((lines.len(), code_text.clone()));
-                        push_assistant_content_line(
-                            lines,
-                            Line::from(spans),
-                            &mut emitted_assistant_gutter,
-                            show_picker,
-                        );
-                        if !is_plain_lang(&current_lang) && !is_diff_lang(&current_lang) {
-                            for body_spans in
+                            copy_registry.push((lines.len(), code_text.clone()));
+
+                            let rendered = if is_plain_lang(&current_lang) {
+                                code_text
+                                    .lines()
+                                    .map(|line| {
+                                        vec![Span::styled(
+                                            line.to_owned(),
+                                            get_themed_style(
+                                                COLOR_TEXT(),
+                                                COLOR_BG(),
+                                                Modifier::empty(),
+                                                show_picker,
+                                            ),
+                                        )]
+                                    })
+                                    .collect::<Vec<_>>()
+                            } else if is_diff_lang(&current_lang) {
+                                code_text
+                                    .lines()
+                                    .map(|line| highlight_diff_line(line, box_width, show_picker).spans)
+                                    .collect::<Vec<_>>()
+                            } else {
                                 highlight_code_block(&code_text, &current_lang, show_picker)
-                            {
-                                let mut content_spans = vec![Span::styled(
-                                    " ".to_string(),
-                                    get_themed_style(
-                                        COLOR_TEXT(),
-                                        code_bg,
-                                        Modifier::empty(),
-                                        show_picker,
-                                    ),
-                                )];
-                                content_spans.extend(body_spans.into_iter().map(|span| {
-                                    Span::styled(span.content, span.style.bg(code_bg))
-                                }));
-                                for line in
-                                    wrap_code_spans(content_spans, box_width, code_bg, show_picker)
-                                {
+                            };
+
+                            for body_spans in rendered {
+                                for line in wrap_styled_spans(body_spans, box_width) {
                                     push_assistant_content_line(
                                         lines,
                                         line,
@@ -747,8 +702,8 @@ fn render_assistant_message<'a>(
                                     );
                                 }
                             }
-                            i = j.saturating_sub(1);
                         }
+                        i = j.saturating_sub(1);
                     } else {
                         if processed_lines
                             .get(i + 1)
@@ -1262,64 +1217,10 @@ fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &Ap
 fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) -> Margin {
     let show_picker = state.modal_open();
     let area = chunks[2];
-
-    let border_color = if show_picker {
-        COLOR_MUTED()
-    } else {
-        COLOR_PRIMARY()
-    };
-
-    let (mode_label_str, mode_color) = match state.agent_mode {
-        crate::config::AgentMode::Build => ("build", COLOR_PRIMARY()),
-        crate::config::AgentMode::Plan => ("plan", Color::Rgb(229, 192, 123)),
-    };
-    let model_str = model_label(state);
-
-    let title_left = Line::from(vec![
-        Span::styled(
-            " ✦ ",
-            Style::default()
-                .fg(COLOR_PRIMARY())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "rustcode",
-            Style::default()
-                .fg(COLOR_TEXT())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-    ]);
-
-    let title_right = Line::from(vec![
-        Span::styled(
-            format!(" {mode_label_str} "),
-            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("[{model_str}] "),
-            Style::default().fg(COLOR_MUTED()),
-        ),
-    ]);
-
-    let status_line = Line::from(vec![Span::styled(
-        format!(" {} ", format_input_status_text(state)),
-        Style::default().fg(COLOR_MUTED()),
-    )]);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .title(title_left)
-        .title(title_right.alignment(ratatui::layout::Alignment::Right))
-        .title_bottom(status_line.alignment(ratatui::layout::Alignment::Right));
-
-    f.render_widget(block, area);
-
+    f.render_widget(Clear, area);
     let input_margin = Margin {
-        vertical: 1,
-        horizontal: 2,
+        vertical: 0,
+        horizontal: 0,
     };
     let input_inner = area.inner(input_margin);
 
@@ -1342,8 +1243,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         if state.input_buffer.is_empty() && state.get_command_suggestion().is_none() {
             let placeholder_style =
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
-            let placeholder_text =
-                "Ask a question, request code changes, or type / for commands...";
+            let placeholder_text = "Ask RustCode to do anything";
             styled_chars.extend(placeholder_text.chars().map(|c| (c, placeholder_style)));
         } else if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
@@ -1367,7 +1267,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 
         let prompt_span = Span::styled(
-            "❯ ",
+            "› ",
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
         );
         let mut current_line_spans = vec![prompt_span];
@@ -1428,7 +1328,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         lines.push(Line::from(current_line_spans));
     }
 
-    let text_area_height = input_inner.height;
+    let text_area_height = input_inner.height.saturating_sub(1);
     let text_area = ratatui::layout::Rect::new(
         input_inner.x,
         input_inner.y,
@@ -1438,10 +1338,56 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_BG()));
     f.render_widget(paragraph, text_area);
 
+    if input_inner.height > 0 {
+        let footer_area = ratatui::layout::Rect::new(
+            input_inner.x,
+            input_inner.y + input_inner.height.saturating_sub(1),
+            input_inner.width,
+            1,
+        );
+        let (used, _) = context_usage(state);
+        let window = state.active_context_window().max(1);
+        let remaining = 100u32.saturating_sub(
+            ((used as f64 / window as f64) * 100.0).round().clamp(0.0, 100.0) as u32,
+        );
+        let left = if matches!(state.status, AppStatus::Idle) {
+            "  ? for shortcuts".to_owned()
+        } else {
+            "  tab to queue message".to_owned()
+        };
+        let right = format!("{remaining}% context left  ");
+        let padding = (footer_area.width as usize)
+            .saturating_sub(left.width() + right.width());
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    left,
+                    get_themed_style(
+                        COLOR_MUTED(),
+                        COLOR_BG(),
+                        Modifier::empty(),
+                        show_picker,
+                    ),
+                ),
+                Span::raw(" ".repeat(padding)),
+                Span::styled(
+                    right,
+                    get_themed_style(
+                        COLOR_MUTED(),
+                        COLOR_BG(),
+                        Modifier::empty(),
+                        show_picker,
+                    ),
+                ),
+            ])),
+            footer_area,
+        );
+    }
+
     if inner_width > 0 && !show_picker {
         f.set_cursor_position((
             input_inner.x + cursor_dx.min(input_inner.width.saturating_sub(1)),
-            input_inner.y + cursor_dy,
+            input_inner.y + cursor_dy.min(text_area_height.saturating_sub(1)),
         ));
     }
 
@@ -2803,19 +2749,19 @@ pub(crate) fn render_committed_history_block(
     match message.role.as_str() {
         "user" => {
             let content = collapse_image_markers(&message.content);
-            for (index, text) in content.lines().enumerate() {
-                let prefix = if index == 0 { "❯ " } else { "  " };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        prefix,
-                        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        text.to_owned(),
-                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ),
-                ]));
-            }
+            let prefix_style = get_themed_style(
+                COLOR_PRIMARY(),
+                COLOR_BG(),
+                Modifier::BOLD,
+                show_picker,
+            );
+            lines.extend(wrap_prefixed_plain_text(
+                &content,
+                width as usize,
+                Span::styled("› ", prefix_style),
+                Span::styled("  ", prefix_style),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
             lines.push(Line::from(""));
         }
         "assistant" => {
@@ -2958,26 +2904,44 @@ pub fn render_with_transcript(
 ) {
     theme::set_active_theme(&state.config.theme);
 
-    let filtered_cmds: Vec<&CommandInfo> =
-        crate::app::suggestion::filtered_commands(&state.input_buffer);
+    let completion_dismissed = state.dismissed_completion.as_ref() == state.completion_identity().as_ref();
+    let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed {
+        Vec::new()
+    } else {
+        crate::app::suggestion::filtered_commands(&state.input_buffer)
+    };
 
-    let inner_width = f.area().width.saturating_sub(4).max(1);
+    let inner_width = f.area().width.saturating_sub(2).max(1);
     let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize);
     let input_lines = raw_input_lines.min(8);
-    let input_height = input_lines + 2;
+    let approval_active = state.status == AppStatus::AwaitingToolConfirmation;
+    let question_active = state.status == AppStatus::AwaitingQuestion;
+    let input_height = if approval_active {
+        tool_confirmation_height(state, f.area().height.saturating_sub(2))
+    } else if question_active {
+        question_height(
+            state,
+            f.area().width,
+            f.area().height.saturating_sub(2),
+        )
+    } else {
+        input_lines + 2
+    };
     let queue_block_height = queue_preview_height(state);
 
     let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
         .unwrap_or((0, String::new()));
-    let at_files = if !at_query.is_empty()
+    let at_files = if !completion_dismissed && (!at_query.is_empty()
         || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
-            .ends_with('@')
+            .ends_with('@'))
     {
         crate::app::list_project_file_paths(&at_query)
     } else {
         Vec::new()
     };
-    let popup_rows = if !filtered_cmds.is_empty() {
+    let popup_rows = if approval_active || question_active {
+        0
+    } else if !filtered_cmds.is_empty() {
         (filtered_cmds.len() as u16).min(MAX_POPUP_ROWS)
     } else if !at_files.is_empty() {
         (at_files.len() as u16).min(8)
@@ -3052,7 +3016,15 @@ pub fn render_with_transcript(
     };
 
     render_queue_line(f, &chunks, state);
-    let input_margin = render_input(f, &chunks, state);
+    let input_margin = if approval_active {
+        render_tool_confirmation_modal(f, state, chunks[2]);
+        Margin { vertical: 0, horizontal: 0 }
+    } else if question_active {
+        render_question_modal(f, state, chunks[2]);
+        Margin { vertical: 0, horizontal: 0 }
+    } else {
+        render_input(f, &chunks, state)
+    };
 
     if !filtered_cmds.is_empty() {
         let input_inner = chunks[2].inner(input_margin);
@@ -3094,14 +3066,6 @@ pub fn render_with_transcript(
 
     if state.show_mcp_config {
         render_mcp_config_modal(f, state, input_box_area);
-    }
-
-    if state.status == AppStatus::AwaitingToolConfirmation {
-        render_tool_confirmation_modal(f, state, input_box_area);
-    }
-
-    if state.status == AppStatus::AwaitingQuestion {
-        render_question_modal(f, state, input_box_area);
     }
 
     if state.status == AppStatus::VerbosityPicker {

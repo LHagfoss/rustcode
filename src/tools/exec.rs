@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::io::Read;
 use std::process::{Output, Stdio};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -412,6 +413,22 @@ pub fn run_command(args: &Value) -> Result<String, String> {
 }
 
 pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOutput, String> {
+    run_command_output_inner(args, None)
+}
+
+pub(crate) type CommandProgressCallback = Arc<dyn Fn(&[u8], bool) + Send + Sync + 'static>;
+
+pub(crate) fn run_command_output_with_progress(
+    args: &Value,
+    progress: CommandProgressCallback,
+) -> Result<super::ToolExecutionOutput, String> {
+    run_command_output_inner(args, Some(progress))
+}
+
+fn run_command_output_inner(
+    args: &Value,
+    progress: Option<CommandProgressCallback>,
+) -> Result<super::ToolExecutionOutput, String> {
     let command_str = args
         .get("command")
         .and_then(|c| c.as_str())
@@ -607,7 +624,11 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
         });
     }
 
-    let output = run_with_timeout(cmd, Duration::from_millis(timeout_ms.max(1)))?;
+    let output = run_with_timeout(
+        cmd,
+        Duration::from_millis(timeout_ms.max(1)),
+        progress,
+    )?;
     let exit_code = output.status.code().unwrap_or(-1);
 
     let mut result = String::new();
@@ -728,21 +749,49 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
     }
 }
 
-fn run_with_timeout(mut cmd: std::process::Command, timeout: Duration) -> Result<Output, String> {
+fn run_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: Duration,
+    progress: Option<CommandProgressCallback>,
+) -> Result<Output, String> {
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn process: {e}"))?;
     let mut child_stdout = child.stdout.take().ok_or("no stdout pipe")?;
     let mut child_stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
+    let stdout_progress = progress.clone();
     let out_handle = thread::spawn(move || {
         let mut b = Vec::new();
-        let _ = child_stdout.read_to_end(&mut b);
+        let mut chunk = [0u8; 4096];
+        loop {
+            match child_stdout.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if let Some(callback) = stdout_progress.as_ref() {
+                        callback(&chunk[..read], false);
+                    }
+                    b.extend_from_slice(&chunk[..read]);
+                }
+            }
+        }
         b
     });
+    let stderr_progress = progress;
     let err_handle = thread::spawn(move || {
         let mut b = Vec::new();
-        let _ = child_stderr.read_to_end(&mut b);
+        let mut chunk = [0u8; 4096];
+        loop {
+            match child_stderr.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if let Some(callback) = stderr_progress.as_ref() {
+                        callback(&chunk[..read], true);
+                    }
+                    b.extend_from_slice(&chunk[..read]);
+                }
+            }
+        }
         b
     });
 
@@ -804,7 +853,30 @@ mod tests {
     use super::{
         command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
         has_interactive_sudo, reject_broad_git_stage, run_command, run_command_output,
+        run_command_output_with_progress,
     };
+
+    #[test]
+    fn run_command_reports_stdout_and_stderr_while_running() {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let callback: super::CommandProgressCallback = std::sync::Arc::new(move |bytes, stderr| {
+            captured
+                .lock()
+                .unwrap()
+                .push((String::from_utf8_lossy(bytes).into_owned(), stderr));
+        });
+        let output = run_command_output_with_progress(
+            &serde_json::json!({"command": "printf out; printf err >&2"}),
+            callback,
+        )
+        .expect("command output");
+
+        assert!(output.success);
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|(text, stderr)| !stderr && text.contains("out")));
+        assert!(events.iter().any(|(text, stderr)| *stderr && text.contains("err")));
+    }
 
     #[test]
     fn broad_git_staging_is_rejected() {
