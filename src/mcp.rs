@@ -215,8 +215,9 @@ impl McpClient {
             .await
             .map_err(|e| format!("Failed to send request: {e}"))?;
 
-        let resp = rx
+        let resp = tokio::time::timeout(Duration::from_secs(30), rx)
             .await
+            .map_err(|_| "MCP request timed out".to_string())?
             .map_err(|_| "Server closed connection before responding".to_string())?;
         if let Some(err) = resp.get("error") {
             let msg = err

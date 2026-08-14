@@ -299,6 +299,7 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
                 changed_paths: Vec::new(),
                 truncated: false,
                 full_output_artifact: None,
+                ..Default::default()
             }),
     );
 
@@ -340,6 +341,7 @@ fn committed_tool_result_shows_failure_status() {
             changed_paths: Vec::new(),
             truncated: false,
             full_output_artifact: None,
+            ..Default::default()
         }),
     );
 
@@ -374,6 +376,7 @@ fn use_skill_renders_in_committed_history() {
                 changed_paths: Vec::new(),
                 truncated: false,
                 full_output_artifact: None,
+                ..Default::default()
             }),
     );
 
@@ -414,6 +417,7 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
                 changed_paths: Vec::new(),
                 truncated: false,
                 full_output_artifact: None,
+                ..Default::default()
             }),
     );
 
@@ -465,6 +469,7 @@ fn exploration_results_group_and_deduplicate_child_rows() {
                     changed_paths: Vec::new(),
                     truncated: false,
                     full_output_artifact: None,
+                    ..Default::default()
                 }),
         );
     }
@@ -518,6 +523,7 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
                 changed_paths: Vec::new(),
                 truncated: false,
                 full_output_artifact: None,
+                ..Default::default()
             }),
         );
     }
@@ -562,6 +568,7 @@ fn command_preview_preserves_the_output_tail() {
             changed_paths: Vec::new(),
             truncated: false,
             full_output_artifact: None,
+            ..Default::default()
         }),
     );
 
@@ -601,6 +608,7 @@ fn expanded_generic_tool_preserves_its_result_body() {
                 changed_paths: Vec::new(),
                 truncated: false,
                 full_output_artifact: None,
+                ..Default::default()
             }),
     );
     state.expanded_thoughts.insert(1);

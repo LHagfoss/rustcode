@@ -175,8 +175,24 @@ pub async fn stream_request(
     };
     let max_tokens = profile
         .as_ref()
-        .and_then(|p| p.max_tokens)
-        .unwrap_or(crate::config::DEFAULT_REQUEST_MAX_TOKENS);
+        .map(|p| p.context_budget().completion_reserve)
+        .unwrap_or_else(|| {
+            crate::config::ModelProfile {
+                name: model.to_string(),
+                url: url.to_string(),
+                model: model.to_string(),
+                context_window: Some(crate::config::DEFAULT_CONTEXT_WINDOW),
+                engine: None,
+                api_key: None,
+                env_key: None,
+                tool_protocol: None,
+                enable_thinking: None,
+                max_tokens: None,
+                supports_vision: None,
+            }
+            .context_budget()
+            .completion_reserve
+        });
 
     let mut payload = serde_json::json!({
         "model": model,

@@ -1,5 +1,5 @@
 use crate::app::ChatMessage;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
@@ -128,12 +128,16 @@ const PRUNE_TOKEN_THRESHOLD: usize = 1000;
 /// replaced with a one-line summary that preserves the `tool_name:` prefix — so
 /// the tool call / result pairing and schema validity stay intact — along with
 /// the original token count and, when detectable, the command's exit status.
-pub fn prune_historical_tool_outputs(history: &mut [ChatMessage], keep_recent_count: usize) {
+pub fn prune_historical_tool_outputs(
+    history: &mut [ChatMessage],
+    keep_recent_count: usize,
+) -> usize {
     let len = history.len();
     if len <= keep_recent_count {
-        return;
+        return 0;
     }
     let cutoff = len - keep_recent_count;
+    let mut pruned = 0;
     for m in history[..cutoff].iter_mut() {
         if m.role != "tool" {
             continue;
@@ -156,7 +160,9 @@ pub fn prune_historical_tool_outputs(history: &mut [ChatMessage], keep_recent_co
         let status = detect_exit_status(&m.content);
         m.content =
             format!("{prefix}[Tool Output Truncated: {tokens} tokens reduced to summary.{status}]");
+        pruned += 1;
     }
+    pruned
 }
 
 /// Best-effort extraction of a command exit code from raw tool output, so the
@@ -175,8 +181,9 @@ fn detect_exit_status(content: &str) -> String {
     String::new()
 }
 
-pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) {
+pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> usize {
     let mut total_tool_tokens = 0;
+    let mut pruned = 0;
     // Walk backward through history
     for m in history.iter_mut().rev() {
         if m.role == "tool" {
@@ -191,19 +198,86 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) {
             // main model, lower this to fit its window.
             if total_tool_tokens > threshold
                 && !m.content.contains("content cleared to save context")
+                && !m.content.contains("output cleared to save context")
             {
+                let valuable = has_failure_or_diagnostic(&m.content);
                 if let Some(pos) = m.content.find(": ") {
                     let tool_name = &m.content[..pos];
-                    m.content = format!(
-                        "{}: [Old tool result content cleared to save context]",
-                        tool_name
-                    );
+                    m.content = if valuable {
+                        format!(
+                            "{}: [Old tool result retained as compact failure/diagnostic evidence; output cleared to save context]",
+                            tool_name
+                        )
+                    } else {
+                        format!("{}: [Old tool result content cleared to save context]", tool_name)
+                    };
                 } else {
-                    m.content = "[Old tool result content cleared to save context]".to_string();
+                    m.content = if valuable {
+                        "[Old tool result retained as compact failure/diagnostic evidence; output cleared to save context]".to_string()
+                    } else {
+                        "[Old tool result content cleared to save context]".to_string()
+                    };
                 }
+                pruned += 1;
             }
         }
     }
+    pruned
+}
+
+fn has_failure_or_diagnostic(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("compiler errors")
+        || lower.contains("lsp/compiler")
+        || lower.contains("error:")
+        || lower.contains("exit code: 1")
+        || lower.contains("exit code: 2")
+        || lower.contains("exit code: 3")
+        || lower.contains("exit code: 4")
+        || lower.contains("exit code: 5")
+        || lower.contains("exit code: 6")
+        || lower.contains("exit code: 7")
+        || lower.contains("exit code: 8")
+        || lower.contains("exit code: 9")
+}
+
+fn file_read_key(content: &str) -> Option<u64> {
+    let (name, body) = content.split_once(": ")?;
+    if !matches!(name, "view_file" | "read_file") {
+        return None;
+    }
+    Some(memo_key(body).1)
+}
+
+/// Collapse exact duplicate file reads outside the recent suffix. A newer
+/// identical read is authoritative for the current workspace; keeping every
+/// copy only encourages small-context models to attend to stale repetitions.
+/// Reads with different content remain intact, as do errors and recent raw
+/// context.
+pub fn prune_duplicate_tool_results(
+    history: &mut [ChatMessage],
+    keep_recent_count: usize,
+) -> usize {
+    let cutoff = history.len().saturating_sub(keep_recent_count);
+    let mut seen = HashSet::new();
+    let mut pruned = 0;
+    for index in (0..history.len()).rev() {
+        let Some(key) = file_read_key(&history[index].content) else {
+            continue;
+        };
+        if !seen.insert(key) && index < cutoff {
+            let prefix = history[index]
+                .content
+                .split_once(": ")
+                .map(|(name, _)| format!("{name}: "))
+                .unwrap_or_default();
+            history[index].content = format!(
+                "{prefix}[Duplicate unchanged file read omitted; the newer identical read is retained.]"
+            );
+            pruned += 1;
+        }
+    }
+    pruned
 }
 
 /// Share of the budget that must be in use before old tool output is collapsed.
@@ -227,6 +301,22 @@ pub async fn maybe_compact(
     budget: usize,
     cancel_token: &tokio_util::sync::CancellationToken,
 ) -> bool {
+    maybe_compact_with_local_policy(client, url, model, history, budget, cancel_token, false).await
+}
+
+/// Automatic compaction with an explicit local-model hint from the active
+/// profile. Keeping the wrapper above preserves direct callers and tests while
+/// allowing localhost OpenAI-compatible runtimes to avoid an unnecessary
+/// summarizer prefill even when their URL is not Ollama's default port.
+pub async fn maybe_compact_with_local_policy(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    budget: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    local_model: bool,
+) -> bool {
     // 1. Local, zero-cost tool output pruning: collapse large tool outputs that
     //    have aged past the recent window, then apply the hard rolling token cap
     //    as a safety net.
@@ -247,8 +337,9 @@ pub async fn maybe_compact(
         return false;
     }
 
-    prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
-    prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
+    let duplicate_reads = prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
+    let historical_outputs = prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
+    let old_outputs = prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
 
     // 2. Count the post-prune history once. `history` is not touched again
     //    until compaction actually runs, so the same per-message counts serve
@@ -258,8 +349,23 @@ pub async fn maybe_compact(
         .map(|m| estimate_tokens(&m.content))
         .collect();
     let total_tokens: usize = per_message.iter().sum();
-    if total_tokens < budget {
+    // Cancellation still permits the deterministic local pruning above, but
+    // must never report a completed compaction or start a summarizer request.
+    if cancel_token.is_cancelled() {
         return false;
+    }
+    if total_tokens < budget {
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            false,
+            false,
+            history.len(),
+        );
+        return duplicate_reads + historical_outputs + old_outputs > 0;
     }
 
     // Determine how many messages to summarize.
@@ -281,22 +387,38 @@ pub async fn maybe_compact(
 
     let summarize_count = history.len().saturating_sub(keep_count);
     if summarize_count < 4 {
-        return false;
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            false,
+            false,
+            history.len(),
+        );
+        return duplicate_reads + historical_outputs + old_outputs > 0;
     }
-    if cancel_token.is_cancelled() {
-        return false;
-    }
-
     // Tiered compaction: local ollama engines skip LLM summarization —
     // prune+trim already reclaimed tokens, and weak local summaries lose
     // fidelity while adding latency/cost. Gate strictly on ollama endpoint
     // so mock/test servers (random 127.0.0.1 ports) still exercise the
     // summary path.
-    let is_local_engine = {
+    let is_local_engine = local_model || {
         let lower = url.to_ascii_lowercase();
         lower.contains("11434") || lower.contains("ollama")
     };
     if is_local_engine {
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            false,
+            true,
+            history.len(),
+        );
         return true;
     }
 
@@ -309,7 +431,47 @@ pub async fn maybe_compact(
         Some(cancel_token),
     )
     .await
-    .is_ok()
+    .is_ok_and(|_| {
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            true,
+            false,
+            history.len(),
+        );
+        true
+    })
+}
+
+fn emit_compaction_metrics(
+    before_tokens: usize,
+    after_prune_tokens: usize,
+    budget: usize,
+    duplicate_reads: usize,
+    pruned_outputs: usize,
+    summarized: bool,
+    local_prune_only: bool,
+    messages_considered: usize,
+) {
+    crate::logger::operational_event(
+        "context.compaction",
+        serde_json::json!({
+            "before_tokens": before_tokens,
+            "after_prune_tokens": after_prune_tokens,
+            "reclaimed_tokens": before_tokens.saturating_sub(after_prune_tokens),
+            "budget": budget,
+            "messages_considered": messages_considered,
+            "messages_retained_raw": messages_considered.min(KEEP_RECENT_TURNS),
+            "duplicate_reads_collapsed": duplicate_reads,
+            "tool_outputs_pruned": pruned_outputs,
+            "summary_generated": summarized,
+            "local_prune_only": local_prune_only,
+            "hard_trim": false,
+        }),
+    );
 }
 
 pub async fn force_compact(
@@ -331,6 +493,7 @@ pub async fn force_compact_with_budget(
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(usize, usize), String> {
     let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     let prune_threshold = budget
         .map(|b| (b as f64 * 0.6) as usize)
@@ -378,16 +541,32 @@ async fn force_compact_internal(
                 .to_string()
         });
 
-    // Pin the original task (first user message) so the goal is never blurred away.
+    // Pin the original task (first user message, or the marker left by an
+    // earlier compaction) so the goal is never blurred away.
     let first_user_task = history
         .iter()
         .find(|m| m.role == "user")
         .map(|m| m.content.clone());
+    let pinned_task = history
+        .iter()
+        .find(|m| m.role == "system" && m.content.starts_with(ORIGINAL_TASK_MARKER))
+        .map(|m| {
+            m.content
+                .strip_prefix(ORIGINAL_TASK_MARKER)
+                .unwrap_or_default()
+                .trim_start_matches('\n')
+                .to_string()
+        })
+        .filter(|task| !task.is_empty())
+        .or(first_user_task.clone());
 
     // Only summarize messages that aren't the prior summary itself.
     let to_summarize: Vec<&ChatMessage> = history[..summarize_count]
         .iter()
-        .filter(|m| !(m.role == "system" && m.content.starts_with(SUMMARY_MARKER)))
+        .filter(|m| {
+            !(m.role == "system" && m.content.starts_with(SUMMARY_MARKER))
+                && !(m.role == "system" && m.content.starts_with(ORIGINAL_TASK_MARKER))
+        })
         .collect();
 
     let summary = match generate_summary(
@@ -405,9 +584,15 @@ async fn force_compact_internal(
     };
 
     let tail: Vec<ChatMessage> = history[summarize_count..].to_vec();
-    let task_in_tail = first_user_task
-        .as_ref()
-        .is_some_and(|t| tail.iter().any(|m| m.role == "user" && &m.content == t));
+    let task_in_tail = pinned_task.as_ref().is_some_and(|task| {
+        tail.iter().any(|m| m.role == "user" && &m.content == task)
+    });
+    let marker_in_tail = pinned_task.as_ref().is_some_and(|task| {
+        tail.iter().any(|m| {
+            m.role == "system"
+                && m.content == format!("{ORIGINAL_TASK_MARKER}\n{task}")
+        })
+    });
 
     // Replace the summarized range with a single summary message.
     history.clear();
@@ -416,12 +601,13 @@ async fn force_compact_internal(
         format!("{SUMMARY_MARKER}\n{summary}\n[End Summary — the following messages are the most recent conversation]"),
     ));
     // Re-inject the original task verbatim if it fell inside the summarized range.
-    if let Some(task) = first_user_task
+    if let Some(task) = pinned_task
         && !task_in_tail
+        && !marker_in_tail
     {
         history.push(ChatMessage::new(
             "system",
-            format!("[Original task — do not lose sight of this]\n{task}"),
+            format!("{ORIGINAL_TASK_MARKER}\n{task}"),
         ));
     }
     history.extend(tail);
@@ -432,6 +618,7 @@ async fn force_compact_internal(
 /// Prefix that marks a compaction summary message, used to detect and preserve
 /// prior summaries during incremental compaction.
 pub(crate) const SUMMARY_MARKER: &str = "[Session History Summary]";
+const ORIGINAL_TASK_MARKER: &str = "[Original task — do not lose sight of this]";
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
     if value.len() <= max_bytes {
@@ -575,7 +762,7 @@ async fn generate_summary(
         "messages": [
             {
                 "role": "system",
-                "content": "You are a conversation summarizer for a coding session. Produce a concise bullet-point summary. Always preserve: the original user request/goal; every file read, created, or modified (with exact paths); key tool results, findings, and errors; and the current state of the work plus the next step. Be specific about file paths and code changes. Never invent facts and never drop facts from an existing summary. Do NOT include tool call syntax or JSON."
+                "content": "You are a conversation summarizer for a coding session. Produce a concise, incremental, inspectable bullet-point state record; merge new facts into the existing summary instead of retelling the transcript. Preserve these headings when applicable: Goal; Constraints; Architecture/discoveries; Decisions; Modified files; Failures and attempted fixes; Verification/test state; Unresolved work; Next steps. Keep exact file paths, commands, diagnostics, and outcomes that remain relevant. Retain recent raw evidence elsewhere in the conversation. Never invent facts, never drop a still-relevant fact from the existing summary, and do not include tool call syntax, JSON, secrets, source-code dumps, or full command output."
             },
             {
                 "role": "user",
@@ -833,6 +1020,41 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_old_file_reads_collapse_but_changed_reads_survive() {
+        let same = "view_file: [File: src/lib.rs]\n1: old";
+        let changed = "view_file: [File: src/lib.rs]\n1: new";
+        let mut history = vec![
+            tool_msg(same),
+            ChatMessage::new("assistant", "edit").with_diff(Some("real diff".to_string())),
+            tool_msg(changed),
+        ];
+        let collapsed = prune_duplicate_tool_results(&mut history, 1);
+        assert_eq!(collapsed, 0, "the duplicate is in the protected suffix");
+
+        history.extend([
+            ChatMessage::new("assistant", "more work"),
+            ChatMessage::new("user", "verify"),
+        ]);
+        let collapsed = prune_duplicate_tool_results(&mut history, 2);
+        assert_eq!(collapsed, 0, "different file content is not a duplicate");
+
+        history.insert(0, tool_msg(same));
+        let collapsed = prune_duplicate_tool_results(&mut history, 2);
+        assert_eq!(collapsed, 1);
+        assert!(history[0].content.contains("Duplicate unchanged file read"));
+    }
+
+    #[test]
+    fn old_failures_keep_compact_evidence() {
+        let mut history = vec![tool_msg(&format!(
+            "run_command: error: {}",
+            "diagnostic ".repeat(3_000)
+        ))];
+        prune_old_tool_outputs(&mut history, 1);
+        assert!(history[0].content.contains("failure/diagnostic evidence"));
+    }
+
+    #[test]
     fn summary_input_is_globally_bounded_and_keeps_task_and_recent_facts() {
         let mut history = vec![ChatMessage::new(
             "user",
@@ -1042,6 +1264,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_local_model_hint_skips_summary_request() {
+        let mut history = vec![ChatMessage::new("user", "keep this task")];
+        history.extend((0..20).map(|index| {
+            ChatMessage::new("assistant", format!("fact {index}: {}", "detail ".repeat(120)))
+        }));
+
+        let compacted = maybe_compact_with_local_policy(
+            &reqwest::Client::new(),
+            "http://127.0.0.1:9/v1",
+            "local-qwen",
+            &mut history,
+            200,
+            &tokio_util::sync::CancellationToken::new(),
+            true,
+        )
+        .await;
+
+        assert!(compacted);
+        assert!(!history
+            .iter()
+            .any(|message| message.content.starts_with(SUMMARY_MARKER)));
+    }
+
+    #[tokio::test]
     async fn manual_compaction_failure_keeps_history_and_returns_error() {
         let url = one_shot_json_server(serde_json::json!({
             "choices": [{"message": {"content": "  "}}]
@@ -1070,5 +1316,38 @@ mod tests {
                 .iter()
                 .any(|message| message.content.starts_with(SUMMARY_MARKER))
         );
+    }
+
+    #[tokio::test]
+    async fn incremental_compaction_keeps_the_original_task_marker() {
+        let url = one_shot_json_server(serde_json::json!({
+            "choices": [{"message": {"content": "Goal: retain the original objective"}}]
+        }))
+        .await;
+        let mut history = vec![
+            ChatMessage::new("system", format!("{SUMMARY_MARKER}\nPrior facts")),
+            ChatMessage::new(
+                "system",
+                format!("{ORIGINAL_TASK_MARKER}\noriginal objective"),
+            ),
+            ChatMessage::new("user", "current follow-up"),
+        ];
+        history.extend(
+            (0..13).map(|index| ChatMessage::new("assistant", format!("new fact {index}"))),
+        );
+
+        force_compact(
+            &reqwest::Client::new(),
+            &url,
+            "model",
+            &mut history,
+            None,
+        )
+        .await
+        .expect("incremental compaction should succeed");
+
+        assert!(history.iter().any(|message| {
+            message.content == format!("{ORIGINAL_TASK_MARKER}\noriginal objective")
+        }));
     }
 }

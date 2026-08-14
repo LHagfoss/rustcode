@@ -357,8 +357,10 @@ pub(crate) async fn ask_user_question(
         Some(a) if !a.is_empty() => {
             crate::tools::ToolExecutionOutput::success(format!("User selected: {a}"))
         }
-        _ => crate::tools::ToolExecutionOutput::failure(
+        _ => crate::tools::ToolExecutionOutput::failure_with_kind(
             "User cancelled or provided no selection.".to_string(),
+            crate::tools::ToolErrorKind::Cancelled,
+            true,
         ),
     };
     (out, user_wait)
@@ -385,7 +387,11 @@ pub(crate) async fn confirm_and_execute(
         crate::tools::authorize_tool_with_args(name, args, agent_mode, auto_confirm, bypass_confirm)
     {
         return (
-            crate::tools::ToolExecutionOutput::failure(format!("error: {reason}")),
+            crate::tools::ToolExecutionOutput::failure_with_kind(
+                format!("error: {reason}"),
+                crate::tools::ToolErrorKind::PermissionDenied,
+                false,
+            ),
             None,
             std::time::Duration::ZERO,
         );
@@ -454,8 +460,10 @@ pub(crate) async fn confirm_and_execute(
             }
             _ = cancel_token.cancelled() => {
                 dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
-                crate::tools::ToolExecutionOutput::failure(
+                crate::tools::ToolExecutionOutput::failure_with_kind(
                     "error: tool execution cancelled by user".to_string(),
+                    crate::tools::ToolErrorKind::Cancelled,
+                    true,
                 )
             }
         }
@@ -547,8 +555,10 @@ pub(crate) async fn confirm_and_execute(
                     }
                     _ = cancel_token.cancelled() => {
                         dbg_log!("Tool execution cancelled during spawn_blocking await");
-                        crate::tools::ToolExecutionOutput::failure(
+                        crate::tools::ToolExecutionOutput::failure_with_kind(
                             "error: tool execution cancelled by user".to_string(),
+                            crate::tools::ToolErrorKind::Cancelled,
+                            true,
                         )
                     }
                 }
@@ -558,14 +568,18 @@ pub(crate) async fn confirm_and_execute(
                 let _ = crate::notifications::notify_finished(
                     crate::notifications::FinishedStatus::Denied,
                 );
-                crate::tools::ToolExecutionOutput::failure(
+                crate::tools::ToolExecutionOutput::failure_with_kind(
                     "error: user denied this tool call".to_string(),
+                    crate::tools::ToolErrorKind::PermissionDenied,
+                    false,
                 )
             }
             Err(_) => {
                 dbg_log!("Confirmation channel closed for '{}'", name);
-                crate::tools::ToolExecutionOutput::failure(
+                crate::tools::ToolExecutionOutput::failure_with_kind(
                     "error: confirmation channel closed".to_string(),
+                    crate::tools::ToolErrorKind::Internal,
+                    true,
                 )
             }
         };
@@ -592,6 +606,8 @@ pub(crate) async fn confirm_and_execute(
         if let Some(errors) = run_compiler_check(&cwd).await {
             result.content.push_str("\n\nCompiler errors/warnings:\n");
             result.content.push_str(&errors);
+            result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
+            result.retryable = true;
         }
     }
 
@@ -632,6 +648,19 @@ pub(crate) fn tool_result_from_execution(
             changed_paths,
             truncated: execution.truncated,
             full_output_artifact: None,
+            replayed: execution.replayed,
+            error_kind: if execution.success {
+                None
+            } else {
+                execution.error_kind.or_else(|| {
+                    Some(if tool_name == "run_command" {
+                        crate::tools::ToolErrorKind::CommandFailed
+                    } else {
+                        crate::tools::ToolErrorKind::Internal
+                    })
+                })
+            },
+            retryable: execution.retryable,
         },
     }
 }
@@ -650,6 +679,9 @@ pub(crate) fn finalize_tool_result_for_prefix(
     if bounded.truncated {
         result.metadata.truncated = true;
         result.metadata.full_output_artifact = bounded.full_output_artifact;
+        if result.metadata.error_kind.is_none() {
+            result.metadata.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
+        }
     }
     result
 }
@@ -675,6 +707,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
     prefix: &str,
     answered_call: Option<String>,
 ) -> ChatMessage {
+    let envelope = result.execution_envelope();
     let ToolResult {
         tool_name,
         content,
@@ -689,11 +722,14 @@ pub(crate) fn tool_result_history_message_with_prefix(
         .with_tool_result(crate::app::ToolResultRecord {
             tool_name,
             arguments_hash: metadata.arguments_hash,
-            success: metadata.success,
-            exit_code: metadata.exit_code,
-            changed_paths: metadata.changed_paths,
-            truncated: metadata.truncated,
-            full_output_artifact: metadata.full_output_artifact,
+            success: envelope.success,
+            exit_code: envelope.exit_code,
+            changed_paths: envelope.changed_paths,
+            truncated: envelope.truncated,
+            full_output_artifact: envelope.full_output_artifact,
+            error_kind: envelope.error_kind.map(|kind| format!("{kind:?}")),
+            retryable: envelope.retryable,
+            replayed: envelope.replayed,
         })
 }
 
@@ -893,6 +929,9 @@ Re-reading will not produce anything new; if an edit failed to match, expand sta
                                 success: previous.success,
                                 exit_code: previous.exit_code,
                                 truncated: previous.truncated,
+                                replayed: true,
+                                error_kind: None,
+                                retryable: false,
                             },
                             None,
                         )
@@ -911,8 +950,10 @@ different, read another range or make an edit first; repeating this call returns
                 (output, None, wait)
             } else if plan_mode_denied {
                 (
-                    crate::tools::ToolExecutionOutput::failure(
+                    crate::tools::ToolExecutionOutput::failure_with_kind(
                         "error: Plan mode is active; this tool is not permitted.".to_string(),
+                        crate::tools::ToolErrorKind::PermissionDenied,
+                        false,
                     ),
                     None,
                     std::time::Duration::ZERO,

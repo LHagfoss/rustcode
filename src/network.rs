@@ -18,8 +18,7 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
 pub(crate) use messages::{
-    RESPONSE_RESERVE_TOKENS, append_to_last_message, inject_system_reminder, trim_msgs_to_budget,
-    wrap_runtime_context,
+    append_to_last_message, inject_system_reminder, trim_msgs_to_budget, wrap_runtime_context,
 };
 
 #[path = "network/text.rs"]
@@ -100,7 +99,8 @@ pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
 #[path = "network/context_tail.rs"]
 pub(crate) mod context_tail;
 pub(crate) use context_tail::{
-    build_dynamic_context_tail, build_volatile_context_block, format_read_file_context_entry,
+    build_dynamic_context_tail, build_dynamic_context_tail_with_memory,
+    build_volatile_context_block, format_read_file_context_entry,
 };
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -206,9 +206,6 @@ pub(crate) fn accumulate_tokens_used(
 /// exceeded, if any. Order matters only for which reason is reported when
 /// several trip on the same round — all are equally terminal.
 pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
-    if ctx.tool_rounds >= ctx.max_tool_rounds {
-        return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
-    }
     if ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET {
         return Some(TurnBudgetLimit::Tokens(ctx.tokens_used));
     }
@@ -234,6 +231,13 @@ pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit>
         return Some(TurnBudgetLimit::MalformedCalls(
             ctx.consecutive_malformed_calls,
         ));
+    }
+    // The round count is intentionally last: evidence-aware recovery and
+    // focused failure guards get a chance to act first. This remains the hard
+    // final backstop for a model that keeps producing novel but unproductive
+    // actions which evade the more specific deterministic signals.
+    if ctx.tool_rounds >= ctx.max_tool_rounds {
+        return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
     }
     None
 }
@@ -412,8 +416,13 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
         }
     }
 
-    // Drop superseded reads of the same file before measuring tokens.
-    // dedup disabled
+    // Deterministic, content-aware pruning runs before the class-based fallback
+    // below. Keep the newest raw suffix and only collapse exact unchanged reads;
+    // a read with different content may reflect a real edit and must survive.
+    let duplicate_reads = crate::network::compaction::prune_duplicate_tool_results(
+        history,
+        crate::network::compaction::KEEP_RECENT_TURNS,
+    );
 
     let mut tokens = Vec::with_capacity(history.len());
     for m in history.iter() {
@@ -439,7 +448,13 @@ pub(crate) async fn compact_history_to_budget(history: &mut [ChatMessage], budge
     dbg_log!("Compact finished. New history tokens: {}", total);
     crate::logger::operational_event(
         "context.compaction",
-        serde_json::json!({"history_tokens": total, "budget": budget}),
+        serde_json::json!({
+            "history_tokens": total,
+            "budget": budget,
+            "duplicate_reads_collapsed": duplicate_reads,
+            "summary_generated": false,
+            "hard_trim": false,
+        }),
     );
 }
 
@@ -819,12 +834,21 @@ pub(crate) async fn prepare_turn_request(
     // under a short lock, compact the owned copy with the lock released, then
     // re-acquire and merge the result back in.
     {
-        let (api_url, model_name, budget, active_session_id, captured_history) = {
+        let (api_url, model_name, budget, local_model, active_session_id, captured_history) = {
             let s = state.lock().await;
+            let local_model = s.active_model_profile().is_some_and(|profile| {
+                profile.engine.as_deref().is_some_and(|engine| {
+                    matches!(
+                        engine.to_ascii_lowercase().as_str(),
+                        "local" | "ollama" | "llama.cpp" | "llama_cpp" | "lmstudio"
+                    )
+                })
+            });
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
                 s.get_history_token_budget() as usize,
+                local_model,
                 s.active_session_id.clone(),
                 s.history.clone(),
             )
@@ -833,13 +857,14 @@ pub(crate) async fn prepare_turn_request(
         let mut working_history = captured_history.clone();
 
         // Lock released here: this await performs I/O.
-        let compacted = compaction::maybe_compact(
+        let compacted = compaction::maybe_compact_with_local_policy(
             client,
             &api_url,
             &model_name,
             &mut working_history,
             budget,
             cancel_token,
+            local_model,
         )
         .await;
 
@@ -898,7 +923,7 @@ pub(crate) async fn prepare_turn_request(
         volatile_usage,
         volatile_quota,
         volatile_window,
-        context_section,
+        mut context_section,
         system_prompt,
         active_profile,
         vision_profile,
@@ -934,7 +959,7 @@ pub(crate) async fn prepare_turn_request(
             .to_string();
         // Store the snapshot if this is the first turn.
         if s.context_snapshot.is_none() {
-            s.context_snapshot = Some(current_snapshot);
+            s.context_snapshot = Some(current_snapshot.clone());
         }
         (
             history_snapshot,
@@ -951,6 +976,17 @@ pub(crate) async fn prepare_turn_request(
             s.image_analysis_cache.clone(),
         )
     };
+
+    // ContextSnapshot deliberately emits only environment deltas after the
+    // first request. Project instructions are different: they are durable
+    // constraints, so keep the current bounded document available after
+    // compaction/resume without putting it into every summary message.
+    if let Some(instructions) = current_snapshot.project_instructions()
+        && !context_section.contains("# Project instructions")
+    {
+        context_section.push_str("\n\n");
+        context_section.push_str(&instructions);
+    }
 
     compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
@@ -1019,7 +1055,31 @@ pub(crate) async fn prepare_turn_request(
     // after the history is assembled, to preserve the cached prefix). The
     // volatile runtime block (clock/cwd/quota) goes last, as the explicit cache
     // divider at the very end of the payload.
-    let mut dynamic_context = build_dynamic_context_tail(context_section, &read_files, &todos);
+    let (memory_root, memory_query) = {
+        let s = state.lock().await;
+        let root = s
+            .workspace_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
+        let query = history_snapshot
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .map(|message| message.content.clone())
+            .unwrap_or_default();
+        (root, query)
+    };
+    let project_memory = crate::memory::render_relevant(
+        memory_root.as_deref(),
+        &memory_query,
+        (budget_token_limit / 8).clamp(128, 768) as usize,
+    );
+    let mut dynamic_context = build_dynamic_context_tail_with_memory(
+        context_section,
+        &read_files,
+        &todos,
+        project_memory,
+    );
     let volatile_block =
         build_volatile_context_block(volatile_usage.as_ref(), volatile_quota, volatile_window);
     if !dynamic_context.is_empty() {
@@ -1033,9 +1093,10 @@ pub(crate) async fn prepare_turn_request(
     // toward the budget.
     append_to_last_message(&mut msgs, &wrap_runtime_context(&dynamic_context));
 
-    let budget = volatile_window
-        .saturating_sub(RESPONSE_RESERVE_TOKENS)
-        .max(512);
+    // `budget_token_limit` already reserves completion, thinking, tool-schema,
+    // and provider safety headroom from the active model profile. Keep this
+    // final trim on the same budget used by automatic compaction.
+    let budget = budget_token_limit.max(256);
     let dropped = trim_msgs_to_budget(&mut msgs, budget);
     inject_system_reminder(&mut msgs);
     if dropped > 0 {
@@ -1043,6 +1104,14 @@ pub(crate) async fn prepare_turn_request(
             "context budget {} tokens exceeded: dropped {} oldest message(s)",
             budget,
             dropped
+        );
+        crate::logger::operational_event(
+            "context.hard_trim",
+            serde_json::json!({
+                "reason": "model_aware_history_budget_after_deterministic_pruning",
+                "budget": budget,
+                "dropped_messages": dropped,
+            }),
         );
         if tool_rounds == 0 {
             let mut s = state.lock().await;
@@ -1180,11 +1249,30 @@ pub(crate) fn unanswered_call_results(
     calls: &[crate::app::ToolCallRef],
     reason: &str,
 ) -> Vec<ChatMessage> {
+    unanswered_call_results_with_kind(calls, reason, crate::tools::ToolErrorKind::Internal)
+}
+
+pub(crate) fn unanswered_call_results_with_kind(
+    calls: &[crate::app::ToolCallRef],
+    reason: &str,
+    error_kind: crate::tools::ToolErrorKind,
+) -> Vec<ChatMessage> {
     calls
         .iter()
         .map(|call| {
             ChatMessage::new("tool", format!("{}: error: {reason}", call.name))
                 .answering(Some(call.id.clone()))
+                .with_tool_result(crate::app::ToolResultRecord {
+                    tool_name: call.name.clone(),
+                    success: false,
+                    error_kind: Some(format!("{error_kind:?}")),
+                    retryable: matches!(
+                        error_kind,
+                        crate::tools::ToolErrorKind::Cancelled
+                            | crate::tools::ToolErrorKind::Internal
+                    ),
+                    ..Default::default()
+                })
         })
         .collect()
 }

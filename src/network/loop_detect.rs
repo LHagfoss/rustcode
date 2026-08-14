@@ -14,7 +14,7 @@
 //! to this crate's `(tool_name, args)` model instead of `bash:` strings.
 
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -65,6 +65,13 @@ fn is_read_only_category(name: &str, category: &str) -> bool {
                 | "tag"
         )
     )
+}
+
+/// Classify a shell command that only inspects stable repository state. These
+/// checks may legitimately repeat while the model is orienting itself, so the
+/// progress ledger should not treat their identical output as a failed edit.
+pub fn is_stable_inspection_command(command: &str) -> bool {
+    is_read_only_category("run_command", &normalize_command(command))
 }
 
 /// Build `(exact_signature, category)` for a tool call.
@@ -184,6 +191,172 @@ pub fn stagnation_key(output: &str) -> &str {
     } else {
         output
     }
+}
+
+/// Compact evidence from one tool result. The ledger deliberately receives
+/// fingerprints and booleans, never the full result, so loop diagnostics do
+/// not become a second transcript or leak source text into operational logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgressObservation {
+    pub action: String,
+    pub output_fingerprint: u64,
+    pub state_fingerprint: Option<u64>,
+    pub failure_fingerprint: Option<u64>,
+    pub changed_workspace: bool,
+    pub fresh_read: bool,
+    pub search_result: bool,
+    pub no_result: bool,
+    pub verification: bool,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressReason {
+    WorkspaceChanged,
+    NewInformation,
+    FreshRead,
+    Verification,
+    RepeatedFailure,
+    NoNewInformation,
+    Churn,
+}
+
+impl ProgressReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WorkspaceChanged => "workspace_changed",
+            Self::NewInformation => "new_information",
+            Self::FreshRead => "fresh_read",
+            Self::Verification => "verification",
+            Self::RepeatedFailure => "repeated_failure",
+            Self::NoNewInformation => "no_new_information",
+            Self::Churn => "edit_test_revert_churn",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgressAssessment {
+    pub meaningful: bool,
+    pub reason: ProgressReason,
+    pub streak: usize,
+    /// Stable successful verification is useful evidence but is not a reason
+    /// to abort merely because a command printed the same output again.
+    pub suppress_stagnation: bool,
+}
+
+/// A bounded cross-round ledger for evidence-aware progress detection.
+///
+/// `LoopDetector` remains responsible for repeated-call safety. This ledger
+/// answers the complementary question: did the tool result add workspace or
+/// task information? Keeping the two signals separate lets a legitimate
+/// re-read after an edit count as progress without weakening exact-call
+/// detection for mutating tools.
+#[derive(Debug, Clone)]
+pub struct ProgressLedger {
+    seen_outputs: HashSet<u64>,
+    seen_failures: HashSet<u64>,
+    recent_states: VecDeque<u64>,
+    no_progress_streak: usize,
+}
+
+impl Default for ProgressLedger {
+    fn default() -> Self {
+        Self {
+            seen_outputs: HashSet::new(),
+            seen_failures: HashSet::new(),
+            recent_states: VecDeque::with_capacity(4),
+            no_progress_streak: 0,
+        }
+    }
+}
+
+impl ProgressLedger {
+    const MAX_FINGERPRINTS: usize = 128;
+    pub const RECOVERY_STREAK: usize = 3;
+
+    pub fn observe(&mut self, observation: &ProgressObservation) -> ProgressAssessment {
+        let new_output = remember(&mut self.seen_outputs, observation.output_fingerprint);
+        let new_failure = observation
+            .failure_fingerprint
+            .is_some_and(|hash| remember(&mut self.seen_failures, hash));
+
+        let state_hash = observation.state_fingerprint;
+        let state_changed = state_hash.is_some_and(|state| {
+            self.recent_states.back().copied() != Some(state)
+        });
+        let churn = state_hash.is_some_and(|state| {
+            self.recent_states.len() >= 2
+                && self.recent_states.iter().rev().nth(1).copied() == Some(state)
+                && self.recent_states.back().copied() != Some(state)
+        });
+        if let Some(state) = state_hash {
+            self.recent_states.push_back(state);
+            while self.recent_states.len() > 4 {
+                self.recent_states.pop_front();
+            }
+        }
+
+        let stable_verification = observation.verification && observation.success;
+        let (meaningful, reason) = if churn {
+            (false, ProgressReason::Churn)
+        } else if observation.changed_workspace {
+            (true, ProgressReason::WorkspaceChanged)
+        } else if observation.fresh_read && new_output {
+            (true, ProgressReason::FreshRead)
+        } else if observation.search_result && observation.success && observation.no_result {
+            (false, ProgressReason::NoNewInformation)
+        } else if observation.search_result && new_output {
+            (true, ProgressReason::NewInformation)
+        } else if stable_verification && new_output {
+            (true, ProgressReason::Verification)
+        } else if !observation.success && new_failure {
+            (true, ProgressReason::NewInformation)
+        } else if !observation.success {
+            (false, ProgressReason::RepeatedFailure)
+        } else if !new_output || !state_changed {
+            (false, ProgressReason::NoNewInformation)
+        } else {
+            (true, ProgressReason::NewInformation)
+        };
+
+        if meaningful {
+            self.no_progress_streak = 0;
+        } else if !stable_verification {
+            self.no_progress_streak = self.no_progress_streak.saturating_add(1);
+        }
+
+        ProgressAssessment {
+            meaningful,
+            reason,
+            streak: self.no_progress_streak,
+            suppress_stagnation: stable_verification || observation.verification,
+        }
+    }
+
+    pub fn no_progress_streak(&self) -> usize {
+        self.no_progress_streak
+    }
+
+}
+
+fn remember(values: &mut HashSet<u64>, value: u64) -> bool {
+    if values.len() >= ProgressLedger::MAX_FINGERPRINTS {
+        // HashSet iteration order is intentionally irrelevant here; clear the
+        // bounded novelty window rather than retaining unbounded state.
+        values.clear();
+    }
+    values.insert(value)
+}
+
+pub fn stable_hash(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn is_search_tool(name: &str) -> bool {
+    matches!(name, "grep" | "glob" | "find_symbol" | "list_directory")
 }
 
 /// Tracks consecutive repeats of a string value.
@@ -582,6 +755,13 @@ mod tests {
     }
 
     #[test]
+    fn stable_git_inspection_is_progress_safe() {
+        assert!(is_stable_inspection_command("git status --short"));
+        assert!(is_stable_inspection_command("git diff --stat"));
+        assert!(!is_stable_inspection_command("git restore -- src/lib.rs"));
+    }
+
+    #[test]
     fn reset_clears_loop_state() {
         // After progress (reset), a previously-churning read starts fresh.
         let mut d = LoopDetector::new(4);
@@ -633,5 +813,80 @@ mod tests {
     fn stagnation_key_leaves_real_output_untouched() {
         let out = "matches for 'foo' under '.' (1 file(s)):\n\n./a.rs:\n  1: foo";
         assert_eq!(stagnation_key(out), out);
+    }
+
+    fn observation(
+        output: &str,
+        state: Option<&str>,
+        failure: Option<&str>,
+    ) -> ProgressObservation {
+        ProgressObservation {
+            action: "test".to_string(),
+            output_fingerprint: stable_hash(output),
+            state_fingerprint: state.map(stable_hash),
+            failure_fingerprint: failure.map(stable_hash),
+            changed_workspace: state.is_some(),
+            fresh_read: false,
+            search_result: false,
+            no_result: false,
+            verification: false,
+            success: true,
+        }
+    }
+
+    #[test]
+    fn progress_ledger_distinguishes_fresh_reads_from_cached_replays() {
+        let mut ledger = ProgressLedger::default();
+        let mut first = observation("file contents", None, None);
+        first.fresh_read = true;
+        assert_eq!(ledger.observe(&first).reason, ProgressReason::FreshRead);
+
+        let mut replay = first.clone();
+        replay.fresh_read = false;
+        let assessment = ledger.observe(&replay);
+        assert_eq!(assessment.reason, ProgressReason::NoNewInformation);
+        assert!(!assessment.meaningful);
+    }
+
+    #[test]
+    fn progress_ledger_treats_varied_no_result_searches_as_stagnation() {
+        let mut ledger = ProgressLedger::default();
+        for index in 0..ProgressLedger::RECOVERY_STREAK {
+            let mut search = observation(&format!("no-match-{index}"), None, None);
+            search.search_result = true;
+            search.no_result = true;
+            let assessment = ledger.observe(&search);
+            assert_eq!(assessment.reason, ProgressReason::NoNewInformation);
+        }
+        assert_eq!(
+            ledger.no_progress_streak(),
+            ProgressLedger::RECOVERY_STREAK
+        );
+    }
+
+    #[test]
+    fn stable_successful_verification_suppresses_output_only_stagnation() {
+        let mut ledger = ProgressLedger::default();
+        let mut check = observation("cargo test: clean", None, None);
+        check.verification = true;
+        assert!(ledger.observe(&check).suppress_stagnation);
+        assert!(ledger.observe(&check).suppress_stagnation);
+        assert_eq!(ledger.no_progress_streak(), 0);
+    }
+
+    #[test]
+    fn returning_to_a_previous_workspace_state_is_churn() {
+        let mut ledger = ProgressLedger::default();
+        assert_eq!(
+            ledger.observe(&observation("a", Some("a"), None)).reason,
+            ProgressReason::WorkspaceChanged
+        );
+        assert_eq!(
+            ledger.observe(&observation("b", Some("b"), None)).reason,
+            ProgressReason::WorkspaceChanged
+        );
+        let assessment = ledger.observe(&observation("a", Some("a"), None));
+        assert_eq!(assessment.reason, ProgressReason::Churn);
+        assert!(!assessment.meaningful);
     }
 }

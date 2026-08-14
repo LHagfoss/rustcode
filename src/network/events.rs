@@ -10,6 +10,31 @@ pub(crate) struct ToolResult {
     pub metadata: ToolResultMetadata,
 }
 
+impl ToolResult {
+    /// Build the single provider-independent result contract. Human-facing
+    /// `content` remains separate from these typed execution facts; callers
+    /// must not classify failures by searching the display text.
+    pub(crate) fn execution_envelope(&self) -> crate::tools::ToolResultEnvelope {
+        crate::tools::ToolResultEnvelope {
+            call_id: self
+                .metadata
+                .call_id
+                .clone()
+                .unwrap_or_else(|| format!("local_{}", self.metadata.arguments_hash)),
+            tool_name: self.tool_name.clone(),
+            success: self.metadata.success,
+            error_kind: self.metadata.error_kind,
+            retryable: self.metadata.retryable,
+            exit_code: self.metadata.exit_code,
+            changed_paths: self.metadata.changed_paths.clone(),
+            output: self.content.clone(),
+            truncated: self.metadata.truncated,
+            full_output_artifact: self.metadata.full_output_artifact.clone(),
+            replayed: self.metadata.replayed,
+        }
+    }
+}
+
 /// Machine-readable execution facts kept alongside human-readable output.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ToolResultMetadata {
@@ -20,6 +45,9 @@ pub(crate) struct ToolResultMetadata {
     pub changed_paths: Vec<String>,
     pub truncated: bool,
     pub full_output_artifact: Option<String>,
+    pub replayed: bool,
+    pub error_kind: Option<crate::tools::ToolErrorKind>,
+    pub retryable: bool,
 }
 
 /// Provider-independent reason that a model response stopped.

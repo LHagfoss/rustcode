@@ -80,7 +80,20 @@ pub async fn run_acp() -> Result<(), Box<dyn std::error::Error>> {
                     connection.spawn(async move {
                         let result = async {
                             crate::tools::set_active_session_id(Some(session_id.clone()));
-                            crate::tools::set_active_workspace_root(Some(cwd));
+                            crate::tools::set_active_workspace_root(Some(cwd.clone()));
+                            let prompt_tokens = text.split_whitespace().collect::<Vec<_>>();
+                            if prompt_tokens.first() == Some(&"/memory")
+                                && prompt_tokens.len() > 1
+                            {
+                                if let Some(message) =
+                                    crate::memory::command(Some(&cwd), &prompt_tokens[1..])
+                                {
+                                    state.lock().await.history.push(
+                                        crate::app::ChatMessage::new("system", message.clone()),
+                                    );
+                                    return Ok(message);
+                                }
+                            }
                             state
                                 .lock()
                                 .await
