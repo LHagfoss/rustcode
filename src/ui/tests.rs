@@ -1566,6 +1566,20 @@ fn transcript_cursor_keeps_a_committed_prefix_when_the_stream_finalizes() {
 }
 
 #[test]
+fn transcript_cursor_reports_an_empty_tail_when_stream_rows_need_a_separator() {
+    let mut cursor = super::scrollback::TranscriptCursor::default();
+    cursor.commit_stable_stream("table row\n");
+
+    // The final history entry can contain exactly the rows already committed
+    // during streaming. The draw loop uses this empty remainder as the handoff
+    // point to insert one blank row before a follow-up user message.
+    assert_eq!(
+        cursor.take_final_stream_remainder("table row\n"),
+        Some(String::new())
+    );
+}
+
+#[test]
 fn transcript_cursor_resets_when_a_new_stream_replaces_the_old_one() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
     cursor.commit_stable_stream("first\n");
