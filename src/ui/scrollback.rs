@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use pulldown_cmark::{Event, Options, Parser};
+
 fn stream_starts_with_thought(stream: &str) -> bool {
     let text = stream.trim_start();
     text.starts_with("<think>")
@@ -188,15 +190,91 @@ fn is_table_delimiter_line(line: &str) -> bool {
 }
 
 fn stream_holdback_start(text: &str) -> Option<usize> {
-    [unfinished_fence_start(text), unfinished_table_start(text)]
+    [
+        markdown_stream_holdback_start(text),
+        unfinished_fence_start(text),
+        unfinished_table_start(text),
+    ]
         .into_iter()
         .flatten()
         .min()
 }
 
+/// Return the source boundary before the final top-level Markdown block.
+///
+/// Codex keeps the final block in its active streaming cell because a later
+/// delta can still change its shape: a paragraph can become a list, a setext
+/// heading, a table, or a fenced block. RustCode used to commit every complete
+/// physical line, which made those transitions impossible to re-render without
+/// duplicating or flickering terminal output.
+///
+/// Offset parsing is deliberately used only for block boundaries. The normal
+/// renderer remains responsible for styling and layout, so this is not a
+/// second Markdown implementation. A single block returns offset zero and is
+/// therefore held back in its entirety until the response is finalized.
+fn markdown_stream_holdback_start(text: &str) -> Option<usize> {
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+
+    let mut depth = 0usize;
+    let mut block_count = 0usize;
+    let mut last_block_start = 0usize;
+
+    for (event, range) in Parser::new_ext(text, options).into_offset_iter() {
+        if depth == 0 && matches!(event, Event::Start(_) | Event::Rule | Event::Html(_)) {
+            block_count += 1;
+            last_block_start = range.start;
+        }
+
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    (block_count > 0).then_some(if block_count == 1 {
+        0
+    } else {
+        last_block_start
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{unfinished_fence_start, unfinished_table_start};
+    use super::{
+        markdown_stream_holdback_start, unfinished_fence_start, unfinished_table_start,
+    };
+
+    #[test]
+    fn streaming_keeps_the_final_markdown_block_mutable() {
+        assert_eq!(markdown_stream_holdback_start("one paragraph\n"), Some(0));
+        assert_eq!(
+            markdown_stream_holdback_start("first paragraph\n\nsecond paragraph\n"),
+            Some(17)
+        );
+        assert_eq!(
+            markdown_stream_holdback_start("# Heading\n\n- first\n- second\n"),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn streaming_block_boundary_handles_incomplete_fenced_markdown() {
+        assert_eq!(
+            markdown_stream_holdback_start("intro\n\n```rust\nlet value = 1;\n"),
+            Some(7)
+        );
+        assert_eq!(
+            markdown_stream_holdback_start("intro\n\n```rust\nbody\n```\n\nnext"),
+            Some(25)
+        );
+    }
 
     #[test]
     fn fenced_stream_scanner_respects_marker_type_and_length() {
@@ -343,7 +421,7 @@ impl TranscriptCursor {
         if self.committed_stream.is_empty() && stream_starts_with_thought(stream) {
             return Vec::new();
         }
-        split_stable_rows(&self.pending_stable_source(stream)).0
+        stable_rows(&self.pending_stable_source(stream))
     }
 
     /// Return only the source that is safe to hand to terminal scrollback.
@@ -395,10 +473,21 @@ impl TranscriptCursor {
 
         let pending = &stream[self.committed_stream.len()..];
         let stable = self.pending_stable_source(pending);
-        let rows = split_stable_rows(&stable).0;
+        let rows = stable_rows(&stable);
         if !rows.is_empty() {
             self.commit_stable_stream(&stable);
         }
         rows
     }
+}
+
+fn stable_rows(source: &str) -> Vec<String> {
+    let mut rows = split_stable_rows(source).0;
+    // Markdown renderers intentionally discard blank rows at the end of a
+    // committed block. Keep interior blank rows for layout, but don't expose
+    // the separator that only exists to delimit the mutable final block.
+    while rows.last().is_some_and(String::is_empty) {
+        rows.pop();
+    }
+    rows
 }

@@ -332,6 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut was_responding = false;
     let mut terminal_focused = true;
     let mut transcript_cursor = crate::ui::scrollback::TranscriptCursor::default();
+    let mut transcript_state = crate::ui::TranscriptState::default();
     let mut terminal_size = terminal.size()?;
     let mut replay_history = false;
 
@@ -346,6 +347,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             execute!(terminal.backend_mut(), Clear(ClearType::Purge), Clear(ClearType::All))?;
             terminal.clear()?;
             transcript_cursor.reset();
+            transcript_state.reset();
             replay_history = true;
             terminal_size = observed_size;
             needs_redraw = true;
@@ -546,7 +548,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 guard.current_terminal_title = Some(title_display.clone());
             }
 
-            terminal.draw(|f| ui::render(f, &mut guard))?;
+            terminal.draw(|f| ui::render_with_transcript(f, &mut guard, &mut transcript_state))?;
             replay_history = false;
             drop(guard);
             last_draw = std::time::Instant::now();
@@ -1700,8 +1702,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .is_some();
                             if s.active_suggestion_index.is_some() || has_at {
                                 crate::app::apply_autocomplete(&mut s);
-                            } else if s.input_buffer.starts_with('/')
-                                && !s.input_buffer.contains(' ')
+                            } else if crate::app::suggestion::command_token(&s.input_buffer)
+                                .is_some()
                             {
                                 s.cycle_suggestion();
                             } else {
