@@ -56,6 +56,117 @@ pub async fn handle_escape(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CtrlCAction {
+    Handled,
+    Interrupt,
+    Exit,
+}
+
+/// Route Ctrl+C from the most local UI state outward, matching Codex's TUI:
+/// dismiss an overlay, clear a draft, interrupt active work, then exit only
+/// when the app is idle and the composer is empty.
+fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
+    if s.status == AppStatus::AwaitingToolConfirmation {
+        if let Some(tx) = s.tool_confirmation_response.take() {
+            let _ = tx.send(false);
+        }
+        s.pending_tool_confirmation = None;
+        s.pending_queue.clear();
+        s.status = AppStatus::Idle;
+        return CtrlCAction::Interrupt;
+    }
+
+    if s.status == AppStatus::AwaitingQuestion {
+        if let Some(tx) = s.question_response.take() {
+            let _ = tx.send("User cancelled prompt.".to_string());
+        }
+        s.pending_question = None;
+        s.pending_queue.clear();
+        s.status = AppStatus::Idle;
+        return CtrlCAction::Interrupt;
+    }
+
+    if matches!(
+        s.status,
+        AppStatus::VerbosityPicker | AppStatus::ThinkingPicker | AppStatus::ProtocolPicker
+    ) {
+        s.status = AppStatus::Idle;
+        return CtrlCAction::Handled;
+    }
+
+    if s.show_history_picker {
+        if s.pending_delete_session_idx.is_some() {
+            s.pending_delete_session_idx = None;
+        } else {
+            s.show_history_picker = false;
+        }
+        return CtrlCAction::Handled;
+    }
+    if s.show_mcp_config {
+        if s.mcp_edit_state.is_some() {
+            s.mcp_edit_state = None;
+        } else {
+            s.show_mcp_config = false;
+        }
+        return CtrlCAction::Handled;
+    }
+    if s.show_model_picker {
+        s.show_model_picker = false;
+        return CtrlCAction::Handled;
+    }
+    if s.show_theme_picker {
+        s.config.theme = s.theme_picker_initial.clone();
+        s.show_theme_picker = false;
+        return CtrlCAction::Handled;
+    }
+    if s.show_command_picker {
+        s.show_command_picker = false;
+        return CtrlCAction::Handled;
+    }
+
+    if !s.input_buffer.is_empty() {
+        let draft = s.input_buffer.trim().to_string();
+        if !draft.is_empty() && s.input_history.last() != Some(&draft) {
+            s.input_history.push(draft);
+        }
+        s.input_buffer.clear();
+        s.cursor_position = 0;
+        s.history_index = None;
+        s.clear_selection();
+        s.reset_suggestion_cycle();
+        return CtrlCAction::Handled;
+    }
+
+    if s.status != AppStatus::Idle || s.orchestrator_running || !s.pending_queue.is_empty() {
+        s.pending_queue.clear();
+        s.clear_live_tool_calls();
+        s.status = AppStatus::Idle;
+        return CtrlCAction::Interrupt;
+    }
+
+    CtrlCAction::Exit
+}
+
+pub async fn handle_ctrl_c(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut tokio_util::sync::CancellationToken,
+) -> bool {
+    let action = {
+        let mut s = state.lock().await;
+        route_ctrl_c(&mut s)
+    };
+    match action {
+        CtrlCAction::Handled => false,
+        CtrlCAction::Interrupt => {
+            cancel_token.cancel();
+            *cancel_token = tokio_util::sync::CancellationToken::new();
+            false
+        }
+        CtrlCAction::Exit => true,
+    }
+}
+
 pub async fn handle_enter(
     state: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
@@ -1790,7 +1901,7 @@ fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) 
 
 #[cfg(test)]
 mod tests {
-    use super::parse_token_count;
+    use super::{CtrlCAction, parse_token_count, route_ctrl_c};
 
     async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1814,6 +1925,51 @@ mod tests {
         assert_eq!(parse_token_count("256K"), Some(256 * 1024));
         assert_eq!(parse_token_count("abc"), None);
         assert_eq!(parse_token_count(""), None);
+    }
+
+    #[test]
+    fn ctrl_c_closes_local_ui_before_exiting() {
+        let mut state = crate::app::AppState::new();
+        state.show_model_picker = true;
+        assert_eq!(route_ctrl_c(&mut state), CtrlCAction::Handled);
+        assert!(!state.show_model_picker);
+
+        state.input_buffer = "recover this draft".to_string();
+        state.cursor_position = state.input_buffer.len();
+        assert_eq!(route_ctrl_c(&mut state), CtrlCAction::Handled);
+        assert!(state.input_buffer.is_empty());
+        assert_eq!(state.input_history.last().map(String::as_str), Some("recover this draft"));
+
+        assert_eq!(route_ctrl_c(&mut state), CtrlCAction::Exit);
+    }
+
+    #[test]
+    fn ctrl_c_interrupts_active_work_instead_of_exiting() {
+        let mut state = crate::app::AppState::new();
+        state.status = crate::app::AppStatus::Streaming;
+        state.orchestrator_running = true;
+        state.pending_queue.push("queued follow-up".to_string());
+
+        assert_eq!(route_ctrl_c(&mut state), CtrlCAction::Interrupt);
+        assert_eq!(state.status, crate::app::AppStatus::Idle);
+        assert!(state.pending_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_replaces_the_cancelled_turn_token() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let mut app = crate::app::AppState::new();
+        app.status = crate::app::AppStatus::Streaming;
+        let state = Arc::new(Mutex::new(app));
+        let mut token = CancellationToken::new();
+        let active_turn_token = token.clone();
+
+        assert!(!super::handle_ctrl_c(&state, &mut token).await);
+        assert!(active_turn_token.is_cancelled());
+        assert!(!token.is_cancelled());
     }
 
     #[test]
