@@ -154,6 +154,31 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
 ];
 
+/// Return the slash command token from the first input line. Arguments remain
+/// outside the token so the popup can continue to describe `/model foo` (and
+/// similar commands) without replacing or discarding the user's arguments.
+pub fn command_token(input: &str) -> Option<&str> {
+    let first_line = input.lines().next().unwrap_or("");
+    if !first_line.starts_with('/') {
+        return None;
+    }
+    let end = first_line
+        .char_indices()
+        .find_map(|(index, character)| character.is_whitespace().then_some(index))
+        .unwrap_or(first_line.len());
+    Some(&first_line[..end])
+}
+
+pub fn filtered_commands(input: &str) -> Vec<&'static CommandInfo> {
+    let Some(token) = command_token(input) else {
+        return Vec::new();
+    };
+    COMMANDS
+        .iter()
+        .filter(|command| command.name.starts_with(token))
+        .collect()
+}
+
 fn matching_command_names(prefix: &str) -> Vec<&'static str> {
     COMMANDS
         .iter()
@@ -287,7 +312,17 @@ pub fn get_at_word_query(input_buffer: &str, cursor_pos: usize) -> Option<(usize
 
 #[cfg(test)]
 mod tests {
-    use super::get_at_word_query;
+    use super::{command_token, filtered_commands, get_at_word_query};
+
+    #[test]
+    fn command_completion_stays_active_while_arguments_are_present() {
+        assert_eq!(command_token("/model --fast"), Some("/model"));
+        assert_eq!(command_token("/mo --fast"), Some("/mo"));
+        assert!(filtered_commands("/model --fast")
+            .iter()
+            .any(|command| command.name == "/model"));
+        assert!(command_token("plain text").is_none());
+    }
 
     #[test]
     fn at_completion_uses_the_byte_cursor_without_splitting_unicode() {
