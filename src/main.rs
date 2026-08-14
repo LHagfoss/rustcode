@@ -460,6 +460,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     index = group_end;
                     continue;
                 } else if message.role == "assistant" {
+                    let separator = crate::ui::render_work_separator_before_assistant(
+                        &guard,
+                        index,
+                        terminal_width,
+                    );
+                    if !separator.is_empty() {
+                        blocks.push(separator);
+                    }
                     let is_continuation = transcript_cursor.has_committed_stream();
                     if let Some(remainder) =
                         transcript_cursor.take_final_stream_remainder(&message.content)

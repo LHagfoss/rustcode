@@ -403,12 +403,35 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     }
 
     let all_exploration = calls.iter().all(|call| is_exploration_tool(&call.tool_name));
+    let has_command = calls.iter().any(|call| call.tool_name == "run_command");
+    if !all_exploration && !has_command && calls.len() == 1 {
+        let call = &calls[0];
+        let target = if call.target.is_empty() || call.target == "?" {
+            String::new()
+        } else {
+            format!(" {}", truncate_to_width(&call.target, (width as usize).saturating_sub(4)))
+        };
+        let title_style = get_themed_style(
+            COLOR_PRIMARY(),
+            COLOR_BG(),
+            Modifier::BOLD,
+            show_picker,
+        );
+        return vec![Line::from(vec![
+            Span::styled("• ", title_style),
+            Span::styled(call.action.clone(), title_style),
+            Span::styled(
+                target,
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ])];
+    }
     let label = if all_exploration {
         "Exploring"
-    } else if calls.iter().any(|call| call.tool_name == "run_command") {
+    } else if has_command {
         "Running"
     } else {
-        "Using"
+        "Calling"
     };
     let title_style = get_themed_style(
         COLOR_PRIMARY(),
