@@ -2000,6 +2000,7 @@ fn empty_composer_has_no_extra_blank_rows() {
 
     let prompt_row = prompt_row.expect("composer prompt should be rendered");
     assert_eq!(bottom_border_row, Some(prompt_row + 2));
+    assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
 }
 
 #[test]
