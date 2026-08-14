@@ -106,7 +106,7 @@ static BUILTIN_THEMES: &[(&str, &str)] = &[
         r##"name = "default"
 description = "Default dark palette"
 bg = "reset"
-panel = "reset"
+panel = "#1a1d20"
 element = "#22262a"
 text = "#f0e5de"
 muted = "#88929a"
@@ -125,8 +125,8 @@ hover_bg = "#2d3238"
         "light.toml",
         r##"name = "light"
 description = "Clean light mode text and border palette"
-bg = "reset"
-panel = "reset"
+bg = "#f5f7fa"
+panel = "#e6eaf0"
 element = "#d7dde4"
 text = "#1e232a"
 muted = "#5e6872"
@@ -145,8 +145,8 @@ hover_bg = "#d2d8e0"
         "nord.toml",
         r##"name = "nord"
 description = "Arctic nord text and border palette"
-bg = "reset"
-panel = "reset"
+bg = "#2e3440"
+panel = "#3b4252"
 element = "#434c5e"
 text = "#eceff4"
 muted = "#d8dee9"
@@ -165,8 +165,8 @@ hover_bg = "#4c566a"
         "dracula.toml",
         r##"name = "dracula"
 description = "Vibrant dracula text and border palette"
-bg = "reset"
-panel = "reset"
+bg = "#282a36"
+panel = "#44475a"
 element = "#6272a4"
 text = "#f8f8f2"
 muted = "#6272a4"
@@ -185,8 +185,8 @@ hover_bg = "#44475a"
         "tokyo-night.toml",
         r##"name = "tokyo-night"
 description = "Tokyo night text and border palette"
-bg = "reset"
-panel = "reset"
+bg = "#1a1b26"
+panel = "#24283b"
 element = "#292e42"
 text = "#c0caf5"
 muted = "#565f89"
@@ -308,10 +308,10 @@ pub fn active_palette() -> ThemePalette {
 }
 
 pub fn color_bg() -> Color {
-    Color::Reset
+    active_palette().bg
 }
 pub fn color_panel() -> Color {
-    Color::Reset
+    active_palette().panel
 }
 pub fn color_element() -> Color {
     active_palette().element
@@ -400,5 +400,19 @@ pub fn color_diff_absent_bg() -> Color {
         Color::Rgb(235, 240, 245)
     } else {
         Color::Rgb(22, 22, 26)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_themes_define_visible_chat_surfaces() {
+        for (_, content) in BUILTIN_THEMES {
+            let file = toml::from_str::<ThemeFile>(content).unwrap();
+            let palette = ThemePalette::from(&file);
+            assert_ne!(palette.panel, Color::Reset);
+        }
     }
 }
