@@ -1,3 +1,11 @@
+## [v0.18.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.1) - 2026-08-14
+- **UI:** Resume after background task completion ([`e790852`](https://github.com/LHagfoss/rustcode/commit/e790852))
+- **UI:** Pad worked-for separator and space composer footer with active model display ([`0cb2d52`](https://github.com/LHagfoss/rustcode/commit/0cb2d52), [`d44d31f`](https://github.com/LHagfoss/rustcode/commit/d44d31f))
+- **UI:** Align transcript and panel surfaces with Codex design ([`248214b`](https://github.com/LHagfoss/rustcode/commit/248214b))
+- **UI:** Make high verbosity tool output compact ([`ae8b934`](https://github.com/LHagfoss/rustcode/commit/ae8b934))
+- **UI:** Restore chat surface backgrounds and help shortcut ([`e6cd99f`](https://github.com/LHagfoss/rustcode/commit/e6cd99f))
+- **UI:** Restore panel backgrounds and approval selection ([`b972cc9`](https://github.com/LHagfoss/rustcode/commit/b972cc9))
+
 ## [v0.18.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.0) - 2026-08-14
 
 ### Features
