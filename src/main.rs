@@ -99,6 +99,11 @@ fn background_task_history_message(
     )
 }
 
+fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
+    state.pending_queue.push(format!("__task_wakeup__:{task_id}"));
+    state.request_redraw();
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Cheap, once-per-process check: rotate debug.log out of the way if a
@@ -264,13 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register the background task wakeup callback
     let state_cb = Arc::clone(&app_state);
-    let client_cb = client.clone();
-    let token_cb = current_cancel_token.clone();
     let handle = tokio::runtime::Handle::current();
     crate::tools::register_wakeup_callback(move |session_id, task_id, output| {
         let state_clone = Arc::clone(&state_cb);
-        let client_clone = client_cb.clone();
-        let token_clone = token_cb.clone();
         let handle_clone = handle.clone();
         handle_clone.spawn(async move {
             let mut s = state_clone.lock().await;
@@ -281,25 +282,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s.history
                     .push(background_task_history_message(&task_id, output));
                 crate::config::save_session_history(&session_id, &s.history);
-                s.request_redraw();
                 // Drive a fresh model turn when a background task completes in the active session
                 // so the agent automatically receives the result and continues working.
-                s.pending_queue.push(format!("__task_wakeup__:{task_id}"));
-                // Only spawn if no orchestrator is alive; otherwise the
-                // running one drains the queue. Gating on status==Idle raced
-                // an exiting turn and spawned a second concurrent orchestrator.
-                if !s.orchestrator_running {
-                    s.orchestrator_running = true;
-                    s.status = AppStatus::Queued;
-                    drop(s);
-                    crate::network::process_queue_orchestrator(
-                        client_clone,
-                        state_clone,
-                        token_clone,
-                        std::sync::Arc::new(crate::network::policy::InteractivePolicy),
-                    )
-                    .await;
-                }
+                queue_background_wakeup(&mut s, &task_id);
+                // Do not start an orchestrator here. This callback outlives individual
+                // turns, so capturing their cancellation token leaves future wakeups
+                // permanently cancelled after the first interrupt. The main event loop
+                // observes this queued item and starts it with the current token instead.
             } else {
                 let mut history = crate::config::load_session_history_direct(&session_id);
                 history.push(background_task_history_message(&task_id, output));
@@ -2108,7 +2097,7 @@ fn print_goodbye() {
 mod draw_loop_tests {
     use super::{
         STREAM_FRAME_INTERVAL, background_task_history_message, goodbye_cursor_position,
-        should_draw,
+        queue_background_wakeup, should_draw,
     };
     use std::time::Duration;
 
@@ -2143,6 +2132,19 @@ mod draw_loop_tests {
         // counter every second; both are well inside this cadence.
         assert!(should_draw(false, true, Duration::from_secs(1)));
         assert!(should_draw(false, true, Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn background_wakeup_waits_for_main_loop_to_use_current_cancel_token() {
+        let mut state = crate::app::AppState::new();
+        state.orchestrator_running = false;
+        state.redraw_requested = false;
+
+        queue_background_wakeup(&mut state, "task_42");
+
+        assert_eq!(state.pending_queue, ["__task_wakeup__:task_42"]);
+        assert!(!state.orchestrator_running);
+        assert!(state.take_redraw_request());
     }
 
     #[test]
