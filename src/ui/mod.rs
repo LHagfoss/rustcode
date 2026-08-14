@@ -1218,6 +1218,10 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let show_picker = state.modal_open();
     let area = chunks[2];
     f.render_widget(Clear, area);
+    f.render_widget(
+        ratatui::widgets::Block::default().style(Style::default().bg(COLOR_PANEL())),
+        area,
+    );
     let input_margin = Margin {
         vertical: 0,
         horizontal: 0,
@@ -1225,9 +1229,9 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let input_inner = area.inner(input_margin);
 
     let text_style = if state.input_buffer.starts_with('/') {
-        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker)
+        get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
     } else {
-        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)
+        get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
     };
 
     let inner_width = input_inner.width as usize;
@@ -1242,12 +1246,12 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
 
         if state.input_buffer.is_empty() && state.get_command_suggestion().is_none() {
             let placeholder_style =
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
+                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
             let placeholder_text = "Ask RustCode to do anything";
             styled_chars.extend(placeholder_text.chars().map(|c| (c, placeholder_style)));
         } else if let Some(suffix) = state.get_command_suggestion() {
             let suggestion_style =
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker);
+                get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
@@ -1268,7 +1272,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
 
         let prompt_span = Span::styled(
             "› ",
-            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker),
+            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker),
         );
         let mut current_line_spans = vec![prompt_span];
         let mut current_run: Option<(Style, String)> = None;
@@ -1335,7 +1339,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         input_inner.width,
         text_area_height,
     );
-    let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_BG()));
+    let paragraph = Paragraph::new(lines).style(Style::default().bg(COLOR_PANEL()));
     f.render_widget(paragraph, text_area);
 
     if input_inner.height > 0 {
@@ -1364,22 +1368,26 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
                     left,
                     get_themed_style(
                         COLOR_MUTED(),
-                        COLOR_BG(),
+                        COLOR_PANEL(),
                         Modifier::empty(),
                         show_picker,
                     ),
                 ),
-                Span::raw(" ".repeat(padding)),
+                Span::styled(
+                    " ".repeat(padding),
+                    Style::default().bg(COLOR_PANEL()),
+                ),
                 Span::styled(
                     right,
                     get_themed_style(
                         COLOR_MUTED(),
-                        COLOR_BG(),
+                        COLOR_PANEL(),
                         Modifier::empty(),
                         show_picker,
                     ),
                 ),
-            ])),
+            ]))
+            .style(Style::default().bg(COLOR_PANEL())),
             footer_area,
         );
     }

@@ -928,6 +928,8 @@ pub struct AppState {
     pub working_status_pending: bool,
     pub pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     pub modal_scroll_row: u16,
+    /// Selected approval row: 0 = approve, 1 = deny. UI-only state.
+    pub tool_confirmation_selected: usize,
 
     pub tool_confirmation_response: Option<tokio::sync::oneshot::Sender<bool>>,
 
@@ -1180,6 +1182,11 @@ impl AppState {
         }
     }
 
+    pub fn move_tool_confirmation_selection(&mut self, direction: i8) {
+        self.tool_confirmation_selected = if direction < 0 { 0 } else { 1 };
+        self.request_redraw();
+    }
+
     /// Consume a pending redraw request.
     pub fn take_redraw_request(&mut self) -> bool {
         std::mem::take(&mut self.redraw_requested)
@@ -1256,6 +1263,7 @@ impl AppState {
             working_status_pending: false,
             pending_tool_confirmation: None,
             modal_scroll_row: 0,
+            tool_confirmation_selected: 0,
             tool_confirmation_response: None,
             pending_question: None,
             question_response: None,
@@ -2165,6 +2173,17 @@ mod live_tool_tests {
 
         assert!(state.live_tool_calls.is_empty());
         assert!(state.history == history);
+    }
+
+    #[test]
+    fn tool_confirmation_selection_moves_between_approve_and_deny() {
+        let mut state = AppState::new();
+        assert_eq!(state.tool_confirmation_selected, 0);
+
+        state.move_tool_confirmation_selection(1);
+        assert_eq!(state.tool_confirmation_selected, 1);
+        state.move_tool_confirmation_selection(-1);
+        assert_eq!(state.tool_confirmation_selected, 0);
     }
 }
 

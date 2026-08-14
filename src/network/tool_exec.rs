@@ -532,6 +532,7 @@ pub(crate) async fn confirm_and_execute(
         {
             let mut s = state.lock().await;
             s.modal_scroll_row = 0;
+            s.tool_confirmation_selected = 0;
             s.pending_tool_confirmation = Some(vec![ToolConfirmation {
                 tool_name: display_name.to_string(),
                 path,

@@ -595,12 +595,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if s.status == AppStatus::AwaitingToolConfirmation {
                             drop(s);
                             match key.code {
-                                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                                KeyCode::Char('y') | KeyCode::Char('Y') => {
                                     let mut s = app_state.lock().await;
                                     s.pending_tool_confirmation = None;
                                     if let Some(tx) = s.tool_confirmation_response.take() {
                                         let _ = tx.send(true);
                                     }
+                                }
+                                KeyCode::Enter => {
+                                    let approved = {
+                                        let s = app_state.lock().await;
+                                        s.tool_confirmation_selected == 0
+                                    };
+                                    if !approved {
+                                        current_cancel_token.cancel();
+                                        current_cancel_token =
+                                            tokio_util::sync::CancellationToken::new();
+                                    }
+                                    let mut s = app_state.lock().await;
+                                    if let Some(tx) = s.tool_confirmation_response.take() {
+                                        let _ = tx.send(approved);
+                                    }
+                                    s.pending_tool_confirmation = None;
                                 }
                                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                                     // Cancel the running agent stream when denying
@@ -619,21 +635,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 KeyCode::Up => {
                                     let mut s = app_state.lock().await;
-                                    s.modal_scroll_row = s.modal_scroll_row.saturating_sub(1);
+                                    s.move_tool_confirmation_selection(-1);
                                 }
                                 KeyCode::Down => {
                                     let mut s = app_state.lock().await;
-                                    let total_lines = s
-                                        .pending_tool_confirmation
-                                        .as_ref()
-                                        .and_then(|c| c.first())
-                                        .map(|c| c.content_preview.lines().count())
-                                        .unwrap_or(0);
-                                    if total_lines > 0
-                                        && (s.modal_scroll_row as usize) + 1 < total_lines
-                                    {
-                                        s.modal_scroll_row += 1;
-                                    }
+                                    s.move_tool_confirmation_selection(1);
                                 }
                                 _ => {}
                             }
