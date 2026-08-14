@@ -391,6 +391,41 @@ fn use_skill_renders_in_committed_history() {
 }
 
 #[test]
+fn high_verbosity_keeps_tool_call_summaries_visible() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::High;
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "use_skill".to_owned(),
+            arguments: r#"{"name":"clockify"}"#.to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "use_skill: loaded clockify")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "use_skill".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                exit_code: None,
+                changed_paths: Vec::new(),
+                truncated: false,
+                full_output_artifact: None,
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered, ["• Tool", "  └ UseSkill clockify"]);
+}
+
+#[test]
 fn exploration_results_group_and_deduplicate_child_rows() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
 
