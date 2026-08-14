@@ -424,6 +424,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                                 .find(|agent| agent.id == agent_id)
                                 .and_then(|agent| agent.workspace_root.clone())
                         },
+                        None,
                     )
                     .await
                 };

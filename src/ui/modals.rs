@@ -33,6 +33,7 @@ pub(super) fn render_popup_menu(
         0
     };
 
+    f.render_widget(Clear, area);
     let mut popup_lines = Vec::new();
     for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
@@ -40,31 +41,22 @@ pub(super) fn render_popup_menu(
             .map(|i| i == idx)
             .unwrap_or(false);
 
-        let line = if is_selected {
-            let left_text = format!("{:<12}   {}", cmd.name, cmd.desc);
-            let total_len = left_text.width();
-            let padding_len = (area.width as usize).saturating_sub(total_len);
-            let full_text = format!("{}{}", left_text, " ".repeat(padding_len));
-
-            Line::from(Span::styled(
-                full_text,
+        let marker = if is_selected { "› " } else { "  " };
+        let left_text = format!("{marker}{:<10}  ", cmd.name);
+        let desc_text = cmd.desc.to_string();
+        let total_len = left_text.width() + desc_text.width();
+        let padding_len = (area.width as usize).saturating_sub(total_len);
+        let line = Line::from(vec![
+            Span::styled(
+                left_text,
                 Style::default()
-                    .fg(COLOR_BG())
-                    .bg(COLOR_PRIMARY())
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else {
-            let left_text = format!("{:<12}   ", cmd.name);
-            let desc_text = cmd.desc.to_string();
-            let total_len = left_text.width() + desc_text.width();
-            let padding_len = (area.width as usize).saturating_sub(total_len);
-
-            Line::from(vec![
-                Span::styled(left_text, Style::default().fg(COLOR_TEXT()).bg(COLOR_BG())),
-                Span::styled(desc_text, Style::default().fg(COLOR_MUTED()).bg(COLOR_BG())),
-                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
-            ])
-        };
+                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
+                    .bg(COLOR_BG())
+                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+            ),
+            Span::styled(desc_text, Style::default().fg(COLOR_MUTED()).bg(COLOR_BG())),
+            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
+        ]);
         popup_lines.push(line);
     }
     f.render_widget(
@@ -92,28 +84,19 @@ pub(super) fn render_at_popup_menu(
     let mut popup_lines = Vec::new();
     for (i, file) in file_matches.iter().skip(offset).take(max_rows).enumerate() {
         let is_selected = selected == (offset + i);
-        let line = if is_selected {
-            let left_text = format!("📄 {:<35}", file);
-            let total_len = left_text.len();
-            let padding_len = (area.width as usize).saturating_sub(total_len);
-            let full_text = format!("{}{}", left_text, " ".repeat(padding_len));
-
-            Line::from(Span::styled(
-                full_text,
+        let marker = if is_selected { "› " } else { "  " };
+        let left_text = format!("{marker}{file}");
+        let padding_len = (area.width as usize).saturating_sub(left_text.width());
+        let line = Line::from(vec![
+            Span::styled(
+                left_text,
                 Style::default()
-                    .fg(COLOR_BG())
-                    .bg(COLOR_SECONDARY())
-                    .add_modifier(Modifier::BOLD),
-            ))
-        } else {
-            let left_text = format!("📄 {:<35}", file);
-            let padding_len = (area.width as usize).saturating_sub(left_text.len());
-
-            Line::from(vec![
-                Span::styled(left_text, Style::default().fg(COLOR_TEXT()).bg(COLOR_BG())),
-                Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
-            ])
-        };
+                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
+                    .bg(COLOR_BG())
+                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+            ),
+            Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_BG())),
+        ]);
         popup_lines.push(line);
     }
     f.render_widget(
@@ -185,16 +168,12 @@ pub(super) fn render_verbosity_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
-        vertical: 1,
-        horizontal: 3,
+        vertical: 0,
+        horizontal: 0,
     });
 
     let modal_chunks = Layout::default()
@@ -246,7 +225,7 @@ pub(super) fn render_verbosity_picker_modal(
         let is_current = state.verbosity == *verbosity_level;
         let active_badge = if is_current { " [active]" } else { "" };
         let line = if is_selected {
-            let text = format!(" ● {:<5} — {}{}", name, desc, active_badge);
+            let text = format!("› {:<5} — {}{}", name, desc, active_badge);
             let padding = (inner_area.width as usize).saturating_sub(text.len());
             Line::from(vec![Span::styled(
                 format!("{}{}", text, " ".repeat(padding)),
@@ -284,178 +263,6 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
     #[test]
-    fn batch_confirmation_header_is_rendered_above_the_input() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-        let mut state = AppState::new();
-        state.pending_tool_confirmation = Some(vec![
-            ToolConfirmation {
-                tool_name: "write_to_file".to_string(),
-                path: "src/one.rs".to_string(),
-                content_preview: String::new(),
-                content_bytes: 1,
-            },
-            ToolConfirmation {
-                tool_name: "run_command".to_string(),
-                path: "cargo check".to_string(),
-                content_preview: String::new(),
-                content_bytes: 11,
-            },
-        ]);
-
-        let input_area = Rect::new(10, 32, 80, 6);
-        terminal
-            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let header_row = (0..40).find(|y| {
-            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
-            row.contains("Approve 2 tool calls in parallel?")
-        });
-
-        assert_eq!(header_row, Some(24));
-        assert!(header_row.unwrap() < input_area.y);
-        let rendered = (0..40)
-            .map(|y| {
-                (0..100)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            rendered.contains("› 1. Write to file"),
-            "rendered modal:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("2. Run command") && rendered.contains("$ cargo check"),
-            "rendered modal:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("to confirm all"),
-            "rendered modal:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("to cancel all"),
-            "rendered modal:\n{rendered}"
-        );
-    }
-
-    #[test]
-    fn single_confirmation_with_preview_renders_in_short_terminal() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
-        let mut state = AppState::new();
-        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
-            tool_name: "list_directory".to_string(),
-            path: "src/".to_string(),
-            content_preview: "src/main.rs".to_string(),
-            content_bytes: 11,
-        }]);
-
-        let input_area = Rect::new(10, 5, 80, 6);
-        terminal
-            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let confirmation_row = (0..12).find(|y| {
-            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
-            row.contains("Execute tool")
-        });
-        let rendered = (0..12)
-            .map(|y| {
-                (0..100)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(confirmation_row.is_some(), "rendered modal:\n{rendered}");
-        assert!(confirmation_row.unwrap() < input_area.y);
-        assert!(rendered.contains("src/"), "rendered modal:\n{rendered}");
-        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
-        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
-        assert!(!rendered.contains("scroll"), "rendered modal:\n{rendered}");
-    }
-
-    #[test]
-    fn single_confirmation_keeps_scope_at_compact_height_boundary() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
-        let mut state = AppState::new();
-        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
-            tool_name: "list_directory".to_string(),
-            path: "src/".to_string(),
-            content_preview: "src/main.rs".to_string(),
-            content_bytes: 11,
-        }]);
-
-        let input_area = Rect::new(10, 7, 80, 6);
-        terminal
-            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let rendered = (0..14)
-            .map(|y| {
-                (0..100)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(rendered.contains("Execute tool"), "rendered modal:\n{rendered}");
-        assert!(rendered.contains("src/"), "rendered modal:\n{rendered}");
-        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
-        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
-    }
-
-    #[test]
-    fn batch_confirmation_renders_in_short_terminal() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 11)).unwrap();
-        let mut state = AppState::new();
-        state.pending_tool_confirmation = Some(vec![
-            ToolConfirmation {
-                tool_name: "list_directory".to_string(),
-                path: "src/".to_string(),
-                content_preview: String::new(),
-                content_bytes: 0,
-            },
-            ToolConfirmation {
-                tool_name: "read_file".to_string(),
-                path: "Cargo.toml".to_string(),
-                content_preview: String::new(),
-                content_bytes: 0,
-            },
-        ]);
-
-        let input_area = Rect::new(10, 5, 80, 5);
-        terminal
-            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let header_row = (0..11).find(|y| {
-            let row: String = (0..100).map(|x| buffer[(x, *y)].symbol()).collect();
-            row.contains("Approve 2 tool calls in parallel?")
-        });
-        let rendered = (0..11)
-            .map(|y| {
-                (0..100)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(header_row.is_some(), "rendered modal:\n{rendered}");
-        assert!(header_row.unwrap() < input_area.y);
-        assert!(rendered.contains("y / enter"), "rendered modal:\n{rendered}");
-        assert!(rendered.contains("n / esc"), "rendered modal:\n{rendered}");
-    }
-
-    #[test]
     fn single_command_confirmation_uses_codex_command_prompt() {
         let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         let mut state = AppState::new();
@@ -466,7 +273,7 @@ mod tests {
             content_bytes: 0,
         }]);
 
-        let input_area = Rect::new(10, 7, 80, 6);
+        let input_area = Rect::new(0, 2, 100, 10);
         terminal
             .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
             .unwrap();
@@ -480,7 +287,64 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("Would you like to run the following command?"));
-        assert!(rendered.contains("Run command     $ cargo test"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("$ cargo test"), "rendered modal:\n{rendered}");
+        assert!(rendered.contains("› 1. Yes, proceed"));
+        assert!(rendered.contains("2. No, cancel this tool call"));
+    }
+
+    #[test]
+    fn compact_approval_keeps_heading_and_actions_visible() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "write_to_file".to_owned(),
+            path: "src/main.rs".to_owned(),
+            content_preview: "+new line".to_owned(),
+            content_bytes: 9,
+        }]);
+        terminal
+            .draw(|frame| {
+                render_tool_confirmation_modal(frame, &state, Rect::new(0, 2, 80, 5))
+            })
+            .unwrap();
+        let rendered = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(rendered.contains("Would you like to make the following change?"));
+        assert!(rendered.contains("1. Yes, proceed"));
+        assert!(rendered.contains("2. No, cancel"));
+    }
+
+    #[test]
+    fn batch_approval_lists_each_tool_in_the_bottom_pane() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(vec![
+            ToolConfirmation { tool_name: "write_to_file".to_owned(), path: "src/one.rs".to_owned(), content_preview: String::new(), content_bytes: 1 },
+            ToolConfirmation { tool_name: "run_command".to_owned(), path: "cargo check".to_owned(), content_preview: String::new(), content_bytes: 11 },
+        ]);
+        terminal
+            .draw(|frame| {
+                render_tool_confirmation_modal(frame, &state, Rect::new(0, 2, 100, 12))
+            })
+            .unwrap();
+        let rendered = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(rendered.contains("approve these 2 tool calls"));
+        assert!(rendered.contains("write_to_file src/one.rs"));
+        assert!(rendered.contains("run_command $ cargo check"));
+    }
+
+    #[test]
+    fn settings_picker_uses_codex_selection_rows_without_a_box() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let state = AppState::new();
+        terminal
+            .draw(|frame| render_verbosity_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
+            .unwrap();
+        let rendered = terminal.backend().buffer().content.iter()
+            .map(|cell| cell.symbol()).collect::<String>();
+
+        assert!(rendered.contains("Select Output Verbosity"));
+        assert!(rendered.contains("› Low"));
+        assert!(!rendered.contains('╭') && !rendered.contains('╰'));
     }
 }
 
@@ -494,16 +358,12 @@ pub(super) fn render_thinking_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
-        vertical: 1,
-        horizontal: 3,
+        vertical: 0,
+        horizontal: 0,
     });
 
     let modal_chunks = Layout::default()
@@ -559,7 +419,7 @@ pub(super) fn render_thinking_picker_modal(
         let is_current = current == *val;
         let active_badge = if is_current { " [active]" } else { "" };
         let line = if is_selected {
-            let text = format!(" ● {:<7} — {}{}", name, desc, active_badge);
+            let text = format!("› {:<7} — {}{}", name, desc, active_badge);
             let padding = (inner_area.width as usize).saturating_sub(text.len());
             Line::from(vec![Span::styled(
                 format!("{}{}", text, " ".repeat(padding)),
@@ -600,16 +460,12 @@ pub(super) fn render_protocol_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
-        vertical: 1,
-        horizontal: 3,
+        vertical: 0,
+        horizontal: 0,
     });
 
     let modal_chunks = Layout::default()
@@ -668,7 +524,7 @@ pub(super) fn render_protocol_picker_modal(
         let is_current = current == *val;
         let active_badge = if is_current { " [active]" } else { "" };
         let line = if is_selected {
-            let text = format!(" ● {:<10} — {}{}", name, desc, active_badge);
+            let text = format!("› {:<10} — {}{}", name, desc, active_badge);
             let padding = (inner_area.width as usize).saturating_sub(text.len());
             Line::from(vec![Span::styled(
                 format!("{}{}", text, " ".repeat(padding)),
@@ -748,37 +604,19 @@ pub(super) fn render_model_picker_modal(
     let mut list_lines = Vec::new();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let line = if is_selected {
-            let left_text = format!(" ● {}", item.name);
-            let padding_len =
-                (list_area.width as usize).saturating_sub(left_text.len() + item.desc.len());
-            Line::from(vec![
-                Span::styled(
-                    left_text,
-                    Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
-                ),
-                Span::styled(
-                    item.desc.clone(),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
-                ),
-            ])
-        } else {
-            let left_text = format!("   {}", item.name);
-            let padding_len =
-                (list_area.width as usize).saturating_sub(left_text.len() + item.desc.len());
-            Line::from(vec![
-                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
-                Span::styled(" ".repeat(padding_len), Style::default()),
-                Span::styled(item.desc.clone(), Style::default().fg(COLOR_MUTED())),
-            ])
-        };
+        let left_text = format!("{}{}", if is_selected { "› " } else { "  " }, item.name);
+        let padding_len =
+            (list_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
+        let line = Line::from(vec![
+            Span::styled(
+                left_text,
+                Style::default()
+                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
+                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+            ),
+            Span::raw(" ".repeat(padding_len)),
+            Span::styled(item.desc.clone(), Style::default().fg(COLOR_MUTED())),
+        ]);
         list_lines.push(line);
     }
 
@@ -1423,40 +1261,19 @@ pub(super) fn render_command_picker_modal(
     let mut list_lines = Vec::new();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let line = if is_selected {
-            let name_part = format!(" {}", item.name);
-            let padding_len =
-                (list_area.width as usize).saturating_sub(name_part.len() + item.shortcut.len());
-            Line::from(vec![
-                Span::styled(
-                    name_part,
-                    Style::default()
-                        .fg(COLOR_BG())
-                        .bg(COLOR_PRIMARY())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    " ".repeat(padding_len),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
-                ),
-                Span::styled(
-                    item.shortcut.to_string(),
-                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
-                ),
-            ])
-        } else {
-            let name_part = format!("  {}", item.name);
-            let padding_len =
-                (list_area.width as usize).saturating_sub(name_part.len() + item.shortcut.len());
-            Line::from(vec![
-                Span::styled(name_part, Style::default().fg(COLOR_TEXT())),
-                Span::styled(" ".repeat(padding_len), Style::default()),
-                Span::styled(
-                    item.shortcut.to_string(),
-                    Style::default().fg(COLOR_MUTED()),
-                ),
-            ])
-        };
+        let name_part = format!("{}{}", if is_selected { "› " } else { "  " }, item.name);
+        let padding_len =
+            (list_area.width as usize).saturating_sub(name_part.width() + item.shortcut.width());
+        let line = Line::from(vec![
+            Span::styled(
+                name_part,
+                Style::default()
+                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
+                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+            ),
+            Span::raw(" ".repeat(padding_len)),
+            Span::styled(item.shortcut.to_string(), Style::default().fg(COLOR_MUTED())),
+        ]);
         list_lines.push(line);
     }
 
@@ -1476,7 +1293,153 @@ pub(super) fn render_command_picker_modal(
     f.render_widget(list_paragraph, list_area);
 }
 
+pub(super) fn tool_confirmation_height(state: &AppState, available: u16) -> u16 {
+    let Some(confirmations) = state.pending_tool_confirmation.as_ref() else {
+        return 3;
+    };
+    let preview = confirmations
+        .first()
+        .map(|confirmation| confirmation.content_preview.lines().count() as u16)
+        .unwrap_or(0)
+        .min(8);
+    let content = if confirmations.len() > 1 {
+        7u16.saturating_add(confirmations.len().min(8) as u16)
+    } else {
+        9u16.saturating_add(preview)
+    };
+    content.min(available.max(3))
+}
+
+/// Bottom-pane approval view matching Codex's interaction layout. The
+/// execution/confirmation channel remains RustCode's; this function only owns
+/// presentation and keeps the normal composer hidden while a decision is due.
 pub(super) fn render_tool_confirmation_modal(
+    f: &mut Frame,
+    state: &AppState,
+    area: ratatui::layout::Rect,
+) {
+    let confirmations = match &state.pending_tool_confirmation {
+        Some(confirmations) if !confirmations.is_empty() => confirmations,
+        _ => return,
+    };
+    f.render_widget(Clear, area);
+
+    let mut lines = Vec::new();
+    let single = confirmations.len() == 1;
+    let first = &confirmations[0];
+    let is_command = single && first.tool_name == "run_command";
+    let heading = if is_command {
+        "Would you like to run the following command?".to_owned()
+    } else if single {
+        "Would you like to make the following change?".to_owned()
+    } else {
+        format!("Would you like to approve these {} tool calls?", confirmations.len())
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  {heading}"),
+        Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    if single {
+        if is_command {
+            lines.push(Line::from(vec![
+                Span::raw("  $ "),
+                Span::styled(first.path.clone(), Style::default().fg(COLOR_SECONDARY())),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(first.tool_name.clone(), Style::default().fg(COLOR_SECONDARY())),
+                Span::raw(" "),
+                Span::styled(first.path.clone(), Style::default().fg(COLOR_TEXT())),
+            ]));
+        }
+        for source in first.content_preview.lines().take(8) {
+            let mut line = highlight_diff_line(source, area.width.saturating_sub(4) as usize, false);
+            line.spans.insert(0, Span::raw("    "));
+            lines.push(line);
+        }
+    } else {
+        for confirmation in confirmations.iter().take(8) {
+            let command = if confirmation.tool_name == "run_command" { "$ " } else { "" };
+            lines.push(Line::from(vec![
+                Span::raw("  • "),
+                Span::styled(confirmation.tool_name.clone(), Style::default().fg(COLOR_SECONDARY())),
+                Span::raw(" "),
+                Span::styled(format!("{command}{}", confirmation.path), Style::default().fg(COLOR_TEXT())),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("› ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+        Span::styled("1. Yes, proceed", Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD)),
+        Span::styled(" (y)", Style::default().fg(COLOR_MUTED())),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  2. No, cancel this tool call "),
+        Span::styled("(esc)", Style::default().fg(COLOR_MUTED())),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  Press enter to confirm · tab to {} auto-confirm",
+            if state.auto_confirm { "disable" } else { "enable" }
+        ),
+        Style::default().fg(COLOR_MUTED()),
+    )));
+
+    if lines.len() > area.height as usize {
+        let heading = lines.first().cloned().unwrap_or_default();
+        let approve = lines
+            .iter()
+            .find(|line| line.to_string().contains("1. Yes, proceed"))
+            .cloned()
+            .unwrap_or_default();
+        let cancel = lines
+            .iter()
+            .find(|line| line.to_string().contains("2. No, cancel"))
+            .cloned()
+            .unwrap_or_default();
+        let target = lines
+            .iter()
+            .skip(1)
+            .find(|line| {
+                let text = line.to_string();
+                !text.trim().is_empty()
+                    && !text.contains("1. Yes")
+                    && !text.contains("2. No")
+                    && !text.contains("Press enter")
+            })
+            .cloned();
+        let footer = lines.last().cloned();
+        let mut compact = vec![heading];
+        if area.height >= 4
+            && let Some(target) = target
+        {
+            compact.push(target);
+        }
+        compact.push(approve);
+        compact.push(cancel);
+        if area.height >= 5
+            && let Some(footer) = footer
+        {
+            compact.push(footer);
+        }
+        lines = compact;
+    }
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(COLOR_BG())),
+        area,
+    );
+}
+
+#[allow(dead_code)]
+fn render_tool_confirmation_modal_legacy(
     f: &mut Frame,
     state: &AppState,
     input_area: ratatui::layout::Rect,
@@ -1887,7 +1850,121 @@ pub(super) fn render_tool_confirmation_modal(
 
 /// Interactive `ask_question` modal: renders the question and its options, with
 /// the highlighted option (and, for multi-select, ticked options) emphasized.
+pub(super) fn question_height(state: &AppState, width: u16, available: u16) -> u16 {
+    let Some(question) = state.pending_question.as_ref() else {
+        return 3;
+    };
+    let question_rows = textwrap_simple(&question.question, width.saturating_sub(4).max(10) as usize)
+        .len() as u16;
+    let option_rows = if question.custom_input.is_some() {
+        1
+    } else {
+        question.options.len().saturating_add(1) as u16
+    };
+    (question_rows + option_rows + 5).min(available.max(3))
+}
+
 pub(super) fn render_question_modal(
+    f: &mut Frame,
+    state: &AppState,
+    area: ratatui::layout::Rect,
+) {
+    let Some(question) = state.pending_question.as_ref() else {
+        return;
+    };
+    f.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "  Question 1/1 (1 unanswered)",
+            Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+        )),
+    ];
+    for line in textwrap_simple(&question.question, area.width.saturating_sub(4).max(10) as usize) {
+        lines.push(Line::from(format!("  {line}")));
+    }
+    lines.push(Line::from(""));
+
+    let custom_row = if let Some(custom) = question.custom_input.as_ref() {
+        let row = lines.len() as u16;
+        lines.push(Line::from(vec![
+            Span::styled("  › ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                if custom.is_empty() { "Type your answer (optional)".to_owned() } else { custom.clone() },
+                Style::default().fg(if custom.is_empty() { COLOR_MUTED() } else { COLOR_TEXT() }),
+            ),
+        ]));
+        Some(row)
+    } else {
+        for (index, option) in question.options.iter().enumerate() {
+            let selected = question.selected == index;
+            let checked = question.chosen.get(index).copied().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if selected { "  › " } else { "    " },
+                    Style::default().fg(if selected { COLOR_PRIMARY() } else { COLOR_TEXT() }),
+                ),
+                Span::styled(
+                    if question.is_multi_select {
+                        format!("{} {}. ", if checked { "[x]" } else { "[ ]" }, index + 1)
+                    } else {
+                        format!("{}. ", index + 1)
+                    },
+                    Style::default().fg(if selected { COLOR_PRIMARY() } else { COLOR_MUTED() }),
+                ),
+                Span::styled(
+                    option.clone(),
+                    Style::default()
+                        .fg(COLOR_TEXT())
+                        .add_modifier(if selected { Modifier::BOLD } else { Modifier::empty() }),
+                ),
+            ]));
+        }
+        let custom_selected = question.selected == question.options.len();
+        lines.push(Line::from(vec![
+            Span::styled(
+                if custom_selected { "  › " } else { "    " },
+                Style::default().fg(if custom_selected { COLOR_PRIMARY() } else { COLOR_TEXT() }),
+            ),
+            Span::styled(
+                "Type your own answer",
+                Style::default()
+                    .fg(if custom_selected { COLOR_TEXT() } else { COLOR_MUTED() })
+                    .add_modifier(if custom_selected { Modifier::BOLD } else { Modifier::empty() }),
+            ),
+        ]));
+        None
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        if question.custom_input.is_some() {
+            "  enter to submit answer | esc to go back"
+        } else if question.is_multi_select {
+            "  space to toggle | enter to submit answer | esc to interrupt"
+        } else {
+            "  enter to submit answer | esc to interrupt"
+        },
+        Style::default().fg(COLOR_MUTED()),
+    )));
+
+    lines.truncate(area.height as usize);
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).style(Style::default().bg(COLOR_BG())),
+        area,
+    );
+    if let (Some(row), Some(custom)) = (custom_row, question.custom_input.as_ref())
+        && row < area.height
+    {
+        let cursor = question.custom_cursor.min(custom.len());
+        let cursor = custom[..cursor].width() as u16;
+        f.set_cursor_position((
+            area.x + 4 + cursor.min(area.width.saturating_sub(5)),
+            area.y + row,
+        ));
+    }
+}
+
+#[allow(dead_code)]
+fn render_question_modal_legacy(
     f: &mut Frame,
     state: &AppState,
     input_area: ratatui::layout::Rect,
@@ -2138,16 +2215,12 @@ pub(super) fn render_theme_picker_modal(
 
     f.render_widget(Clear, modal_area);
 
-    let modal_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(COLOR_PRIMARY()))
-        .style(Style::default().bg(p.bg));
+    let modal_block = Block::default().style(Style::default().bg(p.bg));
     f.render_widget(modal_block, modal_area);
 
     let inner_area = modal_area.inner(Margin {
-        vertical: 1,
-        horizontal: 3,
+        vertical: 0,
+        horizontal: 0,
     });
 
     let modal_chunks = Layout::default()
@@ -2186,16 +2259,13 @@ pub(super) fn render_theme_picker_modal(
         let active_badge = if is_active { " [active]" } else { "" };
         let line = if is_selected {
             let text = format!(
-                " ● {:<12} — {}{}",
+                "› {:<12} — {}{}",
                 theme.name, theme.description, active_badge
             );
             let padding = (inner_area.width as usize).saturating_sub(text.len());
             Line::from(Span::styled(
                 format!("{}{}", text, " ".repeat(padding)),
-                Style::default()
-                    .fg(p.bg)
-                    .bg(p.primary)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(p.primary).bg(p.bg).add_modifier(Modifier::BOLD),
             ))
         } else {
             let left = format!("   {:<12} — {}", theme.name, theme.description);

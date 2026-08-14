@@ -805,12 +805,44 @@ pub enum Verbosity {
 /// the TUI can update one live activity item instead of appending protocol
 /// fragments to the transcript.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveToolOutputChunk {
+    pub stderr: bool,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveToolCall {
     pub key: String,
     pub provider_call_id: Option<String>,
     pub tool_name: String,
     pub action: String,
     pub target: String,
+    pub output: std::collections::VecDeque<LiveToolOutputChunk>,
+    pub omitted_output_bytes: usize,
+    pub started_at: std::time::Instant,
+}
+
+const MAX_LIVE_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
+
+impl LiveToolCall {
+    pub(crate) fn new(
+        key: impl Into<String>,
+        provider_call_id: Option<String>,
+        tool_name: impl Into<String>,
+        action: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            provider_call_id,
+            tool_name: tool_name.into(),
+            action: action.into(),
+            target: target.into(),
+            output: std::collections::VecDeque::new(),
+            omitted_output_bytes: 0,
+            started_at: std::time::Instant::now(),
+        }
+    }
 }
 
 pub struct AppState {
@@ -862,6 +894,9 @@ pub struct AppState {
     pub update_check: crate::update::UpdateState,
 
     pub active_suggestion_index: Option<usize>,
+    /// Completion token explicitly dismissed with Esc. It remains suppressed
+    /// until the token under the cursor changes, matching Codex popup behavior.
+    pub dismissed_completion: Option<String>,
 
     pub show_model_picker: bool,
     pub model_picker_index: usize,
@@ -1068,15 +1103,60 @@ impl AppState {
             None => format!("local:{sequence}"),
         };
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
-        self.live_tool_calls.push(LiveToolCall {
-            key: key.clone(),
-            provider_call_id: provider_call_id.map(str::to_owned),
-            tool_name: tool_name.to_owned(),
+        self.live_tool_calls.push(LiveToolCall::new(
+            key.clone(),
+            provider_call_id.map(str::to_owned),
+            tool_name,
             action,
             target,
-        });
+        ));
         self.request_redraw();
         key
+    }
+
+    /// Append bounded command output to one presentation-only live tool cell.
+    /// `stderr` is retained so failures can be styled independently while the
+    /// canonical tool result continues to own the complete bounded payload.
+    pub fn append_live_tool_output(&mut self, key: &str, bytes: &[u8], stderr: bool) {
+        if bytes.is_empty() {
+            return;
+        }
+        let Some(call) = self.live_tool_calls.iter_mut().find(|call| call.key == key) else {
+            return;
+        };
+        let text = String::from_utf8_lossy(bytes);
+        if let Some(last) = call.output.back_mut()
+            && last.stderr == stderr
+        {
+            last.text.push_str(&text);
+        } else {
+            call.output.push_back(LiveToolOutputChunk {
+                stderr,
+                text: text.into_owned(),
+            });
+        }
+
+        let mut retained = call.output.iter().map(|chunk| chunk.text.len()).sum::<usize>();
+        while retained > MAX_LIVE_TOOL_OUTPUT_BYTES && call.output.len() > 1 {
+            if let Some(removed) = call.output.pop_front() {
+                retained = retained.saturating_sub(removed.text.len());
+                call.omitted_output_bytes = call
+                    .omitted_output_bytes
+                    .saturating_add(removed.text.len());
+            }
+        }
+        if retained > MAX_LIVE_TOOL_OUTPUT_BYTES
+            && let Some(chunk) = call.output.front_mut()
+        {
+            let remove = retained - MAX_LIVE_TOOL_OUTPUT_BYTES;
+            let mut boundary = remove.min(chunk.text.len());
+            while boundary < chunk.text.len() && !chunk.text.is_char_boundary(boundary) {
+                boundary += 1;
+            }
+            chunk.text.drain(..boundary);
+            call.omitted_output_bytes = call.omitted_output_bytes.saturating_add(boundary);
+        }
+        self.request_redraw();
     }
 
     /// Finish one live tool projection. The completed semantic result is
@@ -1150,6 +1230,7 @@ impl AppState {
             workspace_root: None,
             update_check: crate::update::UpdateState::Unknown,
             active_suggestion_index: None,
+            dismissed_completion: None,
             show_model_picker: false,
             model_picker_index: 0,
             modal_picker_index: 0,
@@ -1389,11 +1470,11 @@ impl AppState {
     }
 
     pub fn reset_suggestion_index(&mut self) {
-        let command_completion =
-            crate::app::suggestion::command_token(&self.input_buffer).is_some();
-        let file_completion =
-            crate::app::get_at_word_query(&self.input_buffer, self.cursor_position).is_some();
-        if command_completion || file_completion {
+        let completion = self.completion_identity();
+        if self.dismissed_completion.as_ref() != completion.as_ref() {
+            self.dismissed_completion = None;
+        }
+        if completion.is_some() && self.dismissed_completion.is_none() {
             if self.active_suggestion_index.is_none() {
                 self.active_suggestion_index = Some(0);
             }
@@ -1402,11 +1483,29 @@ impl AppState {
         }
     }
 
+    pub fn completion_identity(&self) -> Option<String> {
+        if let Some(command) = crate::app::suggestion::command_token(&self.input_buffer) {
+            return Some(format!("command:{command}"));
+        }
+        crate::app::get_at_word_query(&self.input_buffer, self.cursor_position)
+            .map(|(start, query)| format!("file:{start}:{query}"))
+    }
+
+    pub fn dismiss_completion(&mut self) -> bool {
+        let Some(completion) = self.completion_identity() else {
+            return false;
+        };
+        self.dismissed_completion = Some(completion);
+        self.active_suggestion_index = None;
+        true
+    }
+
     pub fn move_cursor_left(&mut self) {
         self.clamp_cursor();
         if let Some(len) = self.char_len_before_cursor() {
             self.cursor_position -= len;
         }
+        self.reset_suggestion_index();
     }
 
     pub fn move_cursor_right(&mut self) {
@@ -1414,6 +1513,7 @@ impl AppState {
         if let Some(c) = self.input_buffer[self.cursor_position..].chars().next() {
             self.cursor_position += c.len_utf8();
         }
+        self.reset_suggestion_index();
     }
 
     pub fn move_cursor_word_left(&mut self) {
@@ -1434,6 +1534,7 @@ impl AppState {
             pos -= c.len_utf8();
         }
         self.cursor_position = pos;
+        self.reset_suggestion_index();
     }
 
     pub fn move_cursor_word_right(&mut self) {
@@ -1454,14 +1555,17 @@ impl AppState {
             pos += c.len_utf8();
         }
         self.cursor_position = pos;
+        self.reset_suggestion_index();
     }
 
     pub fn move_cursor_to_start(&mut self) {
         self.cursor_position = 0;
+        self.reset_suggestion_index();
     }
 
     pub fn move_cursor_to_end(&mut self) {
         self.cursor_position = self.input_buffer.len();
+        self.reset_suggestion_index();
     }
 
     pub fn move_cursor_line_up(&mut self) {
@@ -2017,6 +2121,23 @@ mod live_tool_tests {
 
         state.finish_live_tool_call(&second);
         assert!(state.live_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn live_command_output_is_bounded_and_presentation_only() {
+        let mut state = AppState::new();
+        let key = state.begin_live_tool_call(
+            Some("native-command"),
+            "run_command",
+            &serde_json::json!({"command": "cargo test"}),
+        );
+        state.append_live_tool_output(&key, &vec![b'x'; 40 * 1024], false);
+        state.append_live_tool_output(&key, b"compiler error\n", true);
+
+        let call = &state.live_tool_calls[0];
+        assert!(call.omitted_output_bytes > 0);
+        assert!(call.output.iter().any(|chunk| chunk.stderr));
+        assert!(state.history.is_empty());
     }
 
     #[test]

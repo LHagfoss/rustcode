@@ -89,7 +89,7 @@ fn inline_command_suggestions_render_below_the_composer() {
             .collect::<String>()
     };
     let composer_row = (0..20)
-        .find(|row| row_text(*row).contains("Auto-Confirm"))
+        .find(|row| row_text(*row).contains("? for shortcuts"))
         .expect("composer status row should be visible");
     let popup_row = (0..20)
         .find(|row| row_text(*row).contains("/cancel"))
@@ -799,10 +799,8 @@ fn collapses_image_markers_to_chips() {
 }
 
 #[test]
-fn code_block_rows_fill_full_width() {
+fn code_blocks_render_as_lightweight_transcript_rows() {
     use super::{AssistantRenderOptions, render_assistant_message};
-    use unicode_width::UnicodeWidthStr;
-
     let content = "```text\nWhy Rust Outshines C#\n\nA short line\n```";
     let mut lines = Vec::new();
     let mut copies = Vec::new();
@@ -823,22 +821,13 @@ fn code_block_rows_fill_full_width() {
         },
     );
 
-    // Exactly one code panel → one copy button, anchored to the header row.
+    // The body remains copyable without a language/copy header or full-width panel.
     assert_eq!(copies.len(), 1);
-    let header_idx = copies[0].0;
-
-    // Header + 3 body rows (text, blank, text) must each be
-    // exactly `width` display columns.
-    for line in &lines[header_idx..header_idx + 4] {
-        let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
-        assert_eq!(w, width as usize, "code panel row must fill full width");
-    }
-    for line in &lines[header_idx + 1..header_idx + 4] {
-        assert!(
-            line.spans.iter().all(|span| span.style.bg.is_some()),
-            "ordinary code fences should use the code panel background"
-        );
-    }
+    let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>().join("\n");
+    assert!(rendered.contains("Why Rust Outshines C#"));
+    assert!(rendered.contains("A short line"));
+    assert!(!rendered.contains("Copy 📋"));
+    assert!(lines.iter().all(|line| line.width() < width as usize));
 }
 
 #[test]
@@ -912,7 +901,7 @@ fn streamed_markdown_fences_keep_adversarial_content_in_the_code_cell() {
 }
 
 #[test]
-fn diff_code_blocks_hide_patch_metadata() {
+fn diff_code_blocks_preserve_patch_context_like_codex() {
     use super::{AssistantRenderOptions, render_assistant_message};
 
     let content = "```diff\n--- a/src/temp.rs\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-old\n-removed\n```";
@@ -939,9 +928,9 @@ fn diff_code_blocks_hide_patch_metadata() {
         .flat_map(|line| line.spans.iter())
         .map(|span| span.content.as_ref())
         .collect();
-    assert!(!rendered.contains("a/src/temp.rs"));
-    assert!(!rendered.contains("/dev/null"));
-    assert!(!rendered.contains("@@ -1,2"));
+    assert!(rendered.contains("a/src/temp.rs"));
+    assert!(rendered.contains("/dev/null"));
+    assert!(rendered.contains("@@ -1,2"));
     assert!(rendered.contains("removed"));
 }
 
@@ -1387,13 +1376,9 @@ fn input_bar_contains_live_status_and_command_hint() {
 fn live_tool_activity_is_rendered_without_protocol_text() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
-    state.live_tool_calls.push(crate::app::LiveToolCall {
-        key: "call-1".to_owned(),
-        provider_call_id: None,
-        tool_name: "run_command".to_owned(),
-        action: "Bash".to_owned(),
-        target: "cargo test".to_owned(),
-    });
+    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+        "call-1", None, "run_command", "Bash", "cargo test",
+    ));
 
     let line = super::activity_status_line(&state, false).to_string();
 
@@ -1405,20 +1390,8 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
 #[test]
 fn live_history_cell_keeps_identical_invocations_visible_separately() {
     let calls = vec![
-        crate::app::LiveToolCall {
-            key: "local:1".to_owned(),
-            provider_call_id: None,
-            tool_name: "run_command".to_owned(),
-            action: "Bash".to_owned(),
-            target: "cargo test".to_owned(),
-        },
-        crate::app::LiveToolCall {
-            key: "local:2".to_owned(),
-            provider_call_id: None,
-            tool_name: "run_command".to_owned(),
-            action: "Bash".to_owned(),
-            target: "cargo test".to_owned(),
-        },
+        crate::app::LiveToolCall::new("local:1", None, "run_command", "Bash", "cargo test"),
+        crate::app::LiveToolCall::new("local:2", None, "run_command", "Bash", "cargo test"),
     ];
 
     let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
@@ -1439,13 +1412,9 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
 #[test]
 fn live_tool_cell_is_a_projection_not_history() {
     let mut state = AppState::new();
-    state.live_tool_calls.push(crate::app::LiveToolCall {
-        key: "local:1".to_owned(),
-        provider_call_id: None,
-        tool_name: "view_file".to_owned(),
-        action: "Read".to_owned(),
-        target: "src/main.rs".to_owned(),
-    });
+    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+        "local:1", None, "view_file", "Read", "src/main.rs",
+    ));
 
     let text = super::render_live_tail(&state, 80, 24)
         .into_iter()
@@ -1454,6 +1423,56 @@ fn live_tool_cell_is_a_projection_not_history() {
         .join("\n");
     assert!(text.contains("Exploring"));
     assert!(state.history.is_empty());
+}
+
+#[test]
+fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
+    let mut call = crate::app::LiveToolCall::new(
+        "local:1", None, "run_command", "Bash", "cargo test",
+    );
+    call.output.push_back(crate::app::LiveToolOutputChunk {
+        stderr: false,
+        text: (0..12).map(|line| format!("stdout {line}\n")).collect(),
+    });
+    call.output.push_back(crate::app::LiveToolOutputChunk {
+        stderr: true,
+        text: "compiler error\n".to_owned(),
+    });
+    call.omitted_output_bytes = 4096;
+
+    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Running cargo test");
+    assert!(rendered.iter().any(|line| line.contains("compiler error")));
+    assert!(rendered.iter().any(|line| line.contains("lines")));
+    assert!(rendered.iter().any(|line| line.contains("4096 earlier bytes omitted")));
+    assert!(rendered.len() <= 8, "live output must remain bounded: {rendered:?}");
+}
+
+#[test]
+fn question_replaces_composer_with_borderless_bottom_pane() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut state = AppState::new();
+    state.status = AppStatus::AwaitingQuestion;
+    state.pending_question = Some(crate::app::PendingQuestion::new(
+        "Choose an option.".to_owned(),
+        vec!["Option 1".to_owned(), "Option 2".to_owned()],
+        false,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(80, 18)).unwrap();
+    terminal.draw(|frame| render(frame, &mut state)).unwrap();
+    let rendered = terminal.backend().buffer().content.iter()
+        .map(|cell| cell.symbol()).collect::<String>();
+
+    assert!(rendered.contains("Question 1/1 (1 unanswered)"));
+    assert!(rendered.contains("› 1. Option 1"));
+    assert!(rendered.contains("enter to submit answer"));
+    assert!(!rendered.contains("Ask RustCode to do anything"));
+    assert!(!rendered.contains('╭') && !rendered.contains('╰'));
 }
 
 #[test]
@@ -1468,13 +1487,13 @@ fn active_transcript_cell_updates_in_place_and_clears_without_history() {
     assert!(transcript.revision() > first_revision);
     assert!(!transcript.display_lines(80).is_empty());
 
-    transcript.set_tools(&[crate::app::LiveToolCall {
-        key: "call-1".to_owned(),
-        provider_call_id: Some("native-1".to_owned()),
-        tool_name: "run_command".to_owned(),
-        action: "Bash".to_owned(),
-        target: "cargo test".to_owned(),
-    }]);
+    transcript.set_tools(&[crate::app::LiveToolCall::new(
+        "call-1",
+        Some("native-1".to_owned()),
+        "run_command",
+        "Bash",
+        "cargo test",
+    )]);
     assert!(transcript.revision() > first_revision);
     assert!(
         transcript
@@ -1491,13 +1510,9 @@ fn active_transcript_cell_updates_in_place_and_clears_without_history() {
 fn action_required_status_wins_over_a_live_question_tool() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingQuestion;
-    state.live_tool_calls.push(crate::app::LiveToolCall {
-        key: "question".to_owned(),
-        provider_call_id: None,
-        tool_name: "ask_question".to_owned(),
-        action: "AskQuestion".to_owned(),
-        target: "continue?".to_owned(),
-    });
+    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+        "question", None, "ask_question", "AskQuestion", "continue?",
+    ));
 
     assert_eq!(super::activity_status_label(&state), "Action Required");
 }
@@ -1802,7 +1817,7 @@ fn committed_user_messages_keep_regular_body_text() {
 
     let block = super::render_committed_history_block(&state, 0, 80);
 
-    assert_eq!(block[0].spans[0].content, "❯ ");
+    assert_eq!(block[0].spans[0].content, "› ");
     assert!(!block[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
 }
 
@@ -1816,7 +1831,15 @@ fn committed_user_message_has_trailing_blank_line() {
     let block = super::render_committed_history_block(&state, 0, 80);
 
     assert_eq!(block.len(), 2);
-    assert_eq!(block[0].spans[1].content, "check latest 10 commits");
+    assert_eq!(
+        block[0]
+            .spans
+            .iter()
+            .skip(1)
+            .map(|span| span.content.as_ref())
+            .collect::<String>(),
+        "check latest 10 commits"
+    );
     assert!(block[1].spans.is_empty());
 }
 
@@ -1966,17 +1989,17 @@ fn empty_composer_has_no_extra_blank_rows() {
         (0..100)
             .map(|x| buffer[(x, *y)].symbol())
             .collect::<String>()
-            .contains("Ask a question")
+            .contains("Ask RustCode to do anything")
     });
     let bottom_border_row = (0..12).find(|y| {
         (0..100)
             .map(|x| buffer[(x, *y)].symbol())
             .collect::<String>()
-            .contains("Auto-Confirm")
+            .contains("? for shortcuts")
     });
 
     let prompt_row = prompt_row.expect("composer prompt should be rendered");
-    assert_eq!(bottom_border_row, Some(prompt_row + 1));
+    assert_eq!(bottom_border_row, Some(prompt_row + 2));
 }
 
 #[test]

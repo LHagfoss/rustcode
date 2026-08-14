@@ -65,8 +65,17 @@ pub async fn handle_enter(
     s.reset_suggestion_cycle();
     s.history_index = None;
 
+    let selected_file_completion = s.active_suggestion_index.is_some()
+        && crate::app::get_at_word_query(&s.input_buffer, s.cursor_position).is_some();
     if s.active_suggestion_index.is_some() {
         apply_autocomplete(&mut s);
+    }
+
+    // Codex treats accepting a file completion as an edit to the draft, not as
+    // prompt submission. A second Enter submits once the user can see the
+    // completed path in context.
+    if selected_file_completion {
+        return false;
     }
 
     let raw_input = s.input_buffer.trim().to_string();
@@ -1021,6 +1030,7 @@ pub fn get_completion_len(input_buffer: &str, cursor_position: usize) -> usize {
 }
 
 pub fn apply_autocomplete(s: &mut AppState) {
+    s.dismissed_completion = None;
     if let Some(command) = crate::app::suggestion::command_token(&s.input_buffer) {
         let filtered_cmds = crate::app::suggestion::filtered_commands(&s.input_buffer);
         let idx = s
@@ -1812,6 +1822,29 @@ mod tests {
 
         assert_eq!(state.input_buffer, "/model --fast");
         assert_eq!(state.active_suggestion_index, None);
+    }
+
+    #[tokio::test]
+    async fn enter_accepts_file_completion_without_submitting_the_prompt() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        {
+            let mut state = state.lock().await;
+            state.input_buffer = "inspect @Cargo".to_owned();
+            state.cursor_position = state.input_buffer.len();
+            state.active_suggestion_index = Some(0);
+        }
+        let client = reqwest::Client::new();
+        let mut cancel = CancellationToken::new();
+
+        assert!(!super::handle_enter(&state, &client, &mut cancel).await);
+        let state = state.lock().await;
+        assert!(state.input_buffer.contains("Cargo"));
+        assert!(state.input_buffer.ends_with(' '));
+        assert!(state.history.is_empty());
     }
 
     #[test]
