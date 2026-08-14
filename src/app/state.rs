@@ -794,8 +794,8 @@ pub enum HoverTarget {
 #[derive(Debug, PartialEq, Clone, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Verbosity {
-    #[default]
     Low,
+    #[default]
     High,
 }
 
