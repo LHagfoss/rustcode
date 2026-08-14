@@ -1898,6 +1898,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else if ctrl && c == 'w' {
                                 s.delete_word_backspace();
                                 s.reset_suggestion_cycle();
+                            } else if c == '?'
+                                && !ctrl
+                                && !alt
+                                && !cmd
+                                && s.input_buffer.is_empty()
+                            {
+                                s.history.push(ChatMessage::new(
+                                    "system",
+                                    crate::app::build_help_text(),
+                                ));
+                                s.request_redraw();
                             } else if !ctrl && !alt && !c.is_control() {
                                 s.insert_char(c);
                                 s.reset_suggestion_cycle();
