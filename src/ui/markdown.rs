@@ -95,6 +95,99 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
     push_wrapped_with_continuation(lines, spans, width, None);
 }
 
+#[derive(Clone, Default)]
+struct MarkdownTableCell {
+    spans: Vec<Span<'static>>,
+}
+
+impl MarkdownTableCell {
+    fn push_text(&mut self, text: &str, style: ratatui::style::Style) {
+        if text.is_empty() {
+            return;
+        }
+        self.spans.push(Span::styled(text.to_owned(), style));
+    }
+
+    fn plain_text(&self) -> String {
+        self.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn width(&self) -> usize {
+        self.spans
+            .iter()
+            .map(|span| span.content.width())
+            .sum()
+    }
+}
+
+fn push_table_wrapped_text(
+    lines: &mut Vec<Vec<Span<'static>>>,
+    current_width: &mut usize,
+    text: &str,
+    style: ratatui::style::Style,
+    width: usize,
+) {
+    let width = width.max(1);
+    if lines.is_empty() {
+        lines.push(Vec::new());
+    }
+    for character in text.chars() {
+        if character == '\n' {
+            lines.push(Vec::new());
+            *current_width = 0;
+            continue;
+        }
+        let character_width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        if *current_width > 0 && *current_width + character_width > width {
+            lines.push(Vec::new());
+            *current_width = 0;
+        }
+        if character_width > width {
+            continue;
+        }
+        if let Some(last) = lines.last_mut()
+            && last.last().is_some_and(|span| span.style == style)
+        {
+            last.last_mut().expect("last span exists").content.to_mut().push(character);
+        } else {
+            lines
+                .last_mut()
+                .expect("table line exists")
+                .push(Span::styled(character.to_string(), style));
+        }
+        *current_width += character_width;
+    }
+}
+
+fn wrapped_table_cell(
+    cell: &MarkdownTableCell,
+    width: usize,
+    header: bool,
+) -> Vec<Vec<Span<'static>>> {
+    let cell_style = |style: ratatui::style::Style| {
+        if header {
+            style.add_modifier(Modifier::BOLD)
+        } else {
+            style
+        }
+    };
+    let mut lines = vec![Vec::new()];
+    let mut current_width = 0;
+    for span in &cell.spans {
+        push_table_wrapped_text(
+            &mut lines,
+            &mut current_width,
+            span.content.as_ref(),
+            cell_style(span.style),
+            width,
+        );
+    }
+    lines
+}
+
 fn continuation_line(prefix: Option<&Span<'static>>) -> (Vec<Span<'static>>, usize) {
     let Some(prefix) = prefix else {
         return (Vec::new(), 0);
@@ -451,9 +544,9 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let mut list_continuation = None::<String>;
 
     let mut in_table = false;
-    let mut table_rows: Vec<(Vec<String>, bool)> = Vec::new(); // (cells, is_header)
-    let mut current_row: Vec<String> = Vec::new();
-    let mut current_cell = String::new();
+    let mut table_rows: Vec<(Vec<MarkdownTableCell>, bool)> = Vec::new();
+    let mut current_row: Vec<MarkdownTableCell> = Vec::new();
+    let mut current_cell = MarkdownTableCell::default();
     let flush = |lines: &mut Vec<Line<'static>>,
                  paragraph: &mut Vec<Span<'static>>,
                  quote_depth: usize,
@@ -493,52 +586,43 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         }
     };
     let flush_table = |lines: &mut Vec<Line<'static>>,
-                       rows: &[(Vec<String>, bool)],
+                       rows: &[(Vec<MarkdownTableCell>, bool)],
                        width: usize,
                        show_picker: bool| {
         if rows.is_empty() {
             return;
         }
         let cols = rows.iter().map(|(r, _)| r.len()).max().unwrap_or(0);
-        let header = rows
-            .iter()
-            .find_map(|(cells, is_header)| is_header.then_some(cells));
         let grid_is_cramped = cols > 1 && width < cols.saturating_mul(14).saturating_add(4);
         if grid_is_cramped {
-            if let Some(header) = header {
+            if let Some(header) = rows
+                .iter()
+                .find_map(|(cells, is_header)| is_header.then_some(cells))
+            {
                 let body_rows = rows
                     .iter()
                     .filter(|(_, is_header)| !is_header)
                     .collect::<Vec<_>>();
                 for (row_index, (cells, _)) in body_rows.iter().enumerate() {
-                    for (column, value) in cells.iter().enumerate() {
+                    for (column, cell) in cells.iter().enumerate() {
                         let label = header
                             .get(column)
+                            .map(MarkdownTableCell::plain_text)
                             .filter(|label| !label.is_empty())
-                            .cloned()
                             .unwrap_or_else(|| format!("Field {}", column + 1));
+                        let mut value_spans = vec![Span::styled(
+                            format!("  {label}: "),
+                            get_themed_style(
+                                COLOR_MUTED(),
+                                COLOR_BG(),
+                                Modifier::BOLD,
+                                show_picker,
+                            ),
+                        )];
+                        value_spans.extend(cell.spans.clone());
                         push_wrapped(
                             lines,
-                            vec![
-                                Span::styled(
-                                    format!("  {label}: "),
-                                    get_themed_style(
-                                        COLOR_MUTED(),
-                                        COLOR_BG(),
-                                        Modifier::BOLD,
-                                        show_picker,
-                                    ),
-                                ),
-                                Span::styled(
-                                    value.clone(),
-                                    get_themed_style(
-                                        COLOR_TEXT(),
-                                        COLOR_BG(),
-                                        Modifier::empty(),
-                                        show_picker,
-                                    ),
-                                ),
-                            ],
+                            value_spans,
                             width,
                         );
                     }
@@ -549,25 +633,18 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 return;
             }
         }
-        // Ideal widths capped per-column: content drives width, header truncated to cap
-        let caps = [18usize, 10, 18, 14, 18]; // last col widened so "Replay or Conversation?" content-driven
+        // Content drives width. Keep compact tables compact instead of expanding them to
+        // the viewport; when a table is wider than the viewport, shrink its columns and
+        // wrap the cells below without dropping their inline styles.
         let mut col_widths = vec![3usize; cols];
-        // Content drives width; headers are truncated like any other cell (capped) so
-        // a long header like "Replay or Conversation?" never widens the column past
-        // the widest content cell.
-        for (cells, is_header) in rows {
+        for (cells, _) in rows {
             for (i, c) in cells.iter().enumerate() {
-                let cap = caps.get(i).copied().unwrap_or(22);
-                let effective = if *is_header {
-                    c.width().min(cap)
-                } else {
-                    c.width().min(cap)
-                };
-                col_widths[i] = col_widths[i].max(effective);
+                col_widths[i] = col_widths[i].max(c.width());
             }
         }
-        // Weighted shrink: large token columns shrink first, Session last
-        let mut total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 3 + 4; // +4 outer borders
+        // Two spaces between columns match Codex's readable table rhythm without
+        // adding a box around every cell.
+        let mut total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 2;
         if total > width && cols > 0 {
             let mut excess = total.saturating_sub(width);
             let order: Vec<usize> = {
@@ -587,161 +664,53 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 if excess == 0 {
                     break;
                 }
-                let min_w = caps
-                    .get(i)
-                    .map(|_| 6)
-                    .unwrap_or(5)
-                    .min(col_widths[i].saturating_sub(1));
+                let min_w = 3;
                 let can_shrink = col_widths[i].saturating_sub(min_w);
                 let take = can_shrink.min(excess);
                 col_widths[i] -= take;
                 excess -= take;
             }
-            total = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 3 + 4;
+            total = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 2;
         }
-        // Expand: if table is narrower than available width, give remainder to the
-        // widest-content column so short headers like "Module"/"Purpose" don't leave
-        // 80 cols empty on the right (Core Modules case). Content drives width.
-        if total < width && cols > 0 {
-            let remainder = width.saturating_sub(total);
-            // pick column with widest uncapped content (usually Purpose/last col)
-            let mut uncapped = vec![0usize; cols];
-            for (cells, _) in rows.iter() {
-                for (i, c) in cells.iter().enumerate() {
-                    if i < cols {
-                        uncapped[i] = uncapped[i].max(c.width());
-                    }
-                }
-            }
-            let target = uncapped
-                .iter()
-                .enumerate()
-                .max_by_key(|&(_, &w)| w)
-                .map(|(i, _)| i)
-                .unwrap_or(cols - 1);
-            col_widths[target] += remainder;
-        }
-        // outer borders: 1 padding spaces per cell side: "─" * (w + 2)
-        let top = format!(
-            "┌{}┐",
-            col_widths
-                .iter()
-                .map(|w| "─".repeat(w + 2))
-                .collect::<Vec<_>>()
-                .join("┬")
-        );
-        let bottom = format!(
-            "└{}┘",
-            col_widths
-                .iter()
-                .map(|w| "─".repeat(w + 2))
-                .collect::<Vec<_>>()
-                .join("┴")
-        );
-        lines.push(Line::from(Span::styled(
-            top,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        )));
         for (idx, (cells, is_header)) in rows.iter().enumerate() {
-            let style = if *is_header {
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker)
-            } else {
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker)
-            };
-
-            // Wrap each cell's text into lines fitting col_widths[i]
-            let mut cell_lines: Vec<Vec<String>> = Vec::new();
+            let mut cell_lines: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
             let mut max_cell_height = 1usize;
-
             for i in 0..cols {
-                let txt = cells.get(i).map(|s| s.as_str()).unwrap_or("");
-                let w = col_widths[i];
-                let mut lines_for_cell = Vec::new();
-
-                if txt.is_empty() {
-                    lines_for_cell.push(String::new());
-                } else {
-                    for word in txt.split_inclusive(|c: char| c.is_whitespace()) {
-                        if lines_for_cell.is_empty() {
-                            lines_for_cell.push(String::new());
-                        }
-                        let last_line = lines_for_cell.last_mut().unwrap();
-                        let last_w = last_line.width();
-                        let word_w = word.width();
-
-                        if last_w + word_w <= w || last_w == 0 {
-                            last_line.push_str(word);
-                        } else {
-                            lines_for_cell.push(word.trim_start().to_string());
-                        }
-                    }
-                }
+                let cell = cells.get(i).cloned().unwrap_or_default();
+                let lines_for_cell = wrapped_table_cell(&cell, col_widths[i], *is_header);
                 max_cell_height = max_cell_height.max(lines_for_cell.len());
                 cell_lines.push(lines_for_cell);
             }
 
-            // Render row line by line for multi-line cells
             for line_idx in 0..max_cell_height {
                 let mut row_spans = Vec::new();
-                row_spans.push(Span::styled(
-                    "│".to_string(),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-
                 for i in 0..cols {
-                    let cell_txt = cell_lines[i]
-                        .get(line_idx)
-                        .map(|s| s.trim_end())
-                        .unwrap_or("");
                     let w = col_widths[i];
-                    let formatted = if cell_txt.width() > w {
-                        let mut end = 0;
-                        let mut current_w = 0;
-                        let target_w = w.saturating_sub(1);
-                        for ch in cell_txt.chars() {
-                            let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                            if current_w + ch_w > target_w {
-                                break;
-                            }
-                            current_w += ch_w;
-                            end += ch.len_utf8();
-                        }
-                        let truncated = &cell_txt[..end];
-                        let pad = w.saturating_sub(current_w + 1);
-                        format!(" {}…{:pad$} ", truncated, "", pad = pad)
-                    } else {
-                        let pad = w.saturating_sub(cell_txt.width());
-                        format!(" {}{:pad$} ", cell_txt, "", pad = pad)
-                    };
-                    row_spans.push(Span::styled(formatted, style));
-                    row_spans.push(Span::styled(
-                        "│".to_string(),
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                    ));
+                    let spans = cell_lines[i].get(line_idx).cloned().unwrap_or_default();
+                    let visible_width: usize = spans
+                        .iter()
+                        .map(|span| span.content.width())
+                        .sum();
+                    row_spans.extend(spans);
+                    if visible_width < w {
+                        row_spans.push(Span::raw(" ".repeat(w - visible_width)));
+                    }
+                    if i + 1 < cols {
+                        row_spans.push(Span::raw("  "));
+                    }
                 }
                 lines.push(Line::from(row_spans));
             }
 
-            // Draw divider only under header row
-            if idx == 0 && rows[0].1 {
-                let div = format!(
-                    "├{}┤",
-                    col_widths
-                        .iter()
-                        .map(|w| "─".repeat(w + 2))
-                        .collect::<Vec<_>>()
-                        .join("┼")
-                );
+            // A strong rule separates the header; lighter rules keep body rows scannable.
+            if idx + 1 < rows.len() {
+                let separator = if idx == 0 && rows[0].1 { '━' } else { '─' };
                 lines.push(Line::from(Span::styled(
-                    div,
+                    separator.to_string().repeat(total),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 )));
             }
         }
-        lines.push(Line::from(Span::styled(
-            bottom,
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        )));
     };
 
     let normalized = unwrap_markdown_table_fences(content);
@@ -872,7 +841,16 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             Event::End(TagEnd::Strikethrough) => inline.strike = false,
             Event::Code(text) => {
                 if in_table {
-                    current_cell.push_str(&text);
+                    current_cell.push_text(
+                        &text,
+                        text_style(
+                            InlineStyle {
+                                code: true,
+                                ..inline
+                            },
+                            show_picker,
+                        ),
+                    );
                 } else {
                     paragraph.push(Span::styled(
                         text.to_string(),
@@ -890,18 +868,28 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             Event::End(TagEnd::Link) => inline.link = false,
             Event::Text(text) | Event::InlineHtml(text) => {
                 if in_table {
-                    // Cap per-cell content so a 55KB curl dump doesn't become a single wide row
-                    // and blow out column widths (the "green stuff" overflow in 1786013456760).
-                    if current_cell.len() + text.len() > 400 {
-                        let remaining = 400usize.saturating_sub(current_cell.len());
-                        if remaining > 3 {
-                            current_cell.push_str(
-                                &text[..text.floor_char_boundary(remaining.saturating_sub(1))],
-                            );
-                            current_cell.push('…');
-                        }
+                    // Cap per-cell content so a large command result cannot become an
+                    // unbounded table. Keep each parser span separate so inline Markdown
+                    // styles survive into the table renderer.
+                    let style = if heading.is_some() {
+                        heading_style(heading.unwrap_or(HeadingLevel::H3), show_picker)
                     } else {
-                        current_cell.push_str(&text);
+                        text_style(inline, show_picker)
+                    };
+                    let current_len = current_cell.plain_text().len();
+                    let remaining = 400usize.saturating_sub(current_len);
+                    if remaining > 0 {
+                        let end = text
+                            .char_indices()
+                            .take_while(|(index, _)| *index < remaining)
+                            .map(|(index, character)| index + character.len_utf8())
+                            .last()
+                            .unwrap_or(0)
+                            .min(text.len());
+                        current_cell.push_text(&text[..end], style);
+                        if end < text.len() {
+                            current_cell.push_text("…", style);
+                        }
                     }
                     continue;
                 }
@@ -997,7 +985,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 table_rows.clear();
                 in_table = false;
                 current_row.clear();
-                current_cell.clear();
+                current_cell = MarkdownTableCell::default();
                 lines.push(Line::from(""));
             }
             Event::Start(Tag::TableHead) => {
@@ -1017,7 +1005,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 }
             }
             Event::Start(Tag::TableCell) => {
-                current_cell.clear();
+                current_cell = MarkdownTableCell::default();
             }
             Event::End(TagEnd::TableCell) => {
                 current_row.push(std::mem::take(&mut current_cell));
@@ -1060,8 +1048,27 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(all.contains("Header 1 │ Header 2"));
-        assert!(all.contains('┌') && all.contains('┐') && all.contains('└'));
+        assert!(all.contains("Header 1  Header 2"));
+        assert!(all.contains('━'));
+        assert!(!all.contains('┌') && !all.contains('│'));
+    }
+
+    #[test]
+    fn table_cells_keep_inline_markdown_styles() {
+        let md = "| Name | Value |\n|---|---|\n| **bold** | `code` |";
+        let lines = render_markdown(md, 80, false, false);
+        let bold = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains("bold"))
+            .expect("bold table cell should be rendered");
+        let code = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains("code"))
+            .expect("code table cell should be rendered");
+        assert_eq!(bold.style.add_modifier(Modifier::BOLD), bold.style);
+        assert_ne!(bold.style, code.style, "inline code should retain its style");
     }
 
     #[test]
@@ -1086,8 +1093,8 @@ mod tests {
             .collect::<Vec<_>>();
         let table_index = rendered
             .iter()
-            .position(|line| line.starts_with('┌'))
-            .expect("table should render with a top border");
+            .position(|line| line.contains("Commit"))
+            .expect("table should render with a header");
 
         assert!(rendered[table_index..].iter().any(|line| line.contains("3d6a1a5")));
         assert!(rendered[table_index..].iter().any(|line| line.contains("764fe6b")));
@@ -1296,7 +1303,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| line.starts_with('┌')));
+        assert!(rendered.iter().any(|line| line.contains("Tool  Purpose")));
         assert!(rendered.iter().any(|line| line.contains("grep")));
         assert!(rendered.iter().all(|line| !line.contains("```")));
     }
@@ -1313,7 +1320,9 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| line.starts_with('┌')));
+        assert!(rendered.iter().any(|line| {
+            line.contains("Category") && line.contains("Name") && line.contains("Purpose")
+        }));
         assert!(rendered.iter().any(|line| line.contains("clockify")));
         assert!(rendered.iter().all(|line| !line.contains("| Category |")));
     }
