@@ -398,24 +398,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let terminal_width = terminal.size()?.width;
             transcript_cursor.begin_stream(&guard.current_response);
-            let stable_rows = if replay_history {
-                Vec::new()
+            let stable_source = if replay_history {
+                String::new()
             } else {
-                transcript_cursor.pending_stable_stream(&guard.current_response)
+                transcript_cursor.pending_stable_source(&guard.current_response)
             };
-            if !stable_rows.is_empty() {
-                let stable = format!("{}\n", stable_rows.join("\n"));
+            if !stable_source.is_empty() {
                 let is_continuation = transcript_cursor.has_committed_stream();
                 let lines = crate::ui::render_committed_assistant_chunk(
                     &guard,
-                    &stable,
+                    &stable_source,
                     terminal_width,
                     is_continuation,
                 );
                 if !lines.is_empty() {
                     insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
                 }
-                transcript_cursor.commit_stable_stream(&stable);
+                transcript_cursor.commit_stable_stream(&stable_source);
             }
 
             let history_range = if replay_history {
@@ -496,17 +495,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // During a resize, history must be inserted before the still-live
             // response. Re-emit the stable prefix only after the history pass.
             if replay_history {
-                let stable_rows = transcript_cursor.pending_stable_stream(&guard.current_response);
-                if !stable_rows.is_empty() {
-                    let stable = format!("{}\n", stable_rows.join("\n"));
+                let stable_source =
+                    transcript_cursor.pending_stable_source(&guard.current_response);
+                if !stable_source.is_empty() {
                     let lines = crate::ui::render_committed_assistant_chunk(
                         &guard,
-                        &stable,
+                        &stable_source,
                         terminal_width,
                         false,
                     );
                     insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
-                    transcript_cursor.commit_stable_stream(&stable);
+                    transcript_cursor.commit_stable_stream(&stable_source);
                 }
             }
             transcript_cursor.commit_history_through(history_range.end);

@@ -54,13 +54,9 @@ pub(super) fn render_tool_result<'a>(
     tool_name: &str,
     result: &str,
     width: usize,
-    verbosity: &crate::app::Verbosity,
+    _verbosity: &crate::app::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'a>> {
-    if matches!(verbosity, crate::app::Verbosity::High) {
-        return Vec::new();
-    }
-
     let lines = match tool_name {
         "view_file" => render_read_result(result, width, show_picker),
         "grep" => render_search_result(result, width, show_picker),
@@ -708,11 +704,11 @@ mod tests {
     }
 
     #[test]
-    fn high_verbosity_suppresses_all_tool_results() {
+    fn high_verbosity_keeps_tool_output_available_for_inspection() {
         let result =
             "TaskId: task-1, Status: RUNNING, PID: 1234, Runtime: 5s, Command: cargo check";
         assert!(
-            render_tool_result(
+            !render_tool_result(
                 "manage_task",
                 result,
                 80,
@@ -722,7 +718,7 @@ mod tests {
             .is_empty()
         );
         assert!(
-            render_tool_result(
+            !render_tool_result(
                 "replace_file_content",
                 "edited file",
                 80,
@@ -732,7 +728,7 @@ mod tests {
             .is_empty()
         );
         assert!(
-            render_tool_result(
+            !render_tool_result(
                 "run_command",
                 "command output",
                 80,

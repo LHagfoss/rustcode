@@ -146,6 +146,7 @@ mod tests {
         ToolCall {
             name: name.to_string(),
             arguments: serde_json::json!({}),
+            call_id: None,
         }
     }
 

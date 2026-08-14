@@ -1450,19 +1450,25 @@ pub(crate) fn active_todo_checkpoint(todos: &[crate::app::TodoItem]) -> Option<S
         .map(|todo| todo.content.clone())
 }
 
-/// Pair calls with the ids the provider assigned them, by position. Yields
-/// nothing under the text protocols, where calls are prose without identity.
+/// Pair calls with provider ids. Native calls carry their id directly; the
+/// positional fallback covers the older stream bookkeeping path.
 pub(crate) fn call_refs_for(
     calls: &[crate::tools::ToolCall],
     ids: &[String],
 ) -> Vec<crate::app::ToolCallRef> {
     calls
         .iter()
-        .zip(ids.iter())
-        .map(|(call, id)| crate::app::ToolCallRef {
-            id: id.clone(),
-            name: call.name.clone(),
-            arguments: call.arguments.to_string(),
+        .enumerate()
+        .filter_map(|(position, call)| {
+            let id = call
+                .call_id
+                .clone()
+                .or_else(|| ids.get(position).cloned())?;
+            Some(crate::app::ToolCallRef {
+                id,
+                name: call.name.clone(),
+                arguments: call.arguments.to_string(),
+            })
         })
         .collect()
 }

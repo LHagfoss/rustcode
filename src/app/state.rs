@@ -488,6 +488,7 @@ impl ChatMessage {
                     Some(crate::tools::ToolCall {
                         name: tc.name.clone(),
                         arguments: args,
+                        call_id: Some(tc.id.clone()),
                     })
                 })
                 .collect()
@@ -798,6 +799,20 @@ pub enum Verbosity {
     High,
 }
 
+/// Presentation-only state for a tool invocation that has not produced its
+/// final history message yet. The provider payload and persisted history keep
+/// using [`ToolCallRef`] and [`ToolResultRecord`]; this projection exists so
+/// the TUI can update one live activity item instead of appending protocol
+/// fragments to the transcript.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveToolCall {
+    pub key: String,
+    pub provider_call_id: Option<String>,
+    pub tool_name: String,
+    pub action: String,
+    pub target: String,
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -890,6 +905,13 @@ pub struct AppState {
     /// While this is not empty, the modal overlay stays closed and the user can
     /// keep working normally.
     pub running_tools: Vec<String>,
+    /// Tool calls currently being executed, including read/search calls that
+    /// finish too quickly to be useful as a name-only `running_tools` status.
+    /// This is deliberately not serialized: it is a terminal presentation
+    /// projection, not conversation context.
+    pub live_tool_calls: Vec<LiveToolCall>,
+    /// Monotonic identity source for presentation-only live tool projections.
+    pub live_tool_call_sequence: u64,
 
     pub stream_tracker: Option<StreamTracker>,
 
@@ -1031,6 +1053,53 @@ impl AppState {
         self.redraw_requested = true;
     }
 
+    /// Add a live tool projection for the TUI without changing canonical
+    /// conversation history or provider-facing state.
+    pub fn begin_live_tool_call(
+        &mut self,
+        provider_call_id: Option<&str>,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> String {
+        let sequence = self.live_tool_call_sequence;
+        self.live_tool_call_sequence = self.live_tool_call_sequence.saturating_add(1);
+        let key = match provider_call_id {
+            Some(call_id) => format!("provider:{call_id}:{sequence}"),
+            None => format!("local:{sequence}"),
+        };
+        let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
+        self.live_tool_calls.push(LiveToolCall {
+            key: key.clone(),
+            provider_call_id: provider_call_id.map(str::to_owned),
+            tool_name: tool_name.to_owned(),
+            action,
+            target,
+        });
+        self.request_redraw();
+        key
+    }
+
+    /// Finish one live tool projection. The completed semantic result is
+    /// persisted separately as the normal `ChatMessage` tool result.
+    pub fn finish_live_tool_call(&mut self, key: &str) {
+        if let Some(position) = self
+            .live_tool_calls
+            .iter()
+            .position(|live_call| live_call.key == key)
+        {
+            self.live_tool_calls.remove(position);
+            self.request_redraw();
+        }
+    }
+
+    /// Remove projections left by cancellation or an interrupted turn.
+    pub fn clear_live_tool_calls(&mut self) {
+        if !self.live_tool_calls.is_empty() {
+            self.live_tool_calls.clear();
+            self.request_redraw();
+        }
+    }
+
     /// Consume a pending redraw request.
     pub fn take_redraw_request(&mut self) -> bool {
         std::mem::take(&mut self.redraw_requested)
@@ -1110,6 +1179,8 @@ impl AppState {
             pending_question: None,
             question_response: None,
             running_tools: Vec::new(),
+            live_tool_calls: Vec::new(),
+            live_tool_call_sequence: 0,
             stream_tracker: None,
             auto_confirm: false,
             active_session_id,
@@ -1919,6 +1990,56 @@ mod chat_message_tests {
         let calls = msg.resolved_tool_calls(ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "grep");
+    }
+}
+
+#[cfg(test)]
+mod live_tool_tests {
+    use super::AppState;
+
+    #[test]
+    fn identical_live_calls_have_independent_execution_identity() {
+        let mut state = AppState::new();
+        let arguments = serde_json::json!({"path": "src/lib.rs"});
+        let first = state.begin_live_tool_call(None, "view_file", &arguments);
+        let second = state.begin_live_tool_call(None, "view_file", &arguments);
+
+        assert_ne!(first, second);
+        assert_eq!(state.live_tool_calls.len(), 2);
+
+        state.finish_live_tool_call(&first);
+        assert_eq!(state.live_tool_calls.len(), 1);
+        assert_eq!(state.live_tool_calls[0].key, second);
+
+        state.finish_live_tool_call(&second);
+        assert!(state.live_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn provider_id_is_retained_without_becoming_the_only_key_component() {
+        let mut state = AppState::new();
+        let arguments = serde_json::json!({"command": "cargo check"});
+        let first = state.begin_live_tool_call(Some("provider-call-7"), "run_command", &arguments);
+        let second = state.begin_live_tool_call(Some("provider-call-7"), "run_command", &arguments);
+
+        assert_ne!(first, second);
+        assert!(first.contains("provider-call-7"));
+        assert_eq!(state.live_tool_calls[0].provider_call_id.as_deref(), Some("provider-call-7"));
+    }
+
+    #[test]
+    fn cleanup_removes_all_live_calls_without_touching_history() {
+        let mut state = AppState::new();
+        state.history.push(super::ChatMessage::new("user", "keep me"));
+        let history = state.history.clone();
+        let arguments = serde_json::json!({});
+        state.begin_live_tool_call(None, "grep", &arguments);
+        state.begin_live_tool_call(None, "grep", &arguments);
+
+        state.clear_live_tool_calls();
+
+        assert!(state.live_tool_calls.is_empty());
+        assert!(state.history == history);
     }
 }
 
