@@ -941,6 +941,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     };
                                     s.verbosity = new_verbosity.clone();
                                     s.config.verbosity = new_verbosity;
+                                    crate::config::save_entire_config(&s.config);
                                     s.status = AppStatus::Idle;
                                 }
                                 KeyCode::Esc => {

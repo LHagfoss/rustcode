@@ -1797,6 +1797,10 @@ fn indent_tool_result_body(
     tool_name: &str,
     verbosity: &crate::app::Verbosity,
 ) -> Vec<Line<'static>> {
+    if matches!(verbosity, crate::app::Verbosity::High) {
+        return Vec::new();
+    }
+
     let filtered = lines
         .into_iter()
         .filter(|line| {
@@ -1807,11 +1811,7 @@ fn indent_tool_result_body(
                     .any(|span| span.content.trim_start().starts_with('✗'))
         })
         .collect::<Vec<_>>();
-    let max_visible = if matches!(verbosity, crate::app::Verbosity::High) {
-        20
-    } else {
-        6
-    };
+    let max_visible = 6;
     let omitted = filtered.len().saturating_sub(max_visible);
     let head_count = max_visible / 2;
     let tail_count = max_visible - head_count;
@@ -2114,11 +2114,11 @@ fn indent_generic_tool_body(
     verbosity: &crate::app::Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let max_visible = if matches!(verbosity, crate::app::Verbosity::High) {
-        20
-    } else {
-        6
-    };
+    if matches!(verbosity, crate::app::Verbosity::High) {
+        return Vec::new();
+    }
+
+    let max_visible = 6;
     let omitted = lines.len().saturating_sub(max_visible);
     let head_count = max_visible / 2;
     let tail_count = max_visible - head_count;
@@ -2225,7 +2225,8 @@ pub(crate) fn render_committed_tool_result_group(
                     lines.push(tool_child_line(entry, first_child, show_hint, show_picker));
                     first_child = false;
                     if kind == ToolTranscriptKind::Tool
-                        && (is_expanded || matches!(state.verbosity, crate::app::Verbosity::High))
+                        && is_expanded
+                        && matches!(state.verbosity, crate::app::Verbosity::Low)
                     {
                         lines.extend(indent_generic_tool_body(
                             entry.body.clone(),
@@ -2688,7 +2689,7 @@ pub(crate) fn render_live_tail_with_transcript(
 
     let mut has_visible_active_cell = false;
     if !state.live_tool_calls.is_empty() {
-        transcript.set_tools(&state.live_tool_calls);
+        transcript.set_tools_with_verbosity(&state.live_tool_calls, &state.verbosity);
         has_visible_active_cell = true;
     } else if !tail.is_empty() {
         let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());

@@ -465,7 +465,7 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
 }
 
 #[test]
-fn high_verbosity_expands_generic_tool_details() {
+fn high_verbosity_hides_generic_tool_details() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = AppState::new();
@@ -493,13 +493,15 @@ fn high_verbosity_expands_generic_tool_details() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line.contains("completed")));
-    assert!(rendered.iter().any(|line| line.contains("line 2")));
+    assert!(rendered.iter().any(|line| line == "• Tool"));
+    assert!(rendered.iter().any(|line| line.contains("McpCustomTool")));
+    assert!(!rendered.iter().any(|line| line.contains("completed")));
+    assert!(!rendered.iter().any(|line| line.contains("line 2")));
     assert!(!rendered.iter().any(|line| line.contains("ctrl+o")));
 }
 
 #[test]
-fn verbosity_changes_bounded_tool_presentation_without_mutating_history() {
+fn high_verbosity_collapses_tool_output_without_mutating_history() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = AppState::new();
@@ -539,11 +541,17 @@ fn verbosity_changes_bounded_tool_presentation_without_mutating_history() {
 
     assert!(!low.iter().any(|line| line.contains("line 25")));
     assert!(!low.iter().any(|line| line.contains("line 49")));
-    assert!(high.iter().any(|line| line.contains("line 49")));
-    assert!(high.iter().any(|line| line.contains("… +31 lines")));
+    assert!(!high.iter().any(|line| line.contains("line 49")));
+    assert!(!high.iter().any(|line| line.contains("… +31 lines")));
     assert!(!high.iter().any(|line| line.contains("line 25")));
-    assert!(low.len() < high.len());
+    assert!(low.iter().any(|line| line.contains("ctrl+o to expand")));
+    assert!(!high.iter().any(|line| line.contains("ctrl+o to expand")));
     assert!(state.history == history);
+}
+
+#[test]
+fn default_verbosity_is_high() {
+    assert_eq!(crate::app::Verbosity::default(), crate::app::Verbosity::High);
 }
 
 #[test]
@@ -1450,6 +1458,30 @@ fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
     assert!(rendered.iter().any(|line| line.contains("lines")));
     assert!(rendered.iter().any(|line| line.contains("4096 earlier bytes omitted")));
     assert!(rendered.len() <= 8, "live output must remain bounded: {rendered:?}");
+}
+
+#[test]
+fn high_verbosity_live_command_cell_shows_only_the_invocation() {
+    let mut call = crate::app::LiveToolCall::new(
+        "local:1", None, "run_command", "Bash", "cargo test",
+    );
+    call.output.push_back(crate::app::LiveToolOutputChunk {
+        stderr: false,
+        text: "secret command output\n".to_owned(),
+    });
+
+    let rendered = super::history_cell::render_live_tool_cell_with_verbosity(
+        &[call],
+        80,
+        &crate::app::Verbosity::High,
+        false,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+
+    assert_eq!(rendered, ["• Running cargo test"]);
+    assert!(!rendered.iter().any(|line| line.contains("secret command output")));
 }
 
 #[test]
