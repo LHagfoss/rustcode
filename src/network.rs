@@ -1157,6 +1157,13 @@ pub(crate) async fn prepare_turn_request(
     ) = {
         let mut s = state.lock().await;
         let history_snapshot = s.history.clone();
+        let consumed_wakeups = s.consume_observed_background_wakeups();
+        if consumed_wakeups > 0 {
+            dbg_log!(
+                "Consumed {} background wakeup(s) already present in the request history snapshot",
+                consumed_wakeups
+            );
+        }
         let budget_token_limit = s.get_history_token_budget();
         let mut read_files: Vec<String> = s
             .read_file_mtimes

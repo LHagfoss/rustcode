@@ -1674,6 +1674,15 @@ impl AppState {
         true
     }
 
+    /// Remove background wakeups whose results are already part of the history
+    /// snapshot being sent to the model. User prompts remain queued in order.
+    pub(crate) fn consume_observed_background_wakeups(&mut self) -> usize {
+        let before = self.pending_queue.len();
+        self.pending_queue
+            .retain(|item| !item.starts_with("__task_wakeup__:"));
+        before.saturating_sub(self.pending_queue.len())
+    }
+
     pub fn history_up(&mut self) {
         let user_msgs = &self.input_history;
         if user_msgs.is_empty() {
@@ -2071,6 +2080,19 @@ mod queue_pull_back_tests {
         // Only the wakeup entry remains — nothing more to pull.
         assert!(!s.pop_queued_prompt());
         assert_eq!(s.pending_queue, vec!["__task_wakeup__:abc123"]);
+    }
+
+    #[test]
+    fn observed_background_wakeups_coalesce_without_removing_user_prompts() {
+        let mut s = AppState::new();
+        s.pending_queue = vec![
+            "__task_wakeup__:first".to_string(),
+            "queued user prompt".to_string(),
+            "__task_wakeup__:second".to_string(),
+        ];
+
+        assert_eq!(s.consume_observed_background_wakeups(), 2);
+        assert_eq!(s.pending_queue, ["queued user prompt"]);
     }
 }
 
