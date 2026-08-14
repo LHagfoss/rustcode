@@ -89,8 +89,8 @@ fn inline_command_suggestions_render_below_the_composer() {
             .collect::<String>()
     };
     let composer_row = (0..20)
-        .find(|row| row_text(*row).contains("context left"))
-        .expect("composer status row should be visible");
+        .find(|row| row_text(*row).contains("/"))
+        .expect("composer input row should be visible");
     let popup_row = (0..20)
         .find(|row| row_text(*row).contains("/cancel"))
         .expect("inline command popup should be visible");
@@ -98,6 +98,10 @@ fn inline_command_suggestions_render_below_the_composer() {
     assert!(
         popup_row > composer_row,
         "popup should be below the composer: composer={composer_row}, popup={popup_row}"
+    );
+    assert!(
+        !(0..20).any(|row| row_text(row).contains("context left")),
+        "the footer should be hidden while completions are visible"
     );
 }
 
@@ -2101,7 +2105,7 @@ fn render_clearing_working_status_pending_requests_follow_up_redraw() {
 }
 
 #[test]
-fn empty_composer_has_painted_padding_and_model_footer() {
+fn empty_composer_has_painted_padding_and_external_model_footer() {
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut state = AppState::new();
@@ -2134,8 +2138,29 @@ fn empty_composer_has_painted_padding_and_model_footer() {
     assert!(!footer.contains("? for shortcuts"), "composer footer: {footer:?}");
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
-    assert_eq!(buffer[(0, footer_row + 1)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
     assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
+}
+
+#[test]
+fn composer_footer_is_hidden_while_a_picker_is_open() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut state = AppState::new();
+    state.show_model_picker = true;
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut state))
+        .unwrap();
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(!rendered.contains("context left"));
 }
 
 #[test]
