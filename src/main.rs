@@ -590,8 +590,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
 
-                    if is_ctrl && key.code == KeyCode::Char('c') {
-                        break;
+                    if is_ctrl
+                        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+                    {
+                        if crate::app::handle_ctrl_c(&app_state, &mut current_cancel_token).await {
+                            break;
+                        }
+                        continue;
                     }
 
                     {
