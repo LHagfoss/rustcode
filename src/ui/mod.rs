@@ -2921,24 +2921,6 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     let input_height = input_lines + 2;
     let queue_block_height = queue_preview_height(state);
 
-    let max_chat_height = f
-        .area()
-        .height
-        .saturating_sub(2)
-        .saturating_sub(queue_block_height)
-        .saturating_sub(input_height);
-    let max_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .horizontal_margin(0)
-        .vertical_margin(1)
-        .constraints([
-            Constraint::Length(max_chat_height),
-            Constraint::Length(queue_block_height),
-            Constraint::Length(input_height),
-        ])
-        .split(f.area());
-
-    render_live_conversation(f, &max_chunks, state);
     let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
         .unwrap_or((0, String::new()));
     let at_files = if !at_query.is_empty()
@@ -2949,6 +2931,44 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     } else {
         Vec::new()
     };
+    let popup_rows = if !filtered_cmds.is_empty() {
+        (filtered_cmds.len() as u16).min(MAX_POPUP_ROWS)
+    } else if !at_files.is_empty() {
+        (at_files.len() as u16).min(8)
+    } else {
+        0
+    };
+    // Keep completion rows below the composer, matching Codex's bottom-pane
+    // layout. Reserve the space before sizing the conversation so the popup
+    // never overwrites transcript or the input bar.
+    let popup_height = popup_rows.min(
+        f.area()
+            .height
+            .saturating_sub(2)
+            .saturating_sub(queue_block_height)
+            .saturating_sub(input_height),
+    );
+
+    let max_chat_height = f
+        .area()
+        .height
+        .saturating_sub(2)
+        .saturating_sub(queue_block_height)
+        .saturating_sub(input_height)
+        .saturating_sub(popup_height);
+    let max_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .horizontal_margin(0)
+        .vertical_margin(1)
+        .constraints([
+            Constraint::Length(max_chat_height),
+            Constraint::Length(queue_block_height),
+            Constraint::Length(input_height),
+            Constraint::Length(popup_height),
+        ])
+        .split(f.area());
+
+    render_live_conversation(f, &max_chunks, state);
 
     let picker_active = state.show_model_picker
         || state.show_theme_picker
@@ -2978,6 +2998,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
                 Constraint::Length(chat_height),
                 Constraint::Length(queue_block_height),
                 Constraint::Length(input_height),
+                Constraint::Length(popup_height),
             ])
             .split(f.area());
         render_live_conversation(f, &compact_chunks, state);
@@ -2989,19 +3010,21 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
     if !filtered_cmds.is_empty() {
         let input_inner = chunks[2].inner(input_margin);
-        let popup_height = (filtered_cmds.len() as u16)
-            .min(MAX_POPUP_ROWS)
-            .min(chunks[2].y);
-        let popup_y = chunks[2].y.saturating_sub(popup_height);
-        let popup_area =
-            ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
+        let popup_area = ratatui::layout::Rect::new(
+            input_inner.x,
+            chunks[3].y,
+            input_inner.width,
+            chunks[3].height,
+        );
         render_popup_menu(f, state, &filtered_cmds, popup_area);
     } else if !at_files.is_empty() {
         let input_inner = chunks[2].inner(input_margin);
-        let popup_height = at_files.len().min(8) as u16;
-        let popup_y = chunks[2].y.saturating_sub(popup_height);
-        let popup_area =
-            ratatui::layout::Rect::new(input_inner.x, popup_y, input_inner.width, popup_height);
+        let popup_area = ratatui::layout::Rect::new(
+            input_inner.x,
+            chunks[3].y,
+            input_inner.width,
+            chunks[3].height,
+        );
         render_at_popup_menu(f, state, &at_files, popup_area);
     }
 

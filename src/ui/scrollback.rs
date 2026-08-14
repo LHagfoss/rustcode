@@ -72,9 +72,123 @@ fn unfinished_fence_start(text: &str) -> Option<usize> {
     open.map(|(_, _, start)| start)
 }
 
+/// Return the byte offset of a pipe-table header that is not safe to commit yet.
+///
+/// A Markdown table cannot be recognized from its header alone: the delimiter
+/// row may arrive in the next model delta. Keep a possible header mutable until
+/// that next line settles the decision, and keep a confirmed table mutable for
+/// the rest of the stream so later rows can reflow its columns. This is
+/// presentation-only holdback; the raw assistant message remains canonical.
+fn unfinished_table_start(text: &str) -> Option<usize> {
+    let mut open_fence: Option<(u8, usize)> = None;
+    let mut line_start = 0;
+    let mut possible_header = None;
+
+    for line in text.split_inclusive('\n') {
+        let without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let content = without_newline
+            .strip_suffix('\r')
+            .unwrap_or(without_newline);
+        let indentation = content.len() - content.trim_start_matches(' ').len();
+        let bytes = content.as_bytes();
+
+        if indentation <= 3 {
+            let marker_position = indentation;
+            if let Some(&marker) = bytes.get(marker_position)
+                && (marker == b'`' || marker == b'~')
+            {
+                let mut marker_length = 0;
+                while bytes.get(marker_position + marker_length) == Some(&marker) {
+                    marker_length += 1;
+                }
+                let rest = &content[marker_position + marker_length..];
+                if marker_length >= 3 {
+                    if let Some((open_marker, open_length)) = open_fence {
+                        if marker == open_marker
+                            && marker_length >= open_length
+                            && rest.trim().is_empty()
+                        {
+                            open_fence = None;
+                        }
+                        possible_header = None;
+                        line_start += line.len();
+                        continue;
+                    } else if marker != b'`' || !rest.contains('`') {
+                        open_fence = Some((marker, marker_length));
+                        possible_header = None;
+                        line_start += line.len();
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if open_fence.is_some() {
+            possible_header = None;
+            line_start += line.len();
+            continue;
+        }
+
+        let table_line = strip_blockquote_prefix(content).trim();
+        if is_table_delimiter_line(table_line) {
+            if let Some(header_start) = possible_header.take() {
+                return Some(header_start);
+            }
+            line_start += line.len();
+            continue;
+        }
+
+        possible_header = is_table_header_line(table_line).then_some(line_start);
+        line_start += line.len();
+    }
+
+    possible_header
+}
+
+fn strip_blockquote_prefix(line: &str) -> &str {
+    let mut rest = line.trim_start();
+    while let Some(stripped) = rest.strip_prefix('>') {
+        rest = stripped.trim_start();
+    }
+    rest
+}
+
+fn is_table_header_line(line: &str) -> bool {
+    let cells = line.trim_matches('|').split('|').count();
+    cells >= 2 && line.contains('|')
+}
+
+fn is_table_delimiter_line(line: &str) -> bool {
+    let body = line.trim().trim_matches('|');
+    let cells = body.split('|').map(str::trim).collect::<Vec<_>>();
+    cells.len() >= 2
+        && cells.iter().all(|cell| {
+            let mut chars = cell.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            let Some(last) = cell.chars().next_back() else {
+                return false;
+            };
+            (first == ':' || first == '-')
+                && (last == ':' || last == '-')
+                && cell.chars().filter(|character| *character == '-').count() >= 3
+                && cell
+                    .chars()
+                    .all(|character| character == '-' || character == ':')
+        })
+}
+
+fn stream_holdback_start(text: &str) -> Option<usize> {
+    [unfinished_fence_start(text), unfinished_table_start(text)]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::unfinished_fence_start;
+    use super::{unfinished_fence_start, unfinished_table_start};
 
     #[test]
     fn fenced_stream_scanner_respects_marker_type_and_length() {
@@ -93,7 +207,35 @@ mod tests {
     #[test]
     fn completed_fences_do_not_toggle_on_backticks_in_the_info_string() {
         assert_eq!(unfinished_fence_start("```has`backtick\nbody\n"), None);
-        assert_eq!(unfinished_fence_start("````rust\n```\n````\n```\n"), Some(18));
+        assert_eq!(
+            unfinished_fence_start("````rust\n```\n````\n```\n"),
+            Some(18)
+        );
+    }
+
+    #[test]
+    fn table_holdback_waits_for_delimiter_and_later_rows() {
+        assert_eq!(unfinished_table_start("intro\n| Name | Value |\n"), Some(6));
+        assert_eq!(
+            unfinished_table_start("intro\n| Name | Value |\n| --- | --- |\nrow\n"),
+            Some(6)
+        );
+        assert_eq!(
+            unfinished_table_start("| Name | Value |\nplain prose\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn table_holdback_ignores_fenced_pipe_text() {
+        assert_eq!(
+            unfinished_table_start("```text\n| Name | Value |\n| --- | --- |\n```\n"),
+            None
+        );
+        assert_eq!(
+            unfinished_table_start("> | Name | Value |\n> | --- | --- |\n"),
+            Some(0)
+        );
     }
 }
 
@@ -103,7 +245,7 @@ mod tests {
 pub(crate) fn mutable_stream_text(text: &str) -> String {
     if stream_starts_with_thought(text) {
         crate::network::text::promote_bare_thought_markers(text)
-    } else if let Some(start) = unfinished_fence_start(text) {
+    } else if let Some(start) = stream_holdback_start(text) {
         text[start..].to_owned()
     } else {
         split_stable_rows(text).1
@@ -182,7 +324,7 @@ impl TranscriptCursor {
         let pending = stream
             .strip_prefix(&self.committed_stream)
             .unwrap_or(stream);
-        let stable = if let Some(start) = unfinished_fence_start(pending) {
+        let stable = if let Some(start) = stream_holdback_start(pending) {
             pending[..start].to_owned()
         } else {
             split_stable_rows(pending).0.join("\n")

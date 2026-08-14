@@ -23,8 +23,8 @@ pub(super) fn render_popup_menu(
     filtered_cmds: &[&CommandInfo],
     area: ratatui::layout::Rect,
 ) {
-    // Only `area.height` rows fit above the input box; scroll the list so the
-    // selected command stays visible instead of spilling over the prompt.
+    // The popup is allocated below the input box. Scroll the list so the
+    // selected command stays visible when the available rows are bounded.
     let max_rows = (area.height as usize).max(1);
     let selected = state.active_suggestion_index.unwrap_or(0);
     let offset = if selected >= max_rows {
@@ -42,7 +42,7 @@ pub(super) fn render_popup_menu(
 
         let line = if is_selected {
             let left_text = format!("{:<12}   {}", cmd.name, cmd.desc);
-            let total_len = left_text.len();
+            let total_len = left_text.width();
             let padding_len = (area.width as usize).saturating_sub(total_len);
             let full_text = format!("{}{}", left_text, " ".repeat(padding_len));
 
@@ -56,7 +56,7 @@ pub(super) fn render_popup_menu(
         } else {
             let left_text = format!("{:<12}   ", cmd.name);
             let desc_text = cmd.desc.to_string();
-            let total_len = left_text.len() + desc_text.len();
+            let total_len = left_text.width() + desc_text.width();
             let padding_len = (area.width as usize).saturating_sub(total_len);
 
             Line::from(vec![
