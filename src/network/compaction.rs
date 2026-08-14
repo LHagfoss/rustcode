@@ -83,6 +83,27 @@ pub fn estimate_tokens(text: &str) -> usize {
     count
 }
 
+/// Estimate the provider-visible cost of a persisted chat message. Native
+/// tool calls are stored outside `content`, so counting only the prose would
+/// let large function arguments bypass the history budget.
+pub(crate) fn estimate_message_tokens(message: &ChatMessage) -> usize {
+    let tool_calls = if message.tool_calls.is_empty() {
+        0
+    } else {
+        serde_json::to_string(&message.tool_calls)
+            .map(|calls| estimate_tokens(&calls))
+            .unwrap_or_default()
+    };
+    let tool_call_id = message
+        .tool_call_id
+        .as_deref()
+        .map(estimate_tokens)
+        .unwrap_or_default();
+    estimate_tokens(&message.content)
+        .saturating_add(tool_calls)
+        .saturating_add(tool_call_id)
+}
+
 pub const DEFAULT_PRUNE_TOKEN_THRESHOLD: usize = 90_000;
 
 /// Tokens reclaimed by last compaction, for metrics logging.
@@ -148,7 +169,7 @@ pub fn prune_historical_tool_outputs(
         {
             continue;
         }
-        let tokens = estimate_tokens(&m.content);
+        let tokens = estimate_message_tokens(m);
         if tokens <= PRUNE_TOKEN_THRESHOLD {
             continue;
         }
@@ -187,7 +208,7 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
     // Walk backward through history
     for m in history.iter_mut().rev() {
         if m.role == "tool" {
-            let tokens = estimate_tokens(&m.content);
+            let tokens = estimate_message_tokens(m);
             total_tool_tokens += tokens;
             // Protect the last ~90k tokens of tool outputs (approx 360k chars).
             // Prune older ones to save context window space. Sized for the 128k
@@ -246,7 +267,18 @@ fn file_read_key(content: &str) -> Option<u64> {
     if !matches!(name, "view_file" | "read_file") {
         return None;
     }
-    Some(memo_key(body).1)
+    // A normal view_file result starts with a path/range header. Require that
+    // identity before deduplicating: identical contents from two different
+    // files, a failed read, a replay notice, or a truncated read must never be
+    // collapsed merely because their rendered bodies happen to match.
+    let header = body.lines().next()?;
+    if !header.starts_with("[File: ")
+        || body.contains("[Truncated:")
+        || body.starts_with("[Unchanged since")
+    {
+        return None;
+    }
+    Some(memo_key(&format!("{name}\0{header}\0{body}")).1)
 }
 
 /// Collapse exact duplicate file reads outside the recent suffix. A newer
@@ -332,7 +364,7 @@ pub async fn maybe_compact_with_local_policy(
     //    string and must be counted as such. The memo in `estimate_tokens` is
     //    what keeps the passes cheap — every message the passes leave alone is
     //    encoded once and looked up thereafter.
-    let raw_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    let raw_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     if raw_tokens < prune_floor(budget) {
         return false;
     }
@@ -346,7 +378,7 @@ pub async fn maybe_compact_with_local_policy(
     //    both the budget check and the keep-suffix walk below.
     let per_message: Vec<usize> = history
         .iter()
-        .map(|m| estimate_tokens(&m.content))
+        .map(estimate_message_tokens)
         .collect();
     let total_tokens: usize = per_message.iter().sum();
     // Cancellation still permits the deterministic local pruning above, but
@@ -492,7 +524,7 @@ pub async fn force_compact_with_budget(
     budget: Option<usize>,
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(usize, usize), String> {
-    let before_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     let prune_threshold = budget
@@ -508,7 +540,7 @@ pub async fn force_compact_with_budget(
 
     let result =
         force_compact_internal(client, url, model, history, summarize_count, cancel_token).await;
-    let after_tokens: usize = history.iter().map(|m| estimate_tokens(&m.content)).sum();
+    let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     if after_tokens < before_tokens {
         LAST_COMPACTION_RECLAIMED.store(
             before_tokens - after_tokens,
@@ -644,6 +676,36 @@ fn render_summary_message(message: &ChatMessage) -> String {
     let mut content: String = chars.by_ref().take(SUMMARY_MESSAGE_MAX_CHARS).collect();
     if chars.next().is_some() {
         content.push_str("... [truncated]");
+    }
+    if let Some(record) = &message.tool_result {
+        let error = record
+            .error_kind
+            .as_deref()
+            .unwrap_or(if record.success { "none" } else { "unknown" });
+        let paths = if record.changed_paths.is_empty() {
+            "none".to_string()
+        } else {
+            record.changed_paths.iter().take(16).cloned().collect::<Vec<_>>().join(", ")
+        };
+        content.push_str(&format!(
+            "\n[execution metadata: success={}, error_kind={}, retryable={}, exit_code={:?}, truncated={}, replayed={}, changed_paths={paths}]",
+            record.success,
+            error,
+            record.retryable,
+            record.exit_code,
+            record.truncated,
+            record.replayed,
+        ));
+    }
+    if !message.tool_calls.is_empty() {
+        let calls = message
+            .tool_calls
+            .iter()
+            .take(16)
+            .map(|call| format!("{}({})", call.name, call.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str(&format!("\n[structured tool calls: {calls}]"));
     }
     format!("{role_label}:\n{content}\n\n")
 }
@@ -1042,6 +1104,24 @@ mod tests {
         let collapsed = prune_duplicate_tool_results(&mut history, 2);
         assert_eq!(collapsed, 1);
         assert!(history[0].content.contains("Duplicate unchanged file read"));
+    }
+
+    #[test]
+    fn duplicate_read_pruning_requires_file_identity_and_complete_content() {
+        let mut history = vec![
+            tool_msg("view_file: [File: src/a.rs, Lines 1 to 1 of 1]\n1: same"),
+            tool_msg("view_file: [File: src/a.rs, Lines 1 to 1 of 1]\n1: same"),
+            tool_msg("view_file: [File: src/b.rs, Lines 1 to 1 of 1]\n1: same"),
+            tool_msg("view_file: error: cannot read 'src/c.rs'"),
+            tool_msg("view_file: [File: src/d.rs, Lines 1 to 1 of 2]\n1: same\n[Truncated: lines 2-2 of 2]"),
+        ];
+        history.push(ChatMessage::new("user", "keep recent"));
+        assert_eq!(prune_duplicate_tool_results(&mut history, 1), 1);
+        assert!(history[0].content.contains("Duplicate unchanged file read"));
+        assert!(history[1].content.contains("src/a.rs"));
+        assert!(history[2].content.contains("src/b.rs"));
+        assert!(history[3].content.contains("cannot read"));
+        assert!(history[4].content.contains("Truncated"));
     }
 
     #[test]

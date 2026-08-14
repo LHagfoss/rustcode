@@ -42,6 +42,48 @@ pub enum ToolErrorKind {
 }
 
 impl ToolErrorKind {
+    /// Stable spelling used in persisted `ToolResultRecord` values. Keep this
+    /// explicit instead of relying on Debug formatting so persistence does not
+    /// accidentally change when enum formatting changes.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Validation => "Validation",
+            Self::InvalidArguments => "InvalidArguments",
+            Self::EditMismatch => "EditMismatch",
+            Self::PermissionDenied => "PermissionDenied",
+            Self::CommandFailed => "CommandFailed",
+            Self::CompilerFailed => "CompilerFailed",
+            Self::Cancelled => "Cancelled",
+            Self::McpFailed => "McpFailed",
+            Self::Internal => "Internal",
+            Self::OutputLimit => "OutputLimit",
+            Self::ProviderFailed => "ProviderFailed",
+            Self::UnavailableDependency => "UnavailableDependency",
+            Self::Unknown => "Unknown",
+        }
+    }
+
+    /// Parse the stable persisted spelling. Unknown future values remain in
+    /// the JSON string and simply do not become a falsely known enum.
+    pub fn from_persisted(value: &str) -> Option<Self> {
+        Some(match value {
+            "Validation" => Self::Validation,
+            "InvalidArguments" => Self::InvalidArguments,
+            "EditMismatch" => Self::EditMismatch,
+            "PermissionDenied" => Self::PermissionDenied,
+            "CommandFailed" => Self::CommandFailed,
+            "CompilerFailed" => Self::CompilerFailed,
+            "Cancelled" => Self::Cancelled,
+            "McpFailed" => Self::McpFailed,
+            "Internal" => Self::Internal,
+            "OutputLimit" => Self::OutputLimit,
+            "ProviderFailed" => Self::ProviderFailed,
+            "UnavailableDependency" => Self::UnavailableDependency,
+            "Unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
+
     /// Compatibility helper for legacy display-only callers. Execution paths
     /// should set this kind at the boundary from typed state instead of parsing
     /// human-facing prose.

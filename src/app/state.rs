@@ -407,6 +407,16 @@ pub struct ToolResultRecord {
     pub replayed: bool,
 }
 
+impl ToolResultRecord {
+    /// Convert the backwards-compatible persisted spelling back to the typed
+    /// error contract when a reloaded session needs machine-readable state.
+    pub fn parsed_error_kind(&self) -> Option<crate::tools::ToolErrorKind> {
+        self.error_kind
+            .as_deref()
+            .and_then(crate::tools::ToolErrorKind::from_persisted)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CachedReadOutput {
     pub(crate) replayable_content: Option<String>,
@@ -414,6 +424,8 @@ pub(crate) struct CachedReadOutput {
     pub(crate) exit_code: Option<i32>,
     pub(crate) truncated: bool,
     pub(crate) full_output_artifact: Option<String>,
+    pub(crate) error_kind: Option<crate::tools::ToolErrorKind>,
+    pub(crate) retryable: bool,
 }
 
 impl ChatMessage {
@@ -1170,18 +1182,7 @@ impl AppState {
 
     /// Context window of the active profile, in tokens.
     pub fn active_context_window(&self) -> u32 {
-        self.config
-            .models
-            .iter()
-            .find(|m| m.model == self.model_name || m.name == self.model_name)
-            .or_else(|| {
-                self.config
-                    .models
-                    .iter()
-                    .find(|m| m.name == self.config.default.big())
-            })
-            .and_then(|p| p.context_window)
-            .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW)
+        self.active_context_budget().context_window
     }
 
     pub fn active_model_profile(&self) -> Option<crate::config::ModelProfile> {

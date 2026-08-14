@@ -47,6 +47,60 @@ fn execution_envelope_preserves_authoritative_failure_kind() {
     assert!(envelope.retryable);
 }
 
+#[test]
+fn persisted_tool_error_kind_round_trips_explicitly() {
+    let record = crate::app::ToolResultRecord {
+        error_kind: Some(crate::tools::ToolErrorKind::McpFailed.as_str().to_string()),
+        retryable: true,
+        replayed: true,
+        exit_code: Some(7),
+        changed_paths: vec!["src/mcp.rs".to_string()],
+        ..Default::default()
+    };
+    let reloaded: crate::app::ToolResultRecord =
+        serde_json::from_value(serde_json::to_value(&record).unwrap()).unwrap();
+    assert_eq!(
+        reloaded.parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::McpFailed)
+    );
+    assert!(reloaded.retryable);
+    assert!(reloaded.replayed);
+    assert_eq!(reloaded.exit_code, Some(7));
+    assert_eq!(reloaded.changed_paths, ["src/mcp.rs"]);
+}
+
+#[tokio::test]
+async fn denied_tool_batch_records_permission_denied_metadata() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let calls = vec![crate::tools::ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": "true"}),
+    }];
+    let mut dirty = false;
+    let mut cache = None;
+    let mut wait = std::time::Duration::ZERO;
+    let results = execute_tool_batch(
+        &reqwest::Client::new(),
+        &state,
+        &cancel,
+        &calls,
+        false,
+        &None,
+        &mut dirty,
+        &mut cache,
+        &mut wait,
+        None,
+    )
+    .await;
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].metadata.error_kind,
+        Some(crate::tools::ToolErrorKind::PermissionDenied)
+    );
+    assert!(!results[0].metadata.success);
+}
+
 #[tokio::test]
 async fn gemini_models_probe_false_for_json_protocol_fallback() {
     let client = reqwest::Client::new();
@@ -537,6 +591,7 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             retryable: false,
         },
         Some("real diff".to_string()),
+        None,
     );
 
     assert!(message.content.len() <= 50 * 1024);
@@ -567,6 +622,7 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             error_kind: Some(crate::tools::ToolErrorKind::Internal),
             retryable: false,
         },
+        None,
         None,
     );
     let metadata = spoofed.tool_result.expect("subagent metadata");
@@ -699,8 +755,8 @@ fn test_trim_msgs_keeps_system_and_latest() {
     ];
     // budget fits only ~1 big message
     let dropped = trim_msgs_to_budget(&mut msgs, 1100);
-    assert_eq!(dropped, 1);
-    assert_eq!(msgs.len(), 3);
+    assert_eq!(dropped, 2);
+    assert_eq!(msgs.len(), 2);
     assert_eq!(msgs[0]["role"], "system");
     // huge budget: nothing dropped
     let mut msgs2: Vec<serde_json::Value> = vec![
@@ -1209,6 +1265,178 @@ async fn test_compact_prunes_throwaway_before_file_contents() {
         "throwaway truncated: {}",
         history[0].content
     );
+}
+
+#[tokio::test]
+async fn deterministic_compaction_keeps_goal_state_and_recent_activity() {
+    let mut history = Vec::new();
+    for round in 0..10 {
+        history.push(ChatMessage::new(
+            "user",
+            if round == 0 {
+                "original goal: repair the parser without changing the public API".to_string()
+            } else {
+                format!("follow-up {round}: continue the parser repair")
+            },
+        ));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!(
+                "Decision {round}: inspect the parser state and preserve the existing error contract. {}",
+                "architecture detail ".repeat(40)
+            ),
+        ));
+        history.push(
+            ChatMessage::new(
+                "tool",
+                format!("run_command: compiler failure round {round}\n{}", "diagnostic ".repeat(120)),
+            )
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "run_command".to_string(),
+                success: false,
+                error_kind: Some("CompilerFailed".to_string()),
+                changed_paths: vec!["src/parser.rs".to_string()],
+                ..Default::default()
+            }),
+        );
+    }
+
+    compact_history_to_budget(&mut history, 500).await;
+
+    let record = history
+        .iter()
+        .find(|message| message.content.starts_with("[Deterministic context record]"))
+        .expect("over-budget local history should get a deterministic record");
+    assert!(record.content.contains("original goal: repair the parser"));
+    assert!(record.content.contains("src/parser.rs"));
+    assert!(record.content.contains("CompilerFailed"));
+    assert!(history.iter().any(|message| message.content.contains("follow-up 9")));
+
+    let mut provider_messages = history::to_messages(&history, "system prompt");
+    trim_msgs_to_budget(&mut provider_messages, 500);
+    assert!(provider_messages.iter().any(|message| {
+        message
+            .get("content")
+            .and_then(|content| content.as_str())
+            .is_some_and(|content| content.contains("original goal: repair the parser"))
+    }));
+}
+
+#[tokio::test]
+async fn local_context_preserves_task_state_across_model_window_sizes() {
+    for budget in [4_096, 8_192, 32_768, 128_000, 262_144] {
+        let mut history = vec![ChatMessage::new(
+            "system",
+            "# Project instructions\nRun cargo test after edits; do not change the public API.",
+        )];
+        for round in 0..18 {
+            history.push(ChatMessage::new(
+                "user",
+                if round == 0 {
+                    "original task: repair the parser while preserving the public API".to_string()
+                } else if round == 17 {
+                    "current follow-up: resolve the remaining parser compiler error and verify it".to_string()
+                } else {
+                    format!("inspect parser phase {round}")
+                },
+            ));
+            history.push(ChatMessage::new(
+                "assistant",
+                format!("decision {round}: keep the parser architecture and inspect diagnostics"),
+            ));
+            let result = if round == 17 {
+                "run_command: cargo test --lib\nverification succeeded after the latest parser edit"
+            } else {
+                "run_command: cargo test\nerror: unresolved parser diagnostic\ncompiler output follows\n"
+            };
+            history.push(
+                ChatMessage::new(
+                    "tool",
+                    if round == 17 {
+                        result.to_string()
+                    } else {
+                        format!("{result}{}", "diagnostic detail ".repeat(500))
+                    },
+                )
+                .with_tool_result(crate::app::ToolResultRecord {
+                    tool_name: "run_command".to_string(),
+                    success: round == 17,
+                    error_kind: (!round.eq(&17)).then(|| "CompilerFailed".to_string()),
+                    exit_code: Some(if round == 17 { 0 } else { 1 }),
+                    changed_paths: vec!["src/parser.rs".to_string()],
+                    ..Default::default()
+                }),
+            );
+        }
+
+        compact_history_to_budget(&mut history, budget).await;
+        let mut messages = history::to_messages(&history, "system prompt");
+        inject_system_reminder(&mut messages);
+        trim_msgs_to_budget(&mut messages, budget);
+        let request_tokens = messages
+            .iter()
+            .map(crate::network::messages::estimate_msg_tokens)
+            .sum::<u32>();
+        assert!(request_tokens <= budget, "budget={budget}, tokens={request_tokens}");
+        let rendered = messages
+            .iter()
+            .filter_map(|message| message.get("content").and_then(|content| content.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("original task: repair the parser"), "budget={budget}");
+        assert!(rendered.contains("current follow-up: resolve"), "budget={budget}");
+        assert!(rendered.contains("Project instructions"), "budget={budget}");
+        assert!(rendered.contains("do not change the public API"), "budget={budget}");
+        assert!(rendered.contains("src/parser.rs"), "budget={budget}");
+        assert!(rendered.contains("verification succeeded"), "budget={budget}");
+    }
+}
+
+#[test]
+fn cancellation_persists_completed_results_and_typed_missing_results() {
+    let calls = vec![
+        crate::app::ToolCallRef {
+            id: "call_done".to_string(),
+            name: "grep".to_string(),
+            arguments: "{}".to_string(),
+        },
+        crate::app::ToolCallRef {
+            id: "call_cancelled".to_string(),
+            name: "run_command".to_string(),
+            arguments: "{}".to_string(),
+        },
+    ];
+    let mut history = vec![
+        ChatMessage::new("assistant", "native calls").with_tool_calls(calls.clone()),
+    ];
+    turn_engine::append_cancelled_batch_results(
+        &mut history,
+        vec![ToolResult {
+            tool_name: "grep".to_string(),
+            content: "grep: found".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                ..Default::default()
+            },
+        }],
+        &calls,
+    );
+
+    assert_eq!(history[1].tool_call_id.as_deref(), Some("call_done"));
+    assert!(history[1].tool_result.as_ref().unwrap().success);
+    assert_eq!(history[2].tool_call_id.as_deref(), Some("call_cancelled"));
+    assert_eq!(
+        history[2].tool_result.as_ref().unwrap().parsed_error_kind(),
+        Some(crate::tools::ToolErrorKind::Cancelled)
+    );
+
+    let messages = history::to_messages(&history, "system");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call_done");
+    assert_eq!(messages[2]["tool_call_id"], "call_done");
+    assert_eq!(messages[3]["tool_call_id"], "call_cancelled");
 }
 
 #[tokio::test]

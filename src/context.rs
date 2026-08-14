@@ -15,9 +15,16 @@ pub struct ContextSnapshot {
 impl ContextSnapshot {
     /// Capture the current environment state.
     pub fn capture() -> Self {
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "(unknown)".to_string());
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::capture_at(&cwd)
+    }
+
+    /// Capture environment state for an explicit workspace. ACP sessions and
+    /// headless callers may work in a repository different from RustCode's
+    /// process cwd; using the process cwd here would load the wrong
+    /// instructions and git delta after compaction.
+    pub fn capture_at(root: &Path) -> Self {
+        let cwd = root.to_string_lossy().to_string();
         let date = chrono::Local::now().format("%A %Y-%m-%d").to_string();
 
         let git_branch = run_git(
@@ -156,12 +163,17 @@ const MAX_TREE_ENTRIES: usize = 30;
 const MAX_AGENTS_BYTES: usize = 8000;
 
 pub fn environment_context() -> String {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    environment_context_at(&cwd)
+}
+
+/// Render the initial environment block for an explicit workspace root.
+/// This is the workspace-aware counterpart to [`environment_context`].
+pub fn environment_context_at(root: &Path) -> String {
     let mut out = String::new();
     out.push_str("# Environment\n\n");
 
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "(unknown)".to_string());
+    let cwd = root.to_string_lossy().to_string();
     out.push_str(&format!("- Working directory: {cwd}\n"));
 
     out.push_str(&format!(
@@ -350,5 +362,18 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert!(top_level_tree(dir.to_str().unwrap()).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explicit_workspace_capture_uses_workspace_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "workspace-only rule").unwrap();
+        let snapshot = ContextSnapshot::capture_at(dir.path());
+        assert_eq!(snapshot.cwd, dir.path().to_string_lossy());
+        assert!(snapshot
+            .project_instructions()
+            .unwrap()
+            .contains("workspace-only rule"));
+        assert!(environment_context_at(dir.path()).contains("workspace-only rule"));
     }
 }
