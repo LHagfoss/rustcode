@@ -158,6 +158,29 @@ pub(super) fn input_anchor_rect(
     ratatui::layout::Rect::new(x, y, width, height)
 }
 
+fn render_padded_panel(f: &mut Frame, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        area,
+    );
+    area.inner(Margin {
+        vertical: 1,
+        horizontal: 0,
+    })
+}
+
+fn paint_panel_line_backgrounds(lines: &mut [Line<'static>]) {
+    for line in lines {
+        line.style = line.style.patch(Style::default().bg(COLOR_PANEL()));
+        for span in &mut line.spans {
+            if span.style.bg.is_none() {
+                span.style = span.style.patch(Style::default().bg(COLOR_PANEL()));
+            }
+        }
+    }
+}
+
 pub(super) fn render_verbosity_picker_modal(
     f: &mut Frame,
     state: &AppState,
@@ -166,15 +189,7 @@ pub(super) fn render_verbosity_picker_modal(
     let p = crate::ui::theme::get_palette(&state.config.theme);
     let modal_area = input_anchor_rect(f, input_area, 9);
 
-    f.render_widget(Clear, modal_area);
-
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(modal_block, modal_area);
-
-    let inner_area = modal_area.inner(Margin {
-        vertical: 0,
-        horizontal: 0,
-    });
+    let inner_area = render_padded_panel(f, modal_area);
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -266,6 +281,7 @@ mod tests {
     fn single_command_confirmation_uses_codex_command_prompt() {
         let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         let mut state = AppState::new();
+        let panel = COLOR_PANEL();
         state.pending_tool_confirmation = Some(vec![ToolConfirmation {
             tool_name: "run_command".to_string(),
             path: "cargo test".to_string(),
@@ -290,6 +306,19 @@ mod tests {
         assert!(rendered.contains("$ cargo test"), "rendered modal:\n{rendered}");
         assert!(rendered.contains("› 1. Yes, proceed"));
         assert!(rendered.contains("2. No, cancel this tool call"));
+
+        let buffer = terminal.backend().buffer();
+        let command_row = (2..12)
+            .find(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("$ cargo test")
+            })
+            .expect("dynamic command row");
+        assert!((0..100).all(|x| buffer[(x, command_row)].bg == panel));
+        assert!((0..100).all(|x| buffer[(x, 2)].bg == panel));
+        assert!((0..100).all(|x| buffer[(x, 11)].bg == panel));
     }
 
     #[test]
@@ -359,6 +388,7 @@ mod tests {
     fn settings_picker_uses_codex_selection_rows_without_a_box() {
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         let mut state = AppState::new();
+        let panel = COLOR_PANEL();
         state.modal_picker_index = 1;
         terminal
             .draw(|frame| render_verbosity_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
@@ -369,6 +399,9 @@ mod tests {
         assert!(rendered.contains("Select Output Verbosity"));
         assert!(rendered.contains("› High"));
         assert!(!rendered.contains('╭') && !rendered.contains('╰'));
+        let buffer = terminal.backend().buffer();
+        assert!((2..98).all(|x| buffer[(x, 3)].bg == panel));
+        assert!((2..98).all(|x| buffer[(x, 11)].bg == panel));
     }
 }
 
@@ -380,15 +413,7 @@ pub(super) fn render_thinking_picker_modal(
     let p = crate::ui::theme::get_palette(&state.config.theme);
     let modal_area = input_anchor_rect(f, input_area, 10);
 
-    f.render_widget(Clear, modal_area);
-
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(modal_block, modal_area);
-
-    let inner_area = modal_area.inner(Margin {
-        vertical: 0,
-        horizontal: 0,
-    });
+    let inner_area = render_padded_panel(f, modal_area);
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -482,15 +507,7 @@ pub(super) fn render_protocol_picker_modal(
     let p = crate::ui::theme::get_palette(&state.config.theme);
     let modal_area = input_anchor_rect(f, input_area, 10);
 
-    f.render_widget(Clear, modal_area);
-
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(modal_block, modal_area);
-
-    let inner_area = modal_area.inner(Margin {
-        vertical: 0,
-        horizontal: 0,
-    });
+    let inner_area = render_padded_panel(f, modal_area);
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -592,17 +609,18 @@ pub(super) fn render_model_picker_modal(
         .min(filtered_items.len().saturating_sub(1));
 
     let picker_area = input_anchor_rect(f, input_area, 14);
+    let content_area = render_padded_panel(f, picker_area);
     let header_area = ratatui::layout::Rect::new(
-        picker_area.x,
-        picker_area.y,
-        picker_area.width,
+        content_area.x,
+        content_area.y,
+        content_area.width,
         1,
     );
     let list_area = ratatui::layout::Rect::new(
-        picker_area.x,
-        picker_area.y.saturating_add(1),
-        picker_area.width,
-        picker_area.height.saturating_sub(1),
+        content_area.x,
+        content_area.y.saturating_add(1),
+        content_area.width,
+        content_area.height.saturating_sub(1),
     );
 
     let search = if state.model_picker_search.is_empty() {
@@ -1268,17 +1286,18 @@ pub(super) fn render_command_picker_modal(
         .min(filtered_items.len().saturating_sub(1));
 
     let picker_area = input_anchor_rect(f, input_area, 14);
+    let content_area = render_padded_panel(f, picker_area);
     let header_area = ratatui::layout::Rect::new(
-        picker_area.x,
-        picker_area.y,
-        picker_area.width,
+        content_area.x,
+        content_area.y,
+        content_area.width,
         1,
     );
     let list_area = ratatui::layout::Rect::new(
-        picker_area.x,
-        picker_area.y.saturating_add(1),
-        picker_area.width,
-        picker_area.height.saturating_sub(1),
+        content_area.x,
+        content_area.y.saturating_add(1),
+        content_area.width,
+        content_area.height.saturating_sub(1),
     );
     let search_label = if state.command_picker_search.is_empty() {
         "type to search".to_owned()
@@ -1349,7 +1368,7 @@ pub(super) fn tool_confirmation_height(state: &AppState, available: u16) -> u16 
     } else {
         9u16.saturating_add(preview)
     };
-    content.min(available.max(3))
+    content.saturating_add(2).min(available.max(3))
 }
 
 /// Bottom-pane approval view matching Codex's interaction layout. The
@@ -1364,7 +1383,7 @@ pub(super) fn render_tool_confirmation_modal(
         Some(confirmations) if !confirmations.is_empty() => confirmations,
         _ => return,
     };
-    f.render_widget(Clear, area);
+    let content_area = render_padded_panel(f, area);
 
     let mut lines = Vec::new();
     let single = confirmations.len() == 1;
@@ -1398,7 +1417,11 @@ pub(super) fn render_tool_confirmation_modal(
             ]));
         }
         for source in first.content_preview.lines().take(8) {
-            let mut line = highlight_diff_line(source, area.width.saturating_sub(4) as usize, false);
+            let mut line = highlight_diff_line(
+                source,
+                content_area.width.saturating_sub(4) as usize,
+                false,
+            );
             line.spans.insert(0, Span::raw("    "));
             lines.push(line);
         }
@@ -1451,7 +1474,7 @@ pub(super) fn render_tool_confirmation_modal(
         Style::default().fg(COLOR_MUTED()),
     )));
 
-    if lines.len() > area.height as usize {
+    if lines.len() > content_area.height as usize {
         let heading = lines.first().cloned().unwrap_or_default();
         let approve = lines
             .iter()
@@ -1476,25 +1499,26 @@ pub(super) fn render_tool_confirmation_modal(
             .cloned();
         let footer = lines.last().cloned();
         let mut compact = vec![heading];
-        if area.height >= 4
+        if content_area.height >= 4
             && let Some(target) = target
         {
             compact.push(target);
         }
         compact.push(approve);
         compact.push(cancel);
-        if area.height >= 5
+        if content_area.height >= 5
             && let Some(footer) = footer
         {
             compact.push(footer);
         }
         lines = compact;
     }
+    paint_panel_line_backgrounds(&mut lines);
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(COLOR_PANEL())),
-        area,
+        content_area,
     );
 }
 
@@ -1921,7 +1945,7 @@ pub(super) fn question_height(state: &AppState, width: u16, available: u16) -> u
     } else {
         question.options.len().saturating_add(1) as u16
     };
-    (question_rows + option_rows + 5).min(available.max(3))
+    (question_rows + option_rows + 7).min(available.max(3))
 }
 
 pub(super) fn render_question_modal(
@@ -1932,14 +1956,17 @@ pub(super) fn render_question_modal(
     let Some(question) = state.pending_question.as_ref() else {
         return;
     };
-    f.render_widget(Clear, area);
+    let content_area = render_padded_panel(f, area);
     let mut lines = vec![
         Line::from(Span::styled(
             "  Question 1/1 (1 unanswered)",
             Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
         )),
     ];
-    for line in textwrap_simple(&question.question, area.width.saturating_sub(4).max(10) as usize) {
+    for line in textwrap_simple(
+        &question.question,
+        content_area.width.saturating_sub(4).max(10) as usize,
+    ) {
         lines.push(Line::from(format!("  {line}")));
     }
     lines.push(Line::from(""));
@@ -2006,19 +2033,20 @@ pub(super) fn render_question_modal(
         Style::default().fg(COLOR_MUTED()),
     )));
 
-    lines.truncate(area.height as usize);
+    lines.truncate(content_area.height as usize);
+    paint_panel_line_backgrounds(&mut lines);
     f.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }).style(Style::default().bg(COLOR_PANEL())),
-        area,
+        content_area,
     );
     if let (Some(row), Some(custom)) = (custom_row, question.custom_input.as_ref())
-        && row < area.height
+        && row < content_area.height
     {
         let cursor = question.custom_cursor.min(custom.len());
         let cursor = custom[..cursor].width() as u16;
         f.set_cursor_position((
-            area.x + 4 + cursor.min(area.width.saturating_sub(5)),
-            area.y + row,
+            content_area.x + 4 + cursor.min(content_area.width.saturating_sub(5)),
+            content_area.y + row,
         ));
     }
 }
@@ -2273,15 +2301,7 @@ pub(super) fn render_theme_picker_modal(
     let p = crate::ui::theme::get_palette(&state.config.theme);
     let modal_area = input_anchor_rect(f, input_area, 12);
 
-    f.render_widget(Clear, modal_area);
-
-    let modal_block = Block::default().style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(modal_block, modal_area);
-
-    let inner_area = modal_area.inner(Margin {
-        vertical: 0,
-        horizontal: 0,
-    });
+    let inner_area = render_padded_panel(f, modal_area);
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
