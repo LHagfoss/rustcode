@@ -1,4 +1,5 @@
 mod highlight;
+mod history_cell;
 mod lru;
 mod markdown;
 mod modals;
@@ -2675,6 +2676,8 @@ pub(crate) fn render_live_tail(
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
         && !state.working_status_pending
+        && state.running_tools.is_empty()
+        && state.live_tool_calls.is_empty()
     {
         return build_claude_startup_banner(state, width as usize, height as usize);
     }
@@ -2715,10 +2718,19 @@ pub(crate) fn render_live_tail(
         }
     }
 
-    if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
+    if !state.live_tool_calls.is_empty() {
+        if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+            lines.push(Line::from(""));
+        }
+        lines.extend(history_cell::render_live_tool_cell(
+            &state.live_tool_calls,
+            width,
+            false,
+        ));
+        lines.push(Line::from(""));
+    } else if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
         || state.working_status_pending
         || !state.running_tools.is_empty()
-        || !state.live_tool_calls.is_empty()
     {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
