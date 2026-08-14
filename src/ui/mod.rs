@@ -20,7 +20,9 @@ use modals::{
 };
 use tool_result::render_tool_result;
 
-use crate::app::activity::{ActivityKind, ActivitySnapshot, classify_activity};
+use crate::app::activity::{
+    ActivityKind, ActivitySnapshot, classify_activity, classify_live_tools,
+};
 use crate::app::{AppState, AppStatus, ChatMessage, NoticeKind};
 use ratatui::{
     Frame,
@@ -936,7 +938,12 @@ fn format_input_status_text(state: &AppState) -> String {
 }
 
 fn activity_status_label(state: &AppState) -> String {
-    let activity = classify_activity(&state.status, &state.running_tools);
+    let base_activity = classify_activity(&state.status, &state.running_tools);
+    let activity = if base_activity.kind == ActivityKind::ActionRequired {
+        base_activity
+    } else {
+        classify_live_tools(&state.live_tool_calls).unwrap_or(base_activity)
+    };
     if activity.kind == ActivityKind::Working {
         return "Working".to_string();
     }
@@ -1018,6 +1025,7 @@ fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 }
 
 fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
+    let base_activity = classify_activity(&state.status, &state.running_tools);
     let activity = if state.working_status_pending {
         ActivitySnapshot {
             kind: ActivityKind::Working,
@@ -1025,8 +1033,10 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
             detail: None,
             animated: true,
         }
+    } else if base_activity.kind == ActivityKind::ActionRequired {
+        base_activity
     } else {
-        classify_activity(&state.status, &state.running_tools)
+        classify_live_tools(&state.live_tool_calls).unwrap_or(base_activity)
     };
     let action_detail = state
         .pending_tool_confirmation
@@ -1797,7 +1807,11 @@ fn tool_result_status(message: &ChatMessage, tool_name: &str, result: &str) -> (
     }
 }
 
-fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Line<'static>> {
+fn indent_tool_result_body(
+    lines: Vec<Line<'static>>,
+    tool_name: &str,
+    verbosity: &crate::app::Verbosity,
+) -> Vec<Line<'static>> {
     let filtered = lines
         .into_iter()
         .filter(|line| {
@@ -1808,13 +1822,20 @@ fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Li
                     .any(|span| span.content.trim_start().starts_with('✗'))
         })
         .collect::<Vec<_>>();
-    let omitted = filtered.len().saturating_sub(6);
+    let max_visible = if matches!(verbosity, crate::app::Verbosity::High) {
+        20
+    } else {
+        6
+    };
+    let omitted = filtered.len().saturating_sub(max_visible);
+    let head_count = max_visible / 2;
+    let tail_count = max_visible - head_count;
     let visible = if omitted == 0 {
         filtered
     } else {
-        filtered[..3]
+        filtered[..head_count]
             .iter()
-            .chain(&filtered[filtered.len() - 3..])
+            .chain(&filtered[filtered.len() - tail_count..])
             .cloned()
             .collect()
     };
@@ -1839,7 +1860,7 @@ fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Li
         .collect::<Vec<_>>();
     if omitted > 0 {
         indented.insert(
-            3,
+            head_count,
             Line::from(Span::styled(
                 format!("    … +{omitted} lines"),
                 get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, false),
@@ -1853,6 +1874,7 @@ fn indent_tool_result_body(lines: Vec<Line<'static>>, tool_name: &str) -> Vec<Li
 enum ToolTranscriptKind {
     Explored,
     Command,
+    Edit,
     Tool,
 }
 
@@ -1861,6 +1883,16 @@ fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
         ToolTranscriptKind::Explored
     } else if tool_name == "run_command" {
         ToolTranscriptKind::Command
+    } else if matches!(
+        tool_name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
+    ) {
+        ToolTranscriptKind::Edit
     } else {
         ToolTranscriptKind::Tool
     }
@@ -2150,10 +2182,13 @@ pub(crate) fn render_committed_tool_result_group(
             lines.extend(indent_tool_result_body(
                 entry.body.clone(),
                 &entry.tool_name,
+                &state.verbosity,
             ));
         } else {
             let title = if kind == ToolTranscriptKind::Explored {
                 "Explored"
+            } else if kind == ToolTranscriptKind::Edit {
+                "Edited"
             } else {
                 "Tool"
             };
@@ -2165,10 +2200,15 @@ pub(crate) fn render_committed_tool_result_group(
                 if kind != ToolTranscriptKind::Explored || seen.insert(identity) {
                     let is_expanded = state.expanded_thoughts.contains(&entry.message_index);
                     let show_hint =
-                        kind == ToolTranscriptKind::Tool && !entry.body.is_empty() && !is_expanded;
+                        kind == ToolTranscriptKind::Tool
+                            && !entry.body.is_empty()
+                            && !is_expanded
+                            && matches!(state.verbosity, crate::app::Verbosity::Low);
                     lines.push(tool_child_line(entry, first_child, show_hint, show_picker));
                     first_child = false;
-                    if kind == ToolTranscriptKind::Tool && is_expanded {
+                    if kind == ToolTranscriptKind::Tool
+                        && (is_expanded || matches!(state.verbosity, crate::app::Verbosity::High))
+                    {
                         lines.extend(indent_generic_tool_body(entry.body.clone(), show_picker));
                     }
                 }
@@ -2643,6 +2683,7 @@ pub(crate) fn render_live_tail(
     if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
         || state.working_status_pending
         || !state.running_tools.is_empty()
+        || !state.live_tool_calls.is_empty()
     {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));

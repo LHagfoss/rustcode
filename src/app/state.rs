@@ -798,6 +798,19 @@ pub enum Verbosity {
     High,
 }
 
+/// Presentation-only state for a tool invocation that has not produced its
+/// final history message yet. The provider payload and persisted history keep
+/// using [`ToolCallRef`] and [`ToolResultRecord`]; this projection exists so
+/// the TUI can update one live activity item instead of appending protocol
+/// fragments to the transcript.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveToolCall {
+    pub key: String,
+    pub tool_name: String,
+    pub action: String,
+    pub target: String,
+}
+
 pub struct AppState {
     pub input_buffer: String,
     pub history: Vec<ChatMessage>,
@@ -890,6 +903,11 @@ pub struct AppState {
     /// While this is not empty, the modal overlay stays closed and the user can
     /// keep working normally.
     pub running_tools: Vec<String>,
+    /// Tool calls currently being executed, including read/search calls that
+    /// finish too quickly to be useful as a name-only `running_tools` status.
+    /// This is deliberately not serialized: it is a terminal presentation
+    /// projection, not conversation context.
+    pub live_tool_calls: Vec<LiveToolCall>,
 
     pub stream_tracker: Option<StreamTracker>,
 
@@ -1031,6 +1049,37 @@ impl AppState {
         self.redraw_requested = true;
     }
 
+    /// Add a live tool projection for the TUI without changing canonical
+    /// conversation history or provider-facing state.
+    pub fn begin_live_tool_call(
+        &mut self,
+        key: String,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) {
+        let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
+        self.live_tool_calls.push(LiveToolCall {
+            key,
+            tool_name: tool_name.to_owned(),
+            action,
+            target,
+        });
+        self.request_redraw();
+    }
+
+    /// Finish one live tool projection. The completed semantic result is
+    /// persisted separately as the normal `ChatMessage` tool result.
+    pub fn finish_live_tool_call(&mut self, key: &str) {
+        if let Some(position) = self
+            .live_tool_calls
+            .iter()
+            .position(|live_call| live_call.key == key)
+        {
+            self.live_tool_calls.remove(position);
+            self.request_redraw();
+        }
+    }
+
     /// Consume a pending redraw request.
     pub fn take_redraw_request(&mut self) -> bool {
         std::mem::take(&mut self.redraw_requested)
@@ -1110,6 +1159,7 @@ impl AppState {
             pending_question: None,
             question_response: None,
             running_tools: Vec::new(),
+            live_tool_calls: Vec::new(),
             stream_tracker: None,
             auto_confirm: false,
             active_session_id,
