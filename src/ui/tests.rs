@@ -2099,7 +2099,7 @@ fn render_clearing_working_status_pending_requests_follow_up_redraw() {
 }
 
 #[test]
-fn empty_composer_has_painted_padding_above_and_below() {
+fn empty_composer_has_painted_padding_and_model_footer() {
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut state = AppState::new();
@@ -2124,8 +2124,13 @@ fn empty_composer_has_painted_padding_above_and_below() {
 
     let prompt_row = prompt_row.expect("composer prompt should be rendered");
     let footer_row = bottom_border_row.expect("composer footer should be rendered");
-    assert_eq!(footer_row, prompt_row + 1);
+    assert_eq!(footer_row, prompt_row + 2);
+    let footer = (0..100)
+        .map(|x| buffer[(x, footer_row)].symbol())
+        .collect::<String>();
+    assert!(footer.contains(&state.model_name), "composer footer: {footer:?}");
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row + 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
 }
