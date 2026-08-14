@@ -56,29 +56,40 @@ pub async fn generate_title(
     }
 }
 
-/// Push the incoming prompt (user message, or a background-task wakeup system
-/// note) onto history, persist it, and reset the per-response scratch fields.
+/// Push an incoming user prompt onto history, then reset per-response scratch
+/// fields. A background wakeup already has a durable tool result in history, so
+/// adding a second system notice would create redundant transcript chatter.
+fn prompt_history_message(is_wakeup: bool, next_prompt: &str) -> Option<ChatMessage> {
+    (!is_wakeup).then(|| ChatMessage::new("user", next_prompt.to_string()))
+}
+
 pub(crate) async fn record_prompt_to_history(
     state: &Arc<Mutex<AppState>>,
     is_wakeup: bool,
     next_prompt: &str,
 ) {
     let mut s = state.lock().await;
-    if is_wakeup {
-        let task_id = next_prompt.strip_prefix("__task_wakeup__:").unwrap_or("");
-        s.history.push(ChatMessage::new(
-            "system",
-            format!("Task {task_id} has finished running in the background."),
-        ));
-    } else {
-        s.history
-            .push(ChatMessage::new("user", next_prompt.to_string()));
+    if let Some(message) = prompt_history_message(is_wakeup, next_prompt) {
+        s.history.push(message);
     }
     let active_id = s.active_session_id.clone();
     crate::config::save_session_history(&active_id, &s.history);
     s.current_response.clear();
     s.current_token_usage = None;
     s.response_time = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prompt_history_message;
+
+    #[test]
+    fn background_wakeup_does_not_add_redundant_system_chatter() {
+        assert!(prompt_history_message(true, "__task_wakeup__:task_42").is_none());
+        let user = prompt_history_message(false, "continue").expect("user prompt");
+        assert_eq!(user.role, "user");
+        assert_eq!(user.content, "continue");
+    }
 }
 
 /// Fire-and-forget: generate a session title from the first user message.
