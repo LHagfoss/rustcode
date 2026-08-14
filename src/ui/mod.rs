@@ -1223,7 +1223,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         area,
     );
     let input_margin = Margin {
-        vertical: 0,
+        vertical: 1,
         horizontal: 0,
     };
     let input_inner = area.inner(input_margin);
@@ -2109,6 +2109,21 @@ fn tool_child_line(
     Line::from(spans)
 }
 
+fn command_child_line(
+    entry: &ToolTranscriptEntry,
+    first: bool,
+    show_picker: bool,
+) -> Line<'static> {
+    let mut line = tool_child_line(entry, first, false, show_picker);
+    if !entry.success {
+        line.spans.push(Span::styled(
+            format!(" · {}", entry.status),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+    line
+}
+
 fn indent_generic_tool_body(
     lines: Vec<Line<'static>>,
     verbosity: &crate::app::Verbosity,
@@ -2175,7 +2190,9 @@ pub(crate) fn render_committed_tool_result_group(
     let mut index = 0;
     while index < entries.len() {
         let kind = entries[index].kind;
-        let group_end = if kind == ToolTranscriptKind::Command {
+        let group_end = if kind == ToolTranscriptKind::Command
+            && matches!(state.verbosity, crate::app::Verbosity::Low)
+        {
             index + 1
         } else {
             (index + 1..entries.len())
@@ -2189,26 +2206,67 @@ pub(crate) fn render_committed_tool_result_group(
             lines.push(Line::from(""));
         }
         if kind == ToolTranscriptKind::Command {
-            let entry = &group[0];
-            let command = if entry.target.is_empty() || entry.target == "?" {
-                entry.action.clone()
+            if matches!(state.verbosity, crate::app::Verbosity::High) {
+                lines.push(tool_group_header("Ran", success, show_picker));
+                for (child_index, entry) in group.iter().enumerate() {
+                    lines.push(command_child_line(entry, child_index == 0, show_picker));
+                }
             } else {
-                format!("$ {}", entry.target)
-            };
-            let title = format!("Ran {command} · {}", entry.status);
-            lines.push(tool_group_header(&title, success, show_picker));
-            lines.extend(indent_tool_result_body(
-                entry.body.clone(),
-                &entry.tool_name,
-                &state.verbosity,
-            ));
+                let entry = &group[0];
+                let command = if entry.target.is_empty() || entry.target == "?" {
+                    entry.action.clone()
+                } else {
+                    format!("$ {}", entry.target)
+                };
+                let title = format!("Ran {command} · {}", entry.status);
+                lines.push(tool_group_header(&title, success, show_picker));
+                lines.extend(indent_tool_result_body(
+                    entry.body.clone(),
+                    &entry.tool_name,
+                    &state.verbosity,
+                ));
+            }
         } else {
+            if kind == ToolTranscriptKind::Tool && group.len() == 1 {
+                let entry = &group[0];
+                let title = if entry.target.is_empty() || entry.target == "?" {
+                    entry.action.clone()
+                } else {
+                    format!("{} {}", entry.action, entry.target)
+                };
+                let is_expanded = state.expanded_thoughts.contains(&entry.message_index);
+                let mut header = tool_group_header(&title, success, show_picker);
+                if !entry.body.is_empty()
+                    && !is_expanded
+                    && matches!(state.verbosity, crate::app::Verbosity::Low)
+                {
+                    header.spans.push(Span::styled(
+                        " (ctrl+o to expand)",
+                        get_themed_style(
+                            COLOR_MUTED(),
+                            COLOR_BG(),
+                            Modifier::ITALIC,
+                            show_picker,
+                        ),
+                    ));
+                }
+                lines.push(header);
+                if is_expanded && matches!(state.verbosity, crate::app::Verbosity::Low) {
+                    lines.extend(indent_generic_tool_body(
+                        entry.body.clone(),
+                        &state.verbosity,
+                        show_picker,
+                    ));
+                }
+                index = group_end;
+                continue;
+            }
             let title = if kind == ToolTranscriptKind::Explored {
                 "Explored"
             } else if kind == ToolTranscriptKind::Edit {
                 "Edited"
             } else {
-                "Tool"
+                "Called"
             };
             lines.push(tool_group_header(title, success, show_picker));
             let mut seen = std::collections::HashSet::new();
@@ -2254,21 +2312,59 @@ fn render_committed_tool_result(
     render_committed_tool_result_group(state, &[message_index], width, show_picker)
 }
 
-fn push_turn_separator<'a>(lines: &mut Vec<Line<'a>>, width: u16, show_picker: bool) {
-    let rule = "─".repeat(width.max(1) as usize);
-    // No leading blank: the preceding transcript item (assistant text, status
-    // card, tool card, user bubble) already ends with its own trailing blank
-    // row, so pushing one here doubled the gap above the rule.
-    lines.push(Line::from(Span::<'static>::styled(
-        rule,
+fn format_elapsed_compact(milliseconds: u64) -> String {
+    let seconds = milliseconds / 1_000;
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+    if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+pub(crate) fn render_work_separator_before_assistant(
+    state: &AppState,
+    assistant_index: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let Some(message) = state.history.get(assistant_index) else {
+        return Vec::new();
+    };
+    if message.role != "assistant" || message.content.trim().is_empty() {
+        return Vec::new();
+    }
+    let follows_work = state.history[..assistant_index]
+        .iter()
+        .rev()
+        .find(|candidate| {
+            !((candidate.role == "system" || candidate.role == "assistant")
+                && is_hidden_system_notice(&candidate.content))
+        })
+        .is_some_and(|candidate| candidate.role == "tool");
+    if !follows_work {
+        return Vec::new();
+    }
+
+    let label = message
+        .response_time_ms
+        .filter(|milliseconds| *milliseconds > 60_000)
+        .map(|milliseconds| format!("─ Worked for {} ─", format_elapsed_compact(milliseconds)));
+    let text = if let Some(label) = label {
+        let label_width = label.width();
+        format!("{label}{}", "─".repeat((width as usize).saturating_sub(label_width)))
+    } else {
+        "─".repeat(width.max(1) as usize)
+    };
+    vec![Line::from(Span::styled(
+        text,
         get_themed_style(
             COLOR_TURN_SEPARATOR(),
             COLOR_BG(),
             Modifier::empty(),
-            show_picker,
+            false,
         ),
-    )));
-    lines.push(Line::from(""));
+    ))]
 }
 
 fn push_centered_separator<'a>(
@@ -2934,7 +3030,7 @@ pub fn render_with_transcript(
             f.area().height.saturating_sub(2),
         )
     } else {
-        input_lines + 2
+        input_lines + 3
     };
     let queue_block_height = queue_preview_height(state);
 

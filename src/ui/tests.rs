@@ -420,12 +420,7 @@ fn use_skill_renders_in_committed_history() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "• Tool"));
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.starts_with("  └ UseSkill clockify"))
-    );
+    assert!(rendered.iter().any(|line| line == "• UseSkill clockify"));
 }
 
 #[test]
@@ -461,7 +456,83 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Tool", "  └ UseSkill clockify"]);
+    assert_eq!(rendered, ["• UseSkill clockify"]);
+}
+
+#[test]
+fn high_verbosity_batches_consecutive_commands_under_one_heading() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::High;
+    state.history.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+        ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"git status --short"}"#.to_owned(),
+        },
+        ToolCallRef {
+            id: "call-2".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: r#"{"command":"cargo check --tests"}"#.to_owned(),
+        },
+    ]));
+    for (id, command) in [
+        ("call-1", "git status --short"),
+        ("call-2", "cargo check --tests"),
+    ] {
+        state.history.push(
+            ChatMessage::new("tool", format!("run_command: exit code: 0\n{command} output"))
+                .answering(Some(id.to_owned()))
+                .with_tool_result(ToolResultRecord {
+                    tool_name: "run_command".to_owned(),
+                    success: true,
+                    exit_code: Some(0),
+                    ..Default::default()
+                }),
+        );
+    }
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rendered,
+        ["• Ran", "  └ Bash git status --short", "    Bash cargo check --tests"]
+    );
+    assert!(!rendered.iter().any(|line| line.contains("output")));
+}
+
+#[test]
+fn worked_separator_only_labels_concrete_work_over_one_minute() {
+    use crate::app::{ChatMessage, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "fix it"));
+    state.history.push(
+        ChatMessage::new("tool", "run_command: exit code: 0")
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    let mut assistant = ChatMessage::new("assistant", "Done.");
+    assistant.response_time_ms = Some(125_000);
+    state.history.push(assistant);
+
+    let separator = super::render_work_separator_before_assistant(&state, 2, 80);
+    assert_eq!(separator.len(), 1);
+    assert!(separator[0].to_string().starts_with("─ Worked for 2m 05s ─"));
+
+    state.history[2].response_time_ms = Some(12_000);
+    assert_eq!(
+        super::render_work_separator_before_assistant(&state, 2, 12)[0].to_string(),
+        "────────────"
+    );
+    assert!(super::render_work_separator_before_assistant(&state, 0, 80).is_empty());
 }
 
 #[test]
@@ -493,7 +564,11 @@ fn high_verbosity_hides_generic_tool_details() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "• Tool"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.starts_with("• McpCustomTool"))
+    );
     assert!(rendered.iter().any(|line| line.contains("McpCustomTool")));
     assert!(!rendered.iter().any(|line| line.contains("completed")));
     assert!(!rendered.iter().any(|line| line.contains("line 2")));
@@ -1434,6 +1509,23 @@ fn live_tool_cell_is_a_projection_not_history() {
 }
 
 #[test]
+fn single_live_generic_tool_shows_its_action_without_using_heading() {
+    let call = crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "use_skill",
+        "UseSkill",
+        "release-automation",
+    );
+    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered, ["• UseSkill release-automation"]);
+}
+
+#[test]
 fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
     let mut call = crate::app::LiveToolCall::new(
         "local:1", None, "run_command", "Bash", "cargo test",
@@ -2007,7 +2099,7 @@ fn render_clearing_working_status_pending_requests_follow_up_redraw() {
 }
 
 #[test]
-fn empty_composer_has_no_extra_blank_rows() {
+fn empty_composer_has_painted_padding_above_and_below() {
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut state = AppState::new();
@@ -2031,7 +2123,10 @@ fn empty_composer_has_no_extra_blank_rows() {
     });
 
     let prompt_row = prompt_row.expect("composer prompt should be rendered");
-    assert_eq!(bottom_border_row, Some(prompt_row + 2));
+    let footer_row = bottom_border_row.expect("composer footer should be rendered");
+    assert_eq!(footer_row, prompt_row + 1);
+    assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
+    assert_eq!(buffer[(0, footer_row + 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
 }
 

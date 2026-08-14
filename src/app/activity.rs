@@ -156,15 +156,17 @@ pub fn classify_live_tools(calls: &[LiveToolCall]) -> Option<ActivitySnapshot> {
         (!details.is_empty()).then(|| details.join(", "))
     };
     let label = if all_exploration {
-        "Exploring"
+        "Exploring".to_owned()
     } else if calls.iter().any(|call| call.tool_name == "run_command") {
-        "Running"
+        "Running".to_owned()
+    } else if calls.len() == 1 {
+        calls[0].action.clone()
     } else {
-        "Using"
+        "Calling".to_owned()
     };
     Some(ActivitySnapshot {
         kind: ActivityKind::RunningTool,
-        label: label.to_string(),
+        label,
         detail,
         animated: true,
     })
