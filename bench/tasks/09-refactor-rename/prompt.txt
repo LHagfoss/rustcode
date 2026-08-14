@@ -1,1 +1,0 @@
-Rename the struct `Widget` to `Gadget` throughout the crate — every file, including all usages and the test. `cargo test` must pass and no reference to the identifier `Widget` may remain anywhere in src/.

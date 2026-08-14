@@ -1,1 +1,0 @@
-Find and fix the async deadlock bug in src/lib.rs. Running `cargo test` currently hangs indefinitely due to lock order inversion across async yield points. Fix the concurrency logic so `cargo test` passes cleanly within 5 seconds without hanging.

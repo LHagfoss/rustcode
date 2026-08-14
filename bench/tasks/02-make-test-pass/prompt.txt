@@ -1,1 +1,0 @@
-The unit test in src/lib.rs fails because `add` is implemented wrong. Fix the `add` function so `cargo test` passes. Do not modify the test.
