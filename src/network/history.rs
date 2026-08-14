@@ -469,6 +469,7 @@ mod tests {
             changed_paths: Vec::new(),
             truncated: false,
             full_output_artifact: None,
+            ..Default::default()
         });
         let entries = normalize_history(std::slice::from_ref(&message));
         assert!(matches!(

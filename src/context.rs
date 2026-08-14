@@ -138,6 +138,18 @@ impl ContextSnapshot {
             Some(format!("# Environment Updates\n{}", changes.join("\n")))
         }
     }
+
+    /// Return the applicable project instructions without the rest of the
+    /// environment snapshot. Environment deltas are intentionally sparse, but
+    /// instructions are constraints rather than transient state and must stay
+    /// available after history compaction or a resumed session.
+    pub fn project_instructions(&self) -> Option<String> {
+        self.agent_doc.as_ref().map(|doc| {
+            format!(
+                "# Project instructions (AGENTS.md/CLAUDE.md — authoritative)\n\n{doc}"
+            )
+        })
+    }
 }
 
 const MAX_TREE_ENTRIES: usize = 30;

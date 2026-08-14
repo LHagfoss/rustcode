@@ -13,25 +13,38 @@ pub struct ToolResultEnvelope {
     pub call_id: String,
     pub tool_name: String,
     pub success: bool,
-    pub error_kind: Option<String>,
+    pub error_kind: Option<ToolErrorKind>,
+    pub retryable: bool,
+    pub exit_code: Option<i32>,
+    pub changed_paths: Vec<String>,
     pub output: String,
     pub truncated: bool,
+    pub full_output_artifact: Option<String>,
+    pub replayed: bool,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolErrorKind {
+    Validation,
     InvalidArguments,
     EditMismatch,
     PermissionDenied,
     CommandFailed,
     CompilerFailed,
     Cancelled,
+    McpFailed,
+    Internal,
+    OutputLimit,
+    ProviderFailed,
     UnavailableDependency,
     Unknown,
 }
 
 impl ToolErrorKind {
+    /// Compatibility helper for legacy display-only callers. Execution paths
+    /// should set this kind at the boundary from typed state instead of parsing
+    /// human-facing prose.
     #[allow(dead_code)]
     pub fn from_message(msg: &str) -> Self {
         let lower = msg.to_ascii_lowercase();

@@ -390,7 +390,7 @@ pub struct ToolCallRef {
     pub arguments: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolResultRecord {
     pub tool_name: String,
     pub arguments_hash: String,
@@ -399,6 +399,12 @@ pub struct ToolResultRecord {
     pub changed_paths: Vec<String>,
     pub truncated: bool,
     pub full_output_artifact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+    #[serde(default)]
+    pub retryable: bool,
+    #[serde(default)]
+    pub replayed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1205,9 +1211,31 @@ impl AppState {
     }
 
     pub fn get_history_token_budget(&self) -> u32 {
-        let cw = self.active_context_window();
-        // Use 75% of the model's context window as the history budget.
-        (cw as f64 * 0.75) as u32
+        self.active_context_budget().history_tokens
+    }
+
+    /// A single model-aware budget shared by automatic compaction and final
+    /// request trimming. Profiles without a matching entry retain the existing
+    /// default window and conservative reserves.
+    pub fn active_context_budget(&self) -> crate::config::ContextBudget {
+        self.active_model_profile()
+            .map(|profile| profile.context_budget())
+            .unwrap_or_else(|| {
+                crate::config::ModelProfile {
+                    name: self.model_name.clone(),
+                    url: self.api_base_url.clone(),
+                    model: self.model_name.clone(),
+                    context_window: Some(crate::config::DEFAULT_CONTEXT_WINDOW),
+                    engine: None,
+                    api_key: None,
+                    env_key: None,
+                    tool_protocol: None,
+                    enable_thinking: None,
+                    max_tokens: None,
+                    supports_vision: None,
+                }
+                .context_budget()
+            })
     }
 
     fn clamp_cursor(&mut self) {

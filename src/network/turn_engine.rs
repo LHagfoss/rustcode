@@ -20,7 +20,7 @@ use super::{
     fetch_model_quota, is_mutating_tool, loop_recovery_action, mutation_made_progress,
     prepare_turn_request, probe_function_calling, push_or_replace_loop_warning,
     record_provider_error, stop_turn_for_budget, truncated_batch_summary, turn_budget_exceeded,
-    unanswered_call_results, update_compiler_diagnostic_streak,
+    unanswered_call_results, unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
 };
 
 /// Tracks fence depth while streaming text so an incomplete ````tool block
@@ -56,6 +56,7 @@ pub struct TurnContext {
     pub max_tool_rounds: usize,
     pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
+    pub progress_ledger: loop_detect::ProgressLedger,
     pub loop_recovery_attempts: u8,
     pub force_final: bool,
     pub made_edits: bool,
@@ -87,6 +88,8 @@ pub struct TurnContext {
     pub malformed_calls: usize,
     pub no_progress_results: usize,
     pub failure_replans: usize,
+    pub evidence_recoveries: usize,
+    pub last_progress_reason: Option<loop_detect::ProgressReason>,
     pub provider_errors: usize,
     pub provider_429s: usize,
     pub changed_paths: std::collections::BTreeSet<String>,
@@ -105,6 +108,7 @@ impl TurnContext {
             max_tool_rounds: max_tool_rounds.max(1),
             oversized_batch_rejections: 0,
             loop_detector: loop_detect::LoopDetector::new(6),
+            progress_ledger: loop_detect::ProgressLedger::default(),
             loop_recovery_attempts: 0,
             force_final: false,
             made_edits: false,
@@ -136,6 +140,8 @@ impl TurnContext {
             malformed_calls: 0,
             no_progress_results: 0,
             failure_replans: 0,
+            evidence_recoveries: 0,
+            last_progress_reason: None,
             provider_errors: 0,
             provider_429s: 0,
             changed_paths: std::collections::BTreeSet::new(),
@@ -152,6 +158,9 @@ impl TurnContext {
             "malformed_calls": self.malformed_calls,
             "no_progress_results": self.no_progress_results,
             "failure_replans": self.failure_replans,
+            "evidence_recoveries": self.evidence_recoveries,
+            "progress_no_information_streak": self.progress_ledger.no_progress_streak(),
+            "last_progress_reason": self.last_progress_reason.map(|reason| reason.label()),
             "compiler_diagnostic_streak": self.consecutive_compiler_diagnostics,
             "provider_errors": self.provider_errors,
             "provider_429s": self.provider_429s,
@@ -519,7 +528,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         msg.thought_time_ms = thought_time_ms;
         msg.thought_tokens = thought_tokens;
         s.history.push(msg);
-        for message in unanswered_call_results(&rejected_refs, &reason) {
+        for message in unanswered_call_results_with_kind(
+            &rejected_refs,
+            &reason,
+            crate::tools::ToolErrorKind::Validation,
+        ) {
             s.history.push(message);
         }
         let guidance = if oversized_batch {
@@ -760,7 +773,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 dbg_log!("Orchestrator: Cancelled during tool execution");
                 ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
                 let mut s = state.lock().await;
-                for message in unanswered_call_results(&call_refs, "interrupted by the user") {
+                for message in unanswered_call_results_with_kind(
+                    &call_refs,
+                    "interrupted by the user",
+                    crate::tools::ToolErrorKind::Cancelled,
+                ) {
                     s.history.push(message);
                 }
                 if call_refs.is_empty() {
@@ -776,19 +793,27 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             let mut completed = false;
             let mut stagnation = loop_detect::LoopStatus::Ok;
             let mut failure_replan = None;
+            let mut evidence_recovery = None;
             let executed = results.len();
             for (position, result) in results.into_iter().enumerate() {
                 let call = tool_calls.get(position);
                 let answered_call = call_refs.get(position).map(|call| call.id.clone());
                 let name = result.tool_name;
-                let metadata = result.metadata.clone();
+                let mut metadata = result.metadata.clone();
+                // The provider call id is attached at the orchestration
+                // boundary, after parsing, and is then carried into the
+                // history message that answers that exact call.
+                metadata.call_id = answered_call.clone();
                 let content = result.content;
+                let mut verification_command = false;
                 if call.is_some_and(|call| call.name == "run_command")
                     && let Some(command) = call
                         .and_then(|call| call.arguments.get("command"))
                         .and_then(|command| command.as_str())
                 {
                     ctx.verification.record_command(command, metadata.exit_code);
+                    verification_command = verification::is_verification_command(command)
+                        || loop_detect::is_stable_inspection_command(command);
                 }
                 let diff_opt = result.diff;
                 dbg_log!(
@@ -810,6 +835,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         ));
                     }
                 }
+                let mut mutation_progress = false;
                 if is_mutating_tool(&name) {
                     let failed = !metadata.success
                         || content
@@ -817,6 +843,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             .to_ascii_lowercase()
                             .starts_with("error");
                     let made_progress = mutation_made_progress(metadata.success, &content);
+                    mutation_progress = made_progress && diff_opt.is_some();
                     if failed {
                         ctx.failed_mutations += 1;
                         ctx.consecutive_failed_mutations += 1;
@@ -838,27 +865,84 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         }
                     }
                     if made_progress {
-                        ctx.consecutive_no_progress = 0;
-                    } else {
-                        ctx.consecutive_no_progress += 1;
-                        ctx.no_progress_results += 1;
-                    }
-                    if made_progress {
                         ctx.loop_detector.reset();
                     }
                 }
-                match ctx
-                    .loop_detector
-                    .record_output(loop_detect::stagnation_key(&content))
-                {
-                    status @ (loop_detect::LoopStatus::Warning(n)
-                    | loop_detect::LoopStatus::Abort(n)) => {
-                        dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
-                        if status.rank() > stagnation.rank() {
-                            stagnation = status;
-                        }
+
+                let no_result = loop_detect::stagnation_key(&content) == "grep:no-matches";
+                let search_result = loop_detect::is_search_tool(&name)
+                    || call.is_some_and(|call| {
+                        let (_, category) =
+                            loop_detect::signatures(&call.name, &call.arguments);
+                        category.starts_with("search:")
+                    });
+                let changed_workspace = mutation_progress && metadata.success;
+                let state_fingerprint = changed_workspace.then(|| {
+                    let mut state = metadata.changed_paths.join("\n");
+                    if let Some(diff) = diff_opt.as_deref() {
+                        state.push('\n');
+                        state.push_str(diff);
                     }
-                    loop_detect::LoopStatus::Ok => {}
+                    loop_detect::stable_hash(&state)
+                });
+                let output_fingerprint = compiler_diagnostic_fingerprint(&content)
+                    .as_deref()
+                    .map(loop_detect::stable_hash)
+                    .unwrap_or_else(|| {
+                        loop_detect::stable_hash(loop_detect::stagnation_key(&content))
+                    });
+                let failure_fingerprint = (!metadata.success).then(|| {
+                    loop_detect::stable_hash(&format!(
+                        "{name}:{}:{}",
+                        metadata.exit_code.unwrap_or_default(),
+                        loop_detect::stagnation_key(&content)
+                    ))
+                });
+                let assessment = ctx.progress_ledger.observe(
+                    &loop_detect::ProgressObservation {
+                        action: name.clone(),
+                        output_fingerprint,
+                        state_fingerprint,
+                        failure_fingerprint,
+                        changed_workspace,
+                        fresh_read: loop_detect::is_read_only(&name) && !metadata.replayed,
+                        search_result,
+                        no_result,
+                        verification: verification_command,
+                        success: metadata.success,
+                    },
+                );
+                ctx.last_progress_reason = Some(assessment.reason);
+                if assessment.meaningful {
+                    ctx.consecutive_no_progress = 0;
+                } else if !assessment.suppress_stagnation {
+                    ctx.consecutive_no_progress += 1;
+                    ctx.no_progress_results += 1;
+                }
+                if !assessment.suppress_stagnation
+                    && (assessment.reason == loop_detect::ProgressReason::Churn
+                        || assessment.streak >= loop_detect::ProgressLedger::RECOVERY_STREAK)
+                {
+                    evidence_recovery = Some((
+                        assessment.reason,
+                        assessment.streak,
+                        name.clone(),
+                    ));
+                }
+                if !assessment.suppress_stagnation {
+                    match ctx
+                        .loop_detector
+                        .record_output(loop_detect::stagnation_key(&content))
+                    {
+                        status @ (loop_detect::LoopStatus::Warning(n)
+                        | loop_detect::LoopStatus::Abort(n)) => {
+                            dbg_log!("Loop detector: output stagnation x{} for '{}'", n, name);
+                            if status.rank() > stagnation.rank() {
+                                stagnation = status;
+                            }
+                        }
+                        loop_detect::LoopStatus::Ok => {}
+                    }
                 }
                 s.history.push(tool_result_history_message(
                     ToolResult {
@@ -888,6 +972,55 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         "[Loop warning: the last {n} tool results were identical in kind (e.g. repeated \"no matches\"). Re-phrasing the same search is not progress — the answer is not where you are looking. View the relevant file directly or change approach.]"
                     ),
                 );
+            }
+
+            let output_abort = matches!(stagnation, loop_detect::LoopStatus::Abort(_));
+            if output_abort || evidence_recovery.is_some() {
+                let (reason, streak, action) = evidence_recovery.unwrap_or((
+                    loop_detect::ProgressReason::NoNewInformation,
+                    match stagnation {
+                        loop_detect::LoopStatus::Warning(n)
+                        | loop_detect::LoopStatus::Abort(n) => n,
+                        loop_detect::LoopStatus::Ok => 0,
+                    },
+                    "repeated tool output".to_string(),
+                ));
+                let evidence = format!(
+                    "[Evidence-based recovery: signal={} streak={} action={}]. Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command.",
+                    reason.label(), streak, action
+                );
+                match loop_recovery_action(ctx.loop_recovery_attempts) {
+                    LoopRecoveryAction::Recover => {
+                        ctx.loop_recovery_attempts += 1;
+                        ctx.evidence_recoveries += 1;
+                        ctx.loop_detector.reset();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("{evidence}\n{LOOP_RECOVERY_PROMPT}"),
+                        ));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        s.status = AppStatus::Streaming;
+                        s.stream_tracker = Some(StreamTracker::new());
+                        drop(s);
+                        ctx.turn_machine.finish_tools_if_executing();
+                        ctx.tool_rounds += 1;
+                        return true;
+                    }
+                    LoopRecoveryAction::ForceFinal => {
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("{evidence}\n{FORCE_ANSWER_PROMPT}"),
+                        ));
+                        crate::config::save_history(&s.history);
+                        s.current_response.clear();
+                        drop(s);
+                        ctx.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+                        ctx.force_final = true;
+                        ctx.turn_machine.finish_tools_if_executing();
+                        return true;
+                    }
+                }
             }
 
             if let Some(replan) = failure_replan {

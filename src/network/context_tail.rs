@@ -98,10 +98,22 @@ pub(crate) fn build_dynamic_context_tail(
     read_files: &[String],
     todos: &[crate::app::TodoItem],
 ) -> String {
+    build_dynamic_context_tail_with_memory(context_section, read_files, todos, None)
+}
+
+pub(crate) fn build_dynamic_context_tail_with_memory(
+    context_section: String,
+    read_files: &[String],
+    todos: &[crate::app::TodoItem],
+    project_memory: Option<String>,
+) -> String {
     let mut fragments = vec![history::ContextFragment::new(
         "environment",
         context_section,
     )];
+    if let Some(project_memory) = project_memory {
+        fragments.push(history::ContextFragment::new("project memory", project_memory));
+    }
     if !read_files.is_empty() || !todos.is_empty() {
         if let Some(map) = build_repo_map_fragment() {
             fragments.push(history::ContextFragment::new("repo_map", map));

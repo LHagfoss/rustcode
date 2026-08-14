@@ -13,7 +13,7 @@ mod misc;
 mod search;
 
 #[allow(unused_imports)]
-pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
+pub use envelope::{ToolCallEnvelope, ToolErrorKind, ToolResultEnvelope};
 
 pub(crate) use exec::{command_confirmation_preview, command_requires_confirmation};
 
@@ -34,6 +34,11 @@ pub(crate) struct ToolExecutionOutput {
     pub(crate) success: bool,
     pub(crate) exit_code: Option<i32>,
     pub(crate) truncated: bool,
+    /// True when the harness served a bounded cached read instead of running
+    /// the tool again. This is execution state, not display prose.
+    pub(crate) replayed: bool,
+    pub(crate) error_kind: Option<ToolErrorKind>,
+    pub(crate) retryable: bool,
 }
 
 impl ToolExecutionOutput {
@@ -43,6 +48,9 @@ impl ToolExecutionOutput {
             success: true,
             exit_code: None,
             truncated: false,
+            replayed: false,
+            error_kind: None,
+            retryable: false,
         }
     }
 
@@ -52,6 +60,21 @@ impl ToolExecutionOutput {
             success: false,
             exit_code: None,
             truncated: false,
+            replayed: false,
+            error_kind: Some(ToolErrorKind::Internal),
+            retryable: false,
+        }
+    }
+
+    pub(crate) fn failure_with_kind(
+        content: String,
+        error_kind: ToolErrorKind,
+        retryable: bool,
+    ) -> Self {
+        Self {
+            error_kind: Some(error_kind),
+            retryable,
+            ..Self::failure(content)
         }
     }
 }
@@ -729,10 +752,38 @@ fn schema_from_arguments(arguments: &str) -> Value {
 /// Gather all connected MCP tools as `(name, description, input_schema)`,
 /// sorted by name for a deterministic, cache-stable ordering. Shared by both
 /// the native schema builder and the text-protocol prompt listing.
+fn mcp_canonical_name(server: &str, tool: &str) -> String {
+    let server = server
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    format!("mcp__{server}__{tool}")
+}
+
+fn mcp_raw_name_is_unique(
+    name: &str,
+    clients: &[Arc<crate::mcp::McpClient>],
+) -> bool {
+    if TOOLS.iter().any(|tool| tool.name == name)
+        || AGENT_TOOL_SPECS.iter().any(|(tool, _, _)| *tool == name)
+    {
+        return false;
+    }
+    clients
+        .iter()
+        .filter_map(|client| client.get_tools().ok())
+        .flatten()
+        .filter(|tool| tool.get("name").and_then(|value| value.as_str()) == Some(name))
+        .count()
+        == 1
+}
+
 fn collect_mcp_tools() -> Vec<(String, String, Value)> {
-    let mut out = Vec::new();
+    let mut discovered = Vec::new();
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
-        for client in reg.values() {
+        let mut clients = reg.values().cloned().collect::<Vec<_>>();
+        clients.sort_by(|a, b| a.name.cmp(&b.name));
+        for client in &clients {
             if let Ok(mcp_tools) = client.get_tools() {
                 for tool in mcp_tools {
                     let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -746,11 +797,37 @@ fn collect_mcp_tools() -> Vec<(String, String, Value)> {
                         .to_string();
                     let schema = tool
                         .get("inputSchema")
+                        .filter(|schema| {
+                            schema.is_object()
+                                && schema.get("type").and_then(Value::as_str) == Some("object")
+                        })
                         .cloned()
-                        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
-                    out.push((name.to_string(), desc, schema));
+                        .unwrap_or_else(|| {
+                            serde_json::json!({"type": "object", "properties": {}})
+                        });
+                    discovered.push((client.name.clone(), name.to_string(), desc, schema));
                 }
             }
+        }
+    }
+    discovered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut counts = HashMap::new();
+    for (_, name, _, _) in &discovered {
+        *counts.entry(name.clone()).or_insert(0usize) += 1;
+    }
+    let mut out = Vec::new();
+    let mut emitted = std::collections::HashSet::new();
+    for (server, raw_name, desc, schema) in discovered {
+        let qualified = counts.get(&raw_name).copied().unwrap_or(0) > 1
+            || TOOLS.iter().any(|tool| tool.name == raw_name)
+            || AGENT_TOOL_SPECS.iter().any(|(name, _, _)| *name == raw_name);
+        let name = if qualified {
+            mcp_canonical_name(&server, &raw_name)
+        } else {
+            raw_name
+        };
+        if emitted.insert(name.clone()) {
+            out.push((name, desc, schema));
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1395,23 +1472,40 @@ fn as_error_message(message: &str) -> String {
 
 pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOutput {
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
-        for client in reg.values() {
+        let mut clients = reg.values().cloned().collect::<Vec<_>>();
+        clients.sort_by(|a, b| a.name.cmp(&b.name));
+        for client in &clients {
             if let Ok(tools) = client.get_tools()
                 && tools
                     .iter()
-                    .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
+                    .find_map(|t| {
+                        let raw = t.get("name").and_then(|n| n.as_str())?;
+                        let canonical = mcp_canonical_name(&client.name, raw);
+                        (name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients)))
+                            .then_some(raw)
+                    })
+                    .is_some()
             {
                 let handle = tokio::runtime::Handle::current();
-                let client_clone = Arc::clone(client);
+                let client_clone = Arc::clone(&client);
                 let name_owned = name.to_string();
                 let args_clone = args.clone();
+                let raw_name = tools
+                    .iter()
+                    .find_map(|tool| {
+                        let raw = tool.get("name").and_then(|n| n.as_str())?;
+                        let canonical = mcp_canonical_name(&client.name, raw);
+                        (name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients)))
+                            .then_some(raw.to_string())
+                    })
+                    .unwrap_or(name_owned.clone());
 
                 let res = handle.block_on(async move {
                     client_clone
                         .call(
                             "tools/call",
                             serde_json::json!({
-                                "name": name_owned,
+                                "name": raw_name,
                                 "arguments": args_clone
                             }),
                         )
@@ -1441,6 +1535,9 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
                                 success,
                                 exit_code: None,
                                 truncated: false,
+                                replayed: false,
+                                error_kind: (!success).then_some(ToolErrorKind::McpFailed),
+                                retryable: false,
                             }
                         } else {
                             ToolExecutionOutput {
@@ -1448,11 +1545,18 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
                                 success,
                                 exit_code: None,
                                 truncated: false,
+                                replayed: false,
+                                error_kind: (!success).then_some(ToolErrorKind::McpFailed),
+                                retryable: false,
                             }
                         }
                     }
                     Err(e) => {
-                        ToolExecutionOutput::failure(format!("error: MCP tool call failed: {e}"))
+                        ToolExecutionOutput::failure_with_kind(
+                            format!("error: MCP tool call failed: {e}"),
+                            ToolErrorKind::McpFailed,
+                            true,
+                        )
                     }
                 };
             }
@@ -1462,7 +1566,11 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
     if name == "run_command" {
         return match exec::run_command_output(args) {
             Ok(output) => output,
-            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+            Err(error) => ToolExecutionOutput::failure_with_kind(
+                as_error_message(&error),
+                ToolErrorKind::CommandFailed,
+                true,
+            ),
         };
     }
     if name == "view_file" {
@@ -1472,8 +1580,15 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
                 success: true,
                 exit_code: None,
                 truncated: output.truncated,
+                replayed: false,
+                error_kind: None,
+                retryable: false,
             },
-            Err(error) => ToolExecutionOutput::failure(as_error_message(&error)),
+            Err(error) => ToolExecutionOutput::failure_with_kind(
+                as_error_message(&error),
+                ToolErrorKind::InvalidArguments,
+                false,
+            ),
         };
     }
 
@@ -1482,10 +1597,14 @@ pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOu
             Ok(out) => ToolExecutionOutput::success(out),
             Err(e) => ToolExecutionOutput::failure(as_error_message(&e)),
         },
-        None => ToolExecutionOutput::failure(format!(
-            "error: unknown tool '{name}'. Available: {}",
-            TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
-        )),
+        None => ToolExecutionOutput::failure_with_kind(
+            format!(
+                "error: unknown tool '{name}'. Available: {}",
+                TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+            ),
+            ToolErrorKind::UnavailableDependency,
+            false,
+        ),
     }
 }
 
@@ -1665,6 +1784,22 @@ mod tests {
             enabled
                 .iter()
                 .any(|t| t["function"]["name"] == "send_agent")
+        );
+    }
+
+    #[test]
+    fn mcp_names_are_deterministically_qualified() {
+        assert_eq!(
+            mcp_canonical_name("build-server", "run"),
+            "mcp__build_server__run"
+        );
+        assert_eq!(
+            mcp_canonical_name("build-server", "run"),
+            mcp_canonical_name("build-server", "run")
+        );
+        assert_ne!(
+            mcp_canonical_name("build-server", "run"),
+            mcp_canonical_name("test-server", "run")
         );
     }
 

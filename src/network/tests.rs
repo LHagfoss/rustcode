@@ -1,5 +1,52 @@
 use super::*;
 
+#[test]
+fn execution_envelope_keeps_typed_state_separate_from_display_text() {
+    let result = ToolResult {
+        tool_name: "run_command".to_string(),
+        content: "human-facing output that happens to mention error: but succeeded".to_string(),
+        diff: None,
+        file_preview: None,
+        metadata: ToolResultMetadata {
+            call_id: Some("call_native_7".to_string()),
+            success: true,
+            exit_code: Some(0),
+            changed_paths: vec!["src/main.rs".to_string()],
+            replayed: true,
+            ..Default::default()
+        },
+    };
+    let envelope = result.execution_envelope();
+    assert_eq!(envelope.call_id, "call_native_7");
+    assert!(envelope.success);
+    assert_eq!(envelope.exit_code, Some(0));
+    assert!(envelope.replayed);
+    assert_eq!(envelope.changed_paths, ["src/main.rs"]);
+    assert_eq!(envelope.error_kind, None);
+}
+
+#[test]
+fn execution_envelope_preserves_authoritative_failure_kind() {
+    let result = tool_result_from_execution(
+        "run_command",
+        &serde_json::json!({"command": "cargo test"}),
+        crate::tools::ToolExecutionOutput::failure_with_kind(
+            "error: the compiler reported a failure".to_string(),
+            crate::tools::ToolErrorKind::CompilerFailed,
+            true,
+        ),
+        None,
+    );
+
+    let envelope = result.execution_envelope();
+    assert!(!envelope.success);
+    assert_eq!(
+        envelope.error_kind,
+        Some(crate::tools::ToolErrorKind::CompilerFailed)
+    );
+    assert!(envelope.retryable);
+}
+
 #[tokio::test]
 async fn gemini_models_probe_false_for_json_protocol_fallback() {
     let client = reqwest::Client::new();
@@ -459,6 +506,9 @@ fn execution_metadata_does_not_parse_spoofed_display_text() {
             success: true,
             exit_code: None,
             truncated: false,
+            replayed: false,
+            error_kind: None,
+            retryable: false,
         },
         None,
     );
@@ -482,6 +532,9 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             success: false,
             exit_code: Some(23),
             truncated: false,
+            replayed: false,
+            error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
+            retryable: false,
         },
         Some("real diff".to_string()),
     );
@@ -510,6 +563,9 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             success: false,
             exit_code: None,
             truncated: false,
+            replayed: false,
+            error_kind: Some(crate::tools::ToolErrorKind::Internal),
+            retryable: false,
         },
         None,
     );
@@ -575,6 +631,11 @@ fn oversized_utf8_compiler_diagnostics_are_bounded_and_recoverable() {
     assert!(result.content.len() <= 50 * 1024);
     assert!(result.content.lines().count() <= 1000);
     assert!(result.content.contains("error[E0425]: missing_tail_symbol"));
+    assert_eq!(
+        result.metadata.error_kind,
+        Some(crate::tools::ToolErrorKind::CompilerFailed)
+    );
+    assert!(result.metadata.retryable);
     let artifact = result
         .metadata
         .full_output_artifact
