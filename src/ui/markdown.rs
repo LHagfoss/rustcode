@@ -4,7 +4,7 @@
 //! at a time. This keeps nested emphasis, links, lists, blockquotes, and
 //! escaped text from leaking their syntax into the chat viewport.
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::Modifier,
     text::{Line, Span},
@@ -547,6 +547,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let mut table_rows: Vec<(Vec<MarkdownTableCell>, bool)> = Vec::new();
     let mut current_row: Vec<MarkdownTableCell> = Vec::new();
     let mut current_cell = MarkdownTableCell::default();
+    let mut table_alignments = Vec::<Alignment>::new();
     let flush = |lines: &mut Vec<Line<'static>>,
                  paragraph: &mut Vec<Span<'static>>,
                  quote_depth: usize,
@@ -588,7 +589,8 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
     let flush_table = |lines: &mut Vec<Line<'static>>,
                        rows: &[(Vec<MarkdownTableCell>, bool)],
                        width: usize,
-                       show_picker: bool| {
+                       show_picker: bool,
+                       alignments: &[Alignment]| {
         if rows.is_empty() {
             return;
         }
@@ -644,7 +646,13 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
         }
         // Two spaces between columns match Codex's readable table rhythm without
         // adding a box around every cell.
-        let mut total: usize = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 2;
+        const TABLE_COLUMN_GAP: usize = 2;
+        const TABLE_CELL_PADDING: usize = 1;
+        let mut total: usize = col_widths
+            .iter()
+            .map(|width| width + TABLE_CELL_PADDING * 2)
+            .sum::<usize>()
+            + cols.saturating_sub(1) * TABLE_COLUMN_GAP;
         if total > width && cols > 0 {
             let mut excess = total.saturating_sub(width);
             let order: Vec<usize> = {
@@ -670,7 +678,11 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 col_widths[i] -= take;
                 excess -= take;
             }
-            total = col_widths.iter().sum::<usize>() + cols.saturating_sub(1) * 2;
+            total = col_widths
+                .iter()
+                .map(|width| width + TABLE_CELL_PADDING * 2)
+                .sum::<usize>()
+                + cols.saturating_sub(1) * TABLE_COLUMN_GAP;
         }
         for (idx, (cells, is_header)) in rows.iter().enumerate() {
             let mut cell_lines: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
@@ -691,12 +703,27 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                         .iter()
                         .map(|span| span.content.width())
                         .sum();
-                    row_spans.extend(spans);
-                    if visible_width < w {
-                        row_spans.push(Span::raw(" ".repeat(w - visible_width)));
-                    }
+                    let remaining = w.saturating_sub(visible_width);
+                    let alignment = alignments
+                        .get(i)
+                        .copied()
+                        .unwrap_or(Alignment::None);
+                    let left_padding = match alignment {
+                        Alignment::Center => remaining / 2,
+                        Alignment::Right => remaining,
+                        Alignment::Left | Alignment::None => 0,
+                    };
+                    let right_padding = remaining.saturating_sub(left_padding);
+                    row_spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING + left_padding)));
+                    row_spans.extend(spans.into_iter().map(|mut span| {
+                        if *is_header {
+                            span.style = span.style.add_modifier(Modifier::BOLD);
+                        }
+                        span
+                    }));
+                    row_spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING + right_padding)));
                     if i + 1 < cols {
-                        row_spans.push(Span::raw("  "));
+                        row_spans.push(Span::raw(" ".repeat(TABLE_COLUMN_GAP)));
                     }
                 }
                 lines.push(Line::from(row_spans));
@@ -964,7 +991,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 )));
             }
-            Event::Start(Tag::Table(_)) => {
+            Event::Start(Tag::Table(alignments)) => {
                 flush(
                     &mut lines,
                     &mut paragraph,
@@ -973,6 +1000,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 );
                 in_table = true;
                 table_rows.clear();
+                table_alignments = alignments;
             }
             Event::End(TagEnd::Table) => {
                 flush(
@@ -981,11 +1009,18 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     quote_depth,
                     list_continuation.as_deref(),
                 );
-                flush_table(&mut lines, &table_rows, width, show_picker);
+                flush_table(
+                    &mut lines,
+                    &table_rows,
+                    width,
+                    show_picker,
+                    &table_alignments,
+                );
                 table_rows.clear();
                 in_table = false;
                 current_row.clear();
                 current_cell = MarkdownTableCell::default();
+                table_alignments.clear();
                 lines.push(Line::from(""));
             }
             Event::Start(Tag::TableHead) => {
@@ -1048,7 +1083,8 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(all.contains("Header 1  Header 2"));
+        assert!(all.contains("Header 1"));
+        assert!(all.contains("Header 2"));
         assert!(all.contains('━'));
         assert!(!all.contains('┌') && !all.contains('│'));
     }
@@ -1069,6 +1105,34 @@ mod tests {
             .expect("code table cell should be rendered");
         assert_eq!(bold.style.add_modifier(Modifier::BOLD), bold.style);
         assert_ne!(bold.style, code.style, "inline code should retain its style");
+    }
+
+    #[test]
+    fn table_alignment_and_header_emphasis_survive_terminal_layout() {
+        let md = concat!(
+            "| Left | Center | Right |\n",
+            "|:---|:---:|---:|\n",
+            "| a | b | c |"
+        );
+        let lines = render_markdown(md, 50, false, false);
+        let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        let header = rendered.first().expect("table header");
+        let body = rendered
+            .iter()
+            .find(|line| line.contains('a') && line.contains('b') && line.contains('c'))
+            .expect("table body");
+        assert!(
+            header.contains("Left") && header.contains("Center") && header.contains("Right")
+        );
+        assert!(
+            body.starts_with(" a"),
+            "cells should have readable padding: {body:?}"
+        );
+        assert!(lines[0]
+            .spans
+            .iter()
+            .filter(|span| span.content.contains("Left") || span.content.contains("Center"))
+            .all(|span| span.style.add_modifier.contains(Modifier::BOLD)));
     }
 
     #[test]
@@ -1303,7 +1367,9 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
 
-        assert!(rendered.iter().any(|line| line.contains("Tool  Purpose")));
+        assert!(rendered
+            .iter()
+            .any(|line| line.contains("Tool") && line.contains("Purpose")));
         assert!(rendered.iter().any(|line| line.contains("grep")));
         assert!(rendered.iter().all(|line| !line.contains("```")));
     }

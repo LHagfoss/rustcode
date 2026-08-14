@@ -1457,6 +1457,37 @@ fn live_tool_cell_is_a_projection_not_history() {
 }
 
 #[test]
+fn active_transcript_cell_updates_in_place_and_clears_without_history() {
+    let mut transcript = super::TranscriptState::default();
+
+    transcript.set_assistant("first paragraph", false, None);
+    let first_revision = transcript.revision();
+    assert!(!transcript.display_lines(80).is_empty());
+
+    transcript.set_assistant("first paragraph\n\nsecond", true, None);
+    assert!(transcript.revision() > first_revision);
+    assert!(!transcript.display_lines(80).is_empty());
+
+    transcript.set_tools(&[crate::app::LiveToolCall {
+        key: "call-1".to_owned(),
+        provider_call_id: Some("native-1".to_owned()),
+        tool_name: "run_command".to_owned(),
+        action: "Bash".to_owned(),
+        target: "cargo test".to_owned(),
+    }]);
+    assert!(transcript.revision() > first_revision);
+    assert!(
+        transcript
+            .display_lines(80)
+            .iter()
+            .any(|line| line.to_string().contains("cargo test"))
+    );
+
+    transcript.clear();
+    assert!(transcript.display_lines(80).is_empty());
+}
+
+#[test]
 fn action_required_status_wins_over_a_live_question_tool() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingQuestion;
@@ -1485,8 +1516,11 @@ fn transcript_cursor_never_recommits_history_or_stream_rows() {
 
     assert_eq!(cursor.take_history_range(3), 0..3);
     assert_eq!(cursor.take_history_range(3), 3..3);
-    assert_eq!(cursor.take_stable_stream("alpha\nbeta"), vec!["alpha"]);
-    assert!(cursor.take_stable_stream("alpha\nbeta").is_empty());
+    assert_eq!(
+        cursor.take_stable_stream("alpha\n\nbeta"),
+        vec!["alpha"]
+    );
+    assert!(cursor.take_stable_stream("alpha\n\nbeta").is_empty());
 }
 
 #[test]
@@ -1498,10 +1532,10 @@ fn transcript_cursor_retries_pending_content_until_acknowledged() {
     cursor.commit_history_through(2);
     assert_eq!(cursor.pending_history_range(2), 2..2);
 
-    assert_eq!(cursor.pending_stable_stream("line\ntail"), vec!["line"]);
-    assert_eq!(cursor.pending_stable_stream("line\ntail"), vec!["line"]);
-    cursor.commit_stable_stream("line\n");
-    assert!(cursor.pending_stable_stream("line\ntail").is_empty());
+    assert_eq!(cursor.pending_stable_stream("line\n\ntail"), vec!["line"]);
+    assert_eq!(cursor.pending_stable_stream("line\n\ntail"), vec!["line"]);
+    cursor.commit_stable_stream("line\n\n");
+    assert!(cursor.pending_stable_stream("line\n\ntail").is_empty());
 }
 
 #[test]
@@ -1514,7 +1548,7 @@ fn transcript_cursor_reset_replays_history_after_resize() {
 
     assert_eq!(cursor.pending_history_range(4), 0..4);
     assert_eq!(
-        cursor.pending_stable_stream("already rendered\nnext row"),
+        cursor.pending_stable_stream("already rendered\n\nnext row"),
         vec!["already rendered"]
     );
 }
@@ -1532,11 +1566,11 @@ fn transcript_cursor_holds_thought_stream_until_finalized() {
 #[test]
 fn transcript_cursor_keeps_an_incomplete_code_fence_together() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
-    let stream = "intro\n```rust\nfn main() {\n";
+    let stream = "intro\n\n```rust\nfn main() {\n";
 
     assert_eq!(
         cursor.pending_stable_source(stream),
-        "intro\n".to_owned()
+        "intro\n\n".to_owned()
     );
     assert_eq!(cursor.pending_stable_stream(stream), vec!["intro"]);
     assert_eq!(
@@ -1544,29 +1578,26 @@ fn transcript_cursor_keeps_an_incomplete_code_fence_together() {
         "```rust\nfn main() {\n".to_owned()
     );
 
-    cursor.commit_stable_stream("intro\n");
+    cursor.commit_stable_stream("intro\n\n");
     assert!(cursor.pending_stable_stream(stream).is_empty());
 
-    let completed = "intro\n```rust\nfn main() {}\n```\n";
-    assert_eq!(
-        cursor.pending_stable_source(completed),
-        "```rust\nfn main() {}\n```\n".to_owned()
-    );
+    let completed = "intro\n\n```rust\nfn main() {}\n```\n";
+    assert_eq!(cursor.pending_stable_source(completed), String::new());
 }
 
 #[test]
 fn transcript_cursor_keeps_streamed_tables_mutable_until_finalization() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
-    let header = "intro\n| Name | Value |\n";
-    let with_delimiter = "intro\n| Name | Value |\n| --- | --- |\n";
-    let with_row = "intro\n| Name | Value |\n| --- | --- |\n| one | two |\n";
+    let header = "intro\n\n| Name | Value |\n";
+    let with_delimiter = "intro\n\n| Name | Value |\n| --- | --- |\n";
+    let with_row = "intro\n\n| Name | Value |\n| --- | --- |\n| one | two |\n";
 
-    assert_eq!(cursor.pending_stable_source(header), "intro\n");
+    assert_eq!(cursor.pending_stable_source(header), "intro\n\n");
     assert_eq!(
         super::scrollback::mutable_stream_text(header),
         "| Name | Value |\n"
     );
-    cursor.commit_stable_stream("intro\n");
+    cursor.commit_stable_stream("intro\n\n");
 
     assert!(cursor.pending_stable_stream(with_delimiter).is_empty());
     assert_eq!(
@@ -1578,10 +1609,10 @@ fn transcript_cursor_keeps_streamed_tables_mutable_until_finalization() {
     let remainder = cursor
         .take_final_stream_remainder(with_row)
         .expect("stream prefix should be acknowledged");
-    assert_eq!(remainder, with_row.strip_prefix("intro\n").unwrap());
+    assert_eq!(remainder, with_row.strip_prefix("intro\n\n").unwrap());
 
     cursor.reset();
-    assert_eq!(cursor.pending_stable_source(with_row), "intro\n");
+    assert_eq!(cursor.pending_stable_source(with_row), "intro\n\n");
 }
 
 #[test]
@@ -1589,10 +1620,7 @@ fn transcript_cursor_does_not_hold_pipe_text_without_a_table_delimiter() {
     let cursor = super::scrollback::TranscriptCursor::default();
     let stream = "A | B\nThis is ordinary prose\n";
 
-    assert_eq!(
-        cursor.pending_stable_stream(stream),
-        vec!["A | B", "This is ordinary prose"]
-    );
+    assert!(cursor.pending_stable_stream(stream).is_empty());
 }
 
 #[test]
@@ -1975,10 +2003,10 @@ fn codex_shimmer_moves_a_visible_gradient_across_working() {
 #[test]
 fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
-    cursor.commit_stable_stream("stable\n");
+    cursor.commit_stable_stream("stable\n\n");
 
     assert_eq!(
-        cursor.take_final_stream_remainder("stable\ntail"),
+        cursor.take_final_stream_remainder("stable\n\ntail"),
         Some("tail".to_owned())
     );
     assert_eq!(cursor.take_final_stream_remainder("stable\ntail"), None);
@@ -1987,8 +2015,8 @@ fn transcript_cursor_returns_only_uncommitted_final_stream_tail() {
 #[test]
 fn transcript_cursor_keeps_a_committed_prefix_when_the_stream_finalizes() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
-    let final_text = "Opening line\nFinal answer";
-    let stable = format!("{}\n", cursor.pending_stable_stream(final_text).join("\n"));
+    let final_text = "Opening line\n\nFinal answer";
+    let stable = cursor.pending_stable_source(final_text);
     cursor.commit_stable_stream(&stable);
 
     cursor.begin_stream("");
@@ -2002,13 +2030,13 @@ fn transcript_cursor_keeps_a_committed_prefix_when_the_stream_finalizes() {
 #[test]
 fn transcript_cursor_reports_an_empty_tail_when_stream_rows_need_a_separator() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
-    cursor.commit_stable_stream("table row\n");
+    cursor.commit_stable_stream("table row\n\n");
 
     // The final history entry can contain exactly the rows already committed
     // during streaming. The draw loop uses this empty remainder as the handoff
     // point to insert one blank row before a follow-up user message.
     assert_eq!(
-        cursor.take_final_stream_remainder("table row\n"),
+        cursor.take_final_stream_remainder("table row\n\n"),
         Some(String::new())
     );
 }
@@ -2016,8 +2044,11 @@ fn transcript_cursor_reports_an_empty_tail_when_stream_rows_need_a_separator() {
 #[test]
 fn transcript_cursor_resets_when_a_new_stream_replaces_the_old_one() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
-    cursor.commit_stable_stream("first\n");
-    cursor.begin_stream("second\ntail");
+    cursor.commit_stable_stream("first\n\n");
+    cursor.begin_stream("second\n\ntail");
 
-    assert_eq!(cursor.pending_stable_stream("second\ntail"), vec!["second"]);
+    assert_eq!(
+        cursor.pending_stable_stream("second\n\ntail"),
+        vec!["second"]
+    );
 }

@@ -5,6 +5,7 @@ mod markdown;
 mod modals;
 
 use history_cell::HistoryCell;
+pub(crate) use history_cell::TranscriptState;
 pub(crate) mod scrollback;
 mod tool_result;
 
@@ -146,7 +147,7 @@ pub fn COLOR_DIFF_ABSENT_BG() -> Color {
     theme::color_diff_absent_bg()
 }
 
-pub use crate::app::suggestion::{COMMANDS, CommandInfo};
+pub use crate::app::suggestion::CommandInfo;
 
 fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, _show_picker: bool) -> Style {
     Style::default().fg(fg).bg(bg).add_modifier(modifier)
@@ -2699,6 +2700,21 @@ pub(crate) fn render_live_tail(
     width: u16,
     height: u16,
 ) -> Vec<Line<'static>> {
+    let mut transcript = TranscriptState::default();
+    render_live_tail_with_transcript(state, width, height, &mut transcript)
+}
+
+/// Render the mutable end of the transcript using a persistent presentation
+/// cell owned by the terminal loop. The compatibility wrapper above keeps
+/// snapshot/unit callers simple; the interactive TUI passes the same state
+/// across frames so deltas replace one active cell instead of constructing a
+/// new terminal block on every redraw.
+pub(crate) fn render_live_tail_with_transcript(
+    state: &AppState,
+    width: u16,
+    height: u16,
+    transcript: &mut TranscriptState,
+) -> Vec<Line<'static>> {
     let has_conversation = state
         .history
         .iter()
@@ -2716,7 +2732,11 @@ pub(crate) fn render_live_tail(
     let tail = scrollback::mutable_stream_text(&state.current_response);
     let mut lines = Vec::new();
 
-    if !tail.is_empty() {
+    let mut has_visible_active_cell = false;
+    if !state.live_tool_calls.is_empty() {
+        transcript.set_tools(&state.live_tool_calls);
+        has_visible_active_cell = true;
+    } else if !tail.is_empty() {
         let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());
         let is_tool_syntax = crate::tools::is_tool_call_start(&tail);
         let should_hide_stream = match parsed_tool {
@@ -2725,26 +2745,29 @@ pub(crate) fn render_live_tail(
         };
 
         if !should_hide_stream {
-            let cell = history_cell::AssistantMarkdownCell::streaming(
+            transcript.set_assistant(
                 &tail,
                 scrollback::mutable_stream_is_continuation(&state.current_response),
                 state
                     .generation_start_time
                     .map(|started| started.elapsed().as_millis() as u64),
             );
-            lines.extend(cell.display_lines(width));
+            has_visible_active_cell = true;
+        } else {
+            transcript.clear();
         }
+    } else {
+        transcript.clear();
+    }
+
+    if has_visible_active_cell {
+        lines.extend(transcript.display_lines(width));
     }
 
     if !state.live_tool_calls.is_empty() {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
-        lines.extend(history_cell::render_live_tool_cell(
-            &state.live_tool_calls,
-            width,
-            false,
-        ));
         lines.push(Line::from(""));
     } else if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
         || state.working_status_pending
@@ -2755,6 +2778,11 @@ pub(crate) fn render_live_tail(
         }
         lines.push(activity_status_line(state, false));
         lines.push(Line::from(""));
+    }
+
+    if height > 0 && lines.len() > height as usize {
+        let visible_start = lines.len() - height as usize;
+        lines = lines.split_off(visible_start);
     }
 
     lines.into_iter().map(|line| own_line(&line)).collect()
@@ -2893,12 +2921,17 @@ fn render_committed_assistant_text_with_metrics(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
-fn render_live_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) {
+fn render_live_conversation(
+    f: &mut Frame,
+    chunks: &[ratatui::layout::Rect],
+    state: &mut AppState,
+    transcript: &mut TranscriptState,
+) {
     let area = chunks[0].inner(Margin {
         vertical: 0,
         horizontal: 1,
     });
-    let lines = render_live_tail(state, area.width, area.height);
+    let lines = render_live_tail_with_transcript(state, area.width, area.height, transcript);
     state.conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(area.width) as u16;
@@ -2911,17 +2944,22 @@ fn render_live_conversation(f: &mut Frame, chunks: &[ratatui::layout::Rect], sta
 }
 
 pub fn render(f: &mut Frame, state: &mut AppState) {
+    let mut transcript = TranscriptState::default();
+    render_with_transcript(f, state, &mut transcript);
+}
+
+/// Interactive TUI entry point. `transcript` is terminal-only mutable state;
+/// it must never be persisted with `ChatMessage` history or included in a
+/// provider request.
+pub fn render_with_transcript(
+    f: &mut Frame,
+    state: &mut AppState,
+    transcript: &mut TranscriptState,
+) {
     theme::set_active_theme(&state.config.theme);
 
     let filtered_cmds: Vec<&CommandInfo> =
-        if state.input_buffer.starts_with('/') && !state.input_buffer.contains(' ') {
-            COMMANDS
-                .iter()
-                .filter(|c| c.name.starts_with(&state.input_buffer))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        crate::app::suggestion::filtered_commands(&state.input_buffer);
 
     let inner_width = f.area().width.saturating_sub(4).max(1);
     let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize);
@@ -2976,7 +3014,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
         ])
         .split(f.area());
 
-    render_live_conversation(f, &max_chunks, state);
+    render_live_conversation(f, &max_chunks, state, transcript);
 
     let picker_active = state.show_model_picker
         || state.show_theme_picker
@@ -3009,7 +3047,7 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
                 Constraint::Length(popup_height),
             ])
             .split(f.area());
-        render_live_conversation(f, &compact_chunks, state);
+        render_live_conversation(f, &compact_chunks, state, transcript);
         compact_chunks
     };
 

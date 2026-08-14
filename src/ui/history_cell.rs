@@ -10,6 +10,7 @@ use ratatui::{
     style::Modifier,
     text::{Line, Span},
 };
+use std::cell::RefCell;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, get_themed_style};
@@ -23,14 +24,121 @@ pub(super) trait HistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 }
 
+enum ActiveHistoryCell {
+    Assistant(AssistantMarkdownCell),
+    Tools(LiveToolCell),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActiveHistoryCellKind {
+    Assistant,
+    Tools,
+}
+
+impl ActiveHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        match self {
+            Self::Assistant(cell) => cell.display_lines(width),
+            Self::Tools(cell) => cell.display_lines(width),
+        }
+    }
+}
+
+/// Presentation-only transcript state for the one mutable item at the end of
+/// the TUI transcript.
+///
+/// Codex keeps this active cell separate from finalized history and replaces
+/// its contents on deltas instead of appending duplicate terminal rows. The
+/// source and tool summaries here are intentionally not serialized or passed
+/// to providers; [`AppState`] remains the canonical conversation boundary.
+#[derive(Default)]
+pub(crate) struct TranscriptState {
+    active: Option<ActiveHistoryCell>,
+    active_key: Option<ActiveHistoryCellKind>,
+    revision: u64,
+}
+
+impl TranscriptState {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(crate) fn set_assistant(
+        &mut self,
+        source: &str,
+        continuation: bool,
+        response_time_ms: Option<u64>,
+    ) {
+        let changed = self.active_key != Some(ActiveHistoryCellKind::Assistant)
+            || match self.active.as_ref() {
+                Some(ActiveHistoryCell::Assistant(cell)) => {
+                    cell.source != source || cell.continuation != continuation
+                }
+                _ => true,
+            };
+        if changed {
+            self.revision = self.revision.saturating_add(1);
+            self.active = Some(ActiveHistoryCell::Assistant(
+                AssistantMarkdownCell::streaming(source, continuation, response_time_ms),
+            ));
+        }
+        self.active_key = Some(ActiveHistoryCellKind::Assistant);
+    }
+
+    pub(crate) fn set_tools(&mut self, calls: &[LiveToolCall]) {
+        let changed = self.active_key != Some(ActiveHistoryCellKind::Tools)
+            || match self.active.as_ref() {
+                Some(ActiveHistoryCell::Tools(cell)) => cell.calls != calls,
+                _ => true,
+            };
+        if changed {
+            self.revision = self.revision.saturating_add(1);
+            self.active = Some(ActiveHistoryCell::Tools(LiveToolCell {
+                calls: calls.to_vec(),
+            }));
+        }
+        self.active_key = Some(ActiveHistoryCellKind::Tools);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        if self.active.is_some() {
+            self.revision = self.revision.saturating_add(1);
+        }
+        self.active = None;
+        self.active_key = None;
+    }
+
+    pub(crate) fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.active
+            .as_ref()
+            .map(|cell| cell.display_lines(width))
+            .unwrap_or_default()
+    }
+}
+
 pub(super) struct AssistantMarkdownCell {
-    source: String,
+    pub(super) source: String,
     token_usage: Option<crate::app::TokenUsage>,
-    response_time_ms: Option<u64>,
+    pub(super) response_time_ms: Option<u64>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
     generating: bool,
-    continuation: bool,
+    pub(super) continuation: bool,
+    cached_display: RefCell<Option<(u16, String, Vec<Line<'static>>)>>,
+}
+
+struct LiveToolCell {
+    calls: Vec<LiveToolCall>,
+}
+
+impl HistoryCell for LiveToolCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        render_live_tool_cell(&self.calls, width, false)
+    }
 }
 
 impl AssistantMarkdownCell {
@@ -49,6 +157,7 @@ impl AssistantMarkdownCell {
             thought_tokens,
             generating: false,
             continuation: false,
+            cached_display: RefCell::new(None),
         }
     }
 
@@ -65,12 +174,21 @@ impl AssistantMarkdownCell {
             thought_tokens: None,
             generating: true,
             continuation,
+            cached_display: RefCell::new(None),
         }
     }
 }
 
 impl HistoryCell for AssistantMarkdownCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let theme_name = super::theme::active_palette().name.to_owned();
+        if let Some((cached_width, cached_theme, lines)) = self.cached_display.borrow().as_ref()
+            && *cached_width == width
+            && cached_theme == &theme_name
+        {
+            return lines.clone();
+        }
+
         let mut lines = Vec::new();
         let mut copy_clicks = Vec::new();
         super::render_assistant_message(
@@ -96,7 +214,13 @@ impl HistoryCell for AssistantMarkdownCell {
                 lines.pop();
             }
         }
-        lines.into_iter().map(|line| super::own_line(&line)).collect()
+        let lines = lines
+            .into_iter()
+            .map(|line| super::own_line(&line))
+            .collect::<Vec<_>>();
+        self.cached_display
+            .replace(Some((width, theme_name, lines.clone())));
+        lines
     }
 }
 

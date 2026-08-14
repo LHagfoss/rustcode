@@ -1007,18 +1007,11 @@ fn report_stale_compaction(
 }
 
 pub fn get_filtered_cmds_len(input_buffer: &str) -> usize {
-    if input_buffer.starts_with('/') && !input_buffer.contains(' ') {
-        crate::app::suggestion::COMMANDS
-            .iter()
-            .filter(|c| c.name.starts_with(input_buffer))
-            .count()
-    } else {
-        0
-    }
+    crate::app::suggestion::filtered_commands(input_buffer).len()
 }
 
 pub fn get_completion_len(input_buffer: &str, cursor_position: usize) -> usize {
-    if input_buffer.starts_with('/') && !input_buffer.contains(' ') {
+    if crate::app::suggestion::command_token(input_buffer).is_some() {
         return get_filtered_cmds_len(input_buffer);
     }
 
@@ -1028,19 +1021,17 @@ pub fn get_completion_len(input_buffer: &str, cursor_position: usize) -> usize {
 }
 
 pub fn apply_autocomplete(s: &mut AppState) {
-    if s.input_buffer.starts_with('/') && !s.input_buffer.contains(' ') {
-        let filtered_cmds: Vec<&crate::app::suggestion::CommandInfo> =
-            crate::app::suggestion::COMMANDS
-                .iter()
-                .filter(|c| c.name.starts_with(&s.input_buffer))
-                .collect();
+    if let Some(command) = crate::app::suggestion::command_token(&s.input_buffer) {
+        let filtered_cmds = crate::app::suggestion::filtered_commands(&s.input_buffer);
         let idx = s
             .active_suggestion_index
             .unwrap_or(0)
             .min(filtered_cmds.len().saturating_sub(1));
         if !filtered_cmds.is_empty() {
-            s.input_buffer = filtered_cmds[idx].name.to_string();
-            s.cursor_position = s.input_buffer.len();
+            let replacement = filtered_cmds[idx].name;
+            let command_end = command.len();
+            s.input_buffer.replace_range(0..command_end, replacement);
+            s.cursor_position = replacement.len();
         }
         s.active_suggestion_index = None;
     } else if let Some((at_idx, at_query)) =
@@ -1808,6 +1799,19 @@ mod tests {
         assert_eq!(parse_token_count("256K"), Some(256 * 1024));
         assert_eq!(parse_token_count("abc"), None);
         assert_eq!(parse_token_count(""), None);
+    }
+
+    #[test]
+    fn command_autocomplete_replaces_only_the_command_token() {
+        let mut state = crate::app::AppState::new();
+        state.input_buffer = "/mo --fast".to_owned();
+        state.cursor_position = state.input_buffer.len();
+        state.active_suggestion_index = Some(0);
+
+        super::apply_autocomplete(&mut state);
+
+        assert_eq!(state.input_buffer, "/model --fast");
+        assert_eq!(state.active_suggestion_index, None);
     }
 
     #[test]
