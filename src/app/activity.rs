@@ -442,13 +442,9 @@ mod tests {
             "run_command",
             &serde_json::json!({"command": "cargo test --lib"}),
         );
-        let activity = classify_live_tools(&[LiveToolCall {
-            key: "call-1".to_string(),
-            provider_call_id: None,
-            tool_name: "run_command".to_string(),
-            action,
-            target,
-        }])
+        let activity = classify_live_tools(&[LiveToolCall::new(
+            "call-1", None, "run_command", action, target,
+        )])
         .expect("live activity");
 
         assert_eq!(activity.kind, ActivityKind::RunningTool);
@@ -459,20 +455,8 @@ mod tests {
     #[test]
     fn live_exploration_activity_groups_targets() {
         let calls = [
-            LiveToolCall {
-                key: "read".to_string(),
-                provider_call_id: None,
-                tool_name: "view_file".to_string(),
-                action: "Read".to_string(),
-                target: "src/main.rs".to_string(),
-            },
-            LiveToolCall {
-                key: "search".to_string(),
-                provider_call_id: None,
-                tool_name: "grep".to_string(),
-                action: "Search".to_string(),
-                target: "renderer in src".to_string(),
-            },
+            LiveToolCall::new("read", None, "view_file", "Read", "src/main.rs"),
+            LiveToolCall::new("search", None, "grep", "Search", "renderer in src"),
         ];
         let activity = classify_live_tools(&calls).expect("live activity");
 

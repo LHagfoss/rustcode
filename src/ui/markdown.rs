@@ -91,8 +91,28 @@ fn heading_style(level: HeadingLevel, show_picker: bool) -> ratatui::style::Styl
     get_themed_style(COLOR_TEXT(), COLOR_BG(), modifier, show_picker)
 }
 
+fn heading_marker(level: HeadingLevel) -> &'static str {
+    match level {
+        HeadingLevel::H1 => "# ",
+        HeadingLevel::H2 => "## ",
+        HeadingLevel::H3 => "### ",
+        HeadingLevel::H4 => "#### ",
+        HeadingLevel::H5 => "##### ",
+        HeadingLevel::H6 => "###### ",
+    }
+}
+
 fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width: usize) {
     push_wrapped_with_continuation(lines, spans, width, None);
+}
+
+pub(super) fn wrap_styled_spans(
+    spans: Vec<Span<'static>>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    push_wrapped(&mut lines, spans, width);
+    lines
 }
 
 #[derive(Clone, Default)]
@@ -254,6 +274,35 @@ fn push_wrapped_with_continuation(
     if !current.is_empty() {
         lines.push(Line::from(current));
     }
+}
+
+pub(super) fn wrap_prefixed_plain_text(
+    content: &str,
+    width: usize,
+    initial_prefix: Span<'static>,
+    subsequent_prefix: Span<'static>,
+    text_style: ratatui::style::Style,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let content = content.trim_end_matches(['\r', '\n']);
+    for (index, raw_line) in content.split('\n').enumerate() {
+        let prefix = if index == 0 {
+            initial_prefix.clone()
+        } else {
+            subsequent_prefix.clone()
+        };
+        if raw_line.is_empty() {
+            lines.push(Line::from(prefix));
+            continue;
+        }
+        push_wrapped_with_continuation(
+            &mut lines,
+            vec![prefix, Span::styled(raw_line.to_owned(), text_style)],
+            width,
+            Some(subsequent_prefix.clone()),
+        );
+    }
+    lines
 }
 
 /// Render CommonMark into ratatui lines. Fenced code blocks are returned as
@@ -729,9 +778,10 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 lines.push(Line::from(row_spans));
             }
 
-            // A strong rule separates the header; lighter rules keep body rows scannable.
-            if idx + 1 < rows.len() {
-                let separator = if idx == 0 && rows[0].1 { '━' } else { '─' };
+            // Codex uses one strong rule beneath the header. Body-row rules make
+            // prose-heavy tables look like forms and add considerable vertical noise.
+            if idx == 0 && rows[0].1 && idx + 1 < rows.len() {
+                let separator = '━';
                 lines.push(Line::from(Span::styled(
                     separator.to_string().repeat(total),
                     get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
@@ -768,11 +818,13 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
             }
             Event::End(TagEnd::Heading { .. }) => {
                 if !paragraph.is_empty() {
-                    let style = heading_style(heading.unwrap_or(HeadingLevel::H3), show_picker);
-                    let text: Vec<Span<'static>> = std::mem::take(&mut paragraph)
+                    let level = heading.unwrap_or(HeadingLevel::H3);
+                    let style = heading_style(level, show_picker);
+                    let mut text = vec![Span::styled(heading_marker(level), style)];
+                    text.extend(std::mem::take(&mut paragraph)
                         .into_iter()
                         .map(|s| Span::styled(s.content.into_owned(), style))
-                        .collect();
+                        .collect::<Vec<_>>());
                     lines.push(Line::from(text));
                 }
                 heading = None;
@@ -824,11 +876,11 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 if list_depth > 0 && lines.last().is_some_and(|l| l.spans.is_empty()) {
                     lines.pop();
                 }
-                let indent = "  ".repeat(list_depth.saturating_sub(1));
+                let indent = "    ".repeat(list_depth.saturating_sub(1));
                 let marker = if let Some(Some(index)) = ordered_index.last() {
                     format!("{}{index}. ", indent)
                 } else {
-                    format!("{}• ", indent)
+                    format!("{}- ", indent)
                 };
                 let quote_prefix = "> ".repeat(quote_depth);
                 list_continuation = Some(format!("{quote_prefix}{}", " ".repeat(marker.width())));
@@ -845,7 +897,16 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 }
                 paragraph.push(Span::styled(
                     marker,
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                    get_themed_style(
+                        if ordered_index.last().is_some_and(Option::is_some) {
+                            COLOR_SECONDARY()
+                        } else {
+                            COLOR_TEXT()
+                        },
+                        COLOR_BG(),
+                        Modifier::empty(),
+                        show_picker,
+                    ),
                 ));
             }
             Event::End(TagEnd::Item) => {
@@ -1181,9 +1242,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(rendered.len() > 1, "fixture must wrap: {rendered:?}");
-        assert!(rendered[0].starts_with("• "));
+        assert!(rendered[0].starts_with("- "));
         assert!(rendered[1].starts_with("  "));
-        assert!(!rendered[1].starts_with("• "));
+        assert!(!rendered[1].starts_with("- "));
     }
 
     #[test]
@@ -1247,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_lists_and_styles_headings_without_markdown_markers() {
+    fn renders_lists_and_styles_headings_like_codex() {
         let lines = render_markdown("# Title\n\n- one\n- two", 80, false, false);
         let text: String = lines
             .iter()
@@ -1255,9 +1316,9 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert!(text.contains("Title"));
-        assert!(text.contains('•'));
+        assert!(text.contains("# Title"));
+        assert!(text.contains("- one"));
         assert!(text.contains("one"));
-        assert!(!text.contains("# "));
         assert!(
             lines
                 .iter()
@@ -1411,10 +1472,7 @@ mod tests {
         // 1 heading + 3 bullet lines = 4 non-empty lines
         assert_eq!(non_empty.len(), 4);
         // Ensure all 3 bullet lines have bullet marker
-        let bullet_count = lines
-            .iter()
-            .filter(|l| l.spans.iter().any(|s| s.content.contains('•')))
-            .count();
+        let bullet_count = lines.iter().filter(|line| line.to_string().starts_with("- ")).count();
         assert_eq!(bullet_count, 3);
     }
 
@@ -1425,10 +1483,7 @@ mod tests {
         let non_empty: Vec<_> = lines.iter().filter(|l| !l.spans.is_empty()).collect();
         // 1 heading + 4 bullet lines = 5 non-empty lines
         assert_eq!(non_empty.len(), 5);
-        let bullet_count = lines
-            .iter()
-            .filter(|l| l.spans.iter().any(|s| s.content.contains('•')))
-            .count();
+        let bullet_count = lines.iter().filter(|line| line.to_string().starts_with("- ")).count();
         assert_eq!(bullet_count, 4);
     }
 }

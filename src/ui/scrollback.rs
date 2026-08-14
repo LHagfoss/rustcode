@@ -1,6 +1,64 @@
+use std::collections::VecDeque;
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use pulldown_cmark::{Event, Options, Parser};
+use ratatui::text::Line;
+
+const STREAM_COMMIT_INTERVAL: Duration = Duration::from_millis(16);
+const STREAM_COMMIT_PRESSURE_LINES: usize = 64;
+
+/// Rendered stable rows waiting for the next transcript commit tick.
+///
+/// Keeping this queue separate from `ChatMessage` mirrors Codex's streaming
+/// controller: semantic source remains canonical, the mutable tail stays in an
+/// active cell, and completed blocks enter terminal scrollback on a bounded
+/// cadence rather than directly from arbitrary provider deltas.
+pub(crate) struct StreamCommitQueue {
+    pending: VecDeque<Line<'static>>,
+    last_commit: Instant,
+}
+
+impl Default for StreamCommitQueue {
+    fn default() -> Self {
+        Self {
+            pending: VecDeque::new(),
+            last_commit: Instant::now()
+                .checked_sub(STREAM_COMMIT_INTERVAL)
+                .unwrap_or_else(Instant::now),
+        }
+    }
+}
+
+impl StreamCommitQueue {
+    pub(crate) fn reset(&mut self) {
+        self.pending.clear();
+        self.last_commit = Instant::now()
+            .checked_sub(STREAM_COMMIT_INTERVAL)
+            .unwrap_or_else(Instant::now);
+    }
+
+    pub(crate) fn push(&mut self, lines: Vec<Line<'static>>) {
+        self.pending.extend(lines);
+    }
+
+    pub(crate) fn take_ready(&mut self, force: bool) -> Vec<Line<'static>> {
+        if self.pending.is_empty()
+            || (!force
+                && self.pending.len() < STREAM_COMMIT_PRESSURE_LINES
+                && self.last_commit.elapsed() < STREAM_COMMIT_INTERVAL)
+        {
+            return Vec::new();
+        }
+        self.last_commit = Instant::now();
+        self.pending.drain(..).collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+}
 
 fn stream_starts_with_thought(stream: &str) -> bool {
     let text = stream.trim_start();
@@ -248,8 +306,27 @@ fn markdown_stream_holdback_start(text: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        markdown_stream_holdback_start, unfinished_fence_start, unfinished_table_start,
+        StreamCommitQueue, markdown_stream_holdback_start, unfinished_fence_start,
+        unfinished_table_start,
     };
+
+    #[test]
+    fn stream_commit_queue_flushes_in_order_and_resets_on_reflow() {
+        let mut queue = StreamCommitQueue::default();
+        queue.push(vec!["first".into(), "second".into()]);
+        assert_eq!(queue.pending_len(), 2);
+        assert_eq!(
+            queue
+                .take_ready(true)
+                .into_iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        queue.push(vec!["stale width".into()]);
+        queue.reset();
+        assert_eq!(queue.pending_len(), 0);
+    }
 
     #[test]
     fn streaming_keeps_the_final_markdown_block_mutable() {
