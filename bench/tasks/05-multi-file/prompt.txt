@@ -1,1 +1,0 @@
-The test in src/lib.rs calls `math::double`, but it is not implemented. Add `pub fn double(x: i32) -> i32` in src/math.rs so `cargo test` passes. Do not modify src/lib.rs.

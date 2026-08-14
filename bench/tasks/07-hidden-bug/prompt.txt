@@ -1,1 +1,0 @@
-A test in src/lib.rs fails: exactly one of the functions in src/a.rs, src/b.rs, or src/c.rs is implemented incorrectly. Find the wrong one and fix it so `cargo test` passes. Do not change the tests.
