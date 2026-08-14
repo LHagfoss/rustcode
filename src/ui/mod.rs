@@ -2901,9 +2901,10 @@ pub(crate) fn render_live_tail_with_transcript(
             lines.push(Line::from(""));
         }
         lines.push(Line::from(""));
-    } else if matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
-        || state.working_status_pending
-        || !state.running_tools.is_empty()
+    } else if !has_visible_active_cell
+        && (matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
+            || state.working_status_pending
+            || !state.running_tools.is_empty())
     {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
