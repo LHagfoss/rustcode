@@ -2360,15 +2360,19 @@ pub(crate) fn render_work_separator_before_assistant(
     } else {
         "─".repeat(width.max(1) as usize)
     };
-    vec![Line::from(Span::styled(
-        text,
-        get_themed_style(
-            COLOR_TURN_SEPARATOR(),
-            COLOR_BG(),
-            Modifier::empty(),
-            false,
-        ),
-    ))]
+    vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            text,
+            get_themed_style(
+                COLOR_TURN_SEPARATOR(),
+                COLOR_BG(),
+                Modifier::empty(),
+                false,
+            ),
+        )),
+        Line::from(""),
+    ]
 }
 
 fn push_centered_separator<'a>(
