@@ -71,6 +71,7 @@ pub struct TurnContext {
     pub turn_machine: events::TurnMachine,
     pub last_sent_messages: Vec<serde_json::Value>,
     pub final_content: String,
+    pub final_content_persisted: bool,
     pub streamed_call_ids: Vec<String>,
     pub task_completed: bool,
     pub turn_started_at: std::time::Instant,
@@ -123,6 +124,7 @@ impl TurnContext {
             turn_machine: events::TurnMachine::new(),
             last_sent_messages: Vec::new(),
             final_content: String::new(),
+            final_content_persisted: false,
             streamed_call_ids: Vec::new(),
             task_completed: false,
             turn_started_at: std::time::Instant::now(),
@@ -433,6 +435,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     }
 
     ctx.final_content = accumulated_content;
+    ctx.final_content_persisted = false;
     let (native_tool_calls, streamed_call_ids) = {
         let buffer = stream_buffer.lock().await;
         (
@@ -553,6 +556,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         msg.thought_time_ms = thought_time_ms;
         msg.thought_tokens = thought_tokens;
         s.history.push(msg);
+        ctx.final_content_persisted = true;
         for message in unanswered_call_results_with_kind(
             &rejected_refs,
             &reason,
@@ -657,6 +661,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         msg.thought_time_ms = thought_time_ms;
                         msg.thought_tokens = thought_tokens;
                         s.history.push(msg);
+                        ctx.final_content_persisted = true;
                         s.history
                             .push(ChatMessage::new("system", LOOP_RECOVERY_PROMPT));
                         crate::config::save_history(&s.history);
@@ -680,6 +685,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         msg.thought_time_ms = thought_time_ms;
                         msg.thought_tokens = thought_tokens;
                         s.history.push(msg);
+                        ctx.final_content_persisted = true;
                         s.history
                             .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
                         crate::config::save_history(&s.history);
@@ -722,6 +728,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 msg.thought_time_ms = thought_time_ms;
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
+                ctx.final_content_persisted = true;
                 if dropped_calls > 0 {
                     s.history.push(ChatMessage::new(
                                 "system",
@@ -1229,6 +1236,7 @@ nothing in this summary was written to disk by this task]",
         msg.thought_time_ms = thought_time_ms;
         msg.thought_tokens = thought_tokens;
         s.history.push(msg);
+        ctx.final_content_persisted = true;
 
         let reason = crate::tools::diagnose_failed_tool_call(&ctx.final_content)
             .map(|r| format!("{r}\n\n"))
@@ -1320,6 +1328,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                 msg.thought_time_ms = thought_time_ms;
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
+                ctx.final_content_persisted = true;
                 s.history.push(ChatMessage::new(
                             "system",
                             format!(
@@ -1374,9 +1383,14 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
     if !turn_lifecycle.mark_finalized() {
         return ctx;
     }
-    let had_final_content = !ctx.final_content.trim().is_empty();
-    let final_transcript =
-        lifecycle::final_transcript_content(ctx.task_completed, &ctx.final_content, &stop_reason);
+    let had_final_content =
+        !ctx.final_content_persisted && !ctx.final_content.trim().is_empty();
+    let final_transcript = lifecycle::final_transcript_content(
+        ctx.task_completed,
+        &ctx.final_content,
+        ctx.final_content_persisted,
+        &stop_reason,
+    );
     if let Some(content) = final_transcript.as_ref()
         && !had_final_content
     {
