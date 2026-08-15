@@ -19,10 +19,10 @@ mod ui;
 mod update;
 
 use crate::app::{AppState, AppStatus, ChatMessage, Verbosity};
-use crate::ui::TerminalRuntime;
+use crate::ui::{TerminalRuntime, TuiEvent, TuiEventStream};
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, KeyCode, KeyModifiers},
     execute,
     terminal::{Clear, ClearType},
 };
@@ -311,6 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut transcript_state = crate::ui::TranscriptState::default();
     let mut stream_commits = crate::ui::scrollback::StreamCommitQueue::default();
     let mut terminal_size = terminal_runtime.terminal().size()?;
+    let mut tui_events = TuiEventStream::new();
     let mut replay_history = false;
 
     loop {
@@ -570,13 +571,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             needs_redraw = false;
         }
 
-        if event::poll(EVENT_POLL_INTERVAL)? {
-            let ev = event::read()?;
+        if let Ok(event_result) = tokio::time::timeout(EVENT_POLL_INTERVAL, tui_events.next()).await
+        {
+            let Some(ev) = event_result? else {
+                continue;
+            };
             match ev {
-                Event::Key(key) => {
-                    if key.kind == event::KeyEventKind::Release {
-                        continue;
-                    }
+                TuiEvent::Key(key) => {
                     needs_redraw = true;
                     let is_ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                     let is_cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
@@ -1962,17 +1963,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => {}
                     }
                 }
-                Event::FocusGained => {
+                TuiEvent::FocusGained => {
                     terminal_focused = true;
                     needs_redraw = true;
                 }
-                Event::FocusLost => {
+                TuiEvent::FocusLost => {
                     terminal_focused = false;
                     needs_redraw = true;
                 }
-                // Native terminal mouse handling owns transcript scrolling and selection.
-                Event::Mouse(_) => {}
-                Event::Paste(text) => {
+                TuiEvent::Paste(text) => {
                     // Terminals with bracketed paste enabled deliver Cmd+V through
                     // this event instead of the Char('v') key handler. When the
                     // clipboard holds an image (e.g. a screenshot), the pasted text
@@ -2023,7 +2022,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     needs_redraw = true;
                 }
-                Event::Resize(_, _) => {
+                TuiEvent::Resize { .. } => {
+                    needs_redraw = true;
+                }
+                TuiEvent::Draw => {
                     needs_redraw = true;
                 }
             }

@@ -3,8 +3,10 @@ mod history_cell;
 mod lru;
 mod markdown;
 mod modals;
+mod events;
 mod terminal_runtime;
 
+pub(crate) use events::{TuiEvent, TuiEventStream};
 use history_cell::HistoryCell;
 pub(crate) use history_cell::TranscriptState;
 pub(crate) mod scrollback;
