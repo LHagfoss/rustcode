@@ -32,8 +32,8 @@ use crate::app::activity::{
     ActivityKind, ActivitySnapshot, classify_activity, classify_live_tools,
 };
 use crate::app::{AppState, AppStatus, ChatMessage, NoticeKind};
+use crate::inline_terminal::Frame;
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -3089,6 +3089,92 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     render_with_transcript(f, state, &mut transcript);
 }
 
+/// Height of the mutable inline surface for the next frame. Finalized history
+/// is rendered above this area into terminal scrollback.
+pub(crate) fn desired_height(
+    state: &AppState,
+    transcript: &mut TranscriptState,
+    width: u16,
+    terminal_height: u16,
+) -> u16 {
+    let available = terminal_height.max(1);
+    let inner_width = width.saturating_sub(2).max(1);
+    let completion_dismissed =
+        state.dismissed_completion.as_ref() == state.completion_identity().as_ref();
+    let filtered_cmds = if completion_dismissed {
+        Vec::new()
+    } else {
+        crate::app::suggestion::filtered_commands(&state.input_buffer)
+    };
+    let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
+        .unwrap_or((0, String::new()));
+    let at_files = if !completion_dismissed
+        && (!at_query.is_empty()
+            || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
+                .ends_with('@'))
+    {
+        crate::app::list_project_file_paths(&at_query)
+    } else {
+        Vec::new()
+    };
+
+    let approval_active = state.status == AppStatus::AwaitingToolConfirmation;
+    let question_active = state.status == AppStatus::AwaitingQuestion;
+    let input_height = if approval_active {
+        tool_confirmation_height(state, available.saturating_sub(2))
+    } else if question_active {
+        question_height(state, width, available.saturating_sub(2))
+    } else {
+        count_input_lines(&state.input_buffer, inner_width as usize).min(8) + 2
+    };
+    let queue_height = queue_preview_height(state);
+    let popup_height = if approval_active || question_active {
+        0
+    } else if !filtered_cmds.is_empty() {
+        (filtered_cmds.len() as u16).min(MAX_POPUP_ROWS)
+    } else if !at_files.is_empty() {
+        (at_files.len() as u16).min(8)
+    } else {
+        0
+    };
+    let footer_height = u16::from(composer_footer_visible(
+        state,
+        !filtered_cmds.is_empty(),
+        !at_files.is_empty(),
+    ));
+
+    let live_lines = render_live_tail_with_transcript(
+        state,
+        inner_width,
+        available,
+        transcript,
+    );
+    let mut chat_height = Paragraph::new(live_lines)
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width) as u16;
+    let has_conversation = state
+        .history
+        .iter()
+        .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
+    if !has_conversation {
+        chat_height = chat_height.max(15);
+    }
+    // Inline pickers are anchored above the composer and replace this portion
+    // of the live tail, so reserve their tallest existing panel.
+    if state.modal_open() {
+        chat_height = chat_height.max(14);
+    }
+
+    2u16
+        .saturating_add(chat_height)
+        .saturating_add(queue_height)
+        .saturating_add(input_height)
+        .saturating_add(footer_height)
+        .saturating_add(popup_height)
+        .min(available)
+        .max(1)
+}
+
 /// Interactive TUI entry point. `transcript` is terminal-only mutable state;
 /// it must never be persisted with `ChatMessage` history or included in a
 /// provider request.
@@ -3181,19 +3267,18 @@ pub fn render_with_transcript(
 
     render_live_conversation(f, &max_chunks, state, transcript);
 
-    let picker_active = state.modal_open()
-        || !filtered_cmds.is_empty()
-        || !at_files.is_empty();
-
     let has_conversation = state
         .history
         .iter()
         .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
     let min_welcome_height = if !has_conversation { 15 } else { 0 };
-    let chat_height = conversation_area_height(state.conversation_content_height, max_chat_height)
+    let mut chat_height = conversation_area_height(state.conversation_content_height, max_chat_height)
         .max(min_welcome_height)
         .min(max_chat_height);
-    let chunks = if picker_active || chat_height == max_chat_height {
+    if state.modal_open() {
+        chat_height = chat_height.max(14.min(max_chat_height));
+    }
+    let chunks = if chat_height == max_chat_height {
         max_chunks
     } else {
         let compact_chunks = Layout::default()

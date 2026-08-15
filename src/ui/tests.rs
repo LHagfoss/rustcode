@@ -1,8 +1,34 @@
 use super::*;
 
 #[test]
+fn desired_height_keeps_an_idle_conversation_compact() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "hello"));
+    let mut transcript = TranscriptState::default();
+
+    assert_eq!(super::desired_height(&state, &mut transcript, 100, 40), 6);
+}
+
+#[test]
+fn desired_height_grows_with_streaming_text_and_clamps_to_terminal() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "hello"));
+    state.status = AppStatus::Streaming;
+    state.current_response = (0..50)
+        .map(|line| format!("streamed line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut transcript = TranscriptState::default();
+
+    let height = super::desired_height(&state, &mut transcript, 40, 18);
+    assert!(height > 6);
+    assert_eq!(height, 18);
+}
+
+#[test]
 fn model_picker_keeps_multiple_models_visible_above_the_composer() {
-    use ratatui::{backend::TestBackend, Terminal};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.config.models = (1..=5)
@@ -44,7 +70,8 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
 
 #[test]
 fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
-    use ratatui::{backend::TestBackend, Terminal};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.show_command_picker = true;
@@ -72,7 +99,8 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
 
 #[test]
 fn inline_command_suggestions_render_below_the_composer() {
-    use ratatui::{backend::TestBackend, Terminal};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.input_buffer = "/".to_owned();
@@ -107,7 +135,8 @@ fn inline_command_suggestions_render_below_the_composer() {
 
 #[test]
 fn welcome_banner_renders_without_a_conversation() {
-    use ratatui::{Terminal, backend::TestBackend};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     let mut terminal = Terminal::new(TestBackend::new(100, 28)).unwrap();
@@ -158,7 +187,8 @@ fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
 
 #[test]
 fn queue_preview_shows_recent_user_prompts_without_wakeups() {
-    use ratatui::{Terminal, backend::TestBackend};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.pending_queue = vec![
@@ -1583,7 +1613,8 @@ fn high_verbosity_live_command_cell_shows_only_the_invocation() {
 
 #[test]
 fn question_replaces_composer_with_borderless_bottom_pane() {
-    use ratatui::{Terminal, backend::TestBackend};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingQuestion;
@@ -2129,7 +2160,8 @@ fn live_tail_keeps_working_for_the_final_painted_frame() {
 
 #[test]
 fn render_clearing_working_status_pending_requests_follow_up_redraw() {
-    use ratatui::{Terminal, backend::TestBackend};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.status = AppStatus::Idle;
@@ -2147,7 +2179,8 @@ fn render_clearing_working_status_pending_requests_follow_up_redraw() {
 
 #[test]
 fn empty_composer_has_painted_padding_and_external_model_footer() {
-    use ratatui::{Terminal, backend::TestBackend};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
@@ -2190,7 +2223,8 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
 
 #[test]
 fn composer_footer_is_hidden_while_a_picker_is_open() {
-    use ratatui::{Terminal, backend::TestBackend};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.show_model_picker = true;
