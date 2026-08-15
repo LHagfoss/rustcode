@@ -221,6 +221,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     crate::config::archive_live_history();
 
     let mut app_state_struct = AppState::new();
+    if cli_args.yolo {
+        app_state_struct.auto_confirm = true;
+    }
     if cli_args.resume || cli_args.continue_session {
         crate::app::resume_latest_session(&mut app_state_struct);
     }
@@ -1594,6 +1597,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             current_cancel_token.cancel();
                                             current_cancel_token =
                                                 tokio_util::sync::CancellationToken::new();
+                                        }
+                                        "/yolo" => {
+                                            crate::app::actions::toggle_auto_confirm(&mut s);
                                         }
                                         "/stats" | "/usage" | "/status" => {
                                             s.history.push(ChatMessage::new(

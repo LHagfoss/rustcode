@@ -382,6 +382,9 @@ pub async fn handle_enter(
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
+            "/yolo" => {
+                toggle_auto_confirm(&mut s);
+            }
             "/verbosity" => {
                 use crate::app::state::Verbosity;
                 let label = |v: &Verbosity| match v {
@@ -1202,13 +1205,18 @@ pub fn check_memory_usage(s: &mut AppState) {
     }
 }
 
+pub fn toggle_auto_confirm(s: &mut AppState) {
+    s.auto_confirm = !s.auto_confirm;
+    let status = if s.auto_confirm { "enabled" } else { "disabled" };
+    s.set_notice(format!("YOLO mode {status}"));
+}
+
 pub fn start_new_session(s: &mut AppState) {
     if crate::config::session_has_content(&s.history) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
     s.pending_queue.clear();
     s.current_response.clear();
-    s.working_status_pending = false;
     s.expanded_thoughts.clear();
     s.current_token_usage = None;
     s.response_time = None;
@@ -1358,7 +1366,6 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     s.history_display_start = 0;
     s.pending_queue.clear();
     s.current_response.clear();
-    s.working_status_pending = false;
     s.expanded_thoughts.clear();
     s.current_token_usage = None;
     s.response_time = None;
@@ -1609,6 +1616,7 @@ pub fn build_help_text() -> String {
             &[
                 ("/goal", "Run a task in continuous autoloop mode"),
                 ("/delegate", "Allow subagents for next task only"),
+                ("/yolo", "Toggle automatic tool confirmation"),
                 ("/skills", "Discover and list custom skills"),
                 ("/copy", "Copy last assistant reply to clipboard"),
                 ("/memory", "Inspect or update bounded project memory"),
@@ -2319,6 +2327,25 @@ mod tests {
         let s = state.lock().await;
         assert_eq!(s.status, AppStatus::VerbosityPicker);
         assert_eq!(s.modal_picker_index, 1);
+    }
+
+    #[tokio::test]
+    async fn yolo_command_toggles_auto_confirmation() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let state = Arc::new(Mutex::new(crate::app::AppState::new()));
+        let client = reqwest::Client::new();
+        let mut cancel_token = CancellationToken::new();
+
+        state.lock().await.input_buffer = "/yolo".to_owned();
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        assert!(state.lock().await.auto_confirm);
+
+        state.lock().await.input_buffer = "/yolo".to_owned();
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        assert!(!state.lock().await.auto_confirm);
     }
 
     #[tokio::test]

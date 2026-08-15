@@ -145,6 +145,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show or set verbosity (low|high|toggle)",
     },
     CommandInfo {
+        name: "/yolo",
+        desc: "Toggle automatic tool confirmation",
+    },
+    CommandInfo {
         name: "/theme",
         desc: "Show or set UI color theme (default|light|nord|dracula|tokyo-night)",
     },
