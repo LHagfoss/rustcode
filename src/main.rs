@@ -19,7 +19,7 @@ mod ui;
 mod update;
 
 use crate::app::{AppState, AppStatus, ChatMessage, Verbosity};
-use crate::ui::{TerminalRuntime, TuiEvent, TuiEventStream};
+use crate::ui::{FrameRequester, TerminalRuntime, TuiEvent, TuiEventStream};
 use clap::Parser;
 use crossterm::{
     event::{self, KeyCode, KeyModifiers},
@@ -57,17 +57,6 @@ fn insert_scrollback_lines<B: Backend>(
             .wrap(Wrap { trim: false })
             .render(buffer.area, buffer);
     })
-}
-
-/// Whether the next loop iteration should render.
-///
-/// A frame is drawn when something actually changed (`needs_redraw`, set by
-/// input handling and by background tasks via `AppState::request_redraw`), or
-/// on the streaming cadence while a response is active. Nothing animates on a
-/// timer once the app is idle, so an idle app with no input draws nothing at
-/// all instead of re-rendering ten times a second.
-fn should_draw(needs_redraw: bool, response_active: bool, since_last_draw: Duration) -> bool {
-    needs_redraw || (response_active && since_last_draw >= STREAM_FRAME_INTERVAL)
 }
 
 fn should_clear_mutable_viewport_before_history(
@@ -304,7 +293,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut needs_redraw = true;
-    let mut last_draw = std::time::Instant::now();
     let mut was_responding = false;
     let mut terminal_focused = true;
     let mut transcript_cursor = crate::ui::scrollback::TranscriptCursor::default();
@@ -312,6 +300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream_commits = crate::ui::scrollback::StreamCommitQueue::default();
     let mut terminal_size = terminal_runtime.terminal().size()?;
     let mut tui_events = TuiEventStream::new();
+    let (frame_requester, mut frame_stream) = FrameRequester::new(STREAM_FRAME_INTERVAL);
     let mut replay_history = false;
 
     loop {
@@ -343,6 +332,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (s.status != AppStatus::Idle, s.take_redraw_request())
         };
         needs_redraw |= background_redraw;
+        if response_active {
+            frame_requester.schedule_frame();
+        }
 
         {
             let mut s = app_state.lock().await;
@@ -375,7 +367,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         was_responding = response_active;
-        let should_draw = should_draw(needs_redraw, response_active, last_draw.elapsed());
+        let should_draw = needs_redraw || frame_stream.try_next().is_some();
 
         if should_draw {
             let mut guard = app_state.lock().await;
@@ -567,7 +559,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
             replay_history = false;
             drop(guard);
-            last_draw = std::time::Instant::now();
             needs_redraw = false;
         }
 
@@ -2139,10 +2130,9 @@ fn print_exit_summary(summary: &ExitSummary) {
 #[cfg(test)]
 mod draw_loop_tests {
     use super::{
-        STREAM_FRAME_INTERVAL, background_task_history_message, ExitSummary, format_number,
-        queue_background_wakeup, should_clear_mutable_viewport_before_history, should_draw,
+        background_task_history_message, ExitSummary, format_number, queue_background_wakeup,
+        should_clear_mutable_viewport_before_history,
     };
-    use std::time::Duration;
 
     #[test]
     fn exit_summary_formats_codex_style_usage() {
@@ -2162,32 +2152,6 @@ mod draw_loop_tests {
         );
         assert_eq!(format_number(999), "999");
         assert_eq!(format_number(1_000), "1,000");
-    }
-
-    #[test]
-    fn idle_without_input_never_redraws() {
-        for elapsed_ms in [0, 100, 500, 5_000, 60_000] {
-            assert!(
-                !should_draw(false, false, Duration::from_millis(elapsed_ms)),
-                "idle app redrew after {elapsed_ms}ms with no state change"
-            );
-        }
-    }
-
-    #[test]
-    fn state_change_redraws_immediately() {
-        assert!(should_draw(true, false, Duration::ZERO));
-        assert!(should_draw(true, true, Duration::ZERO));
-    }
-
-    #[test]
-    fn active_response_redraws_on_stream_cadence() {
-        assert!(!should_draw(false, true, Duration::from_millis(5)));
-        assert!(should_draw(false, true, STREAM_FRAME_INTERVAL));
-        // The rotating status label advances every two seconds and the elapsed
-        // counter every second; both are well inside this cadence.
-        assert!(should_draw(false, true, Duration::from_secs(1)));
-        assert!(should_draw(false, true, Duration::from_secs(2)));
     }
 
     #[test]
