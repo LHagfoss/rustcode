@@ -2839,11 +2839,7 @@ pub(crate) fn render_live_tail_with_transcript(
     height: u16,
     transcript: &mut TranscriptState,
 ) -> Vec<Line<'static>> {
-    let has_conversation = state
-        .history
-        .iter()
-        .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
-    if !has_conversation
+    if state.history.is_empty()
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
         && state.running_tools.is_empty()
@@ -3147,11 +3143,7 @@ pub(crate) fn desired_height(
     let mut chat_height = Paragraph::new(live_lines)
         .wrap(Wrap { trim: false })
         .line_count(inner_width) as u16;
-    let has_conversation = state
-        .history
-        .iter()
-        .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
-    if !has_conversation {
+    if state.history.is_empty() {
         chat_height = chat_height.max(15);
     }
     // Inline pickers are anchored above the composer and replace this portion
@@ -3266,11 +3258,7 @@ pub fn render_with_transcript(
 
     render_live_conversation(f, &max_chunks, state, transcript);
 
-    let has_conversation = state
-        .history
-        .iter()
-        .any(|message| matches!(message.role.as_str(), "user" | "assistant"));
-    let min_welcome_height = if !has_conversation { 15 } else { 0 };
+    let min_welcome_height = if state.history.is_empty() { 15 } else { 0 };
     let mut chat_height = conversation_area_height(state.conversation_content_height, max_chat_height)
         .max(min_welcome_height)
         .min(max_chat_height);
