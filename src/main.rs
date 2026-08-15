@@ -343,15 +343,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             needs_redraw = true;
         }
 
-        let (response_active, background_redraw, active_notice) = {
+        let (response_active, background_redraw) = {
             let mut s = app_state.lock().await;
-            (
-                s.status != AppStatus::Idle,
-                s.take_redraw_request(),
-                s.has_active_notice(),
-            )
+            (s.status != AppStatus::Idle, s.take_redraw_request())
         };
-        needs_redraw |= background_redraw || active_notice;
+        needs_redraw |= background_redraw;
 
         {
             let mut s = app_state.lock().await;
