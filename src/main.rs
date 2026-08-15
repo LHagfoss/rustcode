@@ -2028,93 +2028,152 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let exit_summary = {
+        let s = app_state.lock().await;
+        ExitSummary::from_state(&s)
+    };
+
     // Shutdown: nothing queued may be lost, so write it out synchronously.
     crate::config::flush_history();
 
     disable_raw_mode()?;
+    let transcript_end = exit_summary.composer_y.unwrap_or_else(|| {
+        terminal
+            .get_frame()
+            .area()
+            .y
+            .saturating_add(terminal.get_frame().area().height.saturating_sub(1))
+    });
     execute!(
         terminal.backend_mut(),
         crossterm::event::DisableBracketedPaste,
         crossterm::event::DisableFocusChange,
-        SetCursorStyle::DefaultUserShape
-    )?;
-    let goodbye_origin = goodbye_cursor_position(terminal.size()?.height);
-    execute!(
-        terminal.backend_mut(),
-        crossterm::cursor::MoveTo(goodbye_origin.0, goodbye_origin.1)
+        SetCursorStyle::DefaultUserShape,
+        crossterm::cursor::MoveTo(0, transcript_end),
+        Clear(ClearType::FromCursorDown)
     )?;
     terminal.show_cursor()?;
 
-    print_goodbye();
+    print_exit_summary(&exit_summary);
 
     Ok(())
 }
 
-fn goodbye_cursor_position(height: u16) -> (u16, u16) {
-    (0, height.saturating_sub(1))
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExitSummary {
+    prompt_tokens: u64,
+    cached_tokens: u64,
+    completion_tokens: u64,
+    reasoning_tokens: u64,
+    session_id: String,
+    composer_y: Option<u16>,
 }
 
-/// Printed on every exit path (/quit, /exit, Ctrl+C, ...) after the terminal
-/// is restored, so the box lands on the normal screen like other CLIs'
-/// farewell messages.
-fn print_goodbye() {
-    use std::io::Write;
-    use unicode_width::UnicodeWidthStr;
+impl ExitSummary {
+    fn from_state(state: &AppState) -> Self {
+        let mut summary = Self {
+            prompt_tokens: 0,
+            cached_tokens: 0,
+            completion_tokens: 0,
+            reasoning_tokens: 0,
+            session_id: state.active_session_id.clone(),
+            composer_y: state.input_text_area.map(|area| area.y),
+        };
 
-    let (_, _, config) = crate::config::load_config();
-    let duration_seconds = config
-        .start_time
-        .map_or(0, |start| start.elapsed().map_or(0, |d| d.as_secs()));
-
-    // Theme colors are ratatui `Color`s; convert the RGB variants to ANSI
-    // true-color escapes (falls back to default fg for anything else).
-    fn fg(c: ratatui::style::Color) -> String {
-        match c {
-            ratatui::style::Color::Rgb(r, g, b) => format!("\x1b[38;2;{r};{g};{b}m"),
-            _ => String::new(),
+        for message in &state.history {
+            if let Some(usage) = &message.token_usage {
+                summary.prompt_tokens = summary
+                    .prompt_tokens
+                    .saturating_add(u64::from(usage.prompt_tokens));
+                summary.cached_tokens = summary
+                    .cached_tokens
+                    .saturating_add(u64::from(usage.cached_tokens.unwrap_or(0)));
+                summary.completion_tokens = summary
+                    .completion_tokens
+                    .saturating_add(u64::from(usage.completion_tokens));
+            }
+            summary.reasoning_tokens = summary
+                .reasoning_tokens
+                .saturating_add(u64::from(message.thought_tokens.unwrap_or(0)));
         }
+
+        summary
     }
-    const RESET: &str = "\x1b[0m";
 
-    let border = fg(crate::ui::theme::color_primary());
-    let text = fg(crate::ui::theme::color_text());
+    fn usage_line(&self) -> Option<String> {
+        let total = self.prompt_tokens.saturating_add(self.completion_tokens);
+        if total == 0 {
+            return None;
+        }
+        let cached = (self.cached_tokens > 0)
+            .then(|| format!(" (+ {} cached)", format_number(self.cached_tokens)))
+            .unwrap_or_default();
+        let reasoning = (self.reasoning_tokens > 0)
+            .then(|| format!(" (reasoning {})", format_number(self.reasoning_tokens)))
+            .unwrap_or_default();
+        Some(format!(
+            "Token usage: total={} input={}{} output={}{}",
+            format_number(total),
+            format_number(self.prompt_tokens),
+            cached,
+            format_number(self.completion_tokens),
+            reasoning,
+        ))
+    }
+}
 
-    let title = format!(" rustcode v{} ", env!("CARGO_PKG_VERSION"));
-    let msg = format!("👋 Goodbye - session ran for {}s", duration_seconds);
-    let msg_width = UnicodeWidthStr::width(msg.as_str());
-    let title_width = UnicodeWidthStr::width(title.as_str());
-    let content_width = msg_width.max(title_width);
+fn format_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(digit);
+    }
+    formatted
+}
 
-    let top = format!(
-        "╭─{}{}{}─╮",
-        title,
-        "─".repeat(content_width - title_width),
-        border
-    );
-    let bot = format!("{border}╰{}{border}╯", "─".repeat(content_width + 2));
-    let msg_fill = " ".repeat(content_width - msg_width);
+/// Printed after restoring the terminal and erasing the transient composer,
+/// matching Codex's compact usage and resume handoff.
+fn print_exit_summary(summary: &ExitSummary) {
+    use std::io::Write;
 
     let mut out = std::io::stdout();
-    let _ = writeln!(out);
-    let _ = writeln!(out, "{border}{top}");
-    let _ = writeln!(out, "{border}│ {text}{msg}{msg_fill}{border} │");
-    let _ = writeln!(out, "{border}{bot}{RESET}");
-    let _ = writeln!(out);
+    if let Some(usage) = summary.usage_line() {
+        let _ = writeln!(out, "{usage}");
+    }
+    if !summary.session_id.is_empty() {
+        let _ = writeln!(out, "To continue this session, run rustcode --resume");
+    }
 }
 
 #[cfg(test)]
 mod draw_loop_tests {
     use super::{
         LIVE_VIEWPORT_ROWS, STREAM_FRAME_INTERVAL, background_task_history_message,
-        goodbye_cursor_position, queue_background_wakeup, should_draw,
+        ExitSummary, format_number, queue_background_wakeup, should_draw,
     };
     use std::time::Duration;
 
     #[test]
-    fn goodbye_cursor_position_is_bottom_left() {
-        assert_eq!(goodbye_cursor_position(24), (0, 23));
-        assert_eq!(goodbye_cursor_position(1), (0, 0));
-        assert_eq!(goodbye_cursor_position(0), (0, 0));
+    fn exit_summary_formats_codex_style_usage() {
+        let summary = ExitSummary {
+            prompt_tokens: 2_249_608,
+            cached_tokens: 60_154_240,
+            completion_tokens: 132_560,
+            reasoning_tokens: 48_884,
+            session_id: "session-id".to_string(),
+            composer_y: Some(12),
+        };
+        assert_eq!(
+            summary.usage_line().as_deref(),
+            Some(
+                "Token usage: total=2,382,168 input=2,249,608 (+ 60,154,240 cached) output=132,560 (reasoning 48,884)"
+            )
+        );
+        assert_eq!(format_number(999), "999");
+        assert_eq!(format_number(1_000), "1,000");
     }
 
     #[test]
