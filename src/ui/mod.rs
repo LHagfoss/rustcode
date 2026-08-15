@@ -2443,7 +2443,6 @@ pub(crate) fn render_work_separator_before_assistant(
         "─".repeat(width.max(1) as usize)
     };
     vec![
-        Line::from(""),
         Line::from(Span::styled(
             text,
             get_themed_style(

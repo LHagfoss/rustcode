@@ -459,13 +459,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         terminal_width,
                     );
                     if !separator.is_empty() {
-                        if blocks
-                            .last_mut()
-                            .and_then(|block| block.last())
-                            .is_some_and(|line| line.to_string().is_empty())
-                        {
-                            blocks.last_mut().expect("checked above").pop();
-                        }
                         blocks.push(separator);
                     }
                     let is_continuation = transcript_cursor.has_committed_stream();
