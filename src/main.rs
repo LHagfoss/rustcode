@@ -418,6 +418,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let mut blocks = Vec::new();
             if !replay_history && transcript_cursor.is_at_start() && !history_range.is_empty() {
+                // The welcome banner starts life in the mutable viewport. Before
+                // committing it to scrollback, remove that live copy; otherwise
+                // insert_before retains the tall welcome viewport and subsequent
+                // notification rows can overwrite the banner or strand composer
+                // rows beneath it.
+                terminal.draw_height(0, |_| {})?;
                 let banner = crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
                 if !banner.is_empty() {
                     blocks.push(banner);

@@ -184,6 +184,22 @@ fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
     assert!(text.contains("╰"), "banner must end cleanly with a bottom border");
 }
 
+#[test]
+fn inline_notice_finishes_the_welcome_cell_and_compacts_the_viewport() {
+    let mut state = AppState::new();
+    state
+        .history
+        .push(ChatMessage::new("system", "YOLO mode enabled"));
+
+    let lines = super::render_live_tail(&state, 100, 28);
+    assert!(
+        !lines.iter().any(|line| line.to_string().contains("Welcome back!")),
+        "the welcome banner must not be rendered again after a transcript notice"
+    );
+
+    let mut transcript = TranscriptState::default();
+    assert_eq!(super::desired_height(&state, &mut transcript, 100, 40), 6);
+}
 
 #[test]
 fn queue_preview_shows_recent_user_prompts_without_wakeups() {
