@@ -29,7 +29,7 @@ use modals::{
 use tool_result::render_tool_result;
 
 use crate::app::activity::{
-    ActivityKind, ActivitySnapshot, classify_activity, classify_live_tools,
+    ActivityKind, classify_activity, classify_live_tools,
 };
 use crate::app::{AppState, AppStatus, ChatMessage, NoticeKind};
 use crate::inline_terminal::Frame;
@@ -1021,14 +1021,7 @@ fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 
 fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
     let base_activity = classify_activity(&state.status, &state.running_tools);
-    let activity = if state.working_status_pending {
-        ActivitySnapshot {
-            kind: ActivityKind::Working,
-            label: "Working".to_string(),
-            detail: None,
-            animated: true,
-        }
-    } else if base_activity.kind == ActivityKind::ActionRequired {
+    let activity = if base_activity.kind == ActivityKind::ActionRequired {
         base_activity
     } else {
         classify_live_tools(&state.live_tool_calls).unwrap_or(base_activity)
@@ -1063,11 +1056,7 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
     ));
     spans.push(Span::raw(" "));
 
-    let label_text = if state.working_status_pending {
-        "Working".to_string()
-    } else {
-        activity_status_label(state)
-    };
+    let label_text = activity_status_label(state);
     if matches!(
         activity.kind,
         ActivityKind::Working | ActivityKind::RunningTool
@@ -2862,7 +2851,6 @@ pub(crate) fn render_live_tail_with_transcript(
     if !has_conversation
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
-        && !state.working_status_pending
         && state.running_tools.is_empty()
         && state.live_tool_calls.is_empty()
     {
@@ -2904,16 +2892,9 @@ pub(crate) fn render_live_tail_with_transcript(
         lines.extend(transcript.display_lines(width));
     }
 
-    if !state.live_tool_calls.is_empty() {
-        if lines.last().is_some_and(|l| !l.spans.is_empty()) {
-            lines.push(Line::from(""));
-        }
-        lines.push(Line::from(""));
-    } else if !has_visible_active_cell
-        && (matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
-            || state.working_status_pending
-            || !state.running_tools.is_empty())
-    {
+    let activity_visible = matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
+        || !state.running_tools.is_empty();
+    if activity_visible {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
@@ -3089,6 +3070,25 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     render_with_transcript(f, state, &mut transcript);
 }
 
+fn live_surface_padding(state: &AppState) -> (u16, u16) {
+    let active = matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
+        || !state.running_tools.is_empty();
+    (u16::from(!active), 1)
+}
+
+fn inset_vertical(
+    area: ratatui::layout::Rect,
+    top: u16,
+    bottom: u16,
+) -> ratatui::layout::Rect {
+    ratatui::layout::Rect::new(
+        area.x,
+        area.y.saturating_add(top),
+        area.width,
+        area.height.saturating_sub(top.saturating_add(bottom)),
+    )
+}
+
 /// Height of the mutable inline surface for the next frame. Finalized history
 /// is rendered above this area into terminal scrollback.
 pub(crate) fn desired_height(
@@ -3165,7 +3165,9 @@ pub(crate) fn desired_height(
         chat_height = chat_height.max(14);
     }
 
-    2u16
+    let (top_padding, bottom_padding) = live_surface_padding(state);
+    top_padding
+        .saturating_add(bottom_padding)
         .saturating_add(chat_height)
         .saturating_add(queue_height)
         .saturating_add(input_height)
@@ -3232,13 +3234,15 @@ pub fn render_with_transcript(
     let footer_visible =
         composer_footer_visible(state, !filtered_cmds.is_empty(), !at_files.is_empty());
     let footer_height = u16::from(footer_visible);
+    let (top_padding, bottom_padding) = live_surface_padding(state);
+    let vertical_padding = top_padding.saturating_add(bottom_padding);
     // Keep completion rows below the composer, matching Codex's bottom-pane
     // layout. Reserve the space before sizing the conversation so the popup
     // never overwrites transcript or the input bar.
     let popup_height = popup_rows.min(
         f.area()
             .height
-            .saturating_sub(2)
+            .saturating_sub(vertical_padding)
             .saturating_sub(queue_block_height)
             .saturating_sub(input_height)
             .saturating_sub(footer_height),
@@ -3247,15 +3251,15 @@ pub fn render_with_transcript(
     let max_chat_height = f
         .area()
         .height
-        .saturating_sub(2)
+        .saturating_sub(vertical_padding)
         .saturating_sub(queue_block_height)
         .saturating_sub(input_height)
         .saturating_sub(footer_height)
         .saturating_sub(popup_height);
+    let layout_area = inset_vertical(f.area(), top_padding, bottom_padding);
     let max_chunks = Layout::default()
         .direction(Direction::Vertical)
         .horizontal_margin(0)
-        .vertical_margin(1)
         .constraints([
             Constraint::Length(max_chat_height),
             Constraint::Length(queue_block_height),
@@ -3263,7 +3267,7 @@ pub fn render_with_transcript(
             Constraint::Length(footer_height),
             Constraint::Length(popup_height),
         ])
-        .split(f.area());
+        .split(layout_area);
 
     render_live_conversation(f, &max_chunks, state, transcript);
 
@@ -3284,7 +3288,6 @@ pub fn render_with_transcript(
         let compact_chunks = Layout::default()
             .direction(Direction::Vertical)
             .horizontal_margin(0)
-            .vertical_margin(1)
             .constraints([
                 Constraint::Length(chat_height),
                 Constraint::Length(queue_block_height),
@@ -3292,7 +3295,7 @@ pub fn render_with_transcript(
                 Constraint::Length(footer_height),
                 Constraint::Length(popup_height),
             ])
-            .split(f.area());
+            .split(layout_area);
         render_live_conversation(f, &compact_chunks, state, transcript);
         compact_chunks
     };
@@ -3366,15 +3369,7 @@ pub fn render_with_transcript(
         render_protocol_picker_modal(f, state, input_box_area);
     }
 
-    let had_working_pending = state.working_status_pending;
     render_notice(f, state);
-    // The final Working row is only needed for the frame that paints the
-    // finalized reply. New turns clear this at queue start if another prompt
-    // is already waiting.
-    state.working_status_pending = false;
-    if had_working_pending {
-        state.request_redraw();
-    }
 }
 
 /// How long a notice toast stays on screen before it fades out.
