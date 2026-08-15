@@ -1,5 +1,85 @@
 use super::*;
 
+fn render_state_to_text(state: &mut AppState, width: u16, height: u16) -> String {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| render(frame, state)).unwrap();
+
+    (0..height)
+        .map(|row| {
+            (0..width)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn acceptance_empty_session_has_welcome_and_composer() {
+    let mut state = AppState::new();
+    let rendered = render_state_to_text(&mut state, 100, 28);
+
+    assert!(rendered.contains("Welcome back!"), "rendered: {rendered:?}");
+    assert!(
+        rendered.contains("Ask RustCode to do anything"),
+        "rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn acceptance_streaming_session_has_working_surface_and_live_text() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "hello"));
+    state.status = AppStatus::Streaming;
+    state.current_response = "streamed output".to_owned();
+
+    let rendered = render_state_to_text(&mut state, 100, 20);
+
+    assert!(rendered.contains("Working"), "rendered: {rendered:?}");
+    assert!(rendered.contains("streamed output"), "rendered: {rendered:?}");
+}
+
+#[test]
+fn acceptance_tool_confirmation_replaces_composer_with_actions() {
+    use crate::app::ToolConfirmation;
+
+    let mut state = AppState::new();
+    state.status = AppStatus::AwaitingToolConfirmation;
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        tool_name: "run_command".to_owned(),
+        path: "cargo test".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 0,
+    }]);
+
+    let rendered = render_state_to_text(&mut state, 100, 14);
+
+    assert!(
+        rendered.contains("Would you like to run the following command?"),
+        "rendered: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("$ cargo test"),
+        "rendered: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Press enter to confirm"),
+        "rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn acceptance_narrow_terminal_keeps_the_composer_visible() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "hello"));
+    let rendered = render_state_to_text(&mut state, 48, 8);
+
+    assert!(rendered.contains("Ask RustCode"), "rendered: {rendered:?}");
+}
+
 #[test]
 fn desired_height_keeps_an_idle_conversation_compact() {
     let mut state = AppState::new();
@@ -2283,4 +2363,73 @@ fn transcript_cursor_resets_when_a_new_stream_replaces_the_old_one() {
         cursor.pending_stable_stream("second\n\ntail"),
         vec!["second"]
     );
+}
+
+#[test]
+fn subagent_picker_renders_context_status_and_navigation_hint() {
+    let mut state = AppState::new();
+    crate::app::SubagentController.spawn(
+        &mut state,
+        "inspect the parser",
+        Some("high".to_owned()),
+        None,
+        false,
+        Vec::new(),
+        None,
+        None,
+    );
+    state.show_subagent_picker = true;
+
+    let rendered = render_state_to_text(&mut state, 100, 30);
+
+    assert!(rendered.contains("Agent contexts"));
+    assert!(rendered.contains("agent-1"));
+    assert!(rendered.contains("inspect the parser"));
+    assert!(rendered.contains("main"));
+}
+
+#[test]
+fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
+    let mut state = AppState::new();
+    state.history.push(crate::app::ChatMessage::new("user", "parent task"));
+    let id = crate::app::SubagentController.spawn(
+        &mut state,
+        "child task",
+        None,
+        None,
+        false,
+        Vec::new(),
+        None,
+        None,
+    );
+    state.subagents[0]
+        .history
+        .push(crate::app::ChatMessage::new("assistant", "child result"));
+    crate::app::SubagentController.select(&mut state, id).unwrap();
+
+    let rendered = render_state_to_text(&mut state, 100, 30);
+
+    assert!(rendered.contains("agent-1"));
+    assert!(rendered.contains("child result"));
+    assert_eq!(state.history[0].content, "parent task");
+}
+
+#[test]
+fn active_subagent_context_is_named_in_the_composer_footer() {
+    let mut state = AppState::new();
+    let id = crate::app::SubagentController.spawn(
+        &mut state,
+        "child task",
+        None,
+        None,
+        false,
+        Vec::new(),
+        None,
+        None,
+    );
+    crate::app::SubagentController.select(&mut state, id).unwrap();
+
+    let rendered = render_state_to_text(&mut state, 100, 30);
+
+    assert!(rendered.contains(&format!("agent-1 · {}", state.model_name)));
 }

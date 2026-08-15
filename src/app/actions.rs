@@ -230,11 +230,8 @@ pub async fn handle_enter(
                 }
             }
             "/clear" => {
-                // Hide the existing transcript without deleting it. The model
-                // still receives the full history on the next message.
-                s.history_display_start = s.history.len();
-                s.current_response.clear();
-                s.current_token_usage = None;
+                let _ = crate::app::session_controller::SessionController::default()
+                    .clear(&mut s);
             }
             "/summarize" => {
                 // summarize_session locks the state itself and runs a full
@@ -350,17 +347,34 @@ pub async fn handle_enter(
             "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
-                start_new_session(&mut s);
+                let _ = crate::app::session_controller::SessionController::default()
+                    .start_fresh(&mut s);
+            }
+            "/fork" => {
+                cancel_token.cancel();
+                *cancel_token = tokio_util::sync::CancellationToken::new();
+                if let Err(error) = crate::app::session_controller::SessionController::default()
+                    .fork(&mut s, crate::app::events::SessionAction::Latest)
+                {
+                    s.history.push(ChatMessage::new("system", error.to_string()));
+                }
+            }
+            "/archive" => {
+                if let Err(error) = crate::app::session_controller::SessionController::default()
+                    .archive(&mut s)
+                {
+                    s.history.push(ChatMessage::new("system", error.to_string()));
+                }
+            }
+            "/agents" => {
+                s.show_subagent_picker = true;
+                s.subagent_picker_index = 0;
             }
             "/delete_chat" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
-                let session_id = s.active_session_id.clone();
-                if let Some(dir) = crate::config::get_active_session_dir(&session_id) {
-                    std::fs::remove_dir_all(&dir).ok();
-                }
-                s.history.clear();
-                start_new_session(&mut s);
+                let _ = crate::app::session_controller::SessionController::default()
+                    .delete(&mut s, crate::app::events::SessionAction::Latest);
             }
 
             "/delegate" => {
@@ -573,7 +587,19 @@ pub async fn handle_enter(
             }
 
             "/resume" => {
-                resume_latest_session(&mut s);
+                if let Err(error) = crate::app::session_controller::SessionController::default()
+                    .resume(&mut s, crate::app::events::SessionAction::Latest)
+                {
+                    let message = if matches!(
+                        &error,
+                        crate::app::session_controller::SessionError::NoSessionToResume
+                    ) {
+                        "No previous session to resume.".to_owned()
+                    } else {
+                        error.to_string()
+                    };
+                    s.history.push(ChatMessage::new("system", message));
+                }
             }
             "/history" => {
                 let sessions = build_session_list(&s);
@@ -1056,6 +1082,51 @@ pub async fn handle_enter(
         return should_exit;
     }
 
+    if let Some(selected_id) = s.selected_subagent_id {
+        let id = crate::app::SubagentId::from_raw(selected_id);
+        if let Err(error) =
+            crate::app::SubagentController.send_input(&mut s, id, raw_input.clone())
+        {
+            s.history.push(ChatMessage::new("system", error.to_string()));
+            s.request_redraw();
+            s.input_buffer.clear();
+            s.cursor_position = 0;
+            return false;
+        }
+        s.status = AppStatus::Streaming;
+        s.input_buffer.clear();
+        s.cursor_position = 0;
+        let client_clone = client.clone();
+        let state_clone = Arc::clone(state);
+        let token_clone = cancel_token.clone();
+        drop(s);
+        tokio::spawn(async move {
+            let result = crate::network::run_subagent(
+                &client_clone,
+                &state_clone,
+                &token_clone,
+                selected_id,
+            )
+            .await;
+            let status = if token_clone.is_cancelled() {
+                crate::app::SubAgentStatus::Cancelled
+            } else if result.is_err() {
+                crate::app::SubAgentStatus::Failed
+            } else {
+                crate::app::SubAgentStatus::Completed
+            };
+            let mut state = state_clone.lock().await;
+            let _ = crate::app::SubagentController.set_status(
+                &mut state,
+                crate::app::SubagentId::from_raw(selected_id),
+                status,
+            );
+            state.status = AppStatus::Idle;
+            state.request_redraw();
+        });
+        return false;
+    }
+
     s.delegation_active = s.delegation_armed;
     s.delegation_armed = false;
     s.pending_queue.push(raw_input);
@@ -1224,6 +1295,8 @@ pub fn start_new_session(s: &mut AppState) {
     s.temp_input.clear();
     s.status = AppStatus::Idle;
     s.subagents.clear();
+    s.selected_subagent_id = None;
+    s.show_subagent_picker = false;
     s.delegation_armed = false;
     s.delegation_active = false;
     s.next_subagent_id = 1;
@@ -1592,6 +1665,9 @@ pub fn build_help_text() -> String {
                 ("/info", "Show version and system info"),
                 ("/clear", "Clear conversation history"),
                 ("/new", "Start a new conversation"),
+                ("/fork", "Fork the current conversation into a new session"),
+                ("/archive", "Persist the current session"),
+                ("/agents", "Browse subagent conversation contexts"),
                 ("/delete_chat", "Delete current session and start fresh"),
                 ("/history", "Pick a previous session to resume"),
                 ("/change_title", "Rename current session title"),

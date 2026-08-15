@@ -18,10 +18,12 @@ pub(crate) async fn set_subagent_status(
     agent_id: u32,
     status: crate::app::SubAgentStatus,
 ) {
-    let mut s = state.lock().await;
-    if let Some(agent) = s.subagents.iter_mut().find(|agent| agent.id == agent_id) {
-        agent.status = status;
-    }
+    let mut state = state.lock().await;
+    let _ = crate::app::SubagentController.set_status(
+        &mut state,
+        crate::app::SubagentId::from_raw(agent_id),
+        status,
+    );
 }
 
 fn subagent_history_message(
@@ -549,7 +551,6 @@ pub(crate) async fn handle_agent_tool(
                     ));
                 }
                 let id = s.next_subagent_id;
-                s.next_subagent_id += 1;
                 let workspace_root = if write_access {
                     match crate::config::create_subagent_workspace(&s.active_session_id, id) {
                         Ok(path) => Some(path),
@@ -562,18 +563,17 @@ pub(crate) async fn handle_agent_tool(
                 } else {
                     None
                 };
-                s.subagents.push(crate::app::SubAgent {
-                    id,
-                    task: task.to_string(),
+                let id = crate::app::SubagentController.spawn(
+                    &mut s,
+                    task,
                     model,
-                    history: vec![ChatMessage::new("user", task)],
-                    status: crate::app::SubAgentStatus::Running,
+                    None,
                     write_access,
                     allowed_paths,
                     verification_command,
                     workspace_root,
-                    review_manifest: None,
-                });
+                )
+                .raw();
                 let brief: String = task.chars().take(60).collect();
                 push_status_line(
                     &mut s,
@@ -671,16 +671,16 @@ pub(crate) async fn handle_agent_tool(
                     });
                 };
                 push_status_line(&mut s, format!("agent-{id} ← follow-up ({task})"));
-                if let Some(a) = s.subagents.iter_mut().find(|a| a.id == id) {
-                    if a.status == crate::app::SubAgentStatus::Failed
-                        || a.status == crate::app::SubAgentStatus::Cancelled
-                    {
-                        return crate::tools::ToolExecutionOutput::failure(format!(
-                            "error: subagent {id} is not available for follow-up"
-                        ));
-                    }
-                    a.status = crate::app::SubAgentStatus::Running;
-                    a.history.push(ChatMessage::new("user", message));
+                if let Err(crate::app::SubagentError::CannotSendToTerminal(_)) =
+                    crate::app::SubagentController.send_input(
+                        &mut s,
+                        crate::app::SubagentId::from_raw(id),
+                        message,
+                    )
+                {
+                    return crate::tools::ToolExecutionOutput::failure(format!(
+                        "error: subagent {id} is not available for follow-up"
+                    ));
                 }
             }
             let reply = run_subagent(client, state, cancel_token, id).await;

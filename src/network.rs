@@ -43,6 +43,10 @@ pub(crate) mod output;
 pub(crate) mod events;
 pub(crate) use events::{ToolResult, ToolResultMetadata};
 
+#[path = "network/ui_adapter.rs"]
+pub(crate) mod ui_adapter;
+pub(crate) use ui_adapter::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
+
 #[path = "network/tool_exec.rs"]
 pub(crate) mod tool_exec;
 pub(crate) use tool_exec::{
@@ -56,6 +60,7 @@ pub(crate) use tool_exec::{
 pub(crate) mod turn_engine;
 pub(crate) use turn_engine::ToolFenceCounter;
 pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn, run_single_turn};
+pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
 
 #[path = "network/lifecycle.rs"]
 pub(crate) mod lifecycle;

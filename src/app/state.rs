@@ -347,7 +347,7 @@ pub const TIPS: &[&str] = &[
     "Type /info for basic info, or /help for all commands and keybindings",
 ];
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -510,10 +510,13 @@ pub enum SubAgentStatus {
 /// own conversation history and explicit lifecycle state.
 pub struct SubAgent {
     pub id: u32,
+    pub name: String,
     pub task: String,
     pub model: Option<String>,
     pub history: Vec<ChatMessage>,
     pub status: SubAgentStatus,
+    pub active_turn: bool,
+    pub parent_id: Option<u32>,
     pub write_access: bool,
     pub allowed_paths: Vec<String>,
     pub verification_command: Option<String>,
@@ -904,6 +907,8 @@ pub struct AppState {
     pub history_picker_sessions: Vec<crate::config::SessionMeta>,
     pub history_picker_truncated: bool,
     pub pending_delete_session_idx: Option<usize>,
+    pub show_subagent_picker: bool,
+    pub subagent_picker_index: usize,
     pub active_session_id: String,
 
     pub show_mcp_config: bool,
@@ -941,6 +946,9 @@ pub struct AppState {
     pub auto_confirm: bool,
 
     pub subagents: Vec<SubAgent>,
+    /// Selected conversation context for the subagent picker. `None` keeps
+    /// the root conversation active without changing its stored history.
+    pub selected_subagent_id: Option<u32>,
     pub delegation_armed: bool,
     pub delegation_active: bool,
     pub continuous_mode: bool,
@@ -1046,6 +1054,28 @@ fn get_cwd_and_branch() -> String {
 }
 
 impl AppState {
+    /// The transcript currently shown by the interactive context surface.
+    /// The root history remains untouched while a child context is selected.
+    pub(crate) fn active_history(&self) -> &[ChatMessage] {
+        self.selected_subagent_id
+            .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
+            .map(|agent| agent.history.as_slice())
+            .unwrap_or(self.history.as_slice())
+    }
+
+    pub(crate) fn active_history_display_start(&self) -> usize {
+        if self.selected_subagent_id.is_some() {
+            0
+        } else {
+            self.history_display_start
+        }
+    }
+
+    pub(crate) fn selected_subagent(&self) -> Option<&SubAgent> {
+        self.selected_subagent_id
+            .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
+    }
+
     /// Custom title of the active session, read from disk at most once per
     /// session id. Call [`AppState::invalidate_session_title_cache`] after
     /// writing a new title so the next lookup picks it up.
@@ -1238,6 +1268,8 @@ impl AppState {
             history_picker_sessions: Vec::new(),
             history_picker_truncated: false,
             pending_delete_session_idx: None,
+            show_subagent_picker: false,
+            subagent_picker_index: 0,
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
@@ -1256,6 +1288,7 @@ impl AppState {
             auto_confirm: false,
             active_session_id,
             subagents: Vec::new(),
+            selected_subagent_id: None,
             delegation_armed: false,
             delegation_active: false,
             next_subagent_id: 1,
@@ -1300,6 +1333,7 @@ impl AppState {
             || self.show_theme_picker
             || self.show_command_picker
             || self.show_history_picker
+            || self.show_subagent_picker
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation
             || self.status == AppStatus::AwaitingQuestion
@@ -1628,23 +1662,14 @@ impl AppState {
     }
 
     pub fn reset_suggestion_cycle(&mut self) {
-        self.suggestion_cycle.reset();
+        self.composer().reset_suggestion_cycle();
     }
 
     /// Pull the most recently queued prompt back into the input box so the
     /// user can edit or drop it. Internal wakeup entries are left untouched.
     /// Returns true when a prompt was pulled.
     pub fn pop_queued_prompt(&mut self) -> bool {
-        let Some(pos) = self
-            .pending_queue
-            .iter()
-            .rposition(|item| !item.starts_with("__task_wakeup__:"))
-        else {
-            return false;
-        };
-        self.input_buffer = self.pending_queue.remove(pos);
-        self.cursor_position = self.input_buffer.len();
-        true
+        self.composer().pop_queued_prompt()
     }
 
     /// Remove background wakeups whose results are already part of the history
@@ -1657,47 +1682,11 @@ impl AppState {
     }
 
     pub fn history_up(&mut self) {
-        let user_msgs = &self.input_history;
-        if user_msgs.is_empty() {
-            return;
-        }
-
-        let next_idx = match self.history_index {
-            None => {
-                self.temp_input = self.input_buffer.clone();
-                user_msgs.len() - 1
-            }
-            Some(idx) => {
-                if idx > 0 {
-                    idx - 1
-                } else {
-                    0
-                }
-            }
-        };
-
-        self.history_index = Some(next_idx);
-        self.input_buffer = user_msgs[next_idx].clone();
-        self.cursor_position = self.input_buffer.len();
+        self.composer().history_up();
     }
 
     pub fn history_down(&mut self) {
-        let user_msgs = &self.input_history;
-        if user_msgs.is_empty() {
-            return;
-        }
-
-        if let Some(idx) = self.history_index {
-            if idx + 1 < user_msgs.len() {
-                self.history_index = Some(idx + 1);
-                self.input_buffer = user_msgs[idx + 1].clone();
-                self.cursor_position = self.input_buffer.len();
-            } else {
-                self.history_index = None;
-                self.input_buffer = self.temp_input.clone();
-                self.cursor_position = self.input_buffer.len();
-            }
-        }
+        self.composer().history_down();
     }
 
     pub fn scroll_up(&mut self, amount: u16) {

@@ -7,8 +7,9 @@
 
 use super::highlight::{highlight_diff_line, highlight_shell_command};
 use super::*;
-use crate::app::AppState;
+use crate::app::{AppEvent, AppState, ApprovalDecision, PendingQuestion, QuestionAnswer};
 use crate::inline_terminal::Frame;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
@@ -16,6 +17,69 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub(crate) fn approval_event_for_key(
+    key: KeyEvent,
+    selected: usize,
+) -> Option<AppEvent> {
+    let decision = match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => ApprovalDecision::Approve,
+        KeyCode::Char('a') | KeyCode::Char('A') => ApprovalDecision::ApproveAll,
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => ApprovalDecision::Deny,
+        KeyCode::Enter => {
+            if selected == 0 {
+                ApprovalDecision::Approve
+            } else {
+                ApprovalDecision::Deny
+            }
+        }
+        _ => return None,
+    };
+    Some(AppEvent::ApprovalDecision(decision))
+}
+
+pub(crate) fn question_custom_answer_event(question: &PendingQuestion) -> AppEvent {
+    let answer = question
+        .custom_input
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
+    let answer = if answer.is_empty() {
+        "No response provided"
+    } else {
+        answer
+    };
+    AppEvent::AnswerQuestion(QuestionAnswer::Custom(answer.to_owned()))
+}
+
+pub(crate) fn question_answer_event(question: &PendingQuestion) -> Option<AppEvent> {
+    if question.selected >= question.options.len() {
+        return None;
+    }
+
+    let answer = if question.is_multi_select {
+        let picked = question
+            .options
+            .iter()
+            .zip(question.chosen.iter())
+            .filter(|(_, chosen)| **chosen)
+            .map(|(option, _)| option.clone())
+            .collect::<Vec<_>>();
+        if picked.is_empty() {
+            question.options.get(question.selected)?.clone()
+        } else {
+            picked.join(", ")
+        }
+    } else {
+        question.options.get(question.selected)?.clone()
+    };
+
+    Some(AppEvent::AnswerQuestion(QuestionAnswer::Selected(answer)))
+}
+
+pub(crate) fn question_cancel_event() -> AppEvent {
+    AppEvent::AnswerQuestion(QuestionAnswer::Cancelled)
+}
 
 pub(super) fn render_popup_menu(
     f: &mut Frame,
@@ -494,6 +558,66 @@ mod tests {
         assert!(rendered.contains("approve these 2 tool calls"));
         assert!(rendered.contains("write_to_file src/one.rs"));
         assert!(rendered.contains("run_command $ cargo check"));
+    }
+
+    #[test]
+    fn approval_keys_emit_typed_decisions() {
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), 1),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::Approve))
+        ));
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), 1),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAll))
+        ));
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 1),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
+        ));
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 0),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
+        ));
+    }
+
+    #[test]
+    fn question_answers_are_typed_without_mutating_the_question() {
+        let mut question = PendingQuestion::new(
+            "Where?".to_owned(),
+            vec!["Here".to_owned(), "There".to_owned()],
+            false,
+        );
+        question.selected = 1;
+        assert!(matches!(
+            question_answer_event(&question),
+            Some(AppEvent::AnswerQuestion(QuestionAnswer::Selected(answer)))
+                if answer == "There"
+        ));
+
+        question.selected = question.options.len();
+        question.activate_custom_input();
+        question.insert_str("somewhere");
+        assert!(matches!(
+            question_custom_answer_event(&question),
+            AppEvent::AnswerQuestion(QuestionAnswer::Custom(answer)) if answer == "somewhere"
+        ));
+        assert_eq!(question.selected, question.options.len());
+    }
+
+    #[test]
+    fn multi_select_question_answer_joins_selected_options() {
+        let mut question = PendingQuestion::new(
+            "Which?".to_owned(),
+            vec!["one".to_owned(), "two".to_owned()],
+            true,
+        );
+        question.chosen[0] = true;
+        question.chosen[1] = true;
+        assert!(matches!(
+            question_answer_event(&question),
+            Some(AppEvent::AnswerQuestion(QuestionAnswer::Selected(answer)))
+                if answer == "one, two"
+        ));
     }
 
     #[test]
@@ -1009,6 +1133,151 @@ pub(super) fn render_history_picker_modal(
     );
 }
 
+/// Render the navigable subagent context picker. The selected context keeps
+/// its own transcript in state; this surface makes that history visible before
+/// the user switches the active view.
+pub(super) fn render_subagent_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
+    let total = state.subagents.len() + 1;
+    let selected = state.subagent_picker_index.min(total.saturating_sub(1));
+    let modal_area = input_anchor_rect(f, input_area, 18);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
+
+    let inner = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "Agent contexts",
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  esc", Style::default().fg(COLOR_MUTED())),
+        ]))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Select a conversation context; parent history is preserved",
+            Style::default().fg(COLOR_MUTED()),
+        )))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[1],
+    );
+
+    let list_height = chunks[2].height as usize;
+    let mut lines = Vec::with_capacity(total);
+    let root_selected = selected == 0;
+    lines.push(agent_picker_line(
+        root_selected,
+        "main",
+        "root conversation",
+        state.selected_subagent_id.is_none(),
+        inner.width as usize,
+    ));
+    for (index, agent) in state.subagents.iter().enumerate() {
+        let is_selected = selected == index + 1;
+        let status = match agent.status {
+            crate::app::SubAgentStatus::Running => "running",
+            crate::app::SubAgentStatus::Completed => "completed",
+            crate::app::SubAgentStatus::Failed => "failed",
+            crate::app::SubAgentStatus::Cancelled => "cancelled",
+        };
+        let task = agent.task.chars().take(32).collect::<String>();
+        lines.push(agent_picker_line(
+            is_selected,
+            &agent.name,
+            &format!("{status} · {task}"),
+            state.selected_subagent_id == Some(agent.id),
+            inner.width as usize,
+        ));
+    }
+
+    let offset = if selected >= list_height {
+        selected + 1 - list_height
+    } else {
+        0
+    };
+    f.render_widget(
+        Paragraph::new(lines.into_iter().skip(offset).take(list_height).collect::<Vec<_>>())
+            .style(Style::default().bg(COLOR_PANEL())),
+        chunks[2],
+    );
+
+    let detail = if selected == 0 {
+        "main · root context".to_owned()
+    } else if let Some(agent) = state.subagents.get(selected - 1) {
+        let status = match agent.status {
+            crate::app::SubAgentStatus::Running => "running",
+            crate::app::SubAgentStatus::Completed => "completed",
+            crate::app::SubAgentStatus::Failed => "failed",
+            crate::app::SubAgentStatus::Cancelled => "cancelled",
+        };
+        let last = agent
+            .history
+            .last()
+            .map(|message| message.content.lines().next().unwrap_or_default())
+            .unwrap_or_default();
+        format!("{} · {} · {}", agent.name, status, last.chars().take(48).collect::<String>())
+    } else {
+        "No subagent contexts".to_owned()
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            detail,
+            Style::default().fg(COLOR_MUTED()),
+        )))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[3],
+    );
+}
+
+fn agent_picker_line(
+    selected: bool,
+    name: &str,
+    detail: &str,
+    active: bool,
+    width: usize,
+) -> Line<'static> {
+    let marker = if selected { "› " } else { "  " };
+    let active_marker = if active { "●" } else { "○" };
+    let text = format!("{marker}{active_marker} {name} · {detail}");
+    let text = text.chars().take(width).collect::<String>();
+    let style = if selected {
+        Style::default()
+            .fg(COLOR_BG())
+            .bg(COLOR_PRIMARY())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(COLOR_TEXT())
+    };
+    Line::from(Span::styled(text, style))
+}
+
 pub(super) fn render_mcp_config_modal(
     f: &mut Frame,
     state: &AppState,
@@ -1279,6 +1548,16 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
     PaletteItem {
         group: "Session",
+        name: "Fork session",
+        shortcut: "/fork",
+    },
+    PaletteItem {
+        group: "Session",
+        name: "Archive session",
+        shortcut: "/archive",
+    },
+    PaletteItem {
+        group: "Session",
         name: "Resume session",
         shortcut: "/resume",
     },
@@ -1286,6 +1565,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         group: "Session",
         name: "Copy last reply",
         shortcut: "/copy",
+    },
+    PaletteItem {
+        group: "Agent",
+        name: "Browse agent contexts",
+        shortcut: "/agents",
     },
     PaletteItem {
         group: "Agent",
