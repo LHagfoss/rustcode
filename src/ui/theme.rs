@@ -344,9 +344,6 @@ pub fn color_status_border() -> Color {
 pub fn color_turn_separator() -> Color {
     active_palette().turn_separator
 }
-pub fn color_notice_bg() -> Color {
-    active_palette().notice_bg
-}
 pub fn color_hover_bg() -> Color {
     active_palette().hover_bg
 }

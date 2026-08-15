@@ -766,18 +766,6 @@ impl PromptCache {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NoticeKind {
-    Notice,
-    Warning,
-}
-
-pub struct Notice {
-    pub text: String,
-    pub kind: NoticeKind,
-    pub shown_at: std::time::Instant,
-}
-
 /// What the pointer is currently over. Only clickable things get a variant, so
 /// comparing the previous and current target tells the event loop whether a
 /// pointer move actually changed anything worth redrawing.
@@ -992,9 +980,6 @@ pub struct AppState {
     /// Clickable element the pointer is over, refreshed on every mouse move.
     pub hover: HoverTarget,
     pub selected_text: Option<String>,
-    /// Transient top-right toast: (message, shown_at). Auto-expires (~3s) — the
-    /// render path checks elapsed time, so no timer/event is needed to clear it.
-    pub notice: Option<Notice>,
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
     pub selecting: bool,
@@ -1205,7 +1190,7 @@ impl AppState {
         let cwd_and_branch = get_cwd_and_branch();
         crate::ui::theme::ensure_themes_dir();
 
-        let mut app = Self {
+        let app = Self {
             input_buffer: String::new(),
             scroll_to_bottom_btn: None,
             hover: HoverTarget::None,
@@ -1291,7 +1276,6 @@ impl AppState {
             chat_area: None,
             input_text_area: None,
             selected_text: None,
-            notice: None,
             sel_start: None,
             sel_end: None,
             selecting: false,
@@ -1306,14 +1290,6 @@ impl AppState {
             context_snapshot: None,
             prompt_cache: PromptCache::default(),
         };
-        let last_system_content = app
-            .history
-            .iter()
-            .rfind(|m| m.role == "system" && !m.content.contains("Loop warning:"))
-            .map(|m| m.content.clone());
-        if let Some(content) = last_system_content {
-            app.set_notice(content);
-        }
         app
     }
 
@@ -1832,54 +1808,34 @@ impl AppState {
         self.sel_in_input = false;
     }
 
-    pub fn has_active_notice(&self) -> bool {
-        self.notice
-            .as_ref()
-            .is_some_and(|n| n.shown_at.elapsed() < crate::ui::NOTICE_TTL)
-    }
-
-    /// Show a transient notice toast in the top-right corner.
+    /// Append a compact notification to the durable conversation transcript.
     pub fn set_notice(&mut self, text: impl Into<String>) {
-        let text_str = text.into();
-        let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
-            .iter()
-            .any(|word| text_str.to_ascii_lowercase().contains(word));
-        let kind = if is_warning {
-            NoticeKind::Warning
-        } else {
-            NoticeKind::Notice
-        };
-        self.notice = Some(Notice {
-            text: text_str,
-            kind,
-            shown_at: std::time::Instant::now(),
-        });
+        self.history.push(ChatMessage::new("system", text.into()));
         self.redraw_requested = true;
     }
 
     pub fn set_warning_notice(&mut self, text: impl Into<String>) {
-        self.notice = Some(Notice {
-            text: text.into(),
-            kind: NoticeKind::Warning,
-            shown_at: std::time::Instant::now(),
-        });
-        self.redraw_requested = true;
+        self.set_notice(text);
     }
 }
 
 #[cfg(test)]
 mod protocol_tests {
-    use super::{AppState, NoticeKind, PendingQuestion};
+    use super::{AppState, PendingQuestion};
     use crate::config::ToolProtocol;
 
     #[test]
-    fn test_set_warning_notice() {
+    fn notices_are_appended_to_history() {
         let mut state = AppState::new();
         state.set_warning_notice("Custom warning");
-        assert_eq!(state.notice.as_ref().unwrap().kind, NoticeKind::Warning);
-
         state.set_notice("Execution error occurred");
-        assert_eq!(state.notice.as_ref().unwrap().kind, NoticeKind::Warning);
+
+        let notices = &state.history[state.history.len() - 2..];
+        assert_eq!(notices[0].role, "system");
+        assert_eq!(notices[0].content, "Custom warning");
+        assert_eq!(notices[1].role, "system");
+        assert_eq!(notices[1].content, "Execution error occurred");
+        assert!(state.redraw_requested);
     }
 
     #[test]

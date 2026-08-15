@@ -1690,11 +1690,6 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             s.status = crate::app::AppStatus::Streaming;
             s.update_check = crate::update::UpdateState::Checking;
             s.set_notice("⚡ Running brew update & checking for updates...");
-            s.history.push(ChatMessage::new(
-                "system",
-                "Running brew update & checking for updates...",
-            ));
-            s.request_redraw();
         }
 
         let check = match crate::update::check_for_update(&client_clone).await {
@@ -1703,12 +1698,9 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
                 let mut s = state_clone.lock().await;
                 s.status = crate::app::AppStatus::Idle;
                 s.update_check = crate::update::UpdateState::Failed;
-                s.set_warning_notice("Update check failed: couldn't read Homebrew tap.");
-                s.history.push(ChatMessage::new(
-                    "system",
+                s.set_warning_notice(
                     "Update check failed: couldn't read the Homebrew tap. Try running: brew update && brew upgrade rustcode",
-                ));
-                s.request_redraw();
+                );
                 return;
             }
         };
@@ -1723,9 +1715,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
                     "✨ RustCode v{} is up to date.",
                     crate::update::format_version(current)
                 );
-                s.set_notice(&notice);
-                s.history.push(ChatMessage::new("system", notice));
-                s.request_redraw();
+                s.set_notice(notice);
                 return;
             }
         };
@@ -1739,41 +1729,31 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
                 crate::update::format_version(current),
                 crate::update::format_version(latest)
             );
-            s.set_notice("🚀 Update available! Upgrading via Homebrew...");
-            s.history.push(ChatMessage::new("system", notice));
-            s.request_redraw();
+            s.set_notice(notice);
         }
 
         let result = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
         let mut s = state_clone.lock().await;
         s.status = crate::app::AppStatus::Idle;
-        let msg = match result {
+        match result {
             Ok(Ok(())) => {
                 let text = format!(
                     "🎉 Successfully installed RustCode v{}!\nRestart rustcode to launch the new version.",
                     crate::update::format_version(latest)
                 );
-                s.set_notice(format!(
-                    "🎉 Installed RustCode v{}! Restart to apply.",
-                    crate::update::format_version(latest)
-                ));
-                text
+                s.set_notice(text);
             }
             Ok(Err(e)) => {
                 let text = format!(
                     "brew upgrade failed: {e}\nRun manually: brew update && brew upgrade rustcode"
                 );
-                s.set_warning_notice("brew upgrade failed.");
-                text
+                s.set_warning_notice(text);
             }
             Err(e) => {
                 let text = format!("Update task error: {e}");
-                s.set_warning_notice("Update task error.");
-                text
+                s.set_warning_notice(text);
             }
-        };
-        s.history.push(ChatMessage::new("system", msg));
-        s.request_redraw();
+        }
     });
 }
 
@@ -2341,11 +2321,21 @@ mod tests {
 
         state.lock().await.input_buffer = "/yolo".to_owned();
         assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
-        assert!(state.lock().await.auto_confirm);
+        {
+            let s = state.lock().await;
+            assert!(s.auto_confirm);
+            assert_eq!(s.history.last().unwrap().role, "system");
+            assert_eq!(s.history.last().unwrap().content, "YOLO mode enabled");
+        }
 
         state.lock().await.input_buffer = "/yolo".to_owned();
         assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
-        assert!(!state.lock().await.auto_confirm);
+        {
+            let s = state.lock().await;
+            assert!(!s.auto_confirm);
+            assert_eq!(s.history.last().unwrap().role, "system");
+            assert_eq!(s.history.last().unwrap().content, "YOLO mode disabled");
+        }
     }
 
     #[tokio::test]
@@ -2386,7 +2376,8 @@ mod tests {
         {
             let s = state.lock().await;
             assert_eq!(s.config.theme, "nord");
-            assert!(s.notice.as_ref().unwrap().text.contains("nord"));
+            assert_eq!(s.history.last().unwrap().role, "system");
+            assert!(s.history.last().unwrap().content.contains("nord"));
         }
 
         // Switch to unknown theme

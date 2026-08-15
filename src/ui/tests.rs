@@ -271,29 +271,6 @@ fn theme_change_changes_cache_keys() {
 }
 
 #[test]
-fn notice_toast_sits_top_right_and_clamps() {
-    use super::notice_rect;
-    use ratatui::layout::Rect;
-
-    let screen = Rect::new(0, 0, 100, 40);
-    let r = notice_rect(screen, 18).unwrap();
-    // 18 text + 5 padding (glyph + spaces) = 23 wide, borderless single row.
-    assert_eq!(r.width, 23);
-    assert_eq!(r.height, 1);
-    // Right-aligned with a one-column gutter, one row down from the top.
-    assert_eq!(r.x, 100 - 23 - 1);
-    assert_eq!(r.y, 1);
-    assert!(r.x + r.width < screen.width, "must stay on screen");
-
-    // Very wide text is clamped to the screen width.
-    let wide = notice_rect(screen, 500).unwrap();
-    assert!(wide.x + wide.width <= screen.width);
-
-    // Tiny screen → no toast.
-    assert!(notice_rect(Rect::new(0, 0, 2, 1), 5).is_none());
-}
-
-#[test]
 fn custom_tools_render_pascalcase_with_param() {
     use super::{format_pi_tool_action, to_pascal_case};
 
