@@ -30,6 +30,13 @@ fn normalize_event(event: event::Event) -> Option<TuiEvent> {
 }
 
 impl TuiEventStream {
+    pub(crate) fn paused() -> Self {
+        Self {
+            stream: None,
+            paused: true,
+        }
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             stream: Some(event::EventStream::new()),

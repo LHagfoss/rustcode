@@ -8,7 +8,7 @@ mod frame_requester;
 mod terminal_runtime;
 
 pub(crate) use events::{TuiEvent, TuiEventStream};
-pub(crate) use frame_requester::FrameRequester;
+pub(crate) use frame_requester::{FrameRequester, FrameStream};
 use history_cell::HistoryCell;
 pub(crate) use history_cell::TranscriptState;
 pub(crate) mod scrollback;
