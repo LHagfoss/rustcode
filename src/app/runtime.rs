@@ -127,8 +127,7 @@ impl AppRuntime {
             }
             AppEvent::SubmitPrompt(prompt) => {
                 let mut state = self.app_state.lock().await;
-                state.input_buffer = prompt;
-                state.cursor_position = state.input_buffer.len();
+                state.composer().replace_input(prompt);
                 state.request_redraw();
                 Ok(AppRunControl::Continue)
             }
@@ -146,10 +145,15 @@ impl AppRuntime {
                 let state = self.app_state.lock().await;
                 Ok(AppRunControl::Exit(crate::ExitSummary::from_state(&state)))
             }
+            AppEvent::CloseOverlay => {
+                let mut state = self.app_state.lock().await;
+                state.overlays().close_all();
+                state.request_redraw();
+                Ok(AppRunControl::Continue)
+            }
             AppEvent::Tui(_) => Ok(AppRunControl::Continue),
             AppEvent::ApprovalDecision(_)
             | AppEvent::OpenOverlay(_)
-            | AppEvent::CloseOverlay
             | AppEvent::NewSession
             | AppEvent::ResumeSession(_)
             | AppEvent::ForkSession(_)
@@ -217,7 +221,7 @@ impl AppRuntime {
 
             let (response_active, background_redraw) = {
                 let mut s = app_state.lock().await;
-                (s.status != AppStatus::Idle, s.take_redraw_request())
+                (s.status_state().is_active(), s.take_redraw_request())
             };
             needs_redraw |= background_redraw;
             if response_active {
@@ -261,11 +265,12 @@ impl AppRuntime {
                 let mut guard = app_state.lock().await;
 
                 let terminal_width = terminal_runtime.terminal().size()?.width;
-                transcript_cursor.begin_stream(&guard.current_response);
+                let live_response = guard.transcript().live_response().to_owned();
+                transcript_cursor.begin_stream(&live_response);
                 let stable_source = if replay_history {
                     String::new()
                 } else {
-                    transcript_cursor.pending_stable_source(&guard.current_response)
+                    transcript_cursor.pending_stable_source(&live_response)
                 };
                 if !stable_source.is_empty() {
                     let is_continuation = transcript_cursor.has_committed_stream();
@@ -281,10 +286,11 @@ impl AppRuntime {
                     transcript_cursor.commit_stable_stream(&stable_source);
                 }
 
+                let history_len = guard.transcript().history_len();
                 let history_range = if replay_history {
-                    0..guard.history.len()
+                    0..history_len
                 } else {
-                    transcript_cursor.pending_history_range(guard.history.len())
+                    transcript_cursor.pending_history_range(history_len)
                 };
                 let stable_lines = stream_commits
                     .take_ready(replay_history || !history_range.is_empty() || !response_active);

@@ -1628,23 +1628,14 @@ impl AppState {
     }
 
     pub fn reset_suggestion_cycle(&mut self) {
-        self.suggestion_cycle.reset();
+        self.composer().reset_suggestion_cycle();
     }
 
     /// Pull the most recently queued prompt back into the input box so the
     /// user can edit or drop it. Internal wakeup entries are left untouched.
     /// Returns true when a prompt was pulled.
     pub fn pop_queued_prompt(&mut self) -> bool {
-        let Some(pos) = self
-            .pending_queue
-            .iter()
-            .rposition(|item| !item.starts_with("__task_wakeup__:"))
-        else {
-            return false;
-        };
-        self.input_buffer = self.pending_queue.remove(pos);
-        self.cursor_position = self.input_buffer.len();
-        true
+        self.composer().pop_queued_prompt()
     }
 
     /// Remove background wakeups whose results are already part of the history
@@ -1657,47 +1648,11 @@ impl AppState {
     }
 
     pub fn history_up(&mut self) {
-        let user_msgs = &self.input_history;
-        if user_msgs.is_empty() {
-            return;
-        }
-
-        let next_idx = match self.history_index {
-            None => {
-                self.temp_input = self.input_buffer.clone();
-                user_msgs.len() - 1
-            }
-            Some(idx) => {
-                if idx > 0 {
-                    idx - 1
-                } else {
-                    0
-                }
-            }
-        };
-
-        self.history_index = Some(next_idx);
-        self.input_buffer = user_msgs[next_idx].clone();
-        self.cursor_position = self.input_buffer.len();
+        self.composer().history_up();
     }
 
     pub fn history_down(&mut self) {
-        let user_msgs = &self.input_history;
-        if user_msgs.is_empty() {
-            return;
-        }
-
-        if let Some(idx) = self.history_index {
-            if idx + 1 < user_msgs.len() {
-                self.history_index = Some(idx + 1);
-                self.input_buffer = user_msgs[idx + 1].clone();
-                self.cursor_position = self.input_buffer.len();
-            } else {
-                self.history_index = None;
-                self.input_buffer = self.temp_input.clone();
-                self.cursor_position = self.input_buffer.len();
-            }
-        }
+        self.composer().history_down();
     }
 
     pub fn scroll_up(&mut self, amount: u16) {
