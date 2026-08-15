@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long = "acp")]
     pub acp: bool,
 
+    /// Automatically approve tool confirmations for this run
+    #[arg(long = "yolo")]
+    pub yolo: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -68,5 +72,11 @@ mod tests {
     fn parses_acp_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--acp"]).unwrap();
         assert!(cli.acp);
+    }
+
+    #[test]
+    fn parses_yolo_flag() {
+        let cli = Cli::try_parse_from(["rustcode", "--yolo"]).unwrap();
+        assert!(cli.yolo);
     }
 }
