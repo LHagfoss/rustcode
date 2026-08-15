@@ -2413,3 +2413,23 @@ fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
     assert!(rendered.contains("child result"));
     assert_eq!(state.history[0].content, "parent task");
 }
+
+#[test]
+fn active_subagent_context_is_named_in_the_composer_footer() {
+    let mut state = AppState::new();
+    let id = crate::app::SubagentController.spawn(
+        &mut state,
+        "child task",
+        None,
+        None,
+        false,
+        Vec::new(),
+        None,
+        None,
+    );
+    crate::app::SubagentController.select(&mut state, id).unwrap();
+
+    let rendered = render_state_to_text(&mut state, 100, 30);
+
+    assert!(rendered.contains(&format!("agent-1 · {}", state.model_name)));
+}

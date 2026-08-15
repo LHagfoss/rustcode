@@ -911,7 +911,7 @@ fn context_usage(state: &AppState) -> (u32, Option<u32>) {
     }
 
     if let Some(usage) = state
-        .history
+        .active_history()
         .iter()
         .rev()
         .find_map(|message| message.token_usage.as_ref())
@@ -920,7 +920,7 @@ fn context_usage(state: &AppState) -> (u32, Option<u32>) {
     }
 
     let chars: usize = state
-        .history
+        .active_history()
         .iter()
         .map(|message| message.content.len())
         .sum();
@@ -1016,18 +1016,7 @@ fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>> {
 }
 
 fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
-    if elapsed_secs < 60 {
-        format!("{elapsed_secs}s")
-    } else if elapsed_secs < 3600 {
-        let mins = elapsed_secs / 60;
-        let secs = elapsed_secs % 60;
-        format!("{mins}m {secs:02}s")
-    } else {
-        let hours = elapsed_secs / 3600;
-        let mins = (elapsed_secs % 3600) / 60;
-        let secs = elapsed_secs % 60;
-        format!("{hours}h {mins:02}m {secs:02}s")
-    }
+    crate::app::status::format_elapsed_compact(elapsed_secs)
 }
 
 fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
@@ -1371,10 +1360,10 @@ fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &Ap
 
     let (used, _) = context_usage(state);
     let window = state.active_context_window().max(1);
-    let remaining = 100u32.saturating_sub(
-        ((used as f64 / window as f64) * 100.0).round().clamp(0.0, 100.0) as u32,
-    );
-    let left_content = if matches!(state.status, AppStatus::Idle) {
+    let remaining = crate::app::status::context_remaining_percent(used, window);
+    let left_content = if let Some(agent) = state.selected_subagent() {
+        format!("  {} · {}", agent.name, state.model_name)
+    } else if matches!(state.status, AppStatus::Idle) {
         format!("  {}", state.model_name)
     } else {
         format!("  tab to queue message · {}", state.model_name)

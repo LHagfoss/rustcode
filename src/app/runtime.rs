@@ -452,7 +452,10 @@ impl AppRuntime {
             }
 
             let response_just_finished = was_responding && !response_active;
-            if response_just_finished && !terminal_focused {
+            if crate::app::status::should_notify_response_finished(
+                response_just_finished,
+                terminal_focused,
+            ) {
                 use crossterm::style::Print;
                 let _ = execute!(
                     terminal_runtime.terminal().backend_mut(),

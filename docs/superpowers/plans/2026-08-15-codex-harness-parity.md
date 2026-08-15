@@ -590,19 +590,19 @@
 - Keep rendering pure: all render functions consume state and geometry and return Ratatui widgets/lines without performing network or terminal lifecycle operations.
 - Centralize status-line, footer, key-hint, terminal-title, and notification formatting in `StatusState`/status helpers.
 
-- [ ] **Step 1: Add visual acceptance cases**
+- [x] **Step 1: Add visual acceptance cases**
 
   Cover inline/alternate-screen mode, narrow terminal, focused/unfocused terminal, active stream, tool approval, session picker, subagent picker, and external-editor transition.
 
-- [ ] **Step 2: Align information hierarchy**
+- [x] **Step 2: Align information hierarchy**
 
   Apply Codex-like ordering: transcript first, live working/tool state next, composer at the bottom, status/key hints below or alongside the composer, and overlays anchored to the active input area.
 
-- [ ] **Step 3: Align motion and notifications**
+- [x] **Step 3: Align motion and notifications**
 
   Use the frame scheduler for shimmer/spinners, update terminal title from activity state, and notify only on configured focus/finish conditions.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
   Run: `cargo test ui::tests && cargo check --tests`
 
