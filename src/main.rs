@@ -6,6 +6,7 @@ mod cli;
 mod clipboard;
 mod config;
 mod context;
+mod inline_terminal;
 mod mcp;
 mod memory;
 mod network;
@@ -26,7 +27,6 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use ratatui::{
-    Terminal, TerminalOptions, Viewport,
     backend::{Backend, CrosstermBackend},
     widgets::{Paragraph, Widget, Wrap},
 };
@@ -36,23 +36,13 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smooth scrolling
-/// Keep enough mutable rows for streamed assistant text without reserving an
-/// entire screen below a compact conversation. Ratatui reserves inline space
-/// by appending the *requested* number of rows before clamping its buffer, so
-/// `u16::MAX` emitted tens of thousands of line advances at startup.
-const MAX_LIVE_VIEWPORT_ROWS: u16 = 24;
-
-fn live_viewport_rows(terminal_height: u16) -> u16 {
-    terminal_height.clamp(1, MAX_LIVE_VIEWPORT_ROWS)
-}
-
 /// Frame budget while a response is in flight: 60Hz, so streamed tokens,
 /// spinners, the elapsed-second counter and the rotating status label (which
 /// changes every two seconds) all stay live.
 const STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 fn insert_scrollback_lines<B: Backend>(
-    terminal: &mut Terminal<B>,
+    terminal: &mut crate::inline_terminal::InlineTerminal<B>,
     lines: Vec<ratatui::text::Line<'static>>,
     width: u16,
 ) -> Result<(), B::Error> {
@@ -224,14 +214,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let backend = CrosstermBackend::new(stdout);
-    let viewport_rows = live_viewport_rows(crossterm::terminal::size()?.1);
-    let mut terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(viewport_rows),
-        },
-    )?;
-    terminal.clear()?;
+    // Like Codex, start with an empty inline viewport at the shell cursor and
+    // grow it to the renderer's desired height on each frame.
+    let mut terminal = crate::inline_terminal::InlineTerminal::new(backend)?;
 
     crate::config::archive_live_history();
 
@@ -343,12 +328,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let observed_size = terminal.size()?;
         if observed_size != terminal_size {
             terminal.autoresize()?;
-            execute!(terminal.backend_mut(), Clear(ClearType::Purge), Clear(ClearType::All))?;
-            terminal.clear()?;
-            transcript_cursor.reset();
-            transcript_state.reset();
-            stream_commits.reset();
-            replay_history = true;
+            if observed_size.width != terminal_size.width {
+                execute!(terminal.backend_mut(), Clear(ClearType::Purge), Clear(ClearType::All))?;
+                terminal.clear()?;
+                transcript_cursor.reset();
+                transcript_state.reset();
+                stream_commits.reset();
+                replay_history = true;
+            }
             terminal_size = observed_size;
             needs_redraw = true;
         }
@@ -562,7 +549,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 guard.current_terminal_title = Some(title_display.clone());
             }
 
-            terminal.draw(|f| ui::render_with_transcript(f, &mut guard, &mut transcript_state))?;
+            let terminal_height = terminal.size()?.height;
+            let desired_height = ui::desired_height(
+                &guard,
+                &mut transcript_state,
+                terminal_width,
+                terminal_height,
+            );
+            terminal.draw_height(desired_height, |f| {
+                ui::render_with_transcript(f, &mut guard, &mut transcript_state)
+            })?;
             replay_history = false;
             drop(guard);
             last_draw = std::time::Instant::now();
@@ -2037,10 +2033,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     disable_raw_mode()?;
     let transcript_end = exit_summary.composer_y.unwrap_or_else(|| {
         terminal
-            .get_frame()
             .area()
             .y
-            .saturating_add(terminal.get_frame().area().height.saturating_sub(1))
+            .saturating_add(terminal.area().height.saturating_sub(1))
     });
     execute!(
         terminal.backend_mut(),
@@ -2149,8 +2144,8 @@ fn print_exit_summary(summary: &ExitSummary) {
 #[cfg(test)]
 mod draw_loop_tests {
     use super::{
-        MAX_LIVE_VIEWPORT_ROWS, STREAM_FRAME_INTERVAL, background_task_history_message,
-        live_viewport_rows, ExitSummary, format_number, queue_background_wakeup, should_draw,
+        STREAM_FRAME_INTERVAL, background_task_history_message, ExitSummary, format_number,
+        queue_background_wakeup, should_draw,
     };
     use std::time::Duration;
 
@@ -2172,31 +2167,6 @@ mod draw_loop_tests {
         );
         assert_eq!(format_number(999), "999");
         assert_eq!(format_number(1_000), "1,000");
-    }
-
-    #[test]
-    fn live_viewport_is_bounded_without_exceeding_the_terminal() {
-        use ratatui::{Terminal, TerminalOptions, Viewport, backend::TestBackend};
-
-        let mut terminal = Terminal::with_options(
-            TestBackend::new(80, 50),
-            TerminalOptions {
-                viewport: Viewport::Inline(live_viewport_rows(50)),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(terminal.get_frame().area().height, MAX_LIVE_VIEWPORT_ROWS);
-
-        let mut short_terminal = Terminal::with_options(
-            TestBackend::new(80, 12),
-            TerminalOptions {
-                viewport: Viewport::Inline(live_viewport_rows(12)),
-            },
-        )
-        .unwrap();
-        assert_eq!(short_terminal.get_frame().area().height, 12);
-        assert_eq!(live_viewport_rows(0), 1);
     }
 
     #[test]
