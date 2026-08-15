@@ -8,8 +8,8 @@
 use super::highlight::{highlight_diff_line, highlight_shell_command};
 use super::*;
 use crate::app::AppState;
+use crate::inline_terminal::Frame;
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -314,7 +314,8 @@ pub(super) fn render_verbosity_picker_modal(
 mod tests {
     use super::*;
     use crate::app::ToolConfirmation;
-    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::{backend::TestBackend, layout::Rect};
 
     #[test]
     fn single_command_confirmation_uses_codex_command_prompt() {
