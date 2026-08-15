@@ -1495,6 +1495,26 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
     cancel_token: tokio_util::sync::CancellationToken,
     policy: Arc<P>,
 ) {
+    process_queue_orchestrator_inner(client, state, cancel_token, policy, None).await;
+}
+
+pub(crate) async fn process_queue_orchestrator_with_ui_events<P: policy::TurnPolicy + 'static>(
+    client: reqwest::Client,
+    state: Arc<Mutex<AppState>>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    policy: Arc<P>,
+    ui_events: super::ui_adapter::AgentUiEventSender,
+) {
+    process_queue_orchestrator_inner(client, state, cancel_token, policy, Some(ui_events)).await;
+}
+
+async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
+    client: reqwest::Client,
+    state: Arc<Mutex<AppState>>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    policy: Arc<P>,
+    ui_events: Option<super::ui_adapter::AgentUiEventSender>,
+) {
     dbg_log!("Orchestrator started");
     loop {
         let next_prompt = {
@@ -1533,7 +1553,20 @@ pub async fn process_queue_orchestrator<P: policy::TurnPolicy + 'static>(
             spawn_title_generation(&client, &state, next_prompt.clone()).await;
         }
 
-        run_agent_turn(&client, &state, &cancel_token, &policy, &stream_buffer).await;
+        if let Some(sender) = ui_events.clone() {
+            super::ui_adapter::run_agent_turn_with_events(
+                &client,
+                &state,
+                &cancel_token,
+                &policy,
+                &stream_buffer,
+                next_prompt.clone(),
+                sender,
+            )
+            .await;
+        } else {
+            run_agent_turn(&client, &state, &cancel_token, &policy, &stream_buffer).await;
+        }
 
         if cancel_token.is_cancelled() {
             dbg_log!("Cancel token is cancelled, exiting orchestrator loop");

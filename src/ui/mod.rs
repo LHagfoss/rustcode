@@ -3,11 +3,22 @@ mod history_cell;
 mod lru;
 mod markdown;
 mod modals;
+mod events;
+mod frame_requester;
+mod terminal_runtime;
+mod transcript;
+mod composer;
+mod keymap;
 
+pub(crate) use events::{TuiEvent, TuiEventStream};
+pub(crate) use frame_requester::{FrameRequester, FrameStream};
+pub(crate) use composer::{Composer, ComposerAction};
+pub(crate) use transcript::TranscriptModel;
 use history_cell::HistoryCell;
 pub(crate) use history_cell::TranscriptState;
 pub(crate) mod scrollback;
 mod tool_result;
+pub(crate) use terminal_runtime::TerminalRuntime;
 
 use highlight::{
     highlight_code_block, highlight_code_line, highlight_diff_line, highlight_shell_command,
@@ -19,11 +30,16 @@ use markdown::{
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
+pub(crate) use modals::{
+    approval_event_for_key, question_answer_event, question_cancel_event,
+    question_custom_answer_event,
+};
 use modals::{
     question_height, render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
     render_protocol_picker_modal, render_question_modal, render_theme_picker_modal,
-    render_thinking_picker_modal, render_tool_confirmation_modal, render_verbosity_picker_modal,
+    render_subagent_picker_modal, render_thinking_picker_modal, render_tool_confirmation_modal,
+    render_verbosity_picker_modal,
     tool_confirmation_height,
 };
 use tool_result::render_tool_result;
@@ -895,7 +911,7 @@ fn context_usage(state: &AppState) -> (u32, Option<u32>) {
     }
 
     if let Some(usage) = state
-        .history
+        .active_history()
         .iter()
         .rev()
         .find_map(|message| message.token_usage.as_ref())
@@ -904,7 +920,7 @@ fn context_usage(state: &AppState) -> (u32, Option<u32>) {
     }
 
     let chars: usize = state
-        .history
+        .active_history()
         .iter()
         .map(|message| message.content.len())
         .sum();
@@ -1000,18 +1016,7 @@ fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>> {
 }
 
 fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
-    if elapsed_secs < 60 {
-        format!("{elapsed_secs}s")
-    } else if elapsed_secs < 3600 {
-        let mins = elapsed_secs / 60;
-        let secs = elapsed_secs % 60;
-        format!("{mins}m {secs:02}s")
-    } else {
-        let hours = elapsed_secs / 3600;
-        let mins = (elapsed_secs % 3600) / 60;
-        let secs = elapsed_secs % 60;
-        format!("{hours}h {mins:02}m {secs:02}s")
-    }
+    crate::app::status::format_elapsed_compact(elapsed_secs)
 }
 
 fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
@@ -1355,10 +1360,10 @@ fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &Ap
 
     let (used, _) = context_usage(state);
     let window = state.active_context_window().max(1);
-    let remaining = 100u32.saturating_sub(
-        ((used as f64 / window as f64) * 100.0).round().clamp(0.0, 100.0) as u32,
-    );
-    let left_content = if matches!(state.status, AppStatus::Idle) {
+    let remaining = crate::app::status::context_remaining_percent(used, window);
+    let left_content = if let Some(agent) = state.selected_subagent() {
+        format!("  {} · {}", agent.name, state.model_name)
+    } else if matches!(state.status, AppStatus::Idle) {
         format!("  {}", state.model_name)
     } else {
         format!("  tab to queue message · {}", state.model_name)
@@ -1644,11 +1649,12 @@ thread_local! {
 }
 
 fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
+    let history = state.active_history();
     ChatKey {
-        hist_len: state.history.len(),
-        total_len: state.history.iter().map(|m| m.content.len()).sum(),
-        last_len: state.history.last().map_or(0, |m| m.content.len()),
-        history_display_start: state.history_display_start,
+        hist_len: history.len(),
+        total_len: history.iter().map(|m| m.content.len()).sum(),
+        last_len: history.last().map_or(0, |m| m.content.len()),
+        history_display_start: state.active_history_display_start(),
         width,
         show_picker,
         copied_recently: state
@@ -1929,9 +1935,10 @@ fn tool_call_arguments(
     message_index: usize,
     tool_name: &str,
 ) -> serde_json::Value {
-    let message = &state.history[message_index];
+    let history = state.active_history();
+    let message = &history[message_index];
     if let Some(call_id) = message.tool_call_id.as_deref() {
-        return state.history[..message_index]
+        return history[..message_index]
             .iter()
             .rev()
             .filter(|message| message.role == "assistant")
@@ -1941,7 +1948,7 @@ fn tool_call_arguments(
             .unwrap_or(serde_json::Value::Null);
     }
 
-    for (assistant_index, assistant) in state.history[..message_index].iter().enumerate().rev() {
+    for (assistant_index, assistant) in history[..message_index].iter().enumerate().rev() {
         if assistant.role != "assistant" {
             continue;
         }
@@ -1949,7 +1956,7 @@ fn tool_call_arguments(
         if !calls.iter().any(|call| call.name == tool_name) {
             continue;
         }
-        let prior_same_name_results = state.history[assistant_index + 1..message_index]
+        let prior_same_name_results = history[assistant_index + 1..message_index]
             .iter()
             .filter(|message| {
                 message.role == "tool"
@@ -1983,7 +1990,7 @@ fn tool_transcript_entry(
     width: u16,
     show_picker: bool,
 ) -> Option<ToolTranscriptEntry> {
-    let message = state.history.get(message_index)?;
+    let message = state.active_history().get(message_index)?;
     if message.role != "tool" {
         return None;
     }
@@ -2398,13 +2405,14 @@ pub(crate) fn render_work_separator_before_assistant(
     assistant_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let Some(message) = state.history.get(assistant_index) else {
+    let history = state.active_history();
+    let Some(message) = history.get(assistant_index) else {
         return Vec::new();
     };
     if message.role != "assistant" || message.content.trim().is_empty() {
         return Vec::new();
     }
-    let follows_work = state.history[..assistant_index]
+    let follows_work = history[..assistant_index]
         .iter()
         .rev()
         .find(|candidate| {
@@ -2839,6 +2847,10 @@ pub(crate) fn render_live_tail_with_transcript(
     height: u16,
     transcript: &mut TranscriptState,
 ) -> Vec<Line<'static>> {
+    if state.selected_subagent().is_some() {
+        return render_selected_subagent_context(state, width, height);
+    }
+
     if state.history.is_empty()
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
@@ -2852,6 +2864,7 @@ pub(crate) fn render_live_tail_with_transcript(
     let mut lines = Vec::new();
 
     let mut has_visible_active_cell = false;
+    let mut model_live_text = "";
     if !state.live_tool_calls.is_empty() {
         transcript.set_tools_with_verbosity(&state.live_tool_calls, &state.verbosity);
         has_visible_active_cell = true;
@@ -2864,19 +2877,30 @@ pub(crate) fn render_live_tail_with_transcript(
         };
 
         if !should_hide_stream {
-            transcript.set_assistant(
-                &tail,
-                scrollback::mutable_stream_is_continuation(&state.current_response),
-                state
-                    .generation_start_time
-                    .map(|started| started.elapsed().as_millis() as u64),
-            );
+            model_live_text = &tail;
             has_visible_active_cell = true;
         } else {
             transcript.clear();
         }
     } else {
         transcript.clear();
+    }
+
+    transcript.sync_model(&state.history, model_live_text);
+    let model_tail = transcript
+        .model()
+        .live_text()
+        .unwrap_or_default()
+        .to_owned();
+
+    if has_visible_active_cell && state.live_tool_calls.is_empty() {
+        transcript.set_assistant(
+            &model_tail,
+            scrollback::mutable_stream_is_continuation(&state.current_response),
+            state
+                .generation_start_time
+                .map(|started| started.elapsed().as_millis() as u64),
+        );
     }
 
     if has_visible_active_cell {
@@ -2901,13 +2925,64 @@ pub(crate) fn render_live_tail_with_transcript(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
+fn render_selected_subagent_context(
+    state: &AppState,
+    width: u16,
+    height: u16,
+) -> Vec<Line<'static>> {
+    let Some(agent) = state.selected_subagent() else {
+        return Vec::new();
+    };
+    let status = match agent.status {
+        crate::app::SubAgentStatus::Running => "running",
+        crate::app::SubAgentStatus::Completed => "completed",
+        crate::app::SubAgentStatus::Failed => "failed",
+        crate::app::SubAgentStatus::Cancelled => "cancelled",
+    };
+    let parent = agent
+        .parent_id
+        .map(|id| format!("agent-{id}"))
+        .unwrap_or_else(|| "main".to_owned());
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("↳ {}", agent.name),
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        ),
+        Span::styled(
+            format!(" · {status} · parent {parent}"),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        ),
+    ])];
+    lines.push(Line::from(Span::styled(
+        "  agent context · use /agents to navigate · main history preserved",
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+    )));
+
+    let history = state.active_history();
+    let start = history.len().saturating_sub(8);
+    for index in start..history.len() {
+        lines.extend(render_committed_history_block(state, index, width));
+    }
+    if agent.active_turn {
+        lines.push(Line::from(Span::styled(
+            "• Working",
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        )));
+    }
+    if lines.len() > height as usize {
+        lines = lines.split_off(lines.len() - height as usize);
+    }
+    lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
 /// Render one finalized history entry for insertion into terminal scrollback.
 pub(crate) fn render_committed_history_block(
     state: &AppState,
     message_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let Some(message) = state.history.get(message_index) else {
+    let history = state.active_history();
+    let Some(message) = history.get(message_index) else {
         return Vec::new();
     };
     let mut lines = Vec::new();
@@ -2970,7 +3045,7 @@ pub(crate) fn render_committed_history_block(
             if !tool_lines.is_empty() {
                 lines.extend(tool_lines);
                 let next_is_tool = state
-                    .history
+                    .active_history()
                     .get(message_index + 1)
                     .is_some_and(|m| m.role == "tool");
                 if !next_is_tool {
@@ -3291,7 +3366,7 @@ pub fn render_with_transcript(
         render_question_modal(f, state, chunks[2]);
         Margin { vertical: 0, horizontal: 0 }
     } else {
-        render_input(f, &chunks, state)
+        Composer::default().render(f, &chunks, state)
     };
     state.input_text_area = Some(chunks[2]);
     if footer_visible {
@@ -3334,6 +3409,10 @@ pub fn render_with_transcript(
 
     if state.show_history_picker {
         render_history_picker_modal(f, state, input_box_area);
+    }
+
+    if state.show_subagent_picker {
+        render_subagent_picker_modal(f, state, input_box_area);
     }
 
     if state.show_mcp_config {
