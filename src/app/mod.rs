@@ -1,3 +1,5 @@
+pub mod events;
+pub(crate) use events::{AppEvent, AppEventSender};
 pub mod actions;
 pub mod activity;
 pub mod state;

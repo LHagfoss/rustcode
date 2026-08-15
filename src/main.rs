@@ -18,7 +18,7 @@ mod tools;
 mod ui;
 mod update;
 
-use crate::app::{AppState, AppStatus, ChatMessage, Verbosity};
+use crate::app::{AppEvent, AppEventSender, AppState, AppStatus, ChatMessage, Verbosity};
 use crate::ui::{FrameRequester, TerminalRuntime, TuiEvent, TuiEventStream};
 use clap::Parser;
 use crossterm::{
@@ -300,6 +300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream_commits = crate::ui::scrollback::StreamCommitQueue::default();
     let mut terminal_size = terminal_runtime.terminal().size()?;
     let mut tui_events = TuiEventStream::new();
+    let (app_event_sender, mut app_event_receiver) = AppEventSender::channel();
     let (frame_requester, mut frame_stream) = FrameRequester::new(STREAM_FRAME_INTERVAL);
     let mut replay_history = false;
 
@@ -567,7 +568,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(ev) = event_result? else {
                 continue;
             };
-            match ev {
+            let _ = app_event_sender.send(AppEvent::Tui(ev));
+        }
+
+        let Some(app_event) = app_event_receiver.try_recv().ok() else {
+            continue;
+        };
+        match app_event {
+            AppEvent::Tui(ev) => match ev {
                 TuiEvent::Key(key) => {
                     needs_redraw = true;
                     let is_ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
@@ -2019,7 +2027,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 TuiEvent::Draw => {
                     needs_redraw = true;
                 }
-            }
+            },
+            _ => {}
         }
     }
 
