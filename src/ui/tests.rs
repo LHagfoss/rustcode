@@ -1,5 +1,85 @@
 use super::*;
 
+fn render_state_to_text(state: &mut AppState, width: u16, height: u16) -> String {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| render(frame, state)).unwrap();
+
+    (0..height)
+        .map(|row| {
+            (0..width)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn acceptance_empty_session_has_welcome_and_composer() {
+    let mut state = AppState::new();
+    let rendered = render_state_to_text(&mut state, 100, 28);
+
+    assert!(rendered.contains("Welcome back!"), "rendered: {rendered:?}");
+    assert!(
+        rendered.contains("Ask RustCode to do anything"),
+        "rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn acceptance_streaming_session_has_working_surface_and_live_text() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "hello"));
+    state.status = AppStatus::Streaming;
+    state.current_response = "streamed output".to_owned();
+
+    let rendered = render_state_to_text(&mut state, 100, 20);
+
+    assert!(rendered.contains("Working"), "rendered: {rendered:?}");
+    assert!(rendered.contains("streamed output"), "rendered: {rendered:?}");
+}
+
+#[test]
+fn acceptance_tool_confirmation_replaces_composer_with_actions() {
+    use crate::app::ToolConfirmation;
+
+    let mut state = AppState::new();
+    state.status = AppStatus::AwaitingToolConfirmation;
+    state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+        tool_name: "run_command".to_owned(),
+        path: "cargo test".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 0,
+    }]);
+
+    let rendered = render_state_to_text(&mut state, 100, 14);
+
+    assert!(
+        rendered.contains("Would you like to run the following command?"),
+        "rendered: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("$ cargo test"),
+        "rendered: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Press enter to confirm"),
+        "rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn acceptance_narrow_terminal_keeps_the_composer_visible() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "hello"));
+    let rendered = render_state_to_text(&mut state, 48, 8);
+
+    assert!(rendered.contains("Ask RustCode"), "rendered: {rendered:?}");
+}
+
 #[test]
 fn desired_height_keeps_an_idle_conversation_compact() {
     let mut state = AppState::new();
