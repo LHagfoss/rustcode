@@ -38,7 +38,8 @@ use modals::{
     question_height, render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
     render_protocol_picker_modal, render_question_modal, render_theme_picker_modal,
-    render_thinking_picker_modal, render_tool_confirmation_modal, render_verbosity_picker_modal,
+    render_subagent_picker_modal, render_thinking_picker_modal, render_tool_confirmation_modal,
+    render_verbosity_picker_modal,
     tool_confirmation_height,
 };
 use tool_result::render_tool_result;
@@ -1659,11 +1660,12 @@ thread_local! {
 }
 
 fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
+    let history = state.active_history();
     ChatKey {
-        hist_len: state.history.len(),
-        total_len: state.history.iter().map(|m| m.content.len()).sum(),
-        last_len: state.history.last().map_or(0, |m| m.content.len()),
-        history_display_start: state.history_display_start,
+        hist_len: history.len(),
+        total_len: history.iter().map(|m| m.content.len()).sum(),
+        last_len: history.last().map_or(0, |m| m.content.len()),
+        history_display_start: state.active_history_display_start(),
         width,
         show_picker,
         copied_recently: state
@@ -1944,9 +1946,10 @@ fn tool_call_arguments(
     message_index: usize,
     tool_name: &str,
 ) -> serde_json::Value {
-    let message = &state.history[message_index];
+    let history = state.active_history();
+    let message = &history[message_index];
     if let Some(call_id) = message.tool_call_id.as_deref() {
-        return state.history[..message_index]
+        return history[..message_index]
             .iter()
             .rev()
             .filter(|message| message.role == "assistant")
@@ -1956,7 +1959,7 @@ fn tool_call_arguments(
             .unwrap_or(serde_json::Value::Null);
     }
 
-    for (assistant_index, assistant) in state.history[..message_index].iter().enumerate().rev() {
+    for (assistant_index, assistant) in history[..message_index].iter().enumerate().rev() {
         if assistant.role != "assistant" {
             continue;
         }
@@ -1964,7 +1967,7 @@ fn tool_call_arguments(
         if !calls.iter().any(|call| call.name == tool_name) {
             continue;
         }
-        let prior_same_name_results = state.history[assistant_index + 1..message_index]
+        let prior_same_name_results = history[assistant_index + 1..message_index]
             .iter()
             .filter(|message| {
                 message.role == "tool"
@@ -1998,7 +2001,7 @@ fn tool_transcript_entry(
     width: u16,
     show_picker: bool,
 ) -> Option<ToolTranscriptEntry> {
-    let message = state.history.get(message_index)?;
+    let message = state.active_history().get(message_index)?;
     if message.role != "tool" {
         return None;
     }
@@ -2413,13 +2416,14 @@ pub(crate) fn render_work_separator_before_assistant(
     assistant_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let Some(message) = state.history.get(assistant_index) else {
+    let history = state.active_history();
+    let Some(message) = history.get(assistant_index) else {
         return Vec::new();
     };
     if message.role != "assistant" || message.content.trim().is_empty() {
         return Vec::new();
     }
-    let follows_work = state.history[..assistant_index]
+    let follows_work = history[..assistant_index]
         .iter()
         .rev()
         .find(|candidate| {
@@ -2854,6 +2858,10 @@ pub(crate) fn render_live_tail_with_transcript(
     height: u16,
     transcript: &mut TranscriptState,
 ) -> Vec<Line<'static>> {
+    if state.selected_subagent().is_some() {
+        return render_selected_subagent_context(state, width, height);
+    }
+
     if state.history.is_empty()
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
@@ -2928,13 +2936,64 @@ pub(crate) fn render_live_tail_with_transcript(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
+fn render_selected_subagent_context(
+    state: &AppState,
+    width: u16,
+    height: u16,
+) -> Vec<Line<'static>> {
+    let Some(agent) = state.selected_subagent() else {
+        return Vec::new();
+    };
+    let status = match agent.status {
+        crate::app::SubAgentStatus::Running => "running",
+        crate::app::SubAgentStatus::Completed => "completed",
+        crate::app::SubAgentStatus::Failed => "failed",
+        crate::app::SubAgentStatus::Cancelled => "cancelled",
+    };
+    let parent = agent
+        .parent_id
+        .map(|id| format!("agent-{id}"))
+        .unwrap_or_else(|| "main".to_owned());
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("↳ {}", agent.name),
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        ),
+        Span::styled(
+            format!(" · {status} · parent {parent}"),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        ),
+    ])];
+    lines.push(Line::from(Span::styled(
+        "  agent context · use /agents to navigate · main history preserved",
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+    )));
+
+    let history = state.active_history();
+    let start = history.len().saturating_sub(8);
+    for index in start..history.len() {
+        lines.extend(render_committed_history_block(state, index, width));
+    }
+    if agent.active_turn {
+        lines.push(Line::from(Span::styled(
+            "• Working",
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
+        )));
+    }
+    if lines.len() > height as usize {
+        lines = lines.split_off(lines.len() - height as usize);
+    }
+    lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
 /// Render one finalized history entry for insertion into terminal scrollback.
 pub(crate) fn render_committed_history_block(
     state: &AppState,
     message_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let Some(message) = state.history.get(message_index) else {
+    let history = state.active_history();
+    let Some(message) = history.get(message_index) else {
         return Vec::new();
     };
     let mut lines = Vec::new();
@@ -2997,7 +3056,7 @@ pub(crate) fn render_committed_history_block(
             if !tool_lines.is_empty() {
                 lines.extend(tool_lines);
                 let next_is_tool = state
-                    .history
+                    .active_history()
                     .get(message_index + 1)
                     .is_some_and(|m| m.role == "tool");
                 if !next_is_tool {
@@ -3361,6 +3420,10 @@ pub fn render_with_transcript(
 
     if state.show_history_picker {
         render_history_picker_modal(f, state, input_box_area);
+    }
+
+    if state.show_subagent_picker {
+        render_subagent_picker_modal(f, state, input_box_area);
     }
 
     if state.show_mcp_config {

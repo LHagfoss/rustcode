@@ -7,6 +7,7 @@ pub(crate) struct OverlayState<'a> {
     show_theme_picker: &'a mut bool,
     show_command_picker: &'a mut bool,
     show_history_picker: &'a mut bool,
+    show_subagent_picker: &'a mut bool,
     show_mcp_config: &'a mut bool,
     pending_delete_session_idx: &'a mut Option<usize>,
     mcp_edit_state: &'a mut Option<crate::app::state::McpEditState>,
@@ -24,6 +25,7 @@ impl<'a> OverlayState<'a> {
             show_theme_picker: &mut state.show_theme_picker,
             show_command_picker: &mut state.show_command_picker,
             show_history_picker: &mut state.show_history_picker,
+            show_subagent_picker: &mut state.show_subagent_picker,
             show_mcp_config: &mut state.show_mcp_config,
             pending_delete_session_idx: &mut state.pending_delete_session_idx,
             mcp_edit_state: &mut state.mcp_edit_state,
@@ -39,6 +41,7 @@ impl<'a> OverlayState<'a> {
             || *self.show_theme_picker
             || *self.show_command_picker
             || *self.show_history_picker
+            || *self.show_subagent_picker
             || *self.show_mcp_config
             || self.pending_delete_session_idx.is_some()
             || self.mcp_edit_state.is_some()
@@ -55,6 +58,7 @@ impl<'a> OverlayState<'a> {
         *self.show_theme_picker = false;
         *self.show_command_picker = false;
         *self.show_history_picker = false;
+        *self.show_subagent_picker = false;
         *self.show_mcp_config = false;
         *self.pending_delete_session_idx = None;
         *self.mcp_edit_state = None;
@@ -70,6 +74,7 @@ impl<'a> OverlayState<'a> {
         match overlay {
             Overlay::CommandPalette => *self.show_command_picker = true,
             Overlay::History => *self.show_history_picker = true,
+            Overlay::Subagents => *self.show_subagent_picker = true,
             Overlay::Model => *self.show_model_picker = true,
             Overlay::Theme => *self.show_theme_picker = true,
             Overlay::McpConfig => *self.show_mcp_config = true,

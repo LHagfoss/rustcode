@@ -347,7 +347,7 @@ pub const TIPS: &[&str] = &[
     "Type /info for basic info, or /help for all commands and keybindings",
 ];
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -510,10 +510,13 @@ pub enum SubAgentStatus {
 /// own conversation history and explicit lifecycle state.
 pub struct SubAgent {
     pub id: u32,
+    pub name: String,
     pub task: String,
     pub model: Option<String>,
     pub history: Vec<ChatMessage>,
     pub status: SubAgentStatus,
+    pub active_turn: bool,
+    pub parent_id: Option<u32>,
     pub write_access: bool,
     pub allowed_paths: Vec<String>,
     pub verification_command: Option<String>,
@@ -904,6 +907,8 @@ pub struct AppState {
     pub history_picker_sessions: Vec<crate::config::SessionMeta>,
     pub history_picker_truncated: bool,
     pub pending_delete_session_idx: Option<usize>,
+    pub show_subagent_picker: bool,
+    pub subagent_picker_index: usize,
     pub active_session_id: String,
 
     pub show_mcp_config: bool,
@@ -941,6 +946,9 @@ pub struct AppState {
     pub auto_confirm: bool,
 
     pub subagents: Vec<SubAgent>,
+    /// Selected conversation context for the subagent picker. `None` keeps
+    /// the root conversation active without changing its stored history.
+    pub selected_subagent_id: Option<u32>,
     pub delegation_armed: bool,
     pub delegation_active: bool,
     pub continuous_mode: bool,
@@ -1046,6 +1054,28 @@ fn get_cwd_and_branch() -> String {
 }
 
 impl AppState {
+    /// The transcript currently shown by the interactive context surface.
+    /// The root history remains untouched while a child context is selected.
+    pub(crate) fn active_history(&self) -> &[ChatMessage] {
+        self.selected_subagent_id
+            .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
+            .map(|agent| agent.history.as_slice())
+            .unwrap_or(self.history.as_slice())
+    }
+
+    pub(crate) fn active_history_display_start(&self) -> usize {
+        if self.selected_subagent_id.is_some() {
+            0
+        } else {
+            self.history_display_start
+        }
+    }
+
+    pub(crate) fn selected_subagent(&self) -> Option<&SubAgent> {
+        self.selected_subagent_id
+            .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
+    }
+
     /// Custom title of the active session, read from disk at most once per
     /// session id. Call [`AppState::invalidate_session_title_cache`] after
     /// writing a new title so the next lookup picks it up.
@@ -1238,6 +1268,8 @@ impl AppState {
             history_picker_sessions: Vec::new(),
             history_picker_truncated: false,
             pending_delete_session_idx: None,
+            show_subagent_picker: false,
+            subagent_picker_index: 0,
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
@@ -1256,6 +1288,7 @@ impl AppState {
             auto_confirm: false,
             active_session_id,
             subagents: Vec::new(),
+            selected_subagent_id: None,
             delegation_armed: false,
             delegation_active: false,
             next_subagent_id: 1,
@@ -1300,6 +1333,7 @@ impl AppState {
             || self.show_theme_picker
             || self.show_command_picker
             || self.show_history_picker
+            || self.show_subagent_picker
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation
             || self.status == AppStatus::AwaitingQuestion

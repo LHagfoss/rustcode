@@ -7,6 +7,7 @@ pub mod transcript;
 pub mod status;
 pub mod overlays;
 pub mod session_controller;
+pub mod subagent_controller;
 pub mod runtime;
 pub mod actions;
 pub mod activity;
@@ -16,4 +17,5 @@ pub mod suggestion;
 
 pub use actions::*;
 pub use state::*;
+pub(crate) use subagent_controller::{SubagentController, SubagentError, SubagentId};
 pub use suggestion::{get_at_word_query, list_project_file_paths};

@@ -1133,6 +1133,151 @@ pub(super) fn render_history_picker_modal(
     );
 }
 
+/// Render the navigable subagent context picker. The selected context keeps
+/// its own transcript in state; this surface makes that history visible before
+/// the user switches the active view.
+pub(super) fn render_subagent_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
+    let total = state.subagents.len() + 1;
+    let selected = state.subagent_picker_index.min(total.saturating_sub(1));
+    let modal_area = input_anchor_rect(f, input_area, 18);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
+
+    let inner = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "Agent contexts",
+                Style::default()
+                    .fg(COLOR_TEXT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  esc", Style::default().fg(COLOR_MUTED())),
+        ]))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Select a conversation context; parent history is preserved",
+            Style::default().fg(COLOR_MUTED()),
+        )))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[1],
+    );
+
+    let list_height = chunks[2].height as usize;
+    let mut lines = Vec::with_capacity(total);
+    let root_selected = selected == 0;
+    lines.push(agent_picker_line(
+        root_selected,
+        "main",
+        "root conversation",
+        state.selected_subagent_id.is_none(),
+        inner.width as usize,
+    ));
+    for (index, agent) in state.subagents.iter().enumerate() {
+        let is_selected = selected == index + 1;
+        let status = match agent.status {
+            crate::app::SubAgentStatus::Running => "running",
+            crate::app::SubAgentStatus::Completed => "completed",
+            crate::app::SubAgentStatus::Failed => "failed",
+            crate::app::SubAgentStatus::Cancelled => "cancelled",
+        };
+        let task = agent.task.chars().take(32).collect::<String>();
+        lines.push(agent_picker_line(
+            is_selected,
+            &agent.name,
+            &format!("{status} · {task}"),
+            state.selected_subagent_id == Some(agent.id),
+            inner.width as usize,
+        ));
+    }
+
+    let offset = if selected >= list_height {
+        selected + 1 - list_height
+    } else {
+        0
+    };
+    f.render_widget(
+        Paragraph::new(lines.into_iter().skip(offset).take(list_height).collect::<Vec<_>>())
+            .style(Style::default().bg(COLOR_PANEL())),
+        chunks[2],
+    );
+
+    let detail = if selected == 0 {
+        "main · root context".to_owned()
+    } else if let Some(agent) = state.subagents.get(selected - 1) {
+        let status = match agent.status {
+            crate::app::SubAgentStatus::Running => "running",
+            crate::app::SubAgentStatus::Completed => "completed",
+            crate::app::SubAgentStatus::Failed => "failed",
+            crate::app::SubAgentStatus::Cancelled => "cancelled",
+        };
+        let last = agent
+            .history
+            .last()
+            .map(|message| message.content.lines().next().unwrap_or_default())
+            .unwrap_or_default();
+        format!("{} · {} · {}", agent.name, status, last.chars().take(48).collect::<String>())
+    } else {
+        "No subagent contexts".to_owned()
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            detail,
+            Style::default().fg(COLOR_MUTED()),
+        )))
+        .style(Style::default().bg(COLOR_PANEL())),
+        chunks[3],
+    );
+}
+
+fn agent_picker_line(
+    selected: bool,
+    name: &str,
+    detail: &str,
+    active: bool,
+    width: usize,
+) -> Line<'static> {
+    let marker = if selected { "› " } else { "  " };
+    let active_marker = if active { "●" } else { "○" };
+    let text = format!("{marker}{active_marker} {name} · {detail}");
+    let text = text.chars().take(width).collect::<String>();
+    let style = if selected {
+        Style::default()
+            .fg(COLOR_BG())
+            .bg(COLOR_PRIMARY())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(COLOR_TEXT())
+    };
+    Line::from(Span::styled(text, style))
+}
+
 pub(super) fn render_mcp_config_modal(
     f: &mut Frame,
     state: &AppState,
@@ -1420,6 +1565,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         group: "Session",
         name: "Copy last reply",
         shortcut: "/copy",
+    },
+    PaletteItem {
+        group: "Agent",
+        name: "Browse agent contexts",
+        shortcut: "/agents",
     },
     PaletteItem {
         group: "Agent",

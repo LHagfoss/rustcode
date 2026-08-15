@@ -11,6 +11,11 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum AgentUiEvent {
     PromptStarted { prompt: String },
+    SubagentUpdated {
+        id: u32,
+        status: crate::app::SubAgentStatus,
+        active_turn: bool,
+    },
     TextDelta { text: String },
     ToolStarted { name: String, id: String },
     ApprovalRequested { calls: Vec<ToolCall> },
@@ -117,8 +122,9 @@ async fn publish_snapshot(
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
     approval_sent: &mut bool,
+    previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
 ) {
-    let (response, live_tools, pending_approval, protocol, history, history_len) = {
+    let (response, live_tools, pending_approval, protocol, history, history_len, subagents) = {
         let state = state.lock().await;
         (
             state.current_response.clone(),
@@ -132,8 +138,24 @@ async fn publish_snapshot(
                 .cloned()
                 .collect::<Vec<_>>(),
             state.history.len(),
+            state
+                .subagents
+                .iter()
+                .map(|agent| (agent.id, (agent.status, agent.active_turn)))
+                .collect::<Vec<_>>(),
         )
     };
+
+    for (id, snapshot) in subagents {
+        if previous_subagents.get(&id) != Some(&snapshot) {
+            sender.send(AgentUiEvent::SubagentUpdated {
+                id,
+                status: snapshot.0,
+                active_turn: snapshot.1,
+            });
+            previous_subagents.insert(id, snapshot);
+        }
+    }
 
     if response != *previous_response {
         let text = response
@@ -208,6 +230,7 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
     let mut started_tools = HashSet::new();
     let mut finished_tools = HashSet::new();
     let mut approval_sent = false;
+    let mut previous_subagents = std::collections::HashMap::new();
 
     let context = loop {
         tokio::select! {
@@ -221,6 +244,7 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
                     &mut started_tools,
                     &mut finished_tools,
                     &mut approval_sent,
+                    &mut previous_subagents,
                 ).await;
             }
         }
@@ -234,6 +258,7 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
         &mut started_tools,
         &mut finished_tools,
         &mut approval_sent,
+        &mut previous_subagents,
     )
     .await;
 
@@ -309,11 +334,24 @@ mod tests {
     #[tokio::test]
     async fn sender_round_trips_approval_and_recovery_events() {
         let (sender, mut receiver) = AgentUiEventSender::channel();
+        sender.send(AgentUiEvent::SubagentUpdated {
+            id: 7,
+            status: crate::app::SubAgentStatus::Running,
+            active_turn: true,
+        });
         sender.send(AgentUiEvent::ApprovalRequested { calls: Vec::new() });
         sender.send(AgentUiEvent::TurnRecovered {
             message: "retrying".to_owned(),
         });
 
+        assert!(matches!(
+            receiver.recv().await,
+            Some(AgentUiEvent::SubagentUpdated {
+                id: 7,
+                status: crate::app::SubAgentStatus::Running,
+                active_turn: true
+            })
+        ));
         assert!(matches!(
             receiver.recv().await,
             Some(AgentUiEvent::ApprovalRequested { calls }) if calls.is_empty()

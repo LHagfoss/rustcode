@@ -144,7 +144,23 @@ fn open_overlay(state: &mut AppState, overlay: crate::app::events::Overlay) {
         let total = crate::config::list_sessions().len();
         state.history_picker_truncated = crate::app::actions::is_session_list_truncated(total);
     }
+    if matches!(overlay, crate::app::events::Overlay::Subagents) {
+        state.subagent_picker_index = 0;
+    }
     state.overlays().open(overlay);
+}
+
+fn apply_subagent_selection(state: &mut AppState, id: u32) -> Result<(), AppError> {
+    if id == 0 {
+        crate::app::SubagentController.select_root(state);
+    } else {
+        crate::app::SubagentController
+            .select(state, crate::app::SubagentId::from_raw(id))
+            .map_err(|error| AppError(error.to_string()))?;
+    }
+    state.show_subagent_picker = false;
+    state.request_redraw();
+    Ok(())
 }
 
 pub(crate) struct AppRuntime {
@@ -322,7 +338,11 @@ impl AppRuntime {
                 Ok(AppRunControl::Continue)
             }
             AppEvent::Tui(_) => Ok(AppRunControl::Continue),
-            AppEvent::SelectSubagent(_) => Ok(AppRunControl::Continue),
+            AppEvent::SelectSubagent(id) => {
+                let mut state = self.app_state.lock().await;
+                apply_subagent_selection(&mut state, id)?;
+                Ok(AppRunControl::Continue)
+            }
         }
     }
 
@@ -707,6 +727,14 @@ impl AppRuntime {
                 }
                 AppEvent::RequestDraw => {
                     app_state.lock().await.request_redraw();
+                    needs_redraw = true;
+                }
+                AppEvent::SelectSubagent(id) => {
+                    let mut state = app_state.lock().await;
+                    if let Err(error) = apply_subagent_selection(&mut state, id) {
+                        state.set_notice(error.to_string());
+                    }
+                    transcript_state.reset();
                     needs_redraw = true;
                 }
                 AppEvent::CancelActiveTurn => {
@@ -1158,6 +1186,47 @@ impl AppRuntime {
                         }
 
                         let mut s = app_state.lock().await;
+                        if s.show_subagent_picker {
+                            let total = s.subagents.len() + 1;
+                            match key.code {
+                                KeyCode::Esc => {
+                                    s.show_subagent_picker = false;
+                                }
+                                KeyCode::Up => {
+                                    if total > 0 {
+                                        s.subagent_picker_index = if s.subagent_picker_index == 0 {
+                                            total - 1
+                                        } else {
+                                            s.subagent_picker_index - 1
+                                        };
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if total > 0 {
+                                        s.subagent_picker_index =
+                                            (s.subagent_picker_index + 1) % total;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let selected = s
+                                        .subagent_picker_index
+                                        .min(total.saturating_sub(1));
+                                    let id = if selected == 0 {
+                                        0
+                                    } else {
+                                        s.subagents[selected - 1].id
+                                    };
+                                    s.show_subagent_picker = false;
+                                    drop(s);
+                                    let _ = app_event_sender.send(AppEvent::SelectSubagent(id));
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                            drop(s);
+                            continue;
+                        }
+
                         if s.show_history_picker {
                             // Ctrl+D triggers delete confirmation overlay
                             if key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -1592,6 +1661,10 @@ impl AppRuntime {
                                             }
                                             "/resume" => {
                                                 crate::app::resume_latest_session(&mut s);
+                                            }
+                                            "/agents" => {
+                                                s.show_subagent_picker = true;
+                                                s.subagent_picker_index = 0;
                                             }
                                             "/skills" => {
                                                 let skills = crate::skills::discover_skills();
@@ -2257,6 +2330,35 @@ mod tests {
             )))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn select_subagent_event_switches_context_without_mutating_parent_history() {
+        let mut state = AppState::new();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "parent"));
+        let id = crate::app::SubagentController.spawn(
+            &mut state,
+            "child",
+            None,
+            None,
+            false,
+            Vec::new(),
+            None,
+            None,
+        );
+        let mut runtime = AppRuntime::for_test(state);
+
+        runtime
+            .handle_event(AppEvent::SelectSubagent(id.raw()))
+            .await
+            .expect("selection event should be handled");
+
+        let state = runtime.app_state().await;
+        assert_eq!(state.selected_subagent_id, Some(id.raw()));
+        assert_eq!(state.history[0].content, "parent");
+        assert!(!state.show_subagent_picker);
     }
 
     #[tokio::test]

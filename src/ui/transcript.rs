@@ -122,6 +122,7 @@ impl TranscriptModel {
             crate::network::ui_adapter::AgentUiEvent::PromptStarted { .. } => {
                 self.live = None;
             }
+            crate::network::ui_adapter::AgentUiEvent::SubagentUpdated { .. } => {}
             crate::network::ui_adapter::AgentUiEvent::TextDelta { text } => {
                 self.apply_text_delta(text);
             }

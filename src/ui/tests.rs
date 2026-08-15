@@ -2364,3 +2364,52 @@ fn transcript_cursor_resets_when_a_new_stream_replaces_the_old_one() {
         vec!["second"]
     );
 }
+
+#[test]
+fn subagent_picker_renders_context_status_and_navigation_hint() {
+    let mut state = AppState::new();
+    crate::app::SubagentController.spawn(
+        &mut state,
+        "inspect the parser",
+        Some("high".to_owned()),
+        None,
+        false,
+        Vec::new(),
+        None,
+        None,
+    );
+    state.show_subagent_picker = true;
+
+    let rendered = render_state_to_text(&mut state, 100, 30);
+
+    assert!(rendered.contains("Agent contexts"));
+    assert!(rendered.contains("agent-1"));
+    assert!(rendered.contains("inspect the parser"));
+    assert!(rendered.contains("main"));
+}
+
+#[test]
+fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
+    let mut state = AppState::new();
+    state.history.push(crate::app::ChatMessage::new("user", "parent task"));
+    let id = crate::app::SubagentController.spawn(
+        &mut state,
+        "child task",
+        None,
+        None,
+        false,
+        Vec::new(),
+        None,
+        None,
+    );
+    state.subagents[0]
+        .history
+        .push(crate::app::ChatMessage::new("assistant", "child result"));
+    crate::app::SubagentController.select(&mut state, id).unwrap();
+
+    let rendered = render_state_to_text(&mut state, 100, 30);
+
+    assert!(rendered.contains("agent-1"));
+    assert!(rendered.contains("child result"));
+    assert_eq!(state.history[0].content, "parent task");
+}

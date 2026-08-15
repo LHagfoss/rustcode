@@ -77,6 +77,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Persist the current session",
     },
     CommandInfo {
+        name: "/agents",
+        desc: "Browse subagent conversation contexts",
+    },
+    CommandInfo {
         name: "/delete_chat",
         desc: "Delete current session and start fresh",
     },

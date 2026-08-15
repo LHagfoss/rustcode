@@ -552,19 +552,19 @@
 - Add controller methods `spawn`, `send_input`, `interrupt`, `select`, and `list`.
 - Subagent progress is delivered through `AgentUiEvent` and frame requests; selection changes the active transcript context without losing the parent context.
 
-- [ ] **Step 1: Write lifecycle and navigation tests**
+- [x] **Step 1: Write lifecycle and navigation tests**
 
   Cover spawn registration, running/completed/cancelled states, parent ownership, selection, missing IDs, and output routing.
 
-- [ ] **Step 2: Adapt existing subagent tool calls**
+- [x] **Step 2: Adapt existing subagent tool calls**
 
   Preserve the current tool protocol and max-active-subagent limit while recording typed lifecycle events.
 
-- [ ] **Step 3: Add the agent picker/status surface**
+- [x] **Step 3: Add the agent picker/status surface**
 
   Render the active agent, parent/child relationship, status, and available navigation keys using existing modal infrastructure.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
   Run: `cargo test network::subagents app::subagent_controller ui::tests && cargo check --tests`
 
