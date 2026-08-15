@@ -1,3 +1,19 @@
+## [v0.18.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.2) - 2026-08-15
+
+### Features
+- **UI:** Route Ctrl-C through the active turn cancellation flow and move composer status into an external footer ([`cb51614`](https://github.com/LHagfoss/rustcode/commit/cb51614) / [`b70221e`](https://github.com/LHagfoss/rustcode/commit/b70221e))
+- **UI:** Highlight shell commands in transcript output ([#621](https://github.com/LHagfoss/rustcode/pull/621) / [`848acbf`](https://github.com/LHagfoss/rustcode/commit/848acbf))
+
+### Fixes
+- **UI:** Align transcript and panel surfaces with Codex ([#617](https://github.com/LHagfoss/rustcode/pull/617) / [`248214b`](https://github.com/LHagfoss/rustcode/commit/248214b))
+- **UI:** Keep the active model visible in the composer footer and pad worked-for separators ([#618](https://github.com/LHagfoss/rustcode/pull/618), [#619](https://github.com/LHagfoss/rustcode/pull/619) / [`d44d31f`](https://github.com/LHagfoss/rustcode/commit/d44d31f), [`0cb2d52`](https://github.com/LHagfoss/rustcode/commit/0cb2d52))
+- **UI:** Expand the live assistant viewport and match the Codex shutdown handoff ([#626](https://github.com/LHagfoss/rustcode/pull/626), [#627](https://github.com/LHagfoss/rustcode/pull/627) / [`246ab8a`](https://github.com/LHagfoss/rustcode/commit/246ab8a), [`9586022`](https://github.com/LHagfoss/rustcode/commit/9586022))
+- **UI:** Separate thought previews from tool cells and polish approval surfaces and separators ([#628](https://github.com/LHagfoss/rustcode/pull/628), [#629](https://github.com/LHagfoss/rustcode/pull/629) / [`60a9a23`](https://github.com/LHagfoss/rustcode/commit/60a9a23), [`83f995d`](https://github.com/LHagfoss/rustcode/commit/83f995d))
+- **UI:** Bound the inline viewport at startup and resize it dynamically ([#630](https://github.com/LHagfoss/rustcode/pull/630), [#631](https://github.com/LHagfoss/rustcode/pull/631) / [`22580fa`](https://github.com/LHagfoss/rustcode/commit/22580fa), [`261c4ba`](https://github.com/LHagfoss/rustcode/commit/261c4ba))
+- **UI:** Keep working status visible and stabilize inline notifications in the transcript ([#632](https://github.com/LHagfoss/rustcode/pull/632), [#633](https://github.com/LHagfoss/rustcode/pull/633), [#634](https://github.com/LHagfoss/rustcode/pull/634) / [`d8e70d7`](https://github.com/LHagfoss/rustcode/commit/d8e70d7), [`bf7e6a4`](https://github.com/LHagfoss/rustcode/commit/bf7e6a4), [`dff6bcf`](https://github.com/LHagfoss/rustcode/commit/dff6bcf))
+- **Agent:** Resume after background task completion and coalesce duplicate wakeups ([#620](https://github.com/LHagfoss/rustcode/pull/620), [#622](https://github.com/LHagfoss/rustcode/pull/622) / [`e790852`](https://github.com/LHagfoss/rustcode/commit/e790852), [`84e0b5a`](https://github.com/LHagfoss/rustcode/commit/84e0b5a))
+- **UI:** Finalize cancelled turns exactly once ([#635](https://github.com/LHagfoss/rustcode/pull/635) / [`4748a91`](https://github.com/LHagfoss/rustcode/commit/4748a91))
+
 ## [v0.17.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.17.0) - 2026-08-11
 
 ### Features
@@ -594,4 +610,3 @@
 - **UI:** Make high verbosity tool output compact ([`ae8b934`](https://github.com/LHagfoss/rustcode/commit/ae8b934))
 - **UI:** Restore chat surface backgrounds and help shortcut ([`e6cd99f`](https://github.com/LHagfoss/rustcode/commit/e6cd99f))
 - **UI:** Restore panel backgrounds and approval selection ([`b972cc9`](https://github.com/LHagfoss/rustcode/commit/b972cc9))
-
