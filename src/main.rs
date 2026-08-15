@@ -71,6 +71,17 @@ fn should_draw(needs_redraw: bool, response_active: bool, since_last_draw: Durat
     needs_redraw || (response_active && since_last_draw >= STREAM_FRAME_INTERVAL)
 }
 
+fn should_clear_mutable_viewport_before_history(
+    replay_history: bool,
+    response_just_finished: bool,
+    transcript_at_start: bool,
+    has_pending_history: bool,
+) -> bool {
+    !replay_history
+        && has_pending_history
+        && (response_just_finished || transcript_at_start)
+}
+
 fn background_task_history_message(
     task_id: &str,
     output: crate::tools::ToolExecutionOutput,
@@ -371,7 +382,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if was_responding && !response_active && !terminal_focused {
+        let response_just_finished = was_responding && !response_active;
+        if response_just_finished && !terminal_focused {
             use crossterm::style::Print;
             let _ = execute!(
                 terminal.backend_mut(),
@@ -417,13 +429,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 insert_scrollback_lines(&mut terminal, stable_lines, terminal_width)?;
             }
             let mut blocks = Vec::new();
-            if !replay_history && transcript_cursor.is_at_start() && !history_range.is_empty() {
-                // The welcome banner starts life in the mutable viewport. Before
-                // committing it to scrollback, remove that live copy; otherwise
-                // insert_before retains the tall welcome viewport and subsequent
-                // notification rows can overwrite the banner or strand composer
-                // rows beneath it.
+            if should_clear_mutable_viewport_before_history(
+                replay_history,
+                response_just_finished,
+                transcript_cursor.is_at_start(),
+                !history_range.is_empty(),
+            ) {
+                // History is about to replace content in the mutable cell. Drop
+                // that old cell before insertion so working/status/composer rows
+                // cannot survive beneath the newly committed transcript.
                 terminal.draw_height(0, |_| {})?;
+            }
+            if !replay_history && transcript_cursor.is_at_start() && !history_range.is_empty() {
                 let banner = crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
                 if !banner.is_empty() {
                     blocks.push(banner);
@@ -2153,7 +2170,7 @@ fn print_exit_summary(summary: &ExitSummary) {
 mod draw_loop_tests {
     use super::{
         STREAM_FRAME_INTERVAL, background_task_history_message, ExitSummary, format_number,
-        queue_background_wakeup, should_draw,
+        queue_background_wakeup, should_clear_mutable_viewport_before_history, should_draw,
     };
     use std::time::Duration;
 
@@ -2201,6 +2218,22 @@ mod draw_loop_tests {
         // counter every second; both are well inside this cadence.
         assert!(should_draw(false, true, Duration::from_secs(1)));
         assert!(should_draw(false, true, Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn finalized_response_clears_mutable_cell_before_history_insertion() {
+        assert!(should_clear_mutable_viewport_before_history(
+            false, true, false, true,
+        ));
+        assert!(should_clear_mutable_viewport_before_history(
+            false, false, true, true,
+        ));
+        assert!(!should_clear_mutable_viewport_before_history(
+            false, false, false, true,
+        ));
+        assert!(!should_clear_mutable_viewport_before_history(
+            true, true, false, true,
+        ));
     }
 
     #[test]
