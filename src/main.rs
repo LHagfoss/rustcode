@@ -19,18 +19,17 @@ mod ui;
 mod update;
 
 use crate::app::{AppState, AppStatus, ChatMessage, Verbosity};
+use crate::ui::TerminalRuntime;
 use clap::Parser;
 use crossterm::{
-    cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
+    terminal::{Clear, ClearType},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
+    backend::Backend,
     widgets::{Paragraph, Widget, Wrap},
 };
-use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -207,27 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        crossterm::event::EnableBracketedPaste,
-        crossterm::event::EnableFocusChange,
-        SetCursorStyle::BlinkingBar,
-        crossterm::style::Print("\x1b]0;rustcode · new session\x07")
-    )?;
-
-    let _ = execute!(
-        stdout,
-        event::PushKeyboardEnhancementFlags(
-            event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-        )
-    );
-
-    let backend = CrosstermBackend::new(stdout);
-    // Like Codex, start with an empty inline viewport at the shell cursor and
-    // grow it to the renderer's desired height on each frame.
-    let mut terminal = crate::inline_terminal::InlineTerminal::new(backend)?;
+    let mut terminal_runtime = TerminalRuntime::start()?;
 
     crate::config::archive_live_history();
 
@@ -331,7 +310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut transcript_cursor = crate::ui::scrollback::TranscriptCursor::default();
     let mut transcript_state = crate::ui::TranscriptState::default();
     let mut stream_commits = crate::ui::scrollback::StreamCommitQueue::default();
-    let mut terminal_size = terminal.size()?;
+    let mut terminal_size = terminal_runtime.terminal().size()?;
     let mut replay_history = false;
 
     loop {
@@ -339,12 +318,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // terminal rows. Once scrollback has been emitted those rows cannot be
         // reflowed in place, so a resize must purge the visible transcript and
         // replay it from the durable history plus the current stream.
-        let observed_size = terminal.size()?;
+        let observed_size = terminal_runtime.terminal().size()?;
         if observed_size != terminal_size {
-            terminal.autoresize()?;
+            terminal_runtime.terminal().autoresize()?;
             if observed_size.width != terminal_size.width {
-                execute!(terminal.backend_mut(), Clear(ClearType::Purge), Clear(ClearType::All))?;
-                terminal.clear()?;
+                execute!(
+                    terminal_runtime.terminal().backend_mut(),
+                    Clear(ClearType::Purge),
+                    Clear(ClearType::All)
+                )?;
+                terminal_runtime.terminal().clear()?;
                 transcript_cursor.reset();
                 transcript_state.reset();
                 stream_commits.reset();
@@ -386,7 +369,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if response_just_finished && !terminal_focused {
             use crossterm::style::Print;
             let _ = execute!(
-                terminal.backend_mut(),
+                terminal_runtime.terminal().backend_mut(),
                 Print("\x1b]9;rustcode · response finished\x07\x07")
             );
         }
@@ -396,7 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if should_draw {
             let mut guard = app_state.lock().await;
 
-            let terminal_width = terminal.size()?.width;
+            let terminal_width = terminal_runtime.terminal().size()?.width;
             transcript_cursor.begin_stream(&guard.current_response);
             let stable_source = if replay_history {
                 String::new()
@@ -426,7 +409,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 replay_history || !history_range.is_empty() || !response_active,
             );
             if !stable_lines.is_empty() {
-                insert_scrollback_lines(&mut terminal, stable_lines, terminal_width)?;
+                insert_scrollback_lines(terminal_runtime.terminal(), stable_lines, terminal_width)?;
             }
             let mut blocks = Vec::new();
             if should_clear_mutable_viewport_before_history(
@@ -438,7 +421,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // History is about to replace content in the mutable cell. Drop
                 // that old cell before insertion so working/status/composer rows
                 // cannot survive beneath the newly committed transcript.
-                terminal.draw_height(0, |_| {})?;
+                terminal_runtime.terminal().draw_height(0, |_| {})?;
             }
             if !replay_history && transcript_cursor.is_at_start() && !history_range.is_empty() {
                 let banner = crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
@@ -514,7 +497,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 index += 1;
             }
             for lines in blocks {
-                insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
+                insert_scrollback_lines(terminal_runtime.terminal(), lines, terminal_width)?;
             }
 
             // During a resize, history must be inserted before the still-live
@@ -529,7 +512,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         terminal_width,
                         false,
                     );
-                    insert_scrollback_lines(&mut terminal, lines, terminal_width)?;
+                    insert_scrollback_lines(terminal_runtime.terminal(), lines, terminal_width)?;
                     transcript_cursor.commit_stable_stream(&stable_source);
                 }
             }
@@ -565,20 +548,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if old_title.as_deref() != Some(title_display.as_str()) {
                 use crossterm::style::Print;
                 let _ = execute!(
-                    terminal.backend_mut(),
+                    terminal_runtime.terminal().backend_mut(),
                     Print(format!("\x1b]0;{}\x07", title_display))
                 );
                 guard.current_terminal_title = Some(title_display.clone());
             }
 
-            let terminal_height = terminal.size()?.height;
+            let terminal_height = terminal_runtime.terminal().size()?.height;
             let desired_height = ui::desired_height(
                 &guard,
                 &mut transcript_state,
                 terminal_width,
                 terminal_height,
             );
-            terminal.draw_height(desired_height, |f| {
+            terminal_runtime.terminal().draw_height(desired_height, |f| {
                 ui::render_with_transcript(f, &mut guard, &mut transcript_state)
             })?;
             replay_history = false;
@@ -601,12 +584,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if (is_ctrl || is_cmd)
                         && (key.code == KeyCode::Char('k') || key.code == KeyCode::Char('K'))
                     {
-                        terminal.clear().ok();
+                        terminal_runtime.terminal().clear().ok();
                         continue;
                     }
                     if is_ctrl && (key.code == KeyCode::Char('l') || key.code == KeyCode::Char('L'))
                     {
-                        terminal.clear().ok();
+                        terminal_runtime.terminal().clear().ok();
                         continue;
                     }
 
@@ -1154,7 +1137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let title_display =
                                         meta.title.replace('|', "\\|").replace('\x07', "");
                                     let _ = execute!(
-                                        terminal.backend_mut(),
+                                        terminal_runtime.terminal().backend_mut(),
                                         crossterm::style::Print(format!(
                                             "\x1b]0;rustcode · {}\x07",
                                             title_display
@@ -1810,7 +1793,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('l')
                             if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
                         {
-                            terminal.clear()?;
+                            terminal_runtime.terminal().clear()?;
                         }
                         KeyCode::Enter => {
                             let modifiers = key.modifiers;
@@ -2055,22 +2038,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shutdown: nothing queued may be lost, so write it out synchronously.
     crate::config::flush_history();
 
-    disable_raw_mode()?;
-    let transcript_end = exit_summary.composer_y.unwrap_or_else(|| {
-        terminal
-            .area()
-            .y
-            .saturating_add(terminal.area().height.saturating_sub(1))
-    });
-    execute!(
-        terminal.backend_mut(),
-        crossterm::event::DisableBracketedPaste,
-        crossterm::event::DisableFocusChange,
-        SetCursorStyle::DefaultUserShape,
-        crossterm::cursor::MoveTo(0, transcript_end),
-        Clear(ClearType::FromCursorDown)
-    )?;
-    terminal.show_cursor()?;
+    terminal_runtime.restore_at(exit_summary.composer_y)?;
 
     print_exit_summary(&exit_summary);
 

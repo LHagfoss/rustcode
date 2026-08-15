@@ -3,11 +3,13 @@ mod history_cell;
 mod lru;
 mod markdown;
 mod modals;
+mod terminal_runtime;
 
 use history_cell::HistoryCell;
 pub(crate) use history_cell::TranscriptState;
 pub(crate) mod scrollback;
 mod tool_result;
+pub(crate) use terminal_runtime::TerminalRuntime;
 
 use highlight::{
     highlight_code_block, highlight_code_line, highlight_diff_line, highlight_shell_command,
