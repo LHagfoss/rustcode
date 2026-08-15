@@ -6,9 +6,11 @@ mod modals;
 mod events;
 mod frame_requester;
 mod terminal_runtime;
+mod transcript;
 
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
+pub(crate) use transcript::TranscriptModel;
 use history_cell::HistoryCell;
 pub(crate) use history_cell::TranscriptState;
 pub(crate) mod scrollback;
@@ -2858,6 +2860,7 @@ pub(crate) fn render_live_tail_with_transcript(
     let mut lines = Vec::new();
 
     let mut has_visible_active_cell = false;
+    let mut model_live_text = "";
     if !state.live_tool_calls.is_empty() {
         transcript.set_tools_with_verbosity(&state.live_tool_calls, &state.verbosity);
         has_visible_active_cell = true;
@@ -2870,19 +2873,30 @@ pub(crate) fn render_live_tail_with_transcript(
         };
 
         if !should_hide_stream {
-            transcript.set_assistant(
-                &tail,
-                scrollback::mutable_stream_is_continuation(&state.current_response),
-                state
-                    .generation_start_time
-                    .map(|started| started.elapsed().as_millis() as u64),
-            );
+            model_live_text = &tail;
             has_visible_active_cell = true;
         } else {
             transcript.clear();
         }
     } else {
         transcript.clear();
+    }
+
+    transcript.sync_model(&state.history, model_live_text);
+    let model_tail = transcript
+        .model()
+        .live_text()
+        .unwrap_or_default()
+        .to_owned();
+
+    if has_visible_active_cell && state.live_tool_calls.is_empty() {
+        transcript.set_assistant(
+            &model_tail,
+            scrollback::mutable_stream_is_continuation(&state.current_response),
+            state
+                .generation_start_time
+                .map(|started| started.elapsed().as_millis() as u64),
+        );
     }
 
     if has_visible_active_cell {

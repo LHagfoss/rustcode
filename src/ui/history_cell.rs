@@ -5,7 +5,7 @@
 //! gives the TUI the same lifecycle shape without serializing terminal state or
 //! making provider code depend on ratatui.
 
-use crate::app::{LiveToolCall, Verbosity};
+use crate::app::{ChatMessage, LiveToolCall, Verbosity};
 use ratatui::{
     style::Modifier,
     text::{Line, Span},
@@ -59,11 +59,21 @@ pub(crate) struct TranscriptState {
     active: Option<ActiveHistoryCell>,
     active_key: Option<ActiveHistoryCellKind>,
     revision: u64,
+    model: super::TranscriptModel,
 }
 
 impl TranscriptState {
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub(crate) fn sync_model(&mut self, history: &[ChatMessage], live_text: &str) {
+        self.model.sync_history(history);
+        self.model.replace_live_text(live_text);
+    }
+
+    pub(crate) fn model(&self) -> &super::TranscriptModel {
+        &self.model
     }
 
     pub(crate) fn revision(&self) -> u64 {
