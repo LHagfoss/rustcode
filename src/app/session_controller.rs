@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_latest_restores_the_most_recent_saved_session() {
+    fn resume_by_id_restores_the_saved_session() {
         let mut state = AppState::new();
         let saved_id = state.active_session_id.clone();
         state.history.push(ChatMessage::new("user", "saved task"));
@@ -299,7 +299,7 @@ mod tests {
         assert_ne!(state.active_session_id, saved_id);
 
         let transition = SessionController::default()
-            .resume(&mut state, SessionAction::Latest)
+            .resume(&mut state, SessionAction::Id(saved_id.clone()))
             .expect("saved session should resume");
 
         assert_eq!(

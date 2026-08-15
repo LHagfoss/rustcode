@@ -223,9 +223,17 @@ pub(super) fn input_anchor_rect(
 }
 
 fn render_padded_panel(f: &mut Frame, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    render_padded_panel_with_color(f, area, COLOR_PANEL())
+}
+
+fn render_padded_panel_with_color(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    panel: Color,
+) -> ratatui::layout::Rect {
     f.render_widget(Clear, area);
     f.render_widget(
-        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(panel)),
         area,
     );
     area.inner(Margin {
@@ -234,8 +242,7 @@ fn render_padded_panel(f: &mut Frame, area: ratatui::layout::Rect) -> ratatui::l
     })
 }
 
-fn paint_panel_line_backgrounds(lines: &mut [Line<'static>]) {
-    let panel = COLOR_PANEL();
+fn paint_panel_line_backgrounds(lines: &mut [Line<'static>], panel: Color) {
     for line in lines {
         line.style = line.style.patch(Style::default().bg(panel));
         for span in &mut line.spans {
@@ -385,7 +392,9 @@ mod tests {
     fn single_command_confirmation_uses_codex_command_prompt() {
         let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
         let mut state = AppState::new();
-        let panel = COLOR_PANEL();
+        state.config.theme = "default".to_owned();
+        let panel = crate::ui::theme::get_palette(&state.config.theme).panel;
+        crate::ui::theme::set_active_theme("nord");
         state.pending_tool_confirmation = Some(vec![ToolConfirmation {
             tool_name: "run_command".to_string(),
             path: "git commit --message \"hello\"".to_string(),
@@ -1784,7 +1793,8 @@ pub(super) fn render_tool_confirmation_modal(
         Some(confirmations) if !confirmations.is_empty() => confirmations,
         _ => return,
     };
-    let content_area = render_padded_panel(f, area);
+    let panel = crate::ui::theme::get_palette(&state.config.theme).panel;
+    let content_area = render_padded_panel_with_color(f, area, panel);
 
     let mut lines = Vec::new();
     let single = confirmations.len() == 1;
@@ -1807,13 +1817,13 @@ pub(super) fn render_tool_confirmation_modal(
         if is_command {
             let command_width = content_area.width.saturating_sub(4) as usize;
             let command = truncate_middle_to_width(&first.path, command_width);
-            for (index, command) in highlight_shell_command(&command, COLOR_PANEL(), false)
+            for (index, command) in highlight_shell_command(&command, panel, false)
                 .into_iter()
                 .enumerate()
             {
                 let mut spans = vec![Span::styled(
                     if index == 0 { "  $ " } else { "    " },
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                    Style::default().fg(COLOR_TEXT()).bg(panel),
                 )];
                 spans.extend(command.spans);
                 lines.push(Line::from(spans));
@@ -1854,7 +1864,7 @@ pub(super) fn render_tool_confirmation_modal(
             if confirmation.tool_name == "run_command" {
                 spans.push(Span::styled(
                     "$ ",
-                    Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
+                    Style::default().fg(COLOR_TEXT()).bg(panel),
                 ));
                 let prefix_width = spans.iter().map(|span| span.content.width()).sum::<usize>();
                 let command = truncate_middle_to_width(
@@ -1862,7 +1872,7 @@ pub(super) fn render_tool_confirmation_modal(
                     (content_area.width as usize).saturating_sub(prefix_width),
                 );
                 if let Some(command) =
-                    highlight_shell_command(&command, COLOR_PANEL(), false)
+                    highlight_shell_command(&command, panel, false)
                         .into_iter()
                         .next()
                 {
@@ -1958,11 +1968,11 @@ pub(super) fn render_tool_confirmation_modal(
         }
         lines = compact;
     }
-    paint_panel_line_backgrounds(&mut lines);
+    paint_panel_line_backgrounds(&mut lines, panel);
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(COLOR_PANEL())),
+            .style(Style::default().bg(panel)),
         content_area,
     );
 }
@@ -2401,7 +2411,8 @@ pub(super) fn render_question_modal(
     let Some(question) = state.pending_question.as_ref() else {
         return;
     };
-    let content_area = render_padded_panel(f, area);
+    let panel = crate::ui::theme::get_palette(&state.config.theme).panel;
+    let content_area = render_padded_panel_with_color(f, area, panel);
     let mut lines = vec![
         Line::from(Span::styled(
             "  Question 1/1 (1 unanswered)",
@@ -2479,9 +2490,11 @@ pub(super) fn render_question_modal(
     )));
 
     lines.truncate(content_area.height as usize);
-    paint_panel_line_backgrounds(&mut lines);
+    paint_panel_line_backgrounds(&mut lines, panel);
     f.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(panel)),
         content_area,
     );
     if let (Some(row), Some(custom)) = (custom_row, question.custom_input.as_ref())
