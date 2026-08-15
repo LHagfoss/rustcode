@@ -512,19 +512,19 @@
 - Keep `SessionId` represented as the existing persisted `String` until a typed identifier is proven compatible with all config/history callers.
 - Session actions return `Result<SessionTransition, SessionError>` and emit a redraw/session event after state changes.
 
-- [ ] **Step 1: Write persistence tests**
+- [x] **Step 1: Write persistence tests**
 
   Cover new session creation, resumable-session filtering, title persistence, queued history flush before switching sessions, resume, fork, and delete confirmation.
 
-- [ ] **Step 2: Move session mutations out of `main.rs`**
+- [x] **Step 2: Move session mutations out of `main.rs`**
 
   Reuse `src/config.rs`’s atomic/debounced history writer and preserve `history.json`, `title.txt`, sandbox, artifacts, and image-cache paths.
 
-- [ ] **Step 3: Implement picker events and rendering**
+- [x] **Step 3: Implement picker events and rendering**
 
   Use the existing modal renderer and make selection produce `AppEvent` rather than mutating picker fields from the main loop.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
   Run: `cargo test config::tests app::session_controller ui::tests && cargo check --tests`
 

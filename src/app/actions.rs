@@ -230,11 +230,8 @@ pub async fn handle_enter(
                 }
             }
             "/clear" => {
-                // Hide the existing transcript without deleting it. The model
-                // still receives the full history on the next message.
-                s.history_display_start = s.history.len();
-                s.current_response.clear();
-                s.current_token_usage = None;
+                let _ = crate::app::session_controller::SessionController::default()
+                    .clear(&mut s);
             }
             "/summarize" => {
                 // summarize_session locks the state itself and runs a full
@@ -350,17 +347,30 @@ pub async fn handle_enter(
             "/new" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
-                start_new_session(&mut s);
+                let _ = crate::app::session_controller::SessionController::default()
+                    .start_fresh(&mut s);
+            }
+            "/fork" => {
+                cancel_token.cancel();
+                *cancel_token = tokio_util::sync::CancellationToken::new();
+                if let Err(error) = crate::app::session_controller::SessionController::default()
+                    .fork(&mut s, crate::app::events::SessionAction::Latest)
+                {
+                    s.history.push(ChatMessage::new("system", error.to_string()));
+                }
+            }
+            "/archive" => {
+                if let Err(error) = crate::app::session_controller::SessionController::default()
+                    .archive(&mut s)
+                {
+                    s.history.push(ChatMessage::new("system", error.to_string()));
+                }
             }
             "/delete_chat" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
-                let session_id = s.active_session_id.clone();
-                if let Some(dir) = crate::config::get_active_session_dir(&session_id) {
-                    std::fs::remove_dir_all(&dir).ok();
-                }
-                s.history.clear();
-                start_new_session(&mut s);
+                let _ = crate::app::session_controller::SessionController::default()
+                    .delete(&mut s, crate::app::events::SessionAction::Latest);
             }
 
             "/delegate" => {
@@ -573,7 +583,19 @@ pub async fn handle_enter(
             }
 
             "/resume" => {
-                resume_latest_session(&mut s);
+                if let Err(error) = crate::app::session_controller::SessionController::default()
+                    .resume(&mut s, crate::app::events::SessionAction::Latest)
+                {
+                    let message = if matches!(
+                        &error,
+                        crate::app::session_controller::SessionError::NoSessionToResume
+                    ) {
+                        "No previous session to resume.".to_owned()
+                    } else {
+                        error.to_string()
+                    };
+                    s.history.push(ChatMessage::new("system", message));
+                }
             }
             "/history" => {
                 let sessions = build_session_list(&s);
@@ -1592,6 +1614,8 @@ pub fn build_help_text() -> String {
                 ("/info", "Show version and system info"),
                 ("/clear", "Clear conversation history"),
                 ("/new", "Start a new conversation"),
+                ("/fork", "Fork the current conversation into a new session"),
+                ("/archive", "Persist the current session"),
                 ("/delete_chat", "Delete current session and start fresh"),
                 ("/history", "Pick a previous session to resume"),
                 ("/change_title", "Rename current session title"),

@@ -69,6 +69,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Start a new conversation",
     },
     CommandInfo {
+        name: "/fork",
+        desc: "Fork the current conversation into a new session",
+    },
+    CommandInfo {
+        name: "/archive",
+        desc: "Persist the current session",
+    },
+    CommandInfo {
         name: "/delete_chat",
         desc: "Delete current session and start fresh",
     },

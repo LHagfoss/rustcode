@@ -193,7 +193,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app_state_struct.auto_confirm = true;
     }
     if cli_args.resume || cli_args.continue_session {
-        crate::app::resume_latest_session(&mut app_state_struct);
+        if let Err(error) = crate::app::session_controller::SessionController::default()
+            .resume(&mut app_state_struct, crate::app::SessionAction::Latest)
+        {
+            let message = if matches!(
+                &error,
+                crate::app::session_controller::SessionError::NoSessionToResume
+            ) {
+                "No previous session to resume.".to_owned()
+            } else {
+                error.to_string()
+            };
+            app_state_struct
+                .history
+                .push(crate::app::ChatMessage::new("system", message));
+        }
     }
     if let Some(ref m_name) = model_override
         && let Some(profile) = app_state_struct

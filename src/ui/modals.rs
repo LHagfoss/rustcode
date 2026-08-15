@@ -1403,6 +1403,16 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
     },
     PaletteItem {
         group: "Session",
+        name: "Fork session",
+        shortcut: "/fork",
+    },
+    PaletteItem {
+        group: "Session",
+        name: "Archive session",
+        shortcut: "/archive",
+    },
+    PaletteItem {
+        group: "Session",
         name: "Resume session",
         shortcut: "/resume",
     },

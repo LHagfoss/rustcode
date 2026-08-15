@@ -79,6 +79,74 @@ async fn apply_question_answer(
     state.request_redraw();
 }
 
+fn apply_session_event(
+    state: &mut AppState,
+    cancel_token: &mut CancellationToken,
+    event: AppEvent,
+) -> Result<(), AppError> {
+    let controller = crate::app::session_controller::SessionController::default();
+    let archive_only = matches!(&event, AppEvent::ArchiveSession);
+    if !archive_only {
+        cancel_token.cancel();
+        *cancel_token = CancellationToken::new();
+    }
+
+    let transition = match event {
+        AppEvent::NewSession => controller.start_fresh(state),
+        AppEvent::ResumeSession(action) => controller.resume(state, action),
+        AppEvent::ForkSession(action) => controller.fork(state, action),
+        AppEvent::ClearSession => controller.clear(state),
+        AppEvent::ArchiveSession => controller.archive(state),
+        AppEvent::DeleteSession(action) => controller.delete(state, action),
+        _ => return Err(AppError("not a session event".to_owned())),
+    }
+    .map_err(|error| AppError(error.to_string()))?;
+
+    if !archive_only {
+        state.show_history_picker = false;
+        state.pending_delete_session_idx = None;
+        state.history_picker_sessions.clear();
+    }
+    state.set_notice(format_session_transition(&transition));
+    state.request_redraw();
+    Ok(())
+}
+
+fn format_session_transition(
+    transition: &crate::app::session_controller::SessionTransition,
+) -> String {
+    match transition {
+        crate::app::session_controller::SessionTransition::Started { .. } => {
+            "Started a new session".to_owned()
+        }
+        crate::app::session_controller::SessionTransition::Resumed { .. } => {
+            "Resumed session".to_owned()
+        }
+        crate::app::session_controller::SessionTransition::Forked { .. } => {
+            "Forked session".to_owned()
+        }
+        crate::app::session_controller::SessionTransition::Cleared { .. } => {
+            "Cleared transcript view".to_owned()
+        }
+        crate::app::session_controller::SessionTransition::Archived { .. } => {
+            "Archived session".to_owned()
+        }
+        crate::app::session_controller::SessionTransition::Deleted { .. } => {
+            "Deleted session".to_owned()
+        }
+    }
+}
+
+fn open_overlay(state: &mut AppState, overlay: crate::app::events::Overlay) {
+    if matches!(overlay, crate::app::events::Overlay::History) {
+        state.history_picker_sessions = crate::app::actions::build_session_list(state);
+        state.history_picker_index = 0;
+        let total = crate::config::list_sessions().len();
+        state.history_picker_truncated = crate::app::actions::is_session_list_truncated(total);
+    }
+    state.overlays().open(overlay);
+}
+
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
     app_state: Arc<Mutex<AppState>>,
@@ -239,15 +307,22 @@ impl AppRuntime {
             }
             AppEvent::OpenOverlay(overlay) => {
                 let mut state = self.app_state.lock().await;
-                state.overlays().open(overlay);
+                open_overlay(&mut state, overlay);
                 state.request_redraw();
                 Ok(AppRunControl::Continue)
             }
-            AppEvent::Tui(_) => Ok(AppRunControl::Continue),
-            AppEvent::NewSession
+            event @ (AppEvent::NewSession
             | AppEvent::ResumeSession(_)
             | AppEvent::ForkSession(_)
-            | AppEvent::SelectSubagent(_) => Ok(AppRunControl::Continue),
+            | AppEvent::ClearSession
+            | AppEvent::ArchiveSession
+            | AppEvent::DeleteSession(_)) => {
+                let mut state = self.app_state.lock().await;
+                apply_session_event(&mut state, &mut self.current_cancel_token, event)?;
+                Ok(AppRunControl::Continue)
+            }
+            AppEvent::Tui(_) => Ok(AppRunControl::Continue),
+            AppEvent::SelectSubagent(_) => Ok(AppRunControl::Continue),
         }
     }
 
@@ -603,8 +678,25 @@ impl AppRuntime {
                 }
                 AppEvent::OpenOverlay(overlay) => {
                     let mut state = app_state.lock().await;
-                    state.overlays().open(overlay);
+                    open_overlay(&mut state, overlay);
                     state.request_redraw();
+                    needs_redraw = true;
+                }
+                event @ (AppEvent::NewSession
+                | AppEvent::ResumeSession(_)
+                | AppEvent::ForkSession(_)
+                | AppEvent::ClearSession
+                | AppEvent::ArchiveSession
+                | AppEvent::DeleteSession(_)) => {
+                    let mut state = app_state.lock().await;
+                    if let Err(error) = apply_session_event(
+                        &mut state,
+                        &mut current_cancel_token,
+                        event,
+                    ) {
+                        state.set_notice(error.to_string());
+                        state.request_redraw();
+                    }
                     needs_redraw = true;
                 }
                 AppEvent::CloseOverlay => {
@@ -1083,22 +1175,14 @@ impl AppRuntime {
                             if let Some(del_idx) = s.pending_delete_session_idx {
                                 match key.code {
                                     KeyCode::Char('y') | KeyCode::Enter => {
-                                        if let Some(meta) =
-                                            s.history_picker_sessions.get(del_idx).cloned()
-                                        {
-                                            crate::config::delete_session_file(&meta.path);
-                                        }
-                                        s.history_picker_sessions.remove(del_idx);
-                                        if !s.history_picker_sessions.is_empty()
-                                            && del_idx
-                                                >= s.history_picker_sessions.len().saturating_sub(1)
-                                        {
-                                            s.history_picker_index =
-                                                (del_idx as i64 - 1).max(0) as usize;
-                                        }
+                                        let action = s
+                                            .history_picker_sessions
+                                            .get(del_idx)
+                                            .and_then(crate::app::session_controller::session_id_from_meta)
+                                            .map(crate::app::events::SessionAction::Id);
                                         s.pending_delete_session_idx = None;
-                                        if s.history_picker_sessions.is_empty() {
-                                            s.show_history_picker = false;
+                                        if let Some(action) = action {
+                                            let _ = app_event_sender.send(AppEvent::DeleteSession(action));
                                         }
                                     }
                                     KeyCode::Esc | KeyCode::Char('n') => {
@@ -1139,20 +1223,14 @@ impl AppRuntime {
                                     let idx = s
                                         .history_picker_index
                                         .min(s.history_picker_sessions.len().saturating_sub(1));
-                                    if let Some(meta) = s.history_picker_sessions.get(idx).cloned()
+                                    if let Some(action) = s
+                                        .history_picker_sessions
+                                        .get(idx)
+                                        .and_then(crate::app::session_controller::session_id_from_meta)
+                                        .map(crate::app::events::SessionAction::Id)
                                     {
-                                        crate::app::load_session_into(&mut s, &meta);
-                                        let title_display =
-                                            meta.title.replace('|', "\\|").replace('\x07', "");
-                                        let _ = execute!(
-                                            terminal_runtime.terminal().backend_mut(),
-                                            crossterm::style::Print(format!(
-                                                "\x1b]0;rustcode · {}\x07",
-                                                title_display
-                                            ))
-                                        );
+                                        let _ = app_event_sender.send(AppEvent::ResumeSession(action));
                                     }
-                                    s.show_history_picker = false;
                                 }
                                 _ => {}
                             }
@@ -2125,6 +2203,7 @@ mod tests {
     use super::{AppRunControl, AppRuntime};
     use crate::app::{
         AppEvent, AppState, AppStatus, ApprovalDecision, PendingQuestion, QuestionAnswer,
+        SessionAction,
     };
 
     #[tokio::test]
@@ -2145,6 +2224,39 @@ mod tests {
         let state = runtime.app_state().await;
         assert_eq!(state.input_buffer, "hello");
         assert!(state.redraw_requested);
+    }
+
+    #[tokio::test]
+    async fn session_events_are_applied_by_the_runtime_controller() {
+        let mut state = AppState::new();
+        let old_session = state.active_session_id.clone();
+        state.history.push(crate::app::ChatMessage::new("user", "old"));
+        let mut runtime = AppRuntime::for_test(state);
+
+        runtime
+            .handle_event(AppEvent::NewSession)
+            .await
+            .expect("new session event should be handled");
+
+        let state = runtime.app_state().await;
+        assert_ne!(state.active_session_id, old_session);
+        assert!(!state.show_history_picker);
+        assert!(state
+            .history
+            .iter()
+            .any(|message| message.content == "Started a new session"));
+    }
+
+    #[tokio::test]
+    async fn delete_session_event_rejects_invalid_ids_without_mutation() {
+        let mut runtime = AppRuntime::for_test(AppState::new());
+
+        assert!(runtime
+            .handle_event(AppEvent::DeleteSession(SessionAction::Id(
+                "../escape".to_owned(),
+            )))
+            .await
+            .is_err());
     }
 
     #[tokio::test]

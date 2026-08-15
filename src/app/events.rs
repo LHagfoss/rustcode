@@ -47,6 +47,9 @@ pub(crate) enum AppEvent {
     CancelActiveTurn,
     ApprovalDecision(ApprovalDecision),
     AnswerQuestion(QuestionAnswer),
+    ClearSession,
+    ArchiveSession,
+    DeleteSession(SessionAction),
     OpenOverlay(Overlay),
     CloseOverlay,
     NewSession,
@@ -63,6 +66,9 @@ pub(crate) enum AppCommand {
     CancelActiveTurn,
     ApprovalDecision(ApprovalDecision),
     AnswerQuestion(QuestionAnswer),
+    ClearSession,
+    ArchiveSession,
+    DeleteSession(SessionAction),
     NewSession,
     ResumeSession(SessionAction),
     ForkSession(SessionAction),
@@ -123,6 +129,10 @@ mod tests {
         assert!(matches!(
             AppEvent::ResumeSession(SessionAction::Latest),
             AppEvent::ResumeSession(SessionAction::Latest)
+        ));
+        assert!(matches!(
+            AppEvent::DeleteSession(SessionAction::Id("session-1".to_owned())),
+            AppEvent::DeleteSession(SessionAction::Id(id)) if id == "session-1"
         ));
     }
 
