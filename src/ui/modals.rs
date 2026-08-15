@@ -15,7 +15,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) fn render_popup_menu(
     f: &mut Frame,
@@ -171,14 +171,53 @@ fn render_padded_panel(f: &mut Frame, area: ratatui::layout::Rect) -> ratatui::l
 }
 
 fn paint_panel_line_backgrounds(lines: &mut [Line<'static>]) {
+    let panel = COLOR_PANEL();
     for line in lines {
-        line.style = line.style.patch(Style::default().bg(COLOR_PANEL()));
+        line.style = line.style.patch(Style::default().bg(panel));
         for span in &mut line.spans {
-            if span.style.bg.is_none() {
-                span.style = span.style.patch(Style::default().bg(COLOR_PANEL()));
-            }
+            span.style = span.style.patch(Style::default().bg(panel));
         }
     }
+}
+
+fn truncate_middle_to_width(text: &str, max_width: usize) -> String {
+    let text = text.replace(['\r', '\n'], " ");
+    if text.width() <= max_width {
+        return text;
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_owned();
+    }
+
+    let content_width = max_width - 1;
+    let tail_width = (content_width / 3).max(1);
+    let head_width = content_width.saturating_sub(tail_width);
+    let mut head = String::new();
+    let mut used = 0;
+    for character in text.chars() {
+        let width = character.width().unwrap_or(0);
+        if used + width > head_width {
+            break;
+        }
+        head.push(character);
+        used += width;
+    }
+
+    let mut tail = Vec::new();
+    used = 0;
+    for character in text.chars().rev() {
+        let width = character.width().unwrap_or(0);
+        if used + width > tail_width {
+            break;
+        }
+        tail.push(character);
+        used += width;
+    }
+    tail.reverse();
+    format!("{head}…{}", tail.into_iter().collect::<String>())
 }
 
 pub(super) fn render_verbosity_picker_modal(
@@ -335,6 +374,62 @@ mod tests {
         );
         assert!((0..100).all(|x| buffer[(x, 2)].bg == panel));
         assert!((0..100).all(|x| buffer[(x, 11)].bg == panel));
+    }
+
+    #[test]
+    fn long_approval_rows_are_clipped_and_keep_the_panel_background() {
+        let mut terminal = Terminal::new(TestBackend::new(72, 16)).unwrap();
+        let mut state = AppState::new();
+        let command = "git log v0.17.0..HEAD --oneline --no-merges; echo ---; git log -3 --oneline; echo ---; git tag --sort=-v:refname | head -5";
+        state.pending_tool_confirmation = Some(vec![ToolConfirmation {
+            tool_name: "run_command".to_owned(),
+            path: command.to_owned(),
+            content_preview: format!(
+                "resolved command: {command}\nscope: unclassified or potentially mutating shell command"
+            ),
+            content_bytes: 0,
+        }]);
+
+        terminal
+            .draw(|frame| {
+                render_tool_confirmation_modal(frame, &state, Rect::new(0, 1, 72, 14))
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let rows = (0..16)
+            .map(|y| {
+                (0..72)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert!(rows.iter().any(|row| row.contains("$ git log") && row.contains('…')));
+        assert!(!rows.iter().any(|row| row.contains(command)));
+
+        let preview_rows = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.contains("resolved command:") || row.contains("scope:"))
+            .map(|(row, _)| row as u16)
+            .collect::<Vec<_>>();
+        assert_eq!(preview_rows.len(), 2, "approval rows: {rows:#?}");
+        for row in preview_rows {
+            let painted_panel = buffer[(71, row)].bg;
+            assert!((0..72).all(|x| buffer[(x, row)].bg == painted_panel));
+        }
+    }
+
+    #[test]
+    fn middle_truncation_keeps_command_start_and_tail() {
+        assert_eq!(truncate_middle_to_width("cargo check --tests", 40), "cargo check --tests");
+        let clipped = truncate_middle_to_width(
+            "git log --oneline; dangerous-command --force",
+            24,
+        );
+        assert!(clipped.starts_with("git log"), "clipped command: {clipped}");
+        assert!(clipped.ends_with("--force"), "clipped command: {clipped}");
+        assert_eq!(clipped.width(), 24);
     }
 
     #[test]
@@ -1420,7 +1515,9 @@ pub(super) fn render_tool_confirmation_modal(
 
     if single {
         if is_command {
-            for (index, command) in highlight_shell_command(&first.path, COLOR_PANEL(), false)
+            let command_width = content_area.width.saturating_sub(4) as usize;
+            let command = truncate_middle_to_width(&first.path, command_width);
+            for (index, command) in highlight_shell_command(&command, COLOR_PANEL(), false)
                 .into_iter()
                 .enumerate()
             {
@@ -1432,16 +1529,25 @@ pub(super) fn render_tool_confirmation_modal(
                 lines.push(Line::from(spans));
             }
         } else {
+            let prefix_width = 2 + first.tool_name.width() + 1;
+            let path = truncate_middle_to_width(
+                &first.path,
+                (content_area.width as usize).saturating_sub(prefix_width),
+            );
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(first.tool_name.clone(), Style::default().fg(COLOR_SECONDARY())),
                 Span::raw(" "),
-                Span::styled(first.path.clone(), Style::default().fg(COLOR_TEXT())),
+                Span::styled(path, Style::default().fg(COLOR_TEXT())),
             ]));
         }
         for source in first.content_preview.lines().take(8) {
-            let mut line = highlight_diff_line(
+            let source = truncate_middle_to_width(
                 source,
+                content_area.width.saturating_sub(4) as usize,
+            );
+            let mut line = highlight_diff_line(
+                &source,
                 content_area.width.saturating_sub(4) as usize,
                 false,
             );
@@ -1460,16 +1566,25 @@ pub(super) fn render_tool_confirmation_modal(
                     "$ ",
                     Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
                 ));
+                let prefix_width = spans.iter().map(|span| span.content.width()).sum::<usize>();
+                let command = truncate_middle_to_width(
+                    &confirmation.path,
+                    (content_area.width as usize).saturating_sub(prefix_width),
+                );
                 if let Some(command) =
-                    highlight_shell_command(&confirmation.path, COLOR_PANEL(), false)
+                    highlight_shell_command(&command, COLOR_PANEL(), false)
                         .into_iter()
                         .next()
                 {
                     spans.extend(command.spans);
                 }
             } else {
+                let prefix_width = spans.iter().map(|span| span.content.width()).sum::<usize>();
                 spans.push(Span::styled(
-                    confirmation.path.clone(),
+                    truncate_middle_to_width(
+                        &confirmation.path,
+                        (content_area.width as usize).saturating_sub(prefix_width),
+                    ),
                     Style::default().fg(COLOR_TEXT()),
                 ));
             }
