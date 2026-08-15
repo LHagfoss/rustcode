@@ -1998,6 +1998,28 @@ fn committed_assistant_message_uses_saved_thought_metrics() {
 }
 
 #[test]
+fn committed_thought_only_message_has_a_separator_before_tools() {
+    let mut state = AppState::new();
+    let mut message = ChatMessage::new(
+        "assistant",
+        "<think>Find the Rust files before reading them.</think>",
+    );
+    message.thought_time_ms = Some(718);
+    message.thought_tokens = Some(31);
+    state.history.push(message);
+    state
+        .history
+        .push(ChatMessage::new("tool", "glob: src/main.rs"));
+
+    let thought = super::render_committed_history_block(&state, 0, 80);
+    let tool = super::render_committed_history_block(&state, 1, 80);
+
+    assert!(thought[0].to_string().contains("Thought for 718ms, 31 tokens"));
+    assert!(thought.last().is_some_and(|line| line.spans.is_empty()));
+    assert!(tool.first().is_some_and(|line| !line.spans.is_empty()));
+}
+
+#[test]
 fn live_tail_uses_formatted_working_status() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
