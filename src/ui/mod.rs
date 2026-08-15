@@ -810,6 +810,15 @@ fn render_assistant_message<'a>(
             lines.push(Line::from(""));
         }
     }
+
+    // A finalized thought-only response can hand off directly to a tool cell.
+    // Keep the same single separator that finalized prose receives so the
+    // thought preview does not run into the following Explored/Ran heading.
+    if !is_generating
+        && lines.last().is_some_and(|line| !line.spans.is_empty())
+    {
+        lines.push(Line::from(""));
+    }
 }
 
 fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
