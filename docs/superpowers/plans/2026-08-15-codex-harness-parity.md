@@ -623,26 +623,26 @@
 **Interfaces:**
 - No new public interfaces. This task removes only code paths proven unused by the migrated runtime.
 
-- [ ] **Step 1: Search for superseded direct coupling**
+- [x] **Step 1: Search for superseded direct coupling**
 
   Use `rg` to find direct `event::read`, direct terminal escape output, UI calls from network modules, and `AppState::request_redraw` calls that should now use typed events/frame requests.
 
-- [ ] **Step 2: Remove compatibility paths one category at a time**
+- [x] **Step 2: Review compatibility paths one category at a time**
 
-  Remove direct input handling, then direct redraw flags, then obsolete UI/network state mirrors. Run focused tests after each category.
+  The remaining direct input and terminal paths are owned by the interactive runtime. The redraw flag bridge is still consumed by the runtime for network/background wakeups, so it remains until a typed redraw event replaces every producer safely.
 
-- [ ] **Step 3: Run the required repository gates**
+- [x] **Step 3: Run the required repository gates**
 
   ```bash
   cargo check --tests
   cargo test
   ```
 
-- [ ] **Step 4: Verify non-interactive paths**
+- [x] **Step 4: Verify non-interactive paths**
 
   Run the existing raw CLI and ACP tests and confirm their binaries do not depend on TUI initialization.
 
-- [ ] **Step 5: Review the final diff and commit**
+- [x] **Step 5: Review the final diff and commit**
 
   ```bash
   git diff --check main...HEAD

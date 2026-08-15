@@ -1,7 +1,7 @@
 # Codex-Like Agent Harness and TUI Design
 
-**Date:** 2026-08-15  
-**Status:** Proposed  
+**Date:** 2026-08-15
+**Status:** Proposed
 **Repository:** rustcode
 
 ## Goal
