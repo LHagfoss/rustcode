@@ -4,7 +4,7 @@ use serde_millis;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{atomic::AtomicU64, atomic::Ordering, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
@@ -472,26 +472,55 @@ pub fn get_config_dir() -> Option<PathBuf> {
         let _ = fs::create_dir_all(&dir);
         return Some(dir);
     }
-    if cfg!(test) {
-        let dir = std::env::temp_dir().join("rustcode_test_config");
+    #[cfg(test)]
+    {
+        let dir = test_config_dir();
         let _ = fs::create_dir_all(&dir);
         return Some(dir);
     }
-    let home = std::env::var("HOME").ok()?;
-    let config_root = PathBuf::from(home).join(".config");
-    let dir = config_root.join("rustcode");
+    #[cfg(not(test))]
+    {
+        let home = std::env::var("HOME").ok()?;
+        let config_root = PathBuf::from(home).join(".config");
+        let dir = config_root.join("rustcode");
 
-    if !dir.exists() {
-        let legacy = config_root.join("fmr");
-        if legacy.exists() && fs::rename(&legacy, &dir).is_ok() {
-            let old_history = dir.join("fmr_history.json");
-            if old_history.exists() {
-                let _ = fs::rename(&old_history, dir.join(HISTORY_FILE));
+        if !dir.exists() {
+            let legacy = config_root.join("fmr");
+            if legacy.exists() && fs::rename(&legacy, &dir).is_ok() {
+                let old_history = dir.join("fmr_history.json");
+                if old_history.exists() {
+                    let _ = fs::rename(&old_history, dir.join(HISTORY_FILE));
+                }
             }
         }
-    }
 
-    Some(dir)
+        return Some(dir);
+    }
+}
+
+#[cfg(test)]
+fn test_config_dir() -> PathBuf {
+    let thread = std::thread::current();
+    let identity = thread
+        .name()
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{:?}", thread.id()));
+    let suffix: String = identity
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(80)
+        .collect();
+    std::env::temp_dir().join(format!(
+        "rustcode_test_config_{}_{}",
+        std::process::id(),
+        suffix
+    ))
 }
 
 fn default_endpoint(config: &AppConfig) -> (String, String) {
@@ -681,6 +710,32 @@ fn history_writer() -> &'static HistoryWriter {
 /// map, so recovering the inner value keeps history saving alive.
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn next_session_id_value(now: u64, previous: u64) -> u64 {
+    now.max(previous.saturating_add(1))
+}
+
+fn next_session_id() -> String {
+    static LAST_SESSION_ID: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::from_secs(0))
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    let mut previous = LAST_SESSION_ID.load(Ordering::Relaxed);
+    loop {
+        let candidate = next_session_id_value(now, previous);
+        match LAST_SESSION_ID.compare_exchange_weak(
+            previous,
+            candidate,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return candidate.to_string(),
+            Err(actual) => previous = actual,
+        }
+    }
 }
 
 fn queue_history_write(path: PathBuf, history: &[ChatMessage]) {
@@ -997,11 +1052,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
     let legacy_history_path = dir.join(HISTORY_FILE);
     let legacy_history = load_session_file(&legacy_history_path);
     if session_has_content(&legacy_history) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(std::time::Duration::from_secs(0))
-            .as_millis();
-        let session_id = ts.to_string();
+        let session_id = next_session_id();
         let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
         let _ = fs::create_dir_all(&session_dir);
         let _ = fs::create_dir_all(session_dir.join("sandbox"));
@@ -1016,11 +1067,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
         return session_id;
     }
 
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or(std::time::Duration::from_secs(0))
-        .as_millis();
-    let session_id = ts.to_string();
+    let session_id = next_session_id();
     let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
     let _ = fs::create_dir_all(&session_dir);
     let _ = fs::create_dir_all(session_dir.join("sandbox"));
@@ -1037,11 +1084,7 @@ pub fn create_new_session(config: &mut AppConfig) -> String {
         Some(d) => d,
         None => return "".to_string(),
     };
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or(std::time::Duration::from_secs(0))
-        .as_millis();
-    let session_id = ts.to_string();
+    let session_id = next_session_id();
     let session_dir = dir.join(SESSIONS_DIR).join(&session_id);
     let _ = fs::create_dir_all(&session_dir);
     let _ = fs::create_dir_all(session_dir.join("sandbox"));
@@ -1078,11 +1121,7 @@ pub fn archive_session(history: &[ChatMessage]) -> Option<PathBuf> {
         return None;
     }
     let dir = get_config_dir()?.join(SESSIONS_DIR);
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_millis();
-    let session_dir = dir.join(format!("{ts}"));
+    let session_dir = dir.join(next_session_id());
     fs::create_dir_all(&session_dir).ok()?;
     fs::create_dir_all(session_dir.join("sandbox")).ok()?;
     fs::create_dir_all(session_dir.join("artifacts")).ok()?;
@@ -1415,6 +1454,25 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn session_id_allocator_advances_when_clock_repeats() {
+        assert_eq!(next_session_id_value(1_000, 0), 1_000);
+        assert_eq!(next_session_id_value(1_000, 1_000), 1_001);
+        assert_eq!(next_session_id_value(999, 1_001), 1_002);
+    }
+
+    #[test]
+    fn test_config_directory_is_unique_to_the_test_thread() {
+        let dir = get_config_dir().expect("test config directory");
+        assert!(
+            dir.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rustcode_test_config_")),
+            "unexpected test config directory: {}",
+            dir.display()
+        );
     }
 
     #[test]

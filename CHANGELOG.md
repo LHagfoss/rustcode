@@ -1,3 +1,12 @@
+## [v0.19.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.19.0) - 2026-08-15
+
+### Features
+- **Agent/UI:** Add the Codex-style interactive harness with typed event routing, coalesced redraws, separated transcript/composer/status surfaces, session controls, and navigable subagent contexts ([#637](https://github.com/LHagfoss/rustcode/pull/637) / [`f7a9c69`](https://github.com/LHagfoss/rustcode/commit/f7a9c69))
+
+### Fixes
+- **UI:** Make approval modal panel backgrounds follow the active state palette instead of shared global theme state ([`e585410`](https://github.com/LHagfoss/rustcode/commit/e585410))
+- **Config/Tests:** Allocate monotonic session IDs, isolate test configuration by test thread, and make verbosity fixtures explicit for reliable parallel tests ([`d491236`](https://github.com/LHagfoss/rustcode/commit/d491236))
+
 ## [v0.18.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.2) - 2026-08-15
 
 ### Features
