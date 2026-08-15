@@ -528,14 +528,13 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 3);
-    assert!(separator[0].to_string().is_empty());
-    assert!(separator[1].to_string().starts_with("─ Worked for 2m 05s ─"));
-    assert!(separator[2].to_string().is_empty());
+    assert_eq!(separator.len(), 2);
+    assert!(separator[0].to_string().starts_with("─ Worked for 2m 05s ─"));
+    assert!(separator[1].to_string().is_empty());
 
     state.history[2].response_time_ms = Some(12_000);
     assert_eq!(
-        super::render_work_separator_before_assistant(&state, 2, 12)[1].to_string(),
+        super::render_work_separator_before_assistant(&state, 2, 12)[0].to_string(),
         "────────────"
     );
     assert!(super::render_work_separator_before_assistant(&state, 0, 80).is_empty());
