@@ -1,4 +1,5 @@
 use crate::app::{AppEvent, AppEventSender, AppState, AppStatus, ChatMessage, Verbosity};
+use crate::network::{AgentUiEventReceiver, AgentUiEventSender};
 use crate::ui;
 use crate::ui::{
     FrameRequester, FrameStream, TerminalRuntime, TranscriptState, TuiEvent, TuiEventStream,
@@ -36,6 +37,8 @@ pub(crate) struct AppRuntime {
     frame_stream: FrameStream,
     app_event_sender: AppEventSender,
     app_event_receiver: mpsc::UnboundedReceiver<AppEvent>,
+    agent_ui_event_sender: AgentUiEventSender,
+    agent_ui_event_receiver: AgentUiEventReceiver,
     replay_history: bool,
 }
 
@@ -64,6 +67,7 @@ impl AppRuntime {
     ) -> Result<Self, Box<dyn Error>> {
         let terminal_size = terminal_runtime.terminal().size()?;
         let (app_event_sender, app_event_receiver) = AppEventSender::channel();
+        let (agent_ui_event_sender, agent_ui_event_receiver) = AgentUiEventSender::channel();
         let (frame_requester, frame_stream) = FrameRequester::new(STREAM_FRAME_INTERVAL);
 
         Ok(Self {
@@ -83,6 +87,8 @@ impl AppRuntime {
             frame_stream,
             app_event_sender,
             app_event_receiver,
+            agent_ui_event_sender,
+            agent_ui_event_receiver,
             replay_history: false,
         })
     }
@@ -90,6 +96,7 @@ impl AppRuntime {
     #[cfg(test)]
     pub(crate) fn for_test(app_state: AppState) -> Self {
         let (app_event_sender, app_event_receiver) = AppEventSender::channel();
+        let (agent_ui_event_sender, agent_ui_event_receiver) = AgentUiEventSender::channel();
         let (frame_requester, frame_stream) = FrameRequester::new(STREAM_FRAME_INTERVAL);
         Self {
             terminal_runtime: None,
@@ -108,6 +115,8 @@ impl AppRuntime {
             frame_stream,
             app_event_sender,
             app_event_receiver,
+            agent_ui_event_sender,
+            agent_ui_event_receiver,
             replay_history: false,
         }
     }
@@ -179,6 +188,8 @@ impl AppRuntime {
             frame_stream,
             app_event_sender,
             app_event_receiver,
+            agent_ui_event_sender,
+            agent_ui_event_receiver,
             replay_history,
         } = self;
         let mut terminal_runtime = terminal_runtime
@@ -194,6 +205,7 @@ impl AppRuntime {
         let mut tui_events = tui_events;
         let mut frame_stream = frame_stream;
         let mut app_event_receiver = app_event_receiver;
+        let mut agent_ui_event_receiver = agent_ui_event_receiver;
         let mut replay_history = replay_history;
         let composer = ui::Composer::new();
         loop {
@@ -225,6 +237,11 @@ impl AppRuntime {
                 (s.status_state().is_active(), s.take_redraw_request())
             };
             needs_redraw |= background_redraw;
+            while let Ok(agent_event) = agent_ui_event_receiver.try_recv() {
+                transcript_state.apply_agent_event(&agent_event);
+                frame_requester.schedule_frame();
+                needs_redraw = true;
+            }
             if response_active {
                 frame_requester.schedule_frame();
             }
@@ -237,13 +254,15 @@ impl AppRuntime {
                     let client_clone = client.clone();
                     let state_clone = Arc::clone(&app_state);
                     let token_clone = current_cancel_token.clone();
+                    let ui_event_sender = agent_ui_event_sender.clone();
                     drop(s);
                     tokio::spawn(async move {
-                        crate::network::process_queue_orchestrator(
+                        crate::network::process_queue_orchestrator_with_ui_events(
                             client_clone,
                             state_clone,
                             token_clone,
                             std::sync::Arc::new(crate::network::policy::InteractivePolicy),
+                            ui_event_sender,
                         )
                         .await;
                     });

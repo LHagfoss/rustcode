@@ -72,6 +72,13 @@ impl TranscriptState {
         self.model.replace_live_text(live_text);
     }
 
+    pub(crate) fn apply_agent_event(
+        &mut self,
+        event: &crate::network::ui_adapter::AgentUiEvent,
+    ) {
+        self.model.apply_agent_event(event);
+    }
+
     pub(crate) fn model(&self) -> &super::TranscriptModel {
         &self.model
     }

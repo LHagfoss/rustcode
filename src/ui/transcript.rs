@@ -117,6 +117,29 @@ impl TranscriptModel {
         }
     }
 
+    pub(crate) fn apply_agent_event(&mut self, event: &crate::network::ui_adapter::AgentUiEvent) {
+        match event {
+            crate::network::ui_adapter::AgentUiEvent::PromptStarted { .. } => {
+                self.live = None;
+            }
+            crate::network::ui_adapter::AgentUiEvent::TextDelta { text } => {
+                self.apply_text_delta(text);
+            }
+            crate::network::ui_adapter::AgentUiEvent::TurnFinished { content, .. } => {
+                if !content.is_empty() {
+                    self.replace_live_text(content);
+                }
+                self.commit_live();
+            }
+            crate::network::ui_adapter::AgentUiEvent::Cancelled { .. }
+            | crate::network::ui_adapter::AgentUiEvent::Error { .. }
+            | crate::network::ui_adapter::AgentUiEvent::TurnRecovered { .. }
+            | crate::network::ui_adapter::AgentUiEvent::ToolStarted { .. }
+            | crate::network::ui_adapter::AgentUiEvent::ApprovalRequested { .. }
+            | crate::network::ui_adapter::AgentUiEvent::ToolFinished { .. } => {}
+        }
+    }
+
     pub(crate) fn apply_text_delta(&mut self, text: &str) {
         match self.live.as_mut() {
             Some(HistoryCell::Assistant { content, .. }) => content.push_str(text),
@@ -218,5 +241,23 @@ mod tests {
 
         assert_eq!(model.committed().len(), 1);
         assert_eq!(model.live_text(), Some("live"));
+    }
+
+    #[test]
+    fn agent_ui_events_update_one_live_cell_and_commit_it() {
+        let mut model = TranscriptModel::default();
+        model.apply_agent_event(&crate::network::ui_adapter::AgentUiEvent::TextDelta {
+            text: "answer".to_owned(),
+        });
+        model.apply_agent_event(&crate::network::ui_adapter::AgentUiEvent::TurnFinished {
+            content: "answer".to_owned(),
+            completed: true,
+        });
+
+        assert_eq!(model.live_text(), None);
+        assert!(matches!(
+            &model.committed()[0],
+            HistoryCell::Assistant { content, .. } if content == "answer"
+        ));
     }
 }
