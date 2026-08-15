@@ -52,11 +52,12 @@ pub(crate) fn is_unavailable_tool_error(reason: &str) -> bool {
 pub(crate) fn final_transcript_content(
     task_completed: bool,
     content: &str,
+    content_already_persisted: bool,
     reason: &StopReason,
 ) -> Option<String> {
     if task_completed {
         None
-    } else if content.trim().is_empty() {
+    } else if content_already_persisted || content.trim().is_empty() {
         Some(format!("[harness: turn stopped — {reason}]"))
     } else {
         Some(content.to_string())
@@ -85,7 +86,7 @@ mod transcript_tests {
     #[test]
     fn completed_turn_does_not_request_a_duplicate_assistant_message() {
         assert_eq!(
-            final_transcript_content(true, "already recorded", &StopReason::Completed),
+            final_transcript_content(true, "already recorded", true, &StopReason::Completed),
             None
         );
     }
@@ -93,7 +94,20 @@ mod transcript_tests {
     #[test]
     fn empty_terminal_turn_gets_a_durable_stop_marker() {
         assert_eq!(
-            final_transcript_content(false, "", &StopReason::Cancelled),
+            final_transcript_content(false, "", false, &StopReason::Cancelled),
+            Some("[harness: turn stopped — cancelled]".to_string())
+        );
+    }
+
+    #[test]
+    fn persisted_tool_round_content_is_not_appended_again_on_cancel() {
+        assert_eq!(
+            final_transcript_content(
+                false,
+                "assistant response already followed by a tool result",
+                true,
+                &StopReason::Cancelled,
+            ),
             Some("[harness: turn stopped — cancelled]".to_string())
         );
     }
