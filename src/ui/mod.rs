@@ -30,6 +30,10 @@ use markdown::{
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
+pub(crate) use modals::{
+    approval_event_for_key, question_answer_event, question_cancel_event,
+    question_custom_answer_event,
+};
 use modals::{
     question_height, render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu,

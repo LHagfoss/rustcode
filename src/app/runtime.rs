@@ -1,5 +1,8 @@
-use crate::app::{AppEvent, AppEventSender, AppState, AppStatus, ChatMessage, Verbosity};
-use crate::network::{AgentUiEventReceiver, AgentUiEventSender};
+use crate::app::{
+    AppEvent, AppEventSender, AppState, AppStatus, ApprovalDecision, ChatMessage, QuestionAnswer,
+    Verbosity,
+};
+use crate::network::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
 use crate::ui;
 use crate::ui::{
     FrameRequester, FrameStream, TerminalRuntime, TranscriptState, TuiEvent, TuiEventStream,
@@ -19,6 +22,62 @@ use tokio_util::sync::CancellationToken;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+async fn apply_approval_decision(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    decision: ApprovalDecision,
+) {
+    let approved = match decision {
+        ApprovalDecision::Approve => true,
+        ApprovalDecision::ApproveAll => {
+            state.lock().await.auto_confirm = true;
+            true
+        }
+        ApprovalDecision::Deny => false,
+        // Custom approval payloads are reserved for a future policy that can
+        // persist a reason. Until then, a non-empty custom response is an
+        // affirmative decision and an empty one is a denial.
+        ApprovalDecision::Custom(reason) => !reason.trim().is_empty(),
+    };
+
+    if !approved {
+        cancel_token.cancel();
+        *cancel_token = CancellationToken::new();
+    }
+
+    let mut state = state.lock().await;
+    if let Some(tx) = state.tool_confirmation_response.take() {
+        let _ = tx.send(approved);
+    }
+    state.pending_tool_confirmation = None;
+    state.request_redraw();
+}
+
+async fn apply_question_answer(
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &mut CancellationToken,
+    answer: QuestionAnswer,
+) {
+    let (answer, cancelled) = match answer {
+        QuestionAnswer::Selected(answer) | QuestionAnswer::Custom(answer) => (answer, false),
+        QuestionAnswer::Cancelled => {
+            cancel_token.cancel();
+            *cancel_token = CancellationToken::new();
+            ("User cancelled prompt.".to_owned(), true)
+        }
+    };
+
+    let mut state = state.lock().await;
+    if let Some(tx) = state.question_response.take() {
+        let _ = tx.send(answer);
+    }
+    state.pending_question = None;
+    if cancelled {
+        state.status = AppStatus::Idle;
+    }
+    state.request_redraw();
+}
 
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
@@ -160,10 +219,32 @@ impl AppRuntime {
                 state.request_redraw();
                 Ok(AppRunControl::Continue)
             }
+            AppEvent::ApprovalDecision(decision) => {
+                apply_approval_decision(
+                    &self.app_state,
+                    &mut self.current_cancel_token,
+                    decision,
+                )
+                .await;
+                Ok(AppRunControl::Continue)
+            }
+            AppEvent::AnswerQuestion(answer) => {
+                apply_question_answer(
+                    &self.app_state,
+                    &mut self.current_cancel_token,
+                    answer,
+                )
+                .await;
+                Ok(AppRunControl::Continue)
+            }
+            AppEvent::OpenOverlay(overlay) => {
+                let mut state = self.app_state.lock().await;
+                state.overlays().open(overlay);
+                state.request_redraw();
+                Ok(AppRunControl::Continue)
+            }
             AppEvent::Tui(_) => Ok(AppRunControl::Continue),
-            AppEvent::ApprovalDecision(_)
-            | AppEvent::OpenOverlay(_)
-            | AppEvent::NewSession
+            AppEvent::NewSession
             | AppEvent::ResumeSession(_)
             | AppEvent::ForkSession(_)
             | AppEvent::SelectSubagent(_) => Ok(AppRunControl::Continue),
@@ -238,6 +319,11 @@ impl AppRuntime {
             };
             needs_redraw |= background_redraw;
             while let Ok(agent_event) = agent_ui_event_receiver.try_recv() {
+                if matches!(&agent_event, AgentUiEvent::ApprovalRequested { .. }) {
+                    let _ = app_event_sender.send(AppEvent::OpenOverlay(
+                        crate::app::events::Overlay::ToolConfirmation,
+                    ));
+                }
                 transcript_state.apply_agent_event(&agent_event);
                 frame_requester.schedule_frame();
                 needs_redraw = true;
@@ -507,6 +593,40 @@ impl AppRuntime {
                 continue;
             };
             match app_event {
+                AppEvent::ApprovalDecision(decision) => {
+                    apply_approval_decision(&app_state, &mut current_cancel_token, decision).await;
+                    needs_redraw = true;
+                }
+                AppEvent::AnswerQuestion(answer) => {
+                    apply_question_answer(&app_state, &mut current_cancel_token, answer).await;
+                    needs_redraw = true;
+                }
+                AppEvent::OpenOverlay(overlay) => {
+                    let mut state = app_state.lock().await;
+                    state.overlays().open(overlay);
+                    state.request_redraw();
+                    needs_redraw = true;
+                }
+                AppEvent::CloseOverlay => {
+                    let mut state = app_state.lock().await;
+                    state.overlays().close_all();
+                    state.request_redraw();
+                    needs_redraw = true;
+                }
+                AppEvent::RequestDraw => {
+                    app_state.lock().await.request_redraw();
+                    needs_redraw = true;
+                }
+                AppEvent::CancelActiveTurn => {
+                    current_cancel_token.cancel();
+                    current_cancel_token = CancellationToken::new();
+                    let mut state = app_state.lock().await;
+                    state.pending_queue.clear();
+                    state.clear_live_tool_calls();
+                    state.status = AppStatus::Idle;
+                    state.request_redraw();
+                    needs_redraw = true;
+                }
                 AppEvent::Tui(ev) => match ev {
                     TuiEvent::Key(key) => {
                         needs_redraw = true;
@@ -536,57 +656,30 @@ impl AppRuntime {
                         }
 
                         {
-                            let s = app_state.lock().await;
-                            if s.status == AppStatus::AwaitingToolConfirmation {
-                                drop(s);
-                                match key.code {
-                                    KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                        let mut s = app_state.lock().await;
-                                        s.pending_tool_confirmation = None;
-                                        if let Some(tx) = s.tool_confirmation_response.take() {
-                                            let _ = tx.send(true);
+                            let selected = {
+                                let s = app_state.lock().await;
+                                (s.status == AppStatus::AwaitingToolConfirmation)
+                                    .then_some(s.tool_confirmation_selected)
+                            };
+                            if let Some(selected) = selected {
+                                if let Some(event) = ui::approval_event_for_key(key, selected) {
+                                    let _ = app_event_sender.send(event);
+                                } else {
+                                    match key.code {
+                                        KeyCode::Tab => {
+                                            let mut s = app_state.lock().await;
+                                            s.overlays().toggle_auto_confirm();
                                         }
-                                    }
-                                    KeyCode::Enter => {
-                                        let approved = {
-                                            let s = app_state.lock().await;
-                                            s.tool_confirmation_selected == 0
-                                        };
-                                        if !approved {
-                                            current_cancel_token.cancel();
-                                            current_cancel_token =
-                                                tokio_util::sync::CancellationToken::new();
+                                        KeyCode::Up => {
+                                            let mut s = app_state.lock().await;
+                                            s.overlays().move_approval_selection(-1);
                                         }
-                                        let mut s = app_state.lock().await;
-                                        if let Some(tx) = s.tool_confirmation_response.take() {
-                                            let _ = tx.send(approved);
+                                        KeyCode::Down => {
+                                            let mut s = app_state.lock().await;
+                                            s.overlays().move_approval_selection(1);
                                         }
-                                        s.pending_tool_confirmation = None;
+                                        _ => {}
                                     }
-                                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                                        // Cancel the running agent stream when denying
-                                        current_cancel_token.cancel();
-                                        let new_token = tokio_util::sync::CancellationToken::new();
-                                        current_cancel_token = new_token;
-                                        let mut s = app_state.lock().await;
-                                        if let Some(tx) = s.tool_confirmation_response.take() {
-                                            let _ = tx.send(false);
-                                        }
-                                        s.pending_tool_confirmation = None;
-                                    }
-                                    KeyCode::Tab => {
-                                        let mut s = app_state.lock().await;
-                                        s.auto_confirm = !s.auto_confirm;
-                                    }
-                                    KeyCode::Up => {
-                                        let mut s = app_state.lock().await;
-                                        s.move_tool_confirmation_selection(-1);
-                                    }
-                                    KeyCode::Down => {
-                                        let mut s = app_state.lock().await;
-                                        s.move_tool_confirmation_selection(1);
-                                    }
-                                    _ => {}
                                 }
                                 continue;
                             }
@@ -730,21 +823,15 @@ impl AppRuntime {
                                             }
                                         }
                                         KeyCode::Enter => {
-                                            let mut s = app_state.lock().await;
-                                            let mut answer = s
-                                                .pending_question
-                                                .as_ref()
-                                                .and_then(|q| q.custom_input.clone())
-                                                .unwrap_or_default()
-                                                .trim()
-                                                .to_string();
-                                            if answer.is_empty() {
-                                                answer = "No response provided".to_string();
+                                            let answer_event = {
+                                                let s = app_state.lock().await;
+                                                s.pending_question
+                                                    .as_ref()
+                                                    .map(ui::question_custom_answer_event)
+                                            };
+                                            if let Some(answer_event) = answer_event {
+                                                let _ = app_event_sender.send(answer_event);
                                             }
-                                            if let Some(tx) = s.question_response.take() {
-                                                let _ = tx.send(answer);
-                                            }
-                                            s.pending_question = None;
                                         }
                                         KeyCode::Esc => {
                                             let mut s = app_state.lock().await;
@@ -800,11 +887,10 @@ impl AppRuntime {
                                                     *c = !*c;
                                                 }
                                             } else {
-                                                let answer = q.options[idx].clone();
-                                                if let Some(tx) = s.question_response.take() {
-                                                    let _ = tx.send(answer);
+                                                let answer_event = ui::question_answer_event(q);
+                                                if let Some(answer_event) = answer_event {
+                                                    let _ = app_event_sender.send(answer_event);
                                                 }
-                                                s.pending_question = None;
                                             }
                                         }
                                     }
@@ -828,45 +914,14 @@ impl AppRuntime {
                                             if let Some(q) = s.pending_question.as_mut() {
                                                 q.activate_custom_input();
                                             }
-                                        } else if let Some(q) = s.pending_question.as_ref() {
-                                            let answer = if q.is_multi_select {
-                                                let picked: Vec<String> = q
-                                                    .options
-                                                    .iter()
-                                                    .zip(q.chosen.iter())
-                                                    .filter(|(_, c)| **c)
-                                                    .map(|(o, _)| o.clone())
-                                                    .collect();
-                                                if picked.is_empty() {
-                                                    q.options
-                                                        .get(q.selected)
-                                                        .cloned()
-                                                        .unwrap_or_default()
-                                                } else {
-                                                    picked.join(", ")
-                                                }
-                                            } else {
-                                                q.options
-                                                    .get(q.selected)
-                                                    .cloned()
-                                                    .unwrap_or_default()
-                                            };
-                                            if let Some(tx) = s.question_response.take() {
-                                                let _ = tx.send(answer);
-                                            }
-                                            s.pending_question = None;
+                                        } else if let Some(q) = s.pending_question.as_ref()
+                                            && let Some(answer_event) = ui::question_answer_event(q)
+                                        {
+                                            let _ = app_event_sender.send(answer_event);
                                         }
                                     }
                                     KeyCode::Esc => {
-                                        current_cancel_token.cancel();
-                                        current_cancel_token =
-                                            tokio_util::sync::CancellationToken::new();
-                                        let mut s = app_state.lock().await;
-                                        if let Some(tx) = s.question_response.take() {
-                                            let _ = tx.send("User cancelled prompt.".to_string());
-                                        }
-                                        s.pending_question = None;
-                                        s.status = AppStatus::Idle;
+                                        let _ = app_event_sender.send(ui::question_cancel_event());
                                     }
                                     _ => {}
                                 }
@@ -2068,7 +2123,9 @@ impl AppRuntime {
 #[cfg(test)]
 mod tests {
     use super::{AppRunControl, AppRuntime};
-    use crate::app::{AppEvent, AppState};
+    use crate::app::{
+        AppEvent, AppState, AppStatus, ApprovalDecision, PendingQuestion, QuestionAnswer,
+    };
 
     #[tokio::test]
     async fn request_draw_and_submit_are_handled_by_the_runtime() {
@@ -2098,5 +2155,94 @@ mod tests {
             runtime.handle_event(AppEvent::Exit).await,
             Ok(AppRunControl::Exit(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn approval_events_resolve_the_existing_policy_channel() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut state = AppState::new();
+        state.status = AppStatus::AwaitingToolConfirmation;
+        state.pending_tool_confirmation = Some(Vec::new());
+        state.tool_confirmation_response = Some(tx);
+        let mut runtime = AppRuntime::for_test(state);
+
+        runtime
+            .handle_event(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAll))
+            .await
+            .expect("approval event should be handled");
+
+        assert!(rx.await.expect("approval response"));
+        let state = runtime.app_state().await;
+        assert!(state.auto_confirm);
+        assert!(state.pending_tool_confirmation.is_none());
+    }
+
+    #[tokio::test]
+    async fn denying_approval_cancels_the_turn_before_resolving_it() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut state = AppState::new();
+        state.status = AppStatus::AwaitingToolConfirmation;
+        state.pending_tool_confirmation = Some(Vec::new());
+        state.tool_confirmation_response = Some(tx);
+        let mut runtime = AppRuntime::for_test(state);
+        let previous_token = runtime.current_cancel_token.clone();
+
+        runtime
+            .handle_event(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
+            .await
+            .expect("approval event should be handled");
+
+        assert!(!rx.await.expect("approval response"));
+        assert!(previous_token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn question_events_return_typed_answers_through_the_existing_channel() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut state = AppState::new();
+        state.status = AppStatus::AwaitingQuestion;
+        state.pending_question = Some(PendingQuestion::new(
+            "Where?".to_owned(),
+            vec!["Here".to_owned()],
+            false,
+        ));
+        state.question_response = Some(tx);
+        let mut runtime = AppRuntime::for_test(state);
+
+        runtime
+            .handle_event(AppEvent::AnswerQuestion(QuestionAnswer::Custom(
+                "somewhere else".to_owned(),
+            )))
+            .await
+            .expect("question event should be handled");
+
+        assert_eq!(rx.await.expect("question response"), "somewhere else");
+        let state = runtime.app_state().await;
+        assert!(state.pending_question.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_question_returns_the_legacy_cancel_text() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut state = AppState::new();
+        state.status = AppStatus::AwaitingQuestion;
+        state.pending_question = Some(PendingQuestion::new(
+            "Where?".to_owned(),
+            vec!["Here".to_owned()],
+            false,
+        ));
+        state.question_response = Some(tx);
+        let mut runtime = AppRuntime::for_test(state);
+        let previous_token = runtime.current_cancel_token.clone();
+
+        runtime
+            .handle_event(AppEvent::AnswerQuestion(QuestionAnswer::Cancelled))
+            .await
+            .expect("question event should be handled");
+
+        assert_eq!(rx.await.expect("question response"), "User cancelled prompt.");
+        let state = runtime.app_state().await;
+        assert_eq!(state.status, AppStatus::Idle);
+        assert!(previous_token.is_cancelled());
     }
 }

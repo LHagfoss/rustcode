@@ -7,8 +7,9 @@
 
 use super::highlight::{highlight_diff_line, highlight_shell_command};
 use super::*;
-use crate::app::AppState;
+use crate::app::{AppEvent, AppState, ApprovalDecision, PendingQuestion, QuestionAnswer};
 use crate::inline_terminal::Frame;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
@@ -16,6 +17,69 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub(crate) fn approval_event_for_key(
+    key: KeyEvent,
+    selected: usize,
+) -> Option<AppEvent> {
+    let decision = match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => ApprovalDecision::Approve,
+        KeyCode::Char('a') | KeyCode::Char('A') => ApprovalDecision::ApproveAll,
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => ApprovalDecision::Deny,
+        KeyCode::Enter => {
+            if selected == 0 {
+                ApprovalDecision::Approve
+            } else {
+                ApprovalDecision::Deny
+            }
+        }
+        _ => return None,
+    };
+    Some(AppEvent::ApprovalDecision(decision))
+}
+
+pub(crate) fn question_custom_answer_event(question: &PendingQuestion) -> AppEvent {
+    let answer = question
+        .custom_input
+        .as_deref()
+        .unwrap_or_default()
+        .trim();
+    let answer = if answer.is_empty() {
+        "No response provided"
+    } else {
+        answer
+    };
+    AppEvent::AnswerQuestion(QuestionAnswer::Custom(answer.to_owned()))
+}
+
+pub(crate) fn question_answer_event(question: &PendingQuestion) -> Option<AppEvent> {
+    if question.selected >= question.options.len() {
+        return None;
+    }
+
+    let answer = if question.is_multi_select {
+        let picked = question
+            .options
+            .iter()
+            .zip(question.chosen.iter())
+            .filter(|(_, chosen)| **chosen)
+            .map(|(option, _)| option.clone())
+            .collect::<Vec<_>>();
+        if picked.is_empty() {
+            question.options.get(question.selected)?.clone()
+        } else {
+            picked.join(", ")
+        }
+    } else {
+        question.options.get(question.selected)?.clone()
+    };
+
+    Some(AppEvent::AnswerQuestion(QuestionAnswer::Selected(answer)))
+}
+
+pub(crate) fn question_cancel_event() -> AppEvent {
+    AppEvent::AnswerQuestion(QuestionAnswer::Cancelled)
+}
 
 pub(super) fn render_popup_menu(
     f: &mut Frame,
@@ -494,6 +558,66 @@ mod tests {
         assert!(rendered.contains("approve these 2 tool calls"));
         assert!(rendered.contains("write_to_file src/one.rs"));
         assert!(rendered.contains("run_command $ cargo check"));
+    }
+
+    #[test]
+    fn approval_keys_emit_typed_decisions() {
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), 1),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::Approve))
+        ));
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), 1),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::ApproveAll))
+        ));
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 1),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
+        ));
+        assert!(matches!(
+            approval_event_for_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 0),
+            Some(AppEvent::ApprovalDecision(ApprovalDecision::Deny))
+        ));
+    }
+
+    #[test]
+    fn question_answers_are_typed_without_mutating_the_question() {
+        let mut question = PendingQuestion::new(
+            "Where?".to_owned(),
+            vec!["Here".to_owned(), "There".to_owned()],
+            false,
+        );
+        question.selected = 1;
+        assert!(matches!(
+            question_answer_event(&question),
+            Some(AppEvent::AnswerQuestion(QuestionAnswer::Selected(answer)))
+                if answer == "There"
+        ));
+
+        question.selected = question.options.len();
+        question.activate_custom_input();
+        question.insert_str("somewhere");
+        assert!(matches!(
+            question_custom_answer_event(&question),
+            AppEvent::AnswerQuestion(QuestionAnswer::Custom(answer)) if answer == "somewhere"
+        ));
+        assert_eq!(question.selected, question.options.len());
+    }
+
+    #[test]
+    fn multi_select_question_answer_joins_selected_options() {
+        let mut question = PendingQuestion::new(
+            "Which?".to_owned(),
+            vec!["one".to_owned(), "two".to_owned()],
+            true,
+        );
+        question.chosen[0] = true;
+        question.chosen[1] = true;
+        assert!(matches!(
+            question_answer_event(&question),
+            Some(AppEvent::AnswerQuestion(QuestionAnswer::Selected(answer)))
+                if answer == "one, two"
+        ));
     }
 
     #[test]

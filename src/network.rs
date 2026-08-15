@@ -45,7 +45,7 @@ pub(crate) use events::{ToolResult, ToolResultMetadata};
 
 #[path = "network/ui_adapter.rs"]
 pub(crate) mod ui_adapter;
-pub(crate) use ui_adapter::{AgentUiEventReceiver, AgentUiEventSender};
+pub(crate) use ui_adapter::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
 
 #[path = "network/tool_exec.rs"]
 pub(crate) mod tool_exec;

@@ -1,3 +1,4 @@
+use crate::app::events::Overlay;
 use crate::app::state::{AppState, AppStatus};
 
 pub(crate) struct OverlayState<'a> {
@@ -10,6 +11,8 @@ pub(crate) struct OverlayState<'a> {
     pending_delete_session_idx: &'a mut Option<usize>,
     mcp_edit_state: &'a mut Option<crate::app::state::McpEditState>,
     pending_tool_confirmation: &'a mut Option<Vec<crate::app::state::ToolConfirmation>>,
+    tool_confirmation_selected: &'a mut usize,
+    auto_confirm: &'a mut bool,
     pending_question: &'a mut Option<crate::app::state::PendingQuestion>,
 }
 
@@ -25,6 +28,8 @@ impl<'a> OverlayState<'a> {
             pending_delete_session_idx: &mut state.pending_delete_session_idx,
             mcp_edit_state: &mut state.mcp_edit_state,
             pending_tool_confirmation: &mut state.pending_tool_confirmation,
+            tool_confirmation_selected: &mut state.tool_confirmation_selected,
+            auto_confirm: &mut state.auto_confirm,
             pending_question: &mut state.pending_question,
         }
     }
@@ -60,6 +65,41 @@ impl<'a> OverlayState<'a> {
             *self.status = AppStatus::Idle;
         }
     }
+
+    pub(crate) fn open(&mut self, overlay: Overlay) {
+        match overlay {
+            Overlay::CommandPalette => *self.show_command_picker = true,
+            Overlay::History => *self.show_history_picker = true,
+            Overlay::Model => *self.show_model_picker = true,
+            Overlay::Theme => *self.show_theme_picker = true,
+            Overlay::McpConfig => *self.show_mcp_config = true,
+            Overlay::Verbosity => *self.status = AppStatus::VerbosityPicker,
+            Overlay::Thinking => *self.status = AppStatus::ThinkingPicker,
+            Overlay::Protocol => *self.status = AppStatus::ProtocolPicker,
+            Overlay::ToolConfirmation => {
+                if self.pending_tool_confirmation.is_some() {
+                    *self.status = AppStatus::AwaitingToolConfirmation;
+                }
+            }
+            Overlay::Question => {
+                if self.pending_question.is_some() {
+                    *self.status = AppStatus::AwaitingQuestion;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn approval_selected(&self) -> usize {
+        *self.tool_confirmation_selected
+    }
+
+    pub(crate) fn move_approval_selection(&mut self, direction: i8) {
+        *self.tool_confirmation_selected = if direction < 0 { 0 } else { 1 };
+    }
+
+    pub(crate) fn toggle_auto_confirm(&mut self) {
+        *self.auto_confirm = !*self.auto_confirm;
+    }
 }
 
 impl AppState {
@@ -71,7 +111,8 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::OverlayState;
-    use crate::app::AppState;
+    use crate::app::events::Overlay;
+    use crate::app::{AppState, AppStatus};
 
     #[test]
     fn overlay_view_can_close_all_picker_surfaces() {
@@ -87,5 +128,22 @@ mod tests {
 
         assert!(!state.show_model_picker);
         assert!(!state.show_command_picker);
+    }
+
+    #[test]
+    fn overlay_view_owns_approval_selection_and_opening() {
+        let mut state = AppState::new();
+        state.pending_tool_confirmation = Some(Vec::new());
+
+        {
+            let mut overlays = OverlayState::new(&mut state);
+            overlays.open(Overlay::ToolConfirmation);
+            overlays.move_approval_selection(1);
+            overlays.toggle_auto_confirm();
+            assert_eq!(overlays.approval_selected(), 1);
+        }
+
+        assert_eq!(state.status, AppStatus::AwaitingToolConfirmation);
+        assert!(state.auto_confirm);
     }
 }

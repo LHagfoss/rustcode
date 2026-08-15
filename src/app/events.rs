@@ -11,6 +11,14 @@ pub(crate) enum ApprovalDecision {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum QuestionAnswer {
+    Selected(String),
+    Custom(String),
+    Cancelled,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Overlay {
     CommandPalette,
@@ -38,6 +46,7 @@ pub(crate) enum AppEvent {
     SubmitPrompt(String),
     CancelActiveTurn,
     ApprovalDecision(ApprovalDecision),
+    AnswerQuestion(QuestionAnswer),
     OpenOverlay(Overlay),
     CloseOverlay,
     NewSession,
@@ -53,6 +62,7 @@ pub(crate) enum AppCommand {
     SubmitPrompt(String),
     CancelActiveTurn,
     ApprovalDecision(ApprovalDecision),
+    AnswerQuestion(QuestionAnswer),
     NewSession,
     ResumeSession(SessionAction),
     ForkSession(SessionAction),
@@ -77,7 +87,9 @@ impl AppEventSender {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppEvent, AppEventSender, ApprovalDecision, Overlay, SessionAction};
+    use super::{
+        AppEvent, AppEventSender, ApprovalDecision, Overlay, QuestionAnswer, SessionAction,
+    };
     use crate::ui::TuiEvent;
 
     #[test]
@@ -89,6 +101,11 @@ mod tests {
         assert!(matches!(
             approval,
             AppEvent::ApprovalDecision(ApprovalDecision::Custom(reason)) if reason == "once"
+        ));
+        let answer = AppEvent::AnswerQuestion(QuestionAnswer::Custom("later".to_string()));
+        assert!(matches!(
+            answer,
+            AppEvent::AnswerQuestion(QuestionAnswer::Custom(value)) if value == "later"
         ));
     }
 

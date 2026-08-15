@@ -474,19 +474,19 @@
 - Question UI emits a typed answer without writing directly to `AppState`.
 - Tool result rendering consumes immutable `ToolResult`/history-cell data.
 
-- [ ] **Step 1: Add event-driven approval tests**
+- [x] **Step 1: Add event-driven approval tests**
 
   Verify approve, deny, approve-all, custom answer, Esc cancellation, and short-terminal layouts.
 
-- [ ] **Step 2: Move modal selection state behind `OverlayState`**
+- [x] **Step 2: Move modal selection state behind `OverlayState`**
 
   Preserve the current modal copy and geometry first; change styling only after event ownership is correct.
 
-- [ ] **Step 3: Connect decisions to the existing `TurnPolicy`**
+- [x] **Step 3: Connect decisions to the existing `TurnPolicy`**
 
   Ensure a denied approval produces the same persisted tool result and next-turn behavior as today.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
   Run: `cargo test ui::tests network::ui_adapter && cargo check --tests`
 

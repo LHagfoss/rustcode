@@ -1,5 +1,5 @@
 pub mod events;
-pub(crate) use events::{AppEvent, AppEventSender};
+pub(crate) use events::{AppEvent, AppEventSender, ApprovalDecision, QuestionAnswer};
 pub mod composer;
 pub mod transcript;
 pub mod status;
