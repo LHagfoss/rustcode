@@ -416,9 +416,10 @@ fn persisted_edit_result_resolves_tool_name_without_previous_call() {
 
 #[test]
 fn committed_tool_result_shows_action_status_and_indented_output() {
-    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -457,9 +458,10 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
 
 #[test]
 fn committed_tool_result_shows_failure_status() {
-    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -884,9 +886,10 @@ fn exploration_results_match_repeated_calls_without_ids_in_order() {
 
 #[test]
 fn command_preview_preserves_the_output_tail() {
-    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
@@ -932,9 +935,10 @@ fn command_preview_preserves_the_output_tail() {
 
 #[test]
 fn expanded_generic_tool_preserves_its_result_body() {
-    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = AppState::new();
+    state.verbosity = Verbosity::Low;
     state.history.push(
         ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
