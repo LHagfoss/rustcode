@@ -1846,7 +1846,7 @@ fn live_tail_excludes_committed_history() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
 
-    assert!(!text.contains("Working"));
+    assert!(text.contains("Working"));
     assert!(text.contains("unclosed tail"));
     assert!(!text.contains("old completed answer"));
 }
@@ -2083,7 +2083,7 @@ fn live_tail_includes_working_status_with_trailing_gap() {
 }
 
 #[test]
-fn visible_streaming_text_replaces_working_status_without_extra_gaps() {
+fn visible_streaming_text_keeps_working_status_until_completion() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
     state.current_response = (1..=10)
@@ -2098,8 +2098,8 @@ fn visible_streaming_text_replaces_working_status_without_extra_gaps() {
     assert!(text.contains("streamed line 1"), "streaming lines: {rendered:?}");
     assert!(text.contains("line 10"), "streaming lines: {rendered:?}");
     assert!(rendered.len() > 5, "streaming lines: {rendered:?}");
-    assert!(!rendered.iter().any(|line| line.contains("Working")));
-    assert!(lines.last().is_some_and(|line| !line.spans.is_empty()));
+    assert!(rendered.iter().any(|line| line.contains("Working")));
+    assert!(lines.last().is_some_and(|line| line.spans.is_empty()));
 }
 
 #[test]
@@ -2144,37 +2144,12 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
 }
 
 #[test]
-fn live_tail_keeps_working_for_the_final_painted_frame() {
+fn active_turn_uses_only_the_history_separator_above_working() {
     let mut state = AppState::new();
-    state.status = AppStatus::Idle;
-    state.working_status_pending = true;
+    assert_eq!(super::live_surface_padding(&state), (1, 1));
 
-    let text = super::render_live_tail(&state, 80, 24)
-        .iter()
-        .flat_map(|line| line.spans.iter())
-        .map(|span| span.content.as_ref())
-        .collect::<String>();
-
-    assert!(text.contains("Working"), "rendered live tail: {text:?}");
-}
-
-#[test]
-fn render_clearing_working_status_pending_requests_follow_up_redraw() {
-    use crate::inline_terminal::InlineTerminal as Terminal;
-    use ratatui::backend::TestBackend;
-
-    let mut state = AppState::new();
-    state.status = AppStatus::Idle;
-    state.working_status_pending = true;
-    state.redraw_requested = false;
-
-    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
-    terminal
-        .draw(|frame| super::render(frame, &mut state))
-        .unwrap();
-
-    assert!(!state.working_status_pending, "working_status_pending should be reset to false");
-    assert!(state.take_redraw_request(), "render must request a follow-up redraw when working_status_pending is cleared");
+    state.status = AppStatus::Streaming;
+    assert_eq!(super::live_surface_padding(&state), (0, 1));
 }
 
 #[test]

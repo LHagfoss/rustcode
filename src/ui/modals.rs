@@ -1318,6 +1318,11 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
         shortcut: "/mcp",
     },
     PaletteItem {
+        group: "Agent",
+        name: "Toggle automatic tool confirmation",
+        shortcut: "/yolo",
+    },
+    PaletteItem {
         group: "Session",
         name: "Change session title",
         shortcut: "/change_title",
