@@ -31,7 +31,7 @@ use tool_result::render_tool_result;
 use crate::app::activity::{
     ActivityKind, classify_activity, classify_live_tools,
 };
-use crate::app::{AppState, AppStatus, ChatMessage, NoticeKind};
+use crate::app::{AppState, AppStatus, ChatMessage};
 use crate::inline_terminal::Frame;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
@@ -114,11 +114,6 @@ pub fn COLOR_STATUS_BORDER() -> Color {
 #[inline]
 pub fn COLOR_TURN_SEPARATOR() -> Color {
     theme::color_turn_separator()
-}
-#[allow(non_snake_case)]
-#[inline]
-pub fn COLOR_NOTICE_BG() -> Color {
-    theme::color_notice_bg()
 }
 #[allow(non_snake_case)]
 #[inline]
@@ -3369,79 +3364,6 @@ pub fn render_with_transcript(
         render_protocol_picker_modal(f, state, input_box_area);
     }
 
-    render_notice(f, state);
-}
-
-/// How long a notice toast stays on screen before it fades out.
-pub(crate) const NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// Columns of padding around the toast text: accent glyph + spaces on both sides.
-const NOTICE_PADDING: u16 = 5;
-
-/// Computes the top-right rect for a borderless notice toast holding
-/// `text_width` columns of text, or `None` if the screen is too small. The box
-/// is a single row — text plus padding — inset one cell from the corner and
-/// clamped to the screen width.
-fn notice_rect(area: ratatui::layout::Rect, text_width: u16) -> Option<ratatui::layout::Rect> {
-    let box_h = 1u16;
-    let box_w = (text_width + NOTICE_PADDING)
-        .min(area.width.saturating_sub(2))
-        .max(3);
-    if area.width < box_w + 1 || area.height < box_h + 1 {
-        return None;
-    }
-    let x = area.x + area.width - box_w - 1;
-    let y = area.y + 1;
-    Some(ratatui::layout::Rect::new(x, y, box_w, box_h))
-}
-
-/// Draws a small auto-expiring toast in the top-right corner. Cleared lazily
-/// once expired; the ≤100ms idle redraw guarantees it disappears on time.
-/// Borderless: a single dark pill sized to its text, with a leading status
-/// glyph carrying the accent color.
-fn render_notice(f: &mut Frame, state: &mut AppState) {
-    let Some(notice) = state.notice.as_ref() else {
-        return;
-    };
-    if notice.shown_at.elapsed() >= NOTICE_TTL {
-        state.notice = None;
-        return;
-    }
-
-    let is_warning = ["warning", "error", "failed", "blocked", "abort", "loop"]
-        .iter()
-        .any(|word| notice.text.to_ascii_lowercase().contains(word));
-    let (glyph, accent) = match notice.kind {
-        NoticeKind::Warning => ("!", COLOR_TIP()),
-        NoticeKind::Notice if is_warning => ("!", COLOR_TIP()),
-        NoticeKind::Notice => ("✓", COLOR_GREEN()),
-    };
-
-    // Size to the message so short notices ("Copied to clipboard") don't paint a
-    // full-width slab over the conversation.
-    let text_width = notice.text.chars().count().min(60) as u16;
-    let Some(rect) = notice_rect(f.area(), text_width) else {
-        return;
-    };
-
-    let text: String = notice.text.chars().take(60).collect();
-    let bg = COLOR_BG();
-    let para = Paragraph::new(Line::from(vec![
-        Span::styled("▌", Style::default().fg(accent).bg(bg)),
-        Span::styled(
-            format!(" {glyph} "),
-            Style::default()
-                .fg(accent)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(text, Style::default().fg(COLOR_TEXT()).bg(bg)),
-        Span::styled(" ", Style::default().bg(bg)),
-    ]))
-    .style(Style::default().bg(bg));
-
-    f.render_widget(Clear, rect);
-    f.render_widget(para, rect);
 }
 
 #[cfg(test)]
