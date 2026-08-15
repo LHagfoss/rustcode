@@ -987,8 +987,8 @@ pub struct AppState {
     pub mouse_capture_enabled: bool,
     pub agent_mode: crate::config::AgentMode,
     pub chat_area: Option<ratatui::layout::Rect>,
-    /// Screen rect of the editable text region inside the bottom input box, so
-    /// mouse selection can work there too (distinct from `chat_area`).
+    /// Screen rect of the bottom input box. Kept so shutdown can erase the
+    /// transient composer without disturbing the transcript above it.
     pub input_text_area: Option<ratatui::layout::Rect>,
     pub scroll_to_bottom_btn: Option<ratatui::layout::Rect>,
     /// Clickable element the pointer is over, refreshed on every mouse move.

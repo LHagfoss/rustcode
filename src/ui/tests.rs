@@ -2150,6 +2150,11 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
 
     let prompt_row = prompt_row.expect("composer prompt should be rendered");
     let footer_row = bottom_border_row.expect("composer footer should be rendered");
+    assert_eq!(
+        state.input_text_area.map(|area| area.y),
+        Some(prompt_row - 1),
+        "shutdown should know where the transient composer begins"
+    );
     assert_eq!(footer_row, prompt_row + 2);
     let footer = (0..100)
         .map(|x| buffer[(x, footer_row)].symbol())

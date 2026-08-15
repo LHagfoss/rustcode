@@ -3214,6 +3214,7 @@ pub fn render_with_transcript(
     } else {
         render_input(f, &chunks, state)
     };
+    state.input_text_area = Some(chunks[2]);
     if footer_visible {
         render_composer_footer(f, chunks[3], state);
     }
