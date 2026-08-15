@@ -36,11 +36,15 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16); // 60Hz for smooth scrolling
-/// Let the inline viewport use the terminal's available height. Ratatui clamps
-/// this request to the real screen size while preserving inline scrollback.
-/// A fixed 12-row viewport left only four to six rows for streamed assistant
-/// text after the composer, footer, margins, and activity status were laid out.
-const LIVE_VIEWPORT_ROWS: u16 = u16::MAX;
+/// Keep enough mutable rows for streamed assistant text without reserving an
+/// entire screen below a compact conversation. Ratatui reserves inline space
+/// by appending the *requested* number of rows before clamping its buffer, so
+/// `u16::MAX` emitted tens of thousands of line advances at startup.
+const MAX_LIVE_VIEWPORT_ROWS: u16 = 24;
+
+fn live_viewport_rows(terminal_height: u16) -> u16 {
+    terminal_height.clamp(1, MAX_LIVE_VIEWPORT_ROWS)
+}
 
 /// Frame budget while a response is in flight: 60Hz, so streamed tokens,
 /// spinners, the elapsed-second counter and the rotating status label (which
@@ -220,10 +224,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let backend = CrosstermBackend::new(stdout);
+    let viewport_rows = live_viewport_rows(crossterm::terminal::size()?.1);
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
-            viewport: Viewport::Inline(LIVE_VIEWPORT_ROWS),
+            viewport: Viewport::Inline(viewport_rows),
         },
     )?;
     terminal.clear()?;
@@ -2144,8 +2149,8 @@ fn print_exit_summary(summary: &ExitSummary) {
 #[cfg(test)]
 mod draw_loop_tests {
     use super::{
-        LIVE_VIEWPORT_ROWS, STREAM_FRAME_INTERVAL, background_task_history_message,
-        ExitSummary, format_number, queue_background_wakeup, should_draw,
+        MAX_LIVE_VIEWPORT_ROWS, STREAM_FRAME_INTERVAL, background_task_history_message,
+        live_viewport_rows, ExitSummary, format_number, queue_background_wakeup, should_draw,
     };
     use std::time::Duration;
 
@@ -2170,18 +2175,28 @@ mod draw_loop_tests {
     }
 
     #[test]
-    fn live_viewport_uses_the_available_terminal_height() {
+    fn live_viewport_is_bounded_without_exceeding_the_terminal() {
         use ratatui::{Terminal, TerminalOptions, Viewport, backend::TestBackend};
 
         let mut terminal = Terminal::with_options(
-            TestBackend::new(80, 30),
+            TestBackend::new(80, 50),
             TerminalOptions {
-                viewport: Viewport::Inline(LIVE_VIEWPORT_ROWS),
+                viewport: Viewport::Inline(live_viewport_rows(50)),
             },
         )
         .unwrap();
 
-        assert_eq!(terminal.get_frame().area().height, 30);
+        assert_eq!(terminal.get_frame().area().height, MAX_LIVE_VIEWPORT_ROWS);
+
+        let mut short_terminal = Terminal::with_options(
+            TestBackend::new(80, 12),
+            TerminalOptions {
+                viewport: Viewport::Inline(live_viewport_rows(12)),
+            },
+        )
+        .unwrap();
+        assert_eq!(short_terminal.get_frame().area().height, 12);
+        assert_eq!(live_viewport_rows(0), 1);
     }
 
     #[test]
