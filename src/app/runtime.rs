@@ -195,6 +195,7 @@ impl AppRuntime {
         let mut frame_stream = frame_stream;
         let mut app_event_receiver = app_event_receiver;
         let mut replay_history = replay_history;
+        let composer = ui::Composer::new();
         loop {
             // Ratatui's inline viewport grows/shrinks by appending and clearing
             // terminal rows. Once scrollback has been emitted those rows cannot be
@@ -1592,6 +1593,49 @@ impl AppRuntime {
                             key.code,
                             key.modifiers
                         );
+
+                        match {
+                            let mut state = app_state.lock().await;
+                            composer.handle_key(&mut state, key)
+                        } {
+                            ui::ComposerAction::Handled => {
+                                needs_redraw = true;
+                                continue;
+                            }
+                            ui::ComposerAction::Submit => {
+                                if crate::app::handle_enter(
+                                    &app_state,
+                                    &client,
+                                    &mut current_cancel_token,
+                                )
+                                .await
+                                {
+                                    break;
+                                }
+                                needs_redraw = true;
+                                continue;
+                            }
+                            ui::ComposerAction::ClearScreen => {
+                                terminal_runtime.terminal().clear()?;
+                                continue;
+                            }
+                            ui::ComposerAction::Paste => {
+                                if let Some(img_markdown) =
+                                    crate::clipboard::paste_image_from_clipboard()
+                                {
+                                    let mut state = app_state.lock().await;
+                                    composer.handle_paste(&mut state, &img_markdown);
+                                } else if let Some(text) =
+                                    crate::clipboard::read_text_from_clipboard()
+                                {
+                                    let mut state = app_state.lock().await;
+                                    composer.handle_paste(&mut state, &text);
+                                }
+                                needs_redraw = true;
+                                continue;
+                            }
+                            ui::ComposerAction::Cancel | ui::ComposerAction::Unhandled => {}
+                        }
 
                         match key.code {
                             KeyCode::BackTab => {

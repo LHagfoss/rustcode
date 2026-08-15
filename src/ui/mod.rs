@@ -7,9 +7,12 @@ mod events;
 mod frame_requester;
 mod terminal_runtime;
 mod transcript;
+mod composer;
+mod keymap;
 
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
+pub(crate) use composer::{Composer, ComposerAction};
 pub(crate) use transcript::TranscriptModel;
 use history_cell::HistoryCell;
 pub(crate) use history_cell::TranscriptState;
@@ -3311,7 +3314,7 @@ pub fn render_with_transcript(
         render_question_modal(f, state, chunks[2]);
         Margin { vertical: 0, horizontal: 0 }
     } else {
-        render_input(f, &chunks, state)
+        Composer::default().render(f, &chunks, state)
     };
     state.input_text_area = Some(chunks[2]);
     if footer_visible {
