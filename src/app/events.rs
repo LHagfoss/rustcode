@@ -28,6 +28,7 @@ pub(crate) enum Overlay {
     McpConfig,
     Verbosity,
     Thinking,
+    Effort,
     Protocol,
     ToolConfirmation,
     Question,
