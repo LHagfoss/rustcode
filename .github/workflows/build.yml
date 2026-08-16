@@ -21,24 +21,43 @@ jobs:
                     - os: ubuntu-24.04
                       target: x86_64-unknown-linux-gnu
                       name: rustcode-linux-x86_64
+                      target-dir: target
                     - os: macos-latest
                       target: aarch64-apple-darwin
                       name: rustcode-macos-aarch64
+                      target-dir: target
                     - os: windows-2025
                       target: x86_64-pc-windows-gnu
                       name: rustcode-windows-x86_64
+                      target-dir: D:/target
+
+        env:
+            CARGO_TARGET_DIR: ${{ matrix.target-dir }}
 
         steps:
-            - uses: actions/checkout@v4
+            - name: Disable Windows Defender
+              if: runner.os == 'Windows'
+              shell: powershell
+              run: |
+                  Set-MpPreference -DisableRealtimeMonitoring $true -DisableArchiveScanning $true -DisableBehaviorMonitoring $true -DisableScriptScanning $true
+                  Set-MpPreference -ExclusionPath "C:\", "D:\"
 
-            - name: Install Rust (stable)
+            - name: Configure Windows D: Drive Environment
+              if: runner.os == 'Windows'
+              shell: powershell
+              run: |
+                  New-Item -ItemType Directory -Force -Path "D:\.cargo", "D:\target" | Out-Null
+                  "CARGO_HOME=D:\.cargo" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 1
+
+            - name: Set up Rust
               shell: bash
               run: |
-                  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable || true
-
-            - name: Add target
-              shell: bash
-              run: rustup target add ${{ matrix.target }}
+                  rustup default stable
+                  rustup target add ${{ matrix.target }}
 
             - name: Install Linux deps (Ubuntu)
               if: runner.os == 'Linux'
@@ -52,7 +71,7 @@ jobs:
               if: runner.os != 'Windows'
               shell: bash
               run: |
-                  cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
+                  cp ${{ matrix.target-dir }}/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
                   chmod +x ${{ matrix.name }}
                   tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
 
@@ -60,7 +79,7 @@ jobs:
               if: runner.os == 'Windows'
               shell: powershell
               run: |
-                  Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
+                  Copy-Item "${{ matrix.target-dir }}/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
                   Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
 
             - name: Upload artifact
