@@ -409,7 +409,6 @@ async fn prune_class(
     }
 }
 
-const DETERMINISTIC_CONTEXT_RECORD: &str = "[Deterministic context record]";
 const DETERMINISTIC_RECORD_MAX_CHARS: usize = 6_000;
 
 fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
@@ -466,137 +465,8 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
 }
 
 fn deterministic_context_record(history: &[ChatMessage], max_chars: usize) -> String {
-    let first_user = history
-        .iter()
-        .find(|message| message.role == "user" && !message.content.starts_with("<tool_result>"))
-        .map(|message| compact_context_line(&message.content, 700))
-        .unwrap_or_else(|| "(not recorded)".to_string());
-    let latest_user = history
-        .iter()
-        .rev()
-        .find(|message| message.role == "user" && !message.content.starts_with("<tool_result>"))
-        .map(|message| compact_context_line(&message.content, 700));
-    let constraints = history
-        .iter()
-        .filter(|message| {
-            message.role == "system"
-                && !message.content.starts_with('[')
-                && !message
-                    .content
-                    .starts_with(crate::network::compaction::SUMMARY_MARKER)
-        })
-        .map(|message| compact_context_block(&message.content, 900))
-        .filter(|line| !line.is_empty())
-        .take(4)
-        .collect::<Vec<_>>();
-
-    let mut changed_paths = std::collections::BTreeSet::new();
-    let mut failures = Vec::new();
-    let mut verification = Vec::new();
-    let mut decisions = Vec::new();
-    for message in history {
-        if let Some(result) = &message.tool_result {
-            changed_paths.extend(result.changed_paths.iter().cloned());
-            if !result.success || result.error_kind.is_some() {
-                failures.push(format!(
-                    "{} ({}, exit={:?})",
-                    result.tool_name,
-                    result.error_kind.as_deref().unwrap_or("failed"),
-                    result.exit_code
-                ));
-            }
-            if result.tool_name == "run_command" {
-                verification.push(format!(
-                    "{} ({}, exit={:?})",
-                    result.tool_name,
-                    if result.success { "success" } else { "failed" },
-                    result.exit_code
-                ));
-            }
-        }
-        if message.role == "assistant" {
-            for call in &message.tool_calls {
-                if call.name == "run_command"
-                    && let Ok(arguments) = serde_json::from_str::<serde_json::Value>(&call.arguments)
-                    && let Some(command) = arguments.get("command").and_then(|value| value.as_str())
-                {
-                    verification.push(compact_context_line(command, 240));
-                }
-            }
-            let line = compact_context_line(&message.content, 320);
-            if !line.is_empty() && !line.starts_with("```tool") {
-                decisions.push(line);
-            }
-        }
-    }
-
-    let mut record = format!(
-        "{DETERMINISTIC_CONTEXT_RECORD}\nGoal: {first_user}\n"
-    );
-    if let Some(latest_user) = latest_user
-        && latest_user != first_user
-    {
-        record.push_str(&format!("Current follow-up: {latest_user}\n"));
-    }
-    record.push_str(&format!(
-        "Project instructions/constraints: {}\n",
-        if constraints.is_empty() {
-            "none recorded".to_string()
-        } else {
-            constraints.join("; ")
-        }
-    ));
-    record.push_str(&format!(
-        "Modified files: {}\n",
-        if changed_paths.is_empty() {
-            "none recorded".to_string()
-        } else {
-            changed_paths.into_iter().take(32).collect::<Vec<_>>().join(", ")
-        }
-    ));
-    record.push_str(&format!(
-        "Failures/unresolved work: {}\n",
-        if failures.is_empty() {
-            "none recorded".to_string()
-        } else {
-            failures.into_iter().rev().take(8).collect::<Vec<_>>().join("; ")
-        }
-    ));
-    record.push_str(&format!(
-        "Verification state: {}\n",
-        if verification.is_empty() {
-            "none recorded".to_string()
-        } else {
-            verification.into_iter().rev().take(8).collect::<Vec<_>>().join("; ")
-        }
-    ));
-    if !decisions.is_empty() {
-        record.push_str(&format!(
-            "Architecture/decisions/next steps: {}\n",
-            decisions.into_iter().rev().take(8).collect::<Vec<_>>().join("; ")
-        ));
-    }
-    record.chars().take(max_chars).collect()
-}
-
-fn compact_context_line(content: &str, max_chars: usize) -> String {
-    let line = content
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
-    line.chars().take(max_chars).collect()
-}
-
-fn compact_context_block(content: &str, max_chars: usize) -> String {
-    let block = content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .take(8)
-        .collect::<Vec<_>>()
-        .join(" ");
-    block.chars().take(max_chars).collect()
+    crate::network::compaction::StructuredSessionMemory::extract_from_history(history)
+        .format_record(max_chars)
 }
 
 pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, budget: u32) {
@@ -1326,11 +1196,32 @@ pub(crate) async fn prepare_turn_request(
     // trimming so its size counts toward the budget.
     attach_request_context_tail(&mut msgs, &dynamic_context);
 
+    let context_budget = {
+        let s = state.lock().await;
+        s.active_context_budget()
+    };
+    let preflight = compaction::calculate_preflight_budget(
+        &system_prompt,
+        &[],
+        &history_snapshot,
+        &dynamic_context,
+        0,
+        &context_budget,
+    );
+    crate::logger::operational_event(
+        "context.preflight_budget",
+        serde_json::to_value(&preflight).unwrap_or_default(),
+    );
+
     // `budget_token_limit` already reserves completion, thinking, tool-schema,
     // and provider safety headroom from the active model profile. Keep this
-    // final trim on the same budget used by automatic compaction.
+    // final trim on the effective history budget.
     inject_system_reminder(&mut msgs);
-    let budget = budget_token_limit;
+    let budget = if !preflight.fits_hard_limit() || !preflight.fits_soft_target() {
+        context_budget.history_tokens.min(budget_token_limit)
+    } else {
+        budget_token_limit
+    };
     let dropped = trim_msgs_to_budget(&mut msgs, budget);
     if dropped > 0 {
         dbg_log!(
@@ -1344,6 +1235,7 @@ pub(crate) async fn prepare_turn_request(
                 "reason": "model_aware_history_budget_after_deterministic_pruning",
                 "budget": budget,
                 "dropped_messages": dropped,
+                "preflight": preflight,
             }),
         );
         if tool_rounds == 0 {

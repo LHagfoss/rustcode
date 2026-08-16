@@ -88,16 +88,34 @@ fn ends_with_stated_intent(content: &str) -> bool {
         "let me fix",
         "let me create",
         "let me write",
+        "let me read",
+        "let me inspect",
+        "let me check",
+        "let me verify",
         "let's fix",
         "let's create",
+        "let's read",
+        "let's check",
+        "let's verify",
         "i'll fix",
         "i'll create",
+        "i'll read",
+        "i'll check",
+        "i'll verify",
         "i will fix",
         "i will create",
+        "i will read",
+        "i will inspect",
+        "i will check",
+        "i will verify",
         "i need to fix",
         "i need to create",
+        "i need to check",
+        "i need to read",
         "going to fix",
         "going to create",
+        "going to read",
+        "going to check",
     ];
     INTENT_PHRASES.iter().any(|p| lower_tail.contains(p))
 }
@@ -269,17 +287,58 @@ pub(crate) fn is_reasoning_only(content: &str) -> bool {
     strip_think_blocks(content).trim().is_empty()
 }
 
-/// Nudge sent to resume a cut-off turn. When the model stalled on pure
-/// reasoning (replanning in `<think>` with no answer or tool call), a bare
-/// "continue" just invites another round of replanning — some models will
-/// repeat the same plan verbatim several times in a row instead of acting.
-/// Tell it explicitly to stop planning and act.
-pub(crate) fn continuation_nudge(previous: &str) -> &'static str {
-    if is_reasoning_only(previous) {
+/// Formats the assistant message payload sent on a continuation request.
+/// Strips completed `<think>` blocks and bounds unclosed reasoning scratchpads
+/// so massive reasoning traces (e.g. 20k-32k tokens) are not amplified and
+/// resent verbatim on every continuation round.
+pub(crate) fn format_continuation_assistant_message(previous: &str) -> String {
+    let has_unclosed_think = previous.contains("<think>") && !previous.contains("</think>");
+    if has_unclosed_think {
+        // If cut off mid-thought, keep only the most recent thought suffix if long.
+        const MAX_UNCLOSED_THINK_CHARS: usize = 1500;
+        let think_start = previous.find("<think>").unwrap_or(0);
+        let think_body = &previous[think_start + "<think>".len()..];
+        if think_body.len() > MAX_UNCLOSED_THINK_CHARS {
+            let tail = &think_body[think_body.len() - 1000..];
+            return format!("<think>\n... [earlier thoughts omitted for brevity] ...\n{tail}");
+        }
+        return previous.to_string();
+    }
+
+    let prose = strip_think_blocks(previous);
+    let trimmed = prose.trim();
+    if !trimmed.is_empty() {
+        trimmed.to_string()
+    } else if previous.contains("<think>") {
+        "(completed reasoning scratchpad)".to_string()
+    } else {
+        previous.to_string()
+    }
+}
+
+/// Nudge sent to resume a cut-off turn, tailored to the reason the turn was interrupted.
+pub(crate) fn continuation_nudge_for_category(
+    previous: &str,
+    finish_reason: Option<&str>,
+) -> &'static str {
+    if finish_reason == Some("length") {
+        "Your previous response was cut off by the token limit. Continue directly from where you left off."
+    } else if is_reasoning_only(previous) {
         "Stop planning and do not restate your plan again. Call the tool now."
+    } else if previous.matches("```").count() % 2 != 0
+        || (previous.contains("<tool_call>") && !previous.contains("</tool_call>"))
+    {
+        "Your tool call syntax was cut off. Continue the tool syntax directly."
+    } else if !has_intended_tool_call(previous) && ends_with_stated_intent(previous) {
+        "You stated your intended action. Please execute the tool call now."
     } else {
         "continue"
     }
+}
+
+/// Nudge sent to resume a cut-off turn.
+pub(crate) fn continuation_nudge(previous: &str) -> &'static str {
+    continuation_nudge_for_category(previous, None)
 }
 
 /// Cap a diff preview at 10 lines, appending a "... (N more lines changed)"

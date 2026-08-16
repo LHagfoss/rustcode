@@ -9,7 +9,10 @@ use super::policy;
 use super::runner;
 use super::stream::StreamBuffer;
 use super::stream_request::{estimate_token_usage, stream_request};
-use super::text::{self, continuation_nudge, has_intended_tool_call, strip_tool_call_syntax};
+use super::text::{
+    self, continuation_nudge_for_category, format_continuation_assistant_message,
+    has_intended_tool_call, strip_tool_call_syntax,
+};
 use super::title::{record_prompt_to_history, spawn_title_generation};
 use super::tool_exec::{execute_tool_batch, get_tool_project_root, tool_result_history_message};
 use super::verification;
@@ -320,10 +323,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let collected_response = match runner::collect_response(move |previous| {
         let mut current_msgs = request_msgs.clone();
         if !previous.is_empty() {
-            let nudge = continuation_nudge(&previous);
+            let continuation_assistant = format_continuation_assistant_message(&previous);
+            let nudge = continuation_nudge_for_category(&previous, None);
             current_msgs.push(serde_json::json!({
                 "role": "assistant",
-                "content": previous
+                "content": continuation_assistant
             }));
             current_msgs.push(serde_json::json!({
                 "role": "user",

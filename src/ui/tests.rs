@@ -125,6 +125,7 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
             reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
+            ..Default::default()
         })
         .collect();
     state.show_model_picker = true;
@@ -2579,6 +2580,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
             reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
+            ..Default::default()
         },
         crate::config::ModelProfile {
             name: "model-b".to_string(),
@@ -2593,6 +2595,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
             reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
+            ..Default::default()
         },
     ];
 
