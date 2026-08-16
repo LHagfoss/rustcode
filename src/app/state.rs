@@ -1404,6 +1404,7 @@ impl AppState {
                     reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: None,
+                    ..Default::default()
                 }
                 .context_budget()
             })
@@ -1963,6 +1964,7 @@ mod protocol_tests {
             reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
+            ..Default::default()
         });
 
         assert_eq!(

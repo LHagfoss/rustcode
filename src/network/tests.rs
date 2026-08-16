@@ -3352,3 +3352,199 @@ fn session_interruption_and_recovery_safety() {
     assert_eq!(state.status, crate::app::AppStatus::Idle);
     assert_eq!(state.history.len(), 1);
 }
+
+#[test]
+fn test_continuation_assistant_message_strips_massive_think_traces() {
+    use super::text::format_continuation_assistant_message;
+
+    // 1. Completed massive reasoning trace followed by visible prose
+    let massive_think = format!(
+        "<think>\n{}\n</think>\nI will now run the test suite.\n```tool\n{{\"name\": \"run_command\"}}\n```",
+        "deep reasoning ".repeat(2000)
+    );
+    let continuation = format_continuation_assistant_message(&massive_think);
+    assert!(!continuation.contains("<think>"), "Completed think blocks must be stripped from continuation assistant message");
+    assert!(continuation.contains("I will now run the test suite."));
+    assert!(continuation.contains("```tool"));
+    assert!(continuation.len() < 500, "Continuation assistant message must be bounded and compact");
+
+    // 2. Pure reasoning (no visible text outside think)
+    let pure_think = format!("<think>\n{}\n</think>", "planning ".repeat(1500));
+    let continuation_pure = format_continuation_assistant_message(&pure_think);
+    assert_eq!(continuation_pure, "(completed reasoning scratchpad)");
+
+    // 3. Unclosed think trace that was cut off mid-thought
+    let cut_off_think = format!("<think>\n{}\nThinking about line 42", "thinking ".repeat(1000));
+    let continuation_cut_off = format_continuation_assistant_message(&cut_off_think);
+    assert!(continuation_cut_off.contains("<think>"));
+    assert!(continuation_cut_off.contains("Thinking about line 42"));
+    assert!(continuation_cut_off.len() <= 1200, "Unclosed think block tail must be bounded");
+}
+
+#[test]
+fn test_continuation_nudges_are_category_aware() {
+    use super::text::continuation_nudge_for_category;
+
+    // Length cutoff
+    assert_eq!(
+        continuation_nudge_for_category("Some partial text", Some("length")),
+        "Your previous response was cut off by the token limit. Continue directly from where you left off."
+    );
+
+    // Reasoning only
+    assert_eq!(
+        continuation_nudge_for_category("<think>Planning step 1...</think>", None),
+        "Stop planning and do not restate your plan again. Call the tool now."
+    );
+
+    // Incomplete tool call
+    assert_eq!(
+        continuation_nudge_for_category("```tool\n{\"name\": \"view_file\"", None),
+        "Your tool call syntax was cut off. Continue the tool syntax directly."
+    );
+
+    // Stated intent without tool call
+    assert_eq!(
+        continuation_nudge_for_category("I will read the file `src/main.rs` now to verify.", None),
+        "You stated your intended action. Please execute the tool call now."
+    );
+
+    // Normal prose
+    assert_eq!(
+        continuation_nudge_for_category("Here is the explanation of the bug:", None),
+        "continue"
+    );
+}
+
+#[test]
+fn test_structured_session_memory_semantic_continuity_across_compactions() {
+    use super::compaction::{StructuredSessionMemory, compact_with_structured_memory};
+
+    let mut history = Vec::new();
+
+    // Turn 1: User specifies critical constraints
+    history.push(ChatMessage::new(
+        "user",
+        "Implement feature X. Rule: Never modify files under src/generated/! Always use cargo check."
+    ));
+    history.push(ChatMessage::new("assistant", "Understood. I will not touch generated files."));
+
+    // Turn 5: Discovered architecture & failed approach
+    history.push(ChatMessage::new("user", "Check if we can use the old parser."));
+    history.push(ChatMessage::new(
+        "assistant",
+        "Decision: Found parser in `src/parser/legacy.rs`. It does not support async."
+    ));
+    let mut failed_tool = ChatMessage::new("tool", "run_command: cargo test\nerror: compilation failed\nexit code: 1");
+    failed_tool.tool_result = Some(crate::app::ToolResultRecord {
+        tool_name: "run_command".to_string(),
+        arguments_hash: "hash".to_string(),
+        success: false,
+        exit_code: Some(1),
+        error_kind: Some("command_failed".to_string()),
+        changed_paths: vec!["src/parser/legacy.rs".to_string()],
+        truncated: false,
+        full_output_artifact: None,
+        replayed: false,
+        retryable: false,
+    });
+    history.push(failed_tool);
+
+    // Add multiple subsequent turns to trigger compaction
+    for i in 6..=35 {
+        history.push(ChatMessage::new("user", format!("Step {i} working on alternative parser")));
+        history.push(ChatMessage::new("assistant", format!("Working on step {i} implementation")));
+    }
+
+    // Extract structured session memory
+    let memory = StructuredSessionMemory::extract_from_history(&history);
+    let record = memory.format_record(4000);
+
+    // Verify key constraints and facts are preserved
+    assert!(record.contains("Never modify files under src/generated/!"), "User constraint must be captured in memory");
+    assert!(record.contains("src/parser/legacy.rs"), "Modified/inspected file must be captured");
+    assert!(record.contains("Goal: Implement feature X"), "Initial goal must be captured");
+
+    // Perform structured compaction
+    let initial_len = history.len();
+    let compacted = compact_with_structured_memory(&mut history, 10, 4000);
+    assert!(compacted, "Compaction should succeed");
+    assert!(history.len() < initial_len);
+
+    // Verify the compacted history retains the structured memory block at message 0
+    assert_eq!(history[0].role, "system");
+    assert!(history[0].content.contains("Never modify files under src/generated/!"));
+
+    // Simulate another 10 turns and a SECOND compaction pass (Turn 45)
+    for i in 36..=45 {
+        history.push(ChatMessage::new("user", format!("Follow up step {i}")));
+        history.push(ChatMessage::new("assistant", format!("Follow up step {i} completed")));
+    }
+    let second_compacted = compact_with_structured_memory(&mut history, 10, 4000);
+    assert!(second_compacted, "Second compaction should succeed");
+
+    // Verify the constraint from Turn 1 is STILL preserved after multiple compaction passes!
+    assert!(history[0].content.contains("Never modify files under src/generated/!"), "Turn 1 constraint must survive multiple compaction passes!");
+}
+
+#[test]
+fn test_preflight_budget_calculation_and_limits() {
+    use super::compaction::calculate_preflight_budget;
+    use crate::config::ModelProfile;
+
+    let profile = ModelProfile {
+        name: "local-qwen".to_string(),
+        url: "http://localhost:11434/v1/chat/completions".to_string(),
+        model: "qwen:32b".to_string(),
+        context_window: Some(32768),
+        soft_context_target: Some(24000),
+        hard_effective_limit: Some(30000),
+        provider_overhead_margin: Some(1024),
+        ..ModelProfile::default()
+    };
+    let budget = profile.context_budget();
+
+    let history = vec![
+        ChatMessage::new("user", "Hello! Write a small parser."),
+        ChatMessage::new("assistant", "Here is the plan for the parser."),
+    ];
+
+    let preflight = calculate_preflight_budget(
+        "You are RustCode.",
+        &[],
+        &history,
+        "# Runtime Context\n- cwd: /code\n",
+        0,
+        &budget,
+    );
+
+    assert_eq!(preflight.soft_context_target, 24000);
+    assert_eq!(preflight.hard_effective_limit, 30000);
+    assert!(preflight.fits_soft_target());
+    assert!(preflight.fits_hard_limit());
+    assert!(preflight.total_estimated_prompt > 0);
+}
+
+#[test]
+fn test_local_model_profile_completion_reserve_defaults() {
+    use crate::config::ModelProfile;
+
+    // Local profile without explicit max_tokens defaults to a safe 4k-8k completion cap
+    let local_profile = ModelProfile {
+        name: "local-ollama".to_string(),
+        url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
+        model: "qwen2.5:32b".to_string(),
+        context_window: Some(128000),
+        ..ModelProfile::default()
+    };
+    let local_budget = local_profile.context_budget();
+    assert!(
+        local_budget.completion_reserve <= 8192,
+        "Local profile completion reserve must be capped at 8192, got: {}",
+        local_budget.completion_reserve
+    );
+    assert!(
+        local_budget.soft_context_target < local_budget.context_window,
+        "Local profile must have a realistic soft context target below the theoretical context window"
+    );
+}
