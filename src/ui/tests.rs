@@ -39,7 +39,10 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
     let rendered = render_state_to_text(&mut state, 100, 20);
 
     assert!(rendered.contains("Working"), "rendered: {rendered:?}");
-    assert!(rendered.contains("streamed output"), "rendered: {rendered:?}");
+    assert!(
+        rendered.contains("streamed output"),
+        "rendered: {rendered:?}"
+    );
 }
 
 #[test]
@@ -61,10 +64,7 @@ fn acceptance_tool_confirmation_replaces_composer_with_actions() {
         rendered.contains("Would you like to run the following command?"),
         "rendered: {rendered:?}"
     );
-    assert!(
-        rendered.contains("$ cargo test"),
-        "rendered: {rendered:?}"
-    );
+    assert!(rendered.contains("$ cargo test"), "rendered: {rendered:?}");
     assert!(
         rendered.contains("Press enter to confirm"),
         "rendered: {rendered:?}"
@@ -261,7 +261,10 @@ fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
         .collect::<String>();
 
     assert!(text.contains("Welcome back!"));
-    assert!(text.contains("╰"), "banner must end cleanly with a bottom border");
+    assert!(
+        text.contains("╰"),
+        "banner must end cleanly with a bottom border"
+    );
 }
 
 #[test]
@@ -273,7 +276,9 @@ fn inline_notice_finishes_the_welcome_cell_and_compacts_the_viewport() {
 
     let lines = super::render_live_tail(&state, 100, 28);
     assert!(
-        !lines.iter().any(|line| line.to_string().contains("Welcome back!")),
+        !lines
+            .iter()
+            .any(|line| line.to_string().contains("Welcome back!")),
         "the welcome banner must not be rendered again after a transcript notice"
     );
 
@@ -363,7 +368,10 @@ fn theme_change_changes_cache_keys() {
     theme::set_active_theme("nord");
     let key2 = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
 
-    assert_ne!(key1, key2, "cache key must differ when active theme changes");
+    assert_ne!(
+        key1, key2,
+        "cache key must differ when active theme changes"
+    );
 }
 
 #[test]
@@ -447,9 +455,11 @@ fn committed_tool_result_shows_action_status_and_indented_output() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("• Ran $ cargo test · exit 0")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("• Ran $ cargo test · exit 0"))
+    );
     assert!(
         rendered.iter().any(|line| line.contains("504 passed")),
         "command output must be rendered beneath its header: {rendered:?}"
@@ -492,9 +502,11 @@ fn committed_tool_result_shows_failure_status() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("• Ran $ cargo test · exit 1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("• Ran $ cargo test · exit 1"))
+    );
 }
 
 #[test]
@@ -574,31 +586,36 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
 
     let mut state = AppState::new();
     state.verbosity = Verbosity::High;
-    state.history.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
-        ToolCallRef {
-            id: "call-1".to_owned(),
-            name: "run_command".to_owned(),
-            arguments: r#"{"command":"git status --short"}"#.to_owned(),
-        },
-        ToolCallRef {
-            id: "call-2".to_owned(),
-            name: "run_command".to_owned(),
-            arguments: r#"{"command":"cargo check --tests"}"#.to_owned(),
-        },
-    ]));
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"git status --short"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"cargo check --tests"}"#.to_owned(),
+            },
+        ]));
     for (id, command) in [
         ("call-1", "git status --short"),
         ("call-2", "cargo check --tests"),
     ] {
         state.history.push(
-            ChatMessage::new("tool", format!("run_command: exit code: 0\n{command} output"))
-                .answering(Some(id.to_owned()))
-                .with_tool_result(ToolResultRecord {
-                    tool_name: "run_command".to_owned(),
-                    success: true,
-                    exit_code: Some(0),
-                    ..Default::default()
-                }),
+            ChatMessage::new(
+                "tool",
+                format!("run_command: exit code: 0\n{command} output"),
+            )
+            .answering(Some(id.to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                exit_code: Some(0),
+                ..Default::default()
+            }),
         );
     }
 
@@ -609,7 +626,11 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
 
     assert_eq!(
         rendered,
-        ["• Ran", "  └ Bash git status --short", "    Bash cargo check --tests"]
+        [
+            "• Ran",
+            "  └ Bash git status --short",
+            "    Bash cargo check --tests"
+        ]
     );
     assert!(!rendered.iter().any(|line| line.contains("output")));
 }
@@ -621,12 +642,11 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
     let mut state = AppState::new();
     state.history.push(ChatMessage::new("user", "fix it"));
     state.history.push(
-        ChatMessage::new("tool", "run_command: exit code: 0")
-            .with_tool_result(ToolResultRecord {
-                tool_name: "run_command".to_owned(),
-                success: true,
-                ..Default::default()
-            }),
+        ChatMessage::new("tool", "run_command: exit code: 0").with_tool_result(ToolResultRecord {
+            tool_name: "run_command".to_owned(),
+            success: true,
+            ..Default::default()
+        }),
     );
     let mut assistant = ChatMessage::new("assistant", "Done.");
     assistant.response_time_ms = Some(125_000);
@@ -634,7 +654,11 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
     assert_eq!(separator.len(), 2);
-    assert!(separator[0].to_string().starts_with("─ Worked for 2m 05s ─"));
+    assert!(
+        separator[0]
+            .to_string()
+            .starts_with("─ Worked for 2m 05s ─")
+    );
     assert!(separator[1].to_string().is_empty());
 
     state.history[2].response_time_ms = Some(12_000);
@@ -690,13 +714,13 @@ fn high_verbosity_collapses_tool_output_without_mutating_history() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
 
     let mut state = AppState::new();
-    state.history.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
-        ToolCallRef {
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
             id: "call-1".to_owned(),
             name: "mcp_custom_tool".to_owned(),
             arguments: r#"{"path":"src"}"#.to_owned(),
-        },
-    ]));
+        }]),
+    );
     let body = (0..50)
         .map(|line| format!("line {line}"))
         .collect::<Vec<_>>()
@@ -736,7 +760,10 @@ fn high_verbosity_collapses_tool_output_without_mutating_history() {
 
 #[test]
 fn default_verbosity_is_high() {
-    assert_eq!(crate::app::Verbosity::default(), crate::app::Verbosity::High);
+    assert_eq!(
+        crate::app::Verbosity::default(),
+        crate::app::Verbosity::High
+    );
 }
 
 #[test]
@@ -1018,7 +1045,11 @@ fn code_blocks_render_as_lightweight_transcript_rows() {
 
     // The body remains copyable without a language/copy header or full-width panel.
     assert_eq!(copies.len(), 1);
-    let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>().join("\n");
+    let rendered = lines
+        .iter()
+        .map(Line::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(rendered.contains("Why Rust Outshines C#"));
     assert!(rendered.contains("A short line"));
     assert!(!rendered.contains("Copy 📋"));
@@ -1190,10 +1221,7 @@ fn thought_parser_handles_missing_open_tag() {
     let (answer, preview) =
         split_thought_blocks("Reasoning about user request.\n</think>\n\nFinal response");
     assert_eq!(answer, "Final response");
-    assert_eq!(
-        preview.as_deref(),
-        Some("Reasoning about user request.")
-    );
+    assert_eq!(preview.as_deref(), Some("Reasoning about user request."));
 }
 
 #[test]
@@ -1572,7 +1600,11 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
     state.live_tool_calls.push(crate::app::LiveToolCall::new(
-        "call-1", None, "run_command", "Bash", "cargo test",
+        "call-1",
+        None,
+        "run_command",
+        "Bash",
+        "cargo test",
     ));
 
     let line = super::activity_status_line(&state, false).to_string();
@@ -1608,7 +1640,11 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
 fn live_tool_cell_is_a_projection_not_history() {
     let mut state = AppState::new();
     state.live_tool_calls.push(crate::app::LiveToolCall::new(
-        "local:1", None, "view_file", "Read", "src/main.rs",
+        "local:1",
+        None,
+        "view_file",
+        "Read",
+        "src/main.rs",
     ));
 
     let text = super::render_live_tail(&state, 80, 24)
@@ -1639,9 +1675,8 @@ fn single_live_generic_tool_shows_its_action_without_using_heading() {
 
 #[test]
 fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
-    let mut call = crate::app::LiveToolCall::new(
-        "local:1", None, "run_command", "Bash", "cargo test",
-    );
+    let mut call =
+        crate::app::LiveToolCall::new("local:1", None, "run_command", "Bash", "cargo test");
     call.output.push_back(crate::app::LiveToolOutputChunk {
         stderr: false,
         text: (0..12).map(|line| format!("stdout {line}\n")).collect(),
@@ -1660,15 +1695,21 @@ fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
     assert_eq!(rendered[0], "• Running cargo test");
     assert!(rendered.iter().any(|line| line.contains("compiler error")));
     assert!(rendered.iter().any(|line| line.contains("lines")));
-    assert!(rendered.iter().any(|line| line.contains("4096 earlier bytes omitted")));
-    assert!(rendered.len() <= 8, "live output must remain bounded: {rendered:?}");
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("4096 earlier bytes omitted"))
+    );
+    assert!(
+        rendered.len() <= 8,
+        "live output must remain bounded: {rendered:?}"
+    );
 }
 
 #[test]
 fn high_verbosity_live_command_cell_shows_only_the_invocation() {
-    let mut call = crate::app::LiveToolCall::new(
-        "local:1", None, "run_command", "Bash", "cargo test",
-    );
+    let mut call =
+        crate::app::LiveToolCall::new("local:1", None, "run_command", "Bash", "cargo test");
     call.output.push_back(crate::app::LiveToolOutputChunk {
         stderr: false,
         text: "secret command output\n".to_owned(),
@@ -1685,7 +1726,11 @@ fn high_verbosity_live_command_cell_shows_only_the_invocation() {
     .collect::<Vec<_>>();
 
     assert_eq!(rendered, ["• Running cargo test"]);
-    assert!(!rendered.iter().any(|line| line.contains("secret command output")));
+    assert!(
+        !rendered
+            .iter()
+            .any(|line| line.contains("secret command output"))
+    );
 }
 
 #[test]
@@ -1702,8 +1747,13 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
     ));
     let mut terminal = Terminal::new(TestBackend::new(80, 18)).unwrap();
     terminal.draw(|frame| render(frame, &mut state)).unwrap();
-    let rendered = terminal.backend().buffer().content.iter()
-        .map(|cell| cell.symbol()).collect::<String>();
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
 
     assert!(rendered.contains("Question 1/1 (1 unanswered)"));
     assert!(rendered.contains("› 1. Option 1"));
@@ -1748,7 +1798,11 @@ fn action_required_status_wins_over_a_live_question_tool() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingQuestion;
     state.live_tool_calls.push(crate::app::LiveToolCall::new(
-        "question", None, "ask_question", "AskQuestion", "continue?",
+        "question",
+        None,
+        "ask_question",
+        "AskQuestion",
+        "continue?",
     ));
 
     assert_eq!(super::activity_status_label(&state), "Action Required");
@@ -1768,10 +1822,7 @@ fn transcript_cursor_never_recommits_history_or_stream_rows() {
 
     assert_eq!(cursor.take_history_range(3), 0..3);
     assert_eq!(cursor.take_history_range(3), 3..3);
-    assert_eq!(
-        cursor.take_stable_stream("alpha\n\nbeta"),
-        vec!["alpha"]
-    );
+    assert_eq!(cursor.take_stable_stream("alpha\n\nbeta"), vec!["alpha"]);
     assert!(cursor.take_stable_stream("alpha\n\nbeta").is_empty());
 }
 
@@ -1809,10 +1860,16 @@ fn transcript_cursor_reset_replays_history_after_resize() {
 fn transcript_cursor_holds_thought_stream_until_finalized() {
     let cursor = super::scrollback::TranscriptCursor::default();
 
-    assert!(cursor.pending_stable_stream("<think>\nPlanning\n").is_empty());
-    assert!(cursor
-        .pending_stable_stream("thoughtPlanning the response\n")
-        .is_empty());
+    assert!(
+        cursor
+            .pending_stable_stream("<think>\nPlanning\n")
+            .is_empty()
+    );
+    assert!(
+        cursor
+            .pending_stable_stream("thoughtPlanning the response\n")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1820,10 +1877,7 @@ fn transcript_cursor_keeps_an_incomplete_code_fence_together() {
     let mut cursor = super::scrollback::TranscriptCursor::default();
     let stream = "intro\n\n```rust\nfn main() {\n";
 
-    assert_eq!(
-        cursor.pending_stable_source(stream),
-        "intro\n\n".to_owned()
-    );
+    assert_eq!(cursor.pending_stable_source(stream), "intro\n\n".to_owned());
     assert_eq!(cursor.pending_stable_stream(stream), vec!["intro"]);
     assert_eq!(
         super::scrollback::mutable_stream_text(stream),
@@ -1987,10 +2041,7 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
         },
     );
 
-    let prose: Vec<_> = lines
-        .iter()
-        .filter(|line| !line.spans.is_empty())
-        .collect();
+    let prose: Vec<_> = lines.iter().filter(|line| !line.spans.is_empty()).collect();
     assert_eq!(prose[0].spans[0].content, "• ");
     let first_line = prose[0]
         .spans
@@ -2005,8 +2056,7 @@ fn assistant_messages_use_a_gutter_after_soft_reflow() {
 fn streamed_assistant_chunks_only_bullet_the_first_chunk() {
     let state = AppState::new();
     let first = super::render_committed_assistant_chunk(&state, "first line\n", 80, false);
-    let continuation =
-        super::render_committed_assistant_chunk(&state, "second line\n", 80, true);
+    let continuation = super::render_committed_assistant_chunk(&state, "second line\n", 80, true);
 
     assert_eq!(first[0].spans[0].content, "• ");
     assert_eq!(continuation[0].spans[0].content, "  ");
@@ -2055,7 +2105,12 @@ fn committed_user_messages_keep_regular_body_text() {
     let block = super::render_committed_history_block(&state, 0, 80);
 
     assert_eq!(block[0].spans[0].content, "› ");
-    assert!(!block[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
+    assert!(
+        !block[0].spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
 }
 
 #[test]
@@ -2121,7 +2176,11 @@ fn committed_thought_only_message_has_a_separator_before_tools() {
     let thought = super::render_committed_history_block(&state, 0, 80);
     let tool = super::render_committed_history_block(&state, 1, 80);
 
-    assert!(thought[0].to_string().contains("Thought for 718ms, 31 tokens"));
+    assert!(
+        thought[0]
+            .to_string()
+            .contains("Thought for 718ms, 31 tokens")
+    );
     assert!(thought.last().is_some_and(|line| line.spans.is_empty()));
     assert!(tool.first().is_some_and(|line| !line.spans.is_empty()));
 }
@@ -2172,7 +2231,10 @@ fn visible_streaming_text_keeps_working_status_until_completion() {
     let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
     let text = rendered.join(" ");
 
-    assert!(text.contains("streamed line 1"), "streaming lines: {rendered:?}");
+    assert!(
+        text.contains("streamed line 1"),
+        "streaming lines: {rendered:?}"
+    );
     assert!(text.contains("line 10"), "streaming lines: {rendered:?}");
     assert!(rendered.len() > 5, "streaming lines: {rendered:?}");
     assert!(rendered.iter().any(|line| line.contains("Working")));
@@ -2194,7 +2256,12 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
         last_copy_text: None,
     };
 
-    super::render_assistant_message("<think>\nFirst thought\n</think>\nFirst response", &mut lines, &mut copy_clicks, options);
+    super::render_assistant_message(
+        "<think>\nFirst thought\n</think>\nFirst response",
+        &mut lines,
+        &mut copy_clicks,
+        options,
+    );
 
     let options2 = super::AssistantRenderOptions {
         token_usage: None,
@@ -2207,7 +2274,12 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
         last_copy_text: None,
     };
 
-    super::render_assistant_message("<think>\nSecond thought\n</think>\nSecond response", &mut lines, &mut copy_clicks, options2);
+    super::render_assistant_message(
+        "<think>\nSecond thought\n</think>\nSecond response",
+        &mut lines,
+        &mut copy_clicks,
+        options2,
+    );
 
     let thought_indices: Vec<usize> = lines
         .iter()
@@ -2265,8 +2337,14 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
     let footer = (0..100)
         .map(|x| buffer[(x, footer_row)].symbol())
         .collect::<String>();
-    assert!(footer.contains(&state.model_name), "composer footer: {footer:?}");
-    assert!(!footer.contains("? for shortcuts"), "composer footer: {footer:?}");
+    assert!(
+        footer.contains(&state.model_name),
+        "composer footer: {footer:?}"
+    );
+    assert!(
+        !footer.contains("? for shortcuts"),
+        "composer footer: {footer:?}"
+    );
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
@@ -2395,7 +2473,9 @@ fn subagent_picker_renders_context_status_and_navigation_hint() {
 #[test]
 fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
     let mut state = AppState::new();
-    state.history.push(crate::app::ChatMessage::new("user", "parent task"));
+    state
+        .history
+        .push(crate::app::ChatMessage::new("user", "parent task"));
     let id = crate::app::SubagentController.spawn(
         &mut state,
         "child task",
@@ -2409,7 +2489,9 @@ fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
     state.subagents[0]
         .history
         .push(crate::app::ChatMessage::new("assistant", "child result"));
-    crate::app::SubagentController.select(&mut state, id).unwrap();
+    crate::app::SubagentController
+        .select(&mut state, id)
+        .unwrap();
 
     let rendered = render_state_to_text(&mut state, 100, 30);
 
@@ -2431,9 +2513,131 @@ fn active_subagent_context_is_named_in_the_composer_footer() {
         None,
         None,
     );
-    crate::app::SubagentController.select(&mut state, id).unwrap();
+    crate::app::SubagentController
+        .select(&mut state, id)
+        .unwrap();
 
     let rendered = render_state_to_text(&mut state, 100, 30);
 
     assert!(rendered.contains(&format!("agent-1 · {}", state.model_name)));
+}
+
+#[test]
+fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "test prompt"));
+    state.config.models = vec![
+        crate::config::ModelProfile {
+            name: "model-a".to_string(),
+            url: "http://localhost/a".to_string(),
+            model: "model-a".to_string(),
+            context_window: None,
+            engine: Some("Local".to_owned()),
+            api_key: None,
+            env_key: None,
+            tool_protocol: None,
+            enable_thinking: None,
+            max_tokens: None,
+            supports_vision: None,
+        },
+        crate::config::ModelProfile {
+            name: "model-b".to_string(),
+            url: "http://localhost/b".to_string(),
+            model: "model-b".to_string(),
+            context_window: None,
+            engine: Some("Local".to_owned()),
+            api_key: None,
+            env_key: None,
+            tool_protocol: None,
+            enable_thinking: None,
+            max_tokens: None,
+            supports_vision: None,
+        },
+    ];
+
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+
+    // Step 1: Open /model picker
+    state.show_model_picker = true;
+    let h1 = desired_height(&state, &mut transcript, 80, 24);
+    assert!(
+        h1 >= 14,
+        "modal open should request at least 14 rows, got {h1}"
+    );
+    terminal
+        .draw_height(h1, |f| {
+            render_with_transcript(f, &mut state, &mut transcript)
+        })
+        .unwrap();
+
+    // Step 2: Select model and close picker
+    state.show_model_picker = false;
+    let h2 = desired_height(&state, &mut transcript, 80, 24);
+    assert!(
+        h2 < h1,
+        "viewport should shrink on modal close, h1={h1}, h2={h2}"
+    );
+    terminal
+        .draw_height(h2, |f| {
+            render_with_transcript(f, &mut state, &mut transcript)
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..24)
+        .map(|r| (0..80).map(|c| buffer[(c, r)].symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt_count = rendered
+        .lines()
+        .filter(|line| line.contains("Ask RustCode to do anything"))
+        .count();
+    assert_eq!(
+        prompt_count, 1,
+        "must have exactly 1 composer prompt, got {prompt_count}:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Select model"),
+        "picker header must not remain after close"
+    );
+}
+
+#[test]
+fn viewport_expansion_followed_by_shrink_clears_stale_rows() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+
+    // Draw tall viewport with some state
+    terminal
+        .draw_height(16, |f| {
+            render_with_transcript(f, &mut state, &mut transcript);
+        })
+        .unwrap();
+
+    // Draw smaller viewport
+    terminal
+        .draw_height(6, |f| {
+            render_with_transcript(f, &mut state, &mut transcript);
+        })
+        .unwrap();
+
+    assert_eq!(terminal.area().height, 6);
+    let buffer = terminal.backend().buffer();
+    // Verify rows below the 6th row are empty
+    for row in 6..20 {
+        let line: String = (0..60).map(|col| buffer[(col, row)].symbol()).collect();
+        assert!(
+            line.trim().is_empty(),
+            "row {row} below active viewport must be cleared, found: {line:?}"
+        );
+    }
 }

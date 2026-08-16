@@ -1,21 +1,21 @@
+mod composer;
+mod events;
+mod frame_requester;
 mod highlight;
 mod history_cell;
+mod keymap;
 mod lru;
 mod markdown;
 mod modals;
-mod events;
-mod frame_requester;
 mod terminal_runtime;
 mod transcript;
-mod composer;
-mod keymap;
 
+pub(crate) use composer::{Composer, ComposerAction};
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
-pub(crate) use composer::{Composer, ComposerAction};
-pub(crate) use transcript::TranscriptModel;
 use history_cell::HistoryCell;
 pub(crate) use history_cell::TranscriptState;
+pub(crate) use transcript::TranscriptModel;
 pub(crate) mod scrollback;
 mod tool_result;
 pub(crate) use terminal_runtime::TerminalRuntime;
@@ -25,8 +25,7 @@ use highlight::{
     render_unified_diff, wrap_code_spans,
 };
 use markdown::{
-    render_markdown, unwrap_markdown_table_fences, wrap_prefixed_plain_text,
-    wrap_styled_spans,
+    render_markdown, unwrap_markdown_table_fences, wrap_prefixed_plain_text, wrap_styled_spans,
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
@@ -35,18 +34,15 @@ pub(crate) use modals::{
     question_custom_answer_event,
 };
 use modals::{
-    question_height, render_at_popup_menu, render_command_picker_modal, render_history_picker_modal,
-    render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
-    render_protocol_picker_modal, render_question_modal, render_theme_picker_modal,
-    render_subagent_picker_modal, render_thinking_picker_modal, render_tool_confirmation_modal,
-    render_verbosity_picker_modal,
-    tool_confirmation_height,
+    question_height, render_at_popup_menu, render_command_picker_modal,
+    render_history_picker_modal, render_mcp_config_modal, render_model_picker_modal,
+    render_popup_menu, render_protocol_picker_modal, render_question_modal,
+    render_subagent_picker_modal, render_theme_picker_modal, render_thinking_picker_modal,
+    render_tool_confirmation_modal, render_verbosity_picker_modal, tool_confirmation_height,
 };
 use tool_result::render_tool_result;
 
-use crate::app::activity::{
-    ActivityKind, classify_activity, classify_live_tools,
-};
+use crate::app::activity::{ActivityKind, classify_activity, classify_live_tools};
 use crate::app::{AppState, AppStatus, ChatMessage};
 use crate::inline_terminal::Frame;
 use ratatui::{
@@ -343,7 +339,9 @@ fn is_reasoning_preamble(text: &str) -> bool {
         "• First",
         "• The project",
     ];
-    PREAMBLE_STARTS.iter().any(|prefix| trimmed.starts_with(prefix))
+    PREAMBLE_STARTS
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
 }
 
 fn split_thought_blocks(content: &str) -> (String, Option<String>) {
@@ -660,11 +658,8 @@ fn render_assistant_message<'a>(
                         let mut j = i + 1;
                         let open_fence = next_fence.expect("opening fence has state");
                         while j < processed_lines.len()
-                            && !assistant_fence_transition(
-                                Some(open_fence),
-                                &processed_lines[j].1,
-                            )
-                            .0
+                            && !assistant_fence_transition(Some(open_fence), &processed_lines[j].1)
+                                .0
                         {
                             if !code_text.is_empty() {
                                 code_text.push('\n');
@@ -674,9 +669,10 @@ fn render_assistant_message<'a>(
                         }
 
                         if !code_text.is_empty() {
-                            let _copied_recently = last_copy_text.as_ref().is_some_and(|(text, at)| {
-                                text == &code_text && at.elapsed().as_secs() < 2
-                            });
+                            let _copied_recently =
+                                last_copy_text.as_ref().is_some_and(|(text, at)| {
+                                    text == &code_text && at.elapsed().as_secs() < 2
+                                });
                             copy_registry.push((lines.len(), code_text.clone()));
 
                             let rendered = if is_plain_lang(&current_lang) {
@@ -697,7 +693,9 @@ fn render_assistant_message<'a>(
                             } else if is_diff_lang(&current_lang) {
                                 code_text
                                     .lines()
-                                    .map(|line| highlight_diff_line(line, box_width, show_picker).spans)
+                                    .map(|line| {
+                                        highlight_diff_line(line, box_width, show_picker).spans
+                                    })
                                     .collect::<Vec<_>>()
                             } else {
                                 highlight_code_block(&code_text, &current_lang, show_picker)
@@ -794,12 +792,8 @@ fn render_assistant_message<'a>(
                 if lines.last().is_some_and(|l| !l.spans.is_empty()) {
                     lines.push(Line::from(""));
                 }
-                let markdown_lines = render_markdown(
-                    &normal_text,
-                    content_width,
-                    show_picker,
-                    !is_generating,
-                );
+                let markdown_lines =
+                    render_markdown(&normal_text, content_width, show_picker, !is_generating);
                 for markdown_line in markdown_lines {
                     if markdown_line.spans.is_empty() {
                         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
@@ -825,9 +819,7 @@ fn render_assistant_message<'a>(
     // A finalized thought-only response can hand off directly to a tool cell.
     // Keep the same single separator that finalized prose receives so the
     // thought preview does not run into the following Explored/Ran heading.
-    if !is_generating
-        && lines.last().is_some_and(|line| !line.spans.is_empty())
-    {
+    if !is_generating && lines.last().is_some_and(|line| !line.spans.is_empty()) {
         lines.push(Line::from(""));
     }
 }
@@ -2147,10 +2139,7 @@ fn command_child_lines(
     lines
 }
 
-fn command_summary_lines(
-    entry: &ToolTranscriptEntry,
-    show_picker: bool,
-) -> Vec<Line<'static>> {
+fn command_summary_lines(entry: &ToolTranscriptEntry, show_picker: bool) -> Vec<Line<'static>> {
     let bullet_color = if entry.success {
         COLOR_GREEN()
     } else {
@@ -2170,21 +2159,11 @@ fn command_summary_lines(
                 vec![
                     Span::styled(
                         "• ",
-                        get_themed_style(
-                            bullet_color,
-                            COLOR_BG(),
-                            Modifier::BOLD,
-                            show_picker,
-                        ),
+                        get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
                     ),
                     Span::styled(
                         if has_command { "Ran $ " } else { "Ran Bash" },
-                        get_themed_style(
-                            COLOR_TEXT(),
-                            COLOR_BG(),
-                            Modifier::BOLD,
-                            show_picker,
-                        ),
+                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
                     ),
                 ]
             } else {
@@ -2319,12 +2298,7 @@ pub(crate) fn render_committed_tool_result_group(
                 {
                     header.spans.push(Span::styled(
                         " (ctrl+o to expand)",
-                        get_themed_style(
-                            COLOR_MUTED(),
-                            COLOR_BG(),
-                            Modifier::ITALIC,
-                            show_picker,
-                        ),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
                     ));
                 }
                 lines.push(header);
@@ -2352,11 +2326,10 @@ pub(crate) fn render_committed_tool_result_group(
                 let identity = format!("{}\0{}", entry.action, entry.target);
                 if kind != ToolTranscriptKind::Explored || seen.insert(identity) {
                     let is_expanded = state.expanded_thoughts.contains(&entry.message_index);
-                    let show_hint =
-                        kind == ToolTranscriptKind::Tool
-                            && !entry.body.is_empty()
-                            && !is_expanded
-                            && matches!(state.verbosity, crate::app::Verbosity::Low);
+                    let show_hint = kind == ToolTranscriptKind::Tool
+                        && !entry.body.is_empty()
+                        && !is_expanded
+                        && matches!(state.verbosity, crate::app::Verbosity::Low);
                     lines.push(tool_child_line(entry, first_child, show_hint, show_picker));
                     first_child = false;
                     if kind == ToolTranscriptKind::Tool
@@ -2430,19 +2403,17 @@ pub(crate) fn render_work_separator_before_assistant(
         .map(|milliseconds| format!("─ Worked for {} ─", format_elapsed_compact(milliseconds)));
     let text = if let Some(label) = label {
         let label_width = label.width();
-        format!("{label}{}", "─".repeat((width as usize).saturating_sub(label_width)))
+        format!(
+            "{label}{}",
+            "─".repeat((width as usize).saturating_sub(label_width))
+        )
     } else {
         "─".repeat(width.max(1) as usize)
     };
     vec![
         Line::from(Span::styled(
             text,
-            get_themed_style(
-                COLOR_TURN_SEPARATOR(),
-                COLOR_BG(),
-                Modifier::empty(),
-                false,
-            ),
+            get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false),
         )),
         Line::from(""),
     ]
@@ -2484,13 +2455,10 @@ fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool 
 }
 
 fn next_visible_message(history: &[ChatMessage], index: usize) -> Option<&ChatMessage> {
-    history
-        .iter()
-        .skip(index + 1)
-        .find(|message| {
-            !((message.role == "system" || message.role == "assistant")
-                && is_hidden_system_notice(&message.content))
-        })
+    history.iter().skip(index + 1).find(|message| {
+        !((message.role == "system" || message.role == "assistant")
+            && is_hidden_system_notice(&message.content))
+    })
 }
 
 fn tool_result_needs_assistant_gap(history: &[ChatMessage], tool_index: usize) -> bool {
@@ -2721,8 +2689,6 @@ fn render_status_panel<'a>(
     )]));
 }
 
-
-
 pub(crate) fn build_claude_startup_banner(
     state: &AppState,
     total_width: usize,
@@ -2827,11 +2793,7 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
 
 /// Render only the mutable portion of the current turn. Completed history is
 /// deliberately excluded: it will be committed to terminal scrollback.
-pub(crate) fn render_live_tail(
-    state: &AppState,
-    width: u16,
-    height: u16,
-) -> Vec<Line<'static>> {
+pub(crate) fn render_live_tail(state: &AppState, width: u16, height: u16) -> Vec<Line<'static>> {
     let mut transcript = TranscriptState::default();
     render_live_tail_with_transcript(state, width, height, &mut transcript)
 }
@@ -2991,12 +2953,8 @@ pub(crate) fn render_committed_history_block(
     match message.role.as_str() {
         "user" => {
             let content = collapse_image_markers(&message.content);
-            let prefix_style = get_themed_style(
-                COLOR_PRIMARY(),
-                COLOR_BG(),
-                Modifier::BOLD,
-                show_picker,
-            );
+            let prefix_style =
+                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
             lines.extend(wrap_prefixed_plain_text(
                 &content,
                 width as usize,
@@ -3109,25 +3067,16 @@ fn render_committed_assistant_text_with_metrics(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
-fn render_live_conversation(
-    f: &mut Frame,
-    chunks: &[ratatui::layout::Rect],
-    state: &mut AppState,
-    transcript: &mut TranscriptState,
-) {
-    let area = chunks[0].inner(Margin {
+fn render_live_conversation(f: &mut Frame, area: ratatui::layout::Rect, lines: Vec<Line<'static>>) {
+    let inner_area = area.inner(Margin {
         vertical: 0,
         horizontal: 1,
     });
-    let lines = render_live_tail_with_transcript(state, area.width, area.height, transcript);
-    state.conversation_content_height = Paragraph::new(lines.clone())
-        .wrap(Wrap { trim: false })
-        .line_count(area.width) as u16;
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(COLOR_BG())),
-        area,
+        inner_area,
     );
 }
 
@@ -3142,11 +3091,7 @@ fn live_surface_padding(state: &AppState) -> (u16, u16) {
     (u16::from(!active), 1)
 }
 
-fn inset_vertical(
-    area: ratatui::layout::Rect,
-    top: u16,
-    bottom: u16,
-) -> ratatui::layout::Rect {
+fn inset_vertical(area: ratatui::layout::Rect, top: u16, bottom: u16) -> ratatui::layout::Rect {
     ratatui::layout::Rect::new(
         area.x,
         area.y.saturating_add(top),
@@ -3209,12 +3154,7 @@ pub(crate) fn desired_height(
         !at_files.is_empty(),
     ));
 
-    let live_lines = render_live_tail_with_transcript(
-        state,
-        inner_width,
-        available,
-        transcript,
-    );
+    let live_lines = render_live_tail_with_transcript(state, inner_width, available, transcript);
     let mut chat_height = Paragraph::new(live_lines)
         .wrap(Wrap { trim: false })
         .line_count(inner_width) as u16;
@@ -3249,7 +3189,8 @@ pub fn render_with_transcript(
 ) {
     theme::set_active_theme(&state.config.theme);
 
-    let completion_dismissed = state.dismissed_completion.as_ref() == state.completion_identity().as_ref();
+    let completion_dismissed =
+        state.dismissed_completion.as_ref() == state.completion_identity().as_ref();
     let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed {
         Vec::new()
     } else {
@@ -3264,11 +3205,7 @@ pub fn render_with_transcript(
     let input_height = if approval_active {
         tool_confirmation_height(state, f.area().height.saturating_sub(2))
     } else if question_active {
-        question_height(
-            state,
-            f.area().width,
-            f.area().height.saturating_sub(2),
-        )
+        question_height(state, f.area().width, f.area().height.saturating_sub(2))
     } else {
         input_lines + 2
     };
@@ -3276,9 +3213,10 @@ pub fn render_with_transcript(
 
     let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
         .unwrap_or((0, String::new()));
-    let at_files = if !completion_dismissed && (!at_query.is_empty()
-        || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
-            .ends_with('@'))
+    let at_files = if !completion_dismissed
+        && (!at_query.is_empty()
+            || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
+                .ends_with('@'))
     {
         crate::app::list_project_file_paths(&at_query)
     } else {
@@ -3319,11 +3257,25 @@ pub fn render_with_transcript(
         .saturating_sub(footer_height)
         .saturating_sub(popup_height);
     let layout_area = inset_vertical(f.area(), top_padding, bottom_padding);
-    let max_chunks = Layout::default()
+
+    let lines = render_live_tail_with_transcript(state, inner_width, max_chat_height, transcript);
+    state.conversation_content_height = Paragraph::new(lines.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width) as u16;
+
+    let min_welcome_height = if state.history.is_empty() { 15 } else { 0 };
+    let mut chat_height =
+        conversation_area_height(state.conversation_content_height, max_chat_height)
+            .max(min_welcome_height)
+            .min(max_chat_height);
+    if state.modal_open() {
+        chat_height = chat_height.max(14.min(max_chat_height));
+    }
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
         .horizontal_margin(0)
         .constraints([
-            Constraint::Length(max_chat_height),
+            Constraint::Length(chat_height),
             Constraint::Length(queue_block_height),
             Constraint::Length(input_height),
             Constraint::Length(footer_height),
@@ -3331,40 +3283,21 @@ pub fn render_with_transcript(
         ])
         .split(layout_area);
 
-    render_live_conversation(f, &max_chunks, state, transcript);
-
-    let min_welcome_height = if state.history.is_empty() { 15 } else { 0 };
-    let mut chat_height = conversation_area_height(state.conversation_content_height, max_chat_height)
-        .max(min_welcome_height)
-        .min(max_chat_height);
-    if state.modal_open() {
-        chat_height = chat_height.max(14.min(max_chat_height));
-    }
-    let chunks = if chat_height == max_chat_height {
-        max_chunks
-    } else {
-        let compact_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .horizontal_margin(0)
-            .constraints([
-                Constraint::Length(chat_height),
-                Constraint::Length(queue_block_height),
-                Constraint::Length(input_height),
-                Constraint::Length(footer_height),
-                Constraint::Length(popup_height),
-            ])
-            .split(layout_area);
-        render_live_conversation(f, &compact_chunks, state, transcript);
-        compact_chunks
-    };
+    render_live_conversation(f, chunks[0], lines);
 
     render_queue_line(f, &chunks, state);
     let input_margin = if approval_active {
         render_tool_confirmation_modal(f, state, chunks[2]);
-        Margin { vertical: 0, horizontal: 0 }
+        Margin {
+            vertical: 0,
+            horizontal: 0,
+        }
     } else if question_active {
         render_question_modal(f, state, chunks[2]);
-        Margin { vertical: 0, horizontal: 0 }
+        Margin {
+            vertical: 0,
+            horizontal: 0,
+        }
     } else {
         Composer::default().render(f, &chunks, state)
     };
@@ -3430,7 +3363,6 @@ pub fn render_with_transcript(
     if state.status == AppStatus::ProtocolPicker {
         render_protocol_picker_modal(f, state, input_box_area);
     }
-
 }
 
 #[cfg(test)]
