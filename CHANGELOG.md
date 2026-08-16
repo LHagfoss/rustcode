@@ -1,3 +1,9 @@
+## [v0.20.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.20.1) - 2026-08-16
+
+### Fixes
+- **UI/Terminal:** Preserve shell scrollback history on window resize by removing full terminal scrollback purges from the inline runtime ([#643](https://github.com/LHagfoss/rustcode/pull/643) / [`61aef7f`](https://github.com/LHagfoss/rustcode/commit/61aef7f))
+- **UI:** Format verbose loop detector recovery prompts into concise, human-friendly status lines while preserving complete prompt instructions for the model ([#643](https://github.com/LHagfoss/rustcode/pull/643) / [`61aef7f`](https://github.com/LHagfoss/rustcode/commit/61aef7f))
+
 ## [v0.20.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.20.0) - 2026-08-16
 
 ### Features
