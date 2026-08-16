@@ -2500,6 +2500,35 @@ fn render_status_panel<'a>(
         return;
     }
 
+    // Convert verbose internal agent-steering prompts into concise, human-friendly status lines in the UI.
+    let human_summary = if content.contains("stuck in a loop")
+        || content.contains("CRITICAL — you are stuck in a loop")
+    {
+        Some("Repetitive tool loop detected — stopping tools and requesting final response")
+    } else if content.contains("Evidence-based recovery:")
+        || content.contains("previous tool action repeated without making progress")
+    {
+        Some("Repetitive tool actions detected — nudging agent to make progress")
+    } else if content.starts_with("[harness: failure replan") {
+        Some("Repeated tool execution failures — requesting alternative strategy")
+    } else {
+        None
+    };
+
+    if let Some(summary) = human_summary {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "! ",
+                get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ),
+            Span::styled(
+                summary.to_string(),
+                get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ]));
+        return;
+    }
+
     let is_info_notice = lower.starts_with("session status")
         || lower.starts_with("session usage")
         || lower.starts_with("rustcode info")

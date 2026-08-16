@@ -1424,6 +1424,34 @@ fn status_panels_render_minimal_inline() {
 
     assert_eq!(notice_lines.len(), 1, "ordinary notice panel skips header");
     assert!(notice_lines[0].spans[0].content.contains("  "));
+
+    let mut loop_recovery_lines = Vec::new();
+    render_status_panel(
+        "[Evidence-based recovery: signal=no_new_information streak=4 action=view_file]. Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command.\nThe previous tool action repeated without making progress. Tools remain enabled for one recovery attempt.",
+        80,
+        false,
+        &mut loop_recovery_lines,
+    );
+    assert_eq!(loop_recovery_lines.len(), 1);
+    assert_eq!(loop_recovery_lines[0].spans[0].content, "! ");
+    assert_eq!(
+        loop_recovery_lines[0].spans[1].content,
+        "Repetitive tool actions detected — nudging agent to make progress"
+    );
+
+    let mut loop_abort_lines = Vec::new();
+    render_status_panel(
+        "[Evidence-based recovery: signal=no_new_information streak=6 action=view_file]. Use a different, evidence-producing next step.\nCRITICAL — you are stuck in a loop. Tools are now DISABLED for this turn. Do NOT emit any tool calls.",
+        80,
+        false,
+        &mut loop_abort_lines,
+    );
+    assert_eq!(loop_abort_lines.len(), 1);
+    assert_eq!(loop_abort_lines[0].spans[0].content, "! ");
+    assert_eq!(
+        loop_abort_lines[0].spans[1].content,
+        "Repetitive tool loop detected — stopping tools and requesting final response"
+    );
 }
 
 #[test]
