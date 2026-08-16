@@ -219,6 +219,7 @@ mod tests {
             reasoning_effort: None,
             max_tokens: None,
             supports_vision,
+            ..Default::default()
         }
     }
 

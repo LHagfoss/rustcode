@@ -56,6 +56,17 @@ pub struct ModelProfile {
     /// capability probe.
     #[serde(default)]
     pub supports_vision: Option<bool>,
+    /// Effective soft context target at which proactive compaction and context
+    /// optimization trigger, preventing requests from routinely driving close to
+    /// the theoretical maximum.
+    #[serde(default)]
+    pub soft_context_target: Option<u32>,
+    /// Hard upper limit on estimated prompt tokens plus completion reserve.
+    #[serde(default)]
+    pub hard_effective_limit: Option<u32>,
+    /// Conservative safety margin for provider chat-template framing and tokenizer variations.
+    #[serde(default)]
+    pub provider_overhead_margin: Option<u32>,
 }
 
 /// Fallback `max_tokens` used when a `ModelProfile` doesn't set its own.
@@ -68,10 +79,13 @@ pub const DEFAULT_REQUEST_MAX_TOKENS: u32 = 32768;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextBudget {
     pub context_window: u32,
+    pub soft_context_target: u32,
+    pub hard_effective_limit: u32,
     pub completion_reserve: u32,
     pub thinking_reserve: u32,
     pub tool_reserve: u32,
     pub safety_reserve: u32,
+    pub provider_overhead_margin: u32,
     pub history_tokens: u32,
 }
 
@@ -81,7 +95,12 @@ impl ModelProfile {
         // inflate a deliberately small profile and then send a request that
         // cannot fit the provider's configured window.
         let context_window = self.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW).max(1);
-        let configured_completion = self.max_tokens.unwrap_or(DEFAULT_REQUEST_MAX_TOKENS);
+        let default_completion = if self.is_local() {
+            (context_window / 8).clamp(1024, 8192)
+        } else {
+            DEFAULT_REQUEST_MAX_TOKENS.min((context_window / 4).max(1))
+        };
+        let configured_completion = self.max_tokens.unwrap_or(default_completion);
         let requested_completion = configured_completion
             .min((context_window / 4).max(1))
             .max(1);
@@ -98,6 +117,27 @@ impl ModelProfile {
         };
         let requested_tool = (context_window / 16).clamp(1, 4096);
         let requested_safety = (context_window / 32).clamp(1, 1024);
+
+        let provider_overhead_margin = self
+            .provider_overhead_margin
+            .unwrap_or_else(|| (context_window / 32).clamp(512, 2048))
+            .min(context_window.saturating_sub(1));
+
+        let hard_effective_limit = self
+            .hard_effective_limit
+            .unwrap_or_else(|| context_window.saturating_sub(provider_overhead_margin))
+            .clamp(1, context_window);
+
+        let soft_context_target = self
+            .soft_context_target
+            .unwrap_or_else(|| {
+                if self.is_local() {
+                    ((context_window as f64 * 0.70) as u32).clamp(1, hard_effective_limit)
+                } else {
+                    hard_effective_limit
+                }
+            })
+            .clamp(1, hard_effective_limit);
 
         // Keep the fields honest even for synthetic or unusually small model
         // profiles: the published reserves must never add up to more than the
@@ -116,10 +156,13 @@ impl ModelProfile {
         let history_tokens = context_window.saturating_sub(reserved);
         ContextBudget {
             context_window,
+            soft_context_target,
+            hard_effective_limit,
             completion_reserve,
             thinking_reserve,
             tool_reserve,
             safety_reserve,
+            provider_overhead_margin,
             history_tokens,
         }
     }
@@ -425,6 +468,7 @@ impl Default for AppConfig {
                     reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(false),
+                    ..Default::default()
                 },
                 ModelProfile {
                     name: "gemini-3.6-flash".to_string(),
@@ -439,6 +483,7 @@ impl Default for AppConfig {
                     reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(true),
+                    ..Default::default()
                 },
                 ModelProfile {
                     name: "gemma4:e2b-it-qat".to_string(),
@@ -453,6 +498,7 @@ impl Default for AppConfig {
                     reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(true),
+                    ..Default::default()
                 },
                 ModelProfile {
                     name: "tinkerer".to_string(),
@@ -467,6 +513,7 @@ impl Default for AppConfig {
                     reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(false),
+                    ..Default::default()
                 },
             ],
             tool_protocol: ToolProtocol::default(),

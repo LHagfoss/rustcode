@@ -947,6 +947,7 @@ pub async fn handle_enter(
                             reasoning_effort: None,
                             max_tokens: None,
                             supports_vision: None,
+                            ..Default::default()
                         });
                     }
                     s.config.default.set_big(name.clone());
@@ -1094,6 +1095,7 @@ pub async fn handle_enter(
                             reasoning_effort: None,
                             max_tokens: None,
                             supports_vision: None,
+                            ..Default::default()
                         });
                     }
                     s.config.default.set_big("ollama".to_string());

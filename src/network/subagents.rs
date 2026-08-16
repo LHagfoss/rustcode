@@ -5,8 +5,11 @@ use tokio::sync::Mutex;
 use super::loop_detect;
 use super::messages::{inject_system_reminder, trim_msgs_to_budget};
 use super::runner;
-use super::stream_request;
-use super::text::{continuation_nudge, strip_leading_think};
+use super::stream_request::stream_request;
+use super::text::{
+    continuation_nudge_for_category, format_continuation_assistant_message,
+    strip_leading_think,
+};
 use super::{
     MAX_ACTIVE_SUBAGENTS, StreamBuffer, compact_history_to_budget, confirm_and_execute,
     final_tool_diff, is_read_only_tool, push_status_line,
@@ -200,10 +203,11 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let collected = match runner::collect_response(move |previous| {
             let mut current_msgs = request_msgs.clone();
             if !previous.is_empty() {
-                let nudge = continuation_nudge(&previous);
+                let continuation_assistant = format_continuation_assistant_message(&previous);
+                let nudge = continuation_nudge_for_category(&previous, None);
                 current_msgs.push(serde_json::json!({
                     "role": "assistant",
-                    "content": previous
+                    "content": continuation_assistant
                 }));
                 current_msgs.push(serde_json::json!({
                     "role": "user",

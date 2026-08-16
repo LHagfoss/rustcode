@@ -201,6 +201,7 @@ pub async fn stream_request(
                 reasoning_effort: None,
                 max_tokens: None,
                 supports_vision: None,
+                ..Default::default()
             }
             .context_budget()
             .completion_reserve
@@ -260,6 +261,26 @@ pub async fn stream_request(
     );
 
     let request_start_time = std::time::Instant::now();
+    let estimated_prompt_tokens = estimate_token_usage(&aligned_messages, "")
+        .await
+        .map(|u| u.prompt_tokens)
+        .unwrap_or(0);
+
+    crate::logger::operational_event(
+        "context.request_composition",
+        serde_json::json!({
+            "model": model,
+            "messages": message_count,
+            "tools": tool_count,
+            "payload_bytes": payload_bytes,
+            "estimated_prompt_tokens": estimated_prompt_tokens,
+            "max_tokens": max_tokens,
+            "soft_context_target": profile.as_ref().map(|p| p.context_budget().soft_context_target),
+            "hard_effective_limit": profile.as_ref().map(|p| p.context_budget().hard_effective_limit),
+            "context_window": profile.as_ref().map(|p| p.context_budget().context_window),
+        }),
+    );
+
     crate::logger::operational_event(
         "provider.request_start",
         serde_json::json!({
@@ -592,6 +613,12 @@ pub async fn stream_request(
                                             cached_tokens: cached,
                                         });
 
+                                        let estimation_delta = if estimated_prompt_tokens > 0 {
+                                            Some((p as i64) - (estimated_prompt_tokens as i64))
+                                        } else {
+                                            None
+                                        };
+
                                         crate::logger::operational_event(
                                             "provider.completion",
                                             serde_json::json!({
@@ -600,6 +627,8 @@ pub async fn stream_request(
                                                 "completion_tokens": c,
                                                 "total_tokens": t,
                                                 "cached_tokens": cached,
+                                                "estimated_prompt_tokens": estimated_prompt_tokens,
+                                                "estimation_delta": estimation_delta,
                                                 "elapsed_ms": request_start_time.elapsed().as_millis() as u64,
                                             }),
                                         );
