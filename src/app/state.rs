@@ -10,6 +10,7 @@ pub enum AppStatus {
     AwaitingQuestion,
     VerbosityPicker,
     ThinkingPicker,
+    EffortPicker,
     ProtocolPicker,
 }
 
@@ -1339,6 +1340,7 @@ impl AppState {
             || self.status == AppStatus::AwaitingQuestion
             || self.status == AppStatus::VerbosityPicker
             || self.status == AppStatus::ThinkingPicker
+            || self.status == AppStatus::EffortPicker
             || self.status == AppStatus::ProtocolPicker
     }
 

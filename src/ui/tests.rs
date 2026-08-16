@@ -167,7 +167,7 @@ fn command_picker_keeps_multiple_commands_visible_above_the_composer() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    let visible_commands = ["New session", "Resume session", "Copy last reply"]
+    let visible_commands = ["New session", "Fork session", "Archive session"]
         .iter()
         .filter(|command| rendered.contains(**command))
         .count();
