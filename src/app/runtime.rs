@@ -1707,6 +1707,11 @@ impl AppRuntime {
                                                     &s, &app_state, &client,
                                                 );
                                             }
+                                            "/sync" => {
+                                                crate::app::actions::trigger_sync(
+                                                    &app_state, None, None,
+                                                );
+                                            }
                                             "/update" => {
                                                 crate::app::actions::trigger_update(
                                                     &app_state, &client,

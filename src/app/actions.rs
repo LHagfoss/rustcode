@@ -337,6 +337,15 @@ pub async fn handle_enter(
             "/quota" => {
                 trigger_quota_fetch(&s, state, client);
             }
+            "/sync" => {
+                let sub = tokens.get(1).map(|s| s.to_string());
+                let arg = tokens.get(2).map(|s| s.to_string());
+                s.input_buffer.clear();
+                s.cursor_position = 0;
+                drop(s);
+                trigger_sync(state, sub, arg);
+                return false;
+            }
             "/update" => {
                 s.input_buffer.clear();
                 s.cursor_position = 0;
@@ -1694,6 +1703,7 @@ pub fn build_help_text() -> String {
                 ("/delegate", "Allow subagents for next task only"),
                 ("/yolo", "Toggle automatic tool confirmation"),
                 ("/skills", "Discover and list custom skills"),
+                ("/sync", "Sync config, skills, and themes with Git"),
                 ("/copy", "Copy last assistant reply to clipboard"),
                 ("/memory", "Inspect or update bounded project memory"),
                 ("/changelog", "Show recent changelog updates"),
@@ -1828,6 +1838,58 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             Err(e) => {
                 let text = format!("Update task error: {e}");
                 s.set_warning_notice(text);
+            }
+        }
+    });
+}
+
+pub fn trigger_sync(state: &Arc<Mutex<AppState>>, subcommand: Option<String>, arg: Option<String>) {
+    let state_clone = Arc::clone(state);
+    tokio::spawn(async move {
+        {
+            let mut s = state_clone.lock().await;
+            s.set_notice("🔄 Syncing config repository...");
+        }
+
+        let result = tokio::task::spawn_blocking(move || match subcommand.as_deref() {
+            Some("pull") => {
+                crate::config::sync_config_pull().map(|_| "Config pull complete! 📥".to_string())
+            }
+            Some("push") => {
+                crate::config::sync_config_push().map(|_| "Config push complete! 💾".to_string())
+            }
+            Some("init") => {
+                if let Some(url) = arg {
+                    crate::config::init_sync_repo(&url)
+                        .map(|_| "Sync repository initialized! 🚀".to_string())
+                } else {
+                    Err("Usage: /sync init <remote-git-url>".to_string())
+                }
+            }
+            _ => {
+                crate::config::sync_config_pull()?;
+                crate::config::sync_config_push()?;
+                Ok("Config sync complete! 🚀".to_string())
+            }
+        })
+        .await;
+
+        let mut s = state_clone.lock().await;
+        match result {
+            Ok(Ok(msg)) => {
+                s.set_notice(format!("✅ {msg}"));
+                s.history.push(ChatMessage::new("system", format!("✅ {msg}")));
+            }
+            Ok(Err(err)) => {
+                s.set_warning_notice(format!("❌ {err}"));
+                s.history
+                    .push(ChatMessage::new("system", format!("❌ Sync error: {err}")));
+            }
+            Err(join_err) => {
+                let err_msg = format!("Sync task error: {join_err}");
+                s.set_warning_notice(format!("❌ {err_msg}"));
+                s.history
+                    .push(ChatMessage::new("system", format!("❌ {err_msg}")));
             }
         }
     });
