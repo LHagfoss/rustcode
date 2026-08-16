@@ -943,6 +943,9 @@ fn activity_status_label(state: &AppState) -> String {
         classify_live_tools(&state.live_tool_calls).unwrap_or(base_activity)
     };
     if activity.kind == ActivityKind::Working {
+        if state.current_thought_started_at.is_some() {
+            return "Thinking".to_string();
+        }
         return "Working".to_string();
     }
     activity.label

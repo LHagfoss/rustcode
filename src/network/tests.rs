@@ -1370,7 +1370,10 @@ async fn deterministic_compaction_keeps_goal_state_and_recent_activity() {
         history.push(
             ChatMessage::new(
                 "tool",
-                format!("run_command: compiler failure round {round}\n{}", "diagnostic ".repeat(120)),
+                format!(
+                    "run_command: compiler failure round {round}\n{}",
+                    "diagnostic ".repeat(120)
+                ),
             )
             .with_tool_result(crate::app::ToolResultRecord {
                 tool_name: "run_command".to_string(),
@@ -1386,12 +1389,20 @@ async fn deterministic_compaction_keeps_goal_state_and_recent_activity() {
 
     let record = history
         .iter()
-        .find(|message| message.content.starts_with("[Deterministic context record]"))
+        .find(|message| {
+            message
+                .content
+                .starts_with("[Deterministic context record]")
+        })
         .expect("over-budget local history should get a deterministic record");
     assert!(record.content.contains("original goal: repair the parser"));
     assert!(record.content.contains("src/parser.rs"));
     assert!(record.content.contains("CompilerFailed"));
-    assert!(history.iter().any(|message| message.content.contains("follow-up 9")));
+    assert!(
+        history
+            .iter()
+            .any(|message| message.content.contains("follow-up 9"))
+    );
 
     let mut provider_messages = history::to_messages(&history, "system prompt");
     trim_msgs_to_budget(&mut provider_messages, 500);
@@ -1416,7 +1427,8 @@ async fn local_context_preserves_task_state_across_model_window_sizes() {
                 if round == 0 {
                     "original task: repair the parser while preserving the public API".to_string()
                 } else if round == 17 {
-                    "current follow-up: resolve the remaining parser compiler error and verify it".to_string()
+                    "current follow-up: resolve the remaining parser compiler error and verify it"
+                        .to_string()
                 } else {
                     format!("inspect parser phase {round}")
                 },
@@ -1458,19 +1470,34 @@ async fn local_context_preserves_task_state_across_model_window_sizes() {
             .iter()
             .map(crate::network::messages::estimate_msg_tokens)
             .sum::<u32>();
-        assert!(request_tokens <= budget, "budget={budget}, tokens={request_tokens}");
+        assert!(
+            request_tokens <= budget,
+            "budget={budget}, tokens={request_tokens}"
+        );
         let rendered = messages
             .iter()
             .filter_map(|message| message.get("content").and_then(|content| content.as_str()))
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("original task: repair the parser"), "budget={budget}");
-        assert!(rendered.contains("current follow-up: resolve"), "budget={budget}");
+        assert!(
+            rendered.contains("original task: repair the parser"),
+            "budget={budget}"
+        );
+        assert!(
+            rendered.contains("current follow-up: resolve"),
+            "budget={budget}"
+        );
         assert!(rendered.contains("Project instructions"), "budget={budget}");
-        assert!(rendered.contains("do not change the public API"), "budget={budget}");
+        assert!(
+            rendered.contains("do not change the public API"),
+            "budget={budget}"
+        );
         assert!(rendered.contains("src/parser.rs"), "budget={budget}");
-        assert!(rendered.contains("verification succeeded"), "budget={budget}");
+        assert!(
+            rendered.contains("verification succeeded"),
+            "budget={budget}"
+        );
     }
 }
 
@@ -1488,9 +1515,8 @@ fn cancellation_persists_completed_results_and_typed_missing_results() {
             arguments: "{}".to_string(),
         },
     ];
-    let mut history = vec![
-        ChatMessage::new("assistant", "native calls").with_tool_calls(calls.clone()),
-    ];
+    let mut history =
+        vec![ChatMessage::new("assistant", "native calls").with_tool_calls(calls.clone())];
     turn_engine::append_cancelled_batch_results(
         &mut history,
         vec![ToolResult {
@@ -3029,7 +3055,10 @@ fn historical_assistant_reasoning_is_stripped_when_generating_messages() {
         assistant_msg.get("role").and_then(|r| r.as_str()),
         Some("assistant")
     );
-    let content = assistant_msg.get("content").and_then(|c| c.as_str()).unwrap();
+    let content = assistant_msg
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap();
     assert!(
         !content.contains("<think>"),
         "historical assistant reasoning must not be sent to provider"
@@ -3046,24 +3075,36 @@ fn compaction_prunes_massive_historical_reasoning() {
         ChatMessage::new("user", "Prompt 1"),
         ChatMessage::new(
             "assistant",
-            format!("<think>\n{}\n</think>\nShort answer 1", "deep thoughts ".repeat(5000)),
+            format!(
+                "<think>\n{}\n</think>\nShort answer 1",
+                "deep thoughts ".repeat(5000)
+            ),
         ),
         ChatMessage::new("user", "Prompt 2"),
         ChatMessage::new(
             "assistant",
-            format!("<think>\n{}\n</think>\nShort answer 2", "more thoughts ".repeat(5000)),
+            format!(
+                "<think>\n{}\n</think>\nShort answer 2",
+                "more thoughts ".repeat(5000)
+            ),
         ),
         ChatMessage::new("user", "Prompt 3 (recent)"),
         ChatMessage::new("assistant", "Recent answer"),
     ];
 
-    let before_tokens: usize = history.iter().map(compaction::estimate_message_tokens).sum();
+    let before_tokens: usize = history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
     assert!(before_tokens > 10000, "initial tokens should be large");
 
     let pruned = compaction::prune_historical_reasoning(&mut history, 2);
     assert_eq!(pruned, 2, "must prune 2 historical assistant messages");
 
-    let after_tokens: usize = history.iter().map(compaction::estimate_message_tokens).sum();
+    let after_tokens: usize = history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
     assert!(
         after_tokens < 500,
         "after reasoning pruning tokens should be drastically lower: got {after_tokens}"
@@ -3082,7 +3123,10 @@ fn model_profile_is_local_classification() {
         engine: Some("omlx".to_string()),
         ..ModelProfile::default()
     };
-    assert!(omlx_profile.is_local(), "omlx engine must be classified as local");
+    assert!(
+        omlx_profile.is_local(),
+        "omlx engine must be classified as local"
+    );
 
     let ollama_profile = ModelProfile {
         name: "ollama-model".to_string(),
@@ -3090,7 +3134,10 @@ fn model_profile_is_local_classification() {
         engine: Some("ollama".to_string()),
         ..ModelProfile::default()
     };
-    assert!(ollama_profile.is_local(), "ollama must be classified as local");
+    assert!(
+        ollama_profile.is_local(),
+        "ollama must be classified as local"
+    );
 
     let lmstudio_profile = ModelProfile {
         name: "lmstudio-model".to_string(),
@@ -3098,7 +3145,10 @@ fn model_profile_is_local_classification() {
         engine: Some("lmstudio".to_string()),
         ..ModelProfile::default()
     };
-    assert!(lmstudio_profile.is_local(), "lmstudio must be classified as local");
+    assert!(
+        lmstudio_profile.is_local(),
+        "lmstudio must be classified as local"
+    );
 
     let remote_openai = ModelProfile {
         name: "gpt-4o".to_string(),
@@ -3110,4 +3160,178 @@ fn model_profile_is_local_classification() {
         !remote_openai.is_local(),
         "remote OpenAI endpoint must not be classified as local"
     );
+}
+
+#[test]
+fn stress_test_long_agent_loop_20_turns_with_prefix_stability() {
+    let mut history: Vec<ChatMessage> = Vec::new();
+    let mut previous_provider_messages: Option<Vec<serde_json::Value>> = None;
+    let system_prompt = "You are RustCode, an autonomous coding agent.";
+
+    for turn in 1..=20 {
+        // User instruction / tool feedback
+        history.push(ChatMessage::new(
+            "user",
+            format!("Turn {turn}: Inspect and modify module {turn}"),
+        ));
+
+        // Generate provider messages for this turn
+        let mut provider_msgs = history::to_messages(&history, system_prompt);
+        let dynamic_ctx = format!("time: 12:{turn:02}:00\ncwd: /workspace\ntodos: []");
+        messages::attach_request_context_tail(&mut provider_msgs, &dynamic_ctx);
+
+        // Verify prefix stability: every message from turn N-1 (except its trailing synthetic context tail)
+        // must be IDENTICAL in turn N.
+        if let Some(prev) = &previous_provider_messages {
+            let stable_prefix_len = prev.len().saturating_sub(1);
+            for i in 0..stable_prefix_len {
+                assert_eq!(
+                    prev[i],
+                    provider_msgs[i],
+                    "Message index {i} mutated between turn {} and turn {}",
+                    turn - 1,
+                    turn
+                );
+            }
+        }
+
+        // Assistant responds with huge reasoning and a tool call
+        let reasoning = format!(
+            "<think>\nAnalyzing module {turn} in depth...\n{}\n</think>",
+            "reasoning details ".repeat(200)
+        );
+        let tool_call = crate::app::ToolCallRef {
+            id: format!("call_{turn}"),
+            name: "view_file".to_string(),
+            arguments: serde_json::json!({"path": format!("src/mod_{turn}.rs")}).to_string(),
+        };
+        let assistant_msg =
+            ChatMessage::new("assistant", &reasoning).with_tool_calls(vec![tool_call]);
+        history.push(assistant_msg);
+
+        // Tool output arrives
+        let tool_output =
+            format!("src/mod_{turn}.rs contents:\npub fn run_{turn}() {{ println!(\"ok\"); }}");
+        let mut tool_msg = ChatMessage::new("tool", format!("view_file: {tool_output}"));
+        tool_msg.tool_call_id = Some(format!("call_{turn}"));
+        history.push(tool_msg);
+
+        // Save current provider messages for next turn's prefix comparison
+        let mut current_turn_msgs = history::to_messages(&history, system_prompt);
+        messages::attach_request_context_tail(&mut current_turn_msgs, &dynamic_ctx);
+        previous_provider_messages = Some(current_turn_msgs);
+    }
+
+    // Verify final state:
+    // 1. History has 60 messages (20 turns * 3 messages per turn)
+    assert_eq!(history.len(), 60);
+
+    // 2. When converted to provider messages, all historical assistant reasoning was stripped!
+    let final_provider_msgs = history::to_messages(&history, system_prompt);
+    for msg in &final_provider_msgs {
+        if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
+            if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                assert!(
+                    !content.contains("<think>"),
+                    "Provider message must not contain raw <think> reasoning!"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn stress_test_compaction_under_massive_context_pressure() {
+    let mut history = Vec::new();
+
+    // Create 30 turns of large history (~120k tokens total)
+    for i in 0..30 {
+        history.push(ChatMessage::new("user", format!("Task step {i}")));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!(
+                "<think>\n{}\n</think>\nHere is the plan for step {i}.",
+                "extensive reasoning trace ".repeat(300)
+            ),
+        ));
+        let mut tool_res = ChatMessage::new(
+            "tool",
+            format!(
+                "run_command: output for step {i}:\n{}",
+                "data row\n".repeat(200)
+            ),
+        );
+        tool_res.tool_call_id = Some(format!("call_{i}"));
+        history.push(tool_res);
+    }
+
+    let initial_tokens: usize = history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
+    assert!(
+        initial_tokens > 20000,
+        "Initial tokens should be very high, got: {initial_tokens}"
+    );
+
+    let budget = 15000;
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    // Run deterministic local compaction
+    let compacted = compaction::maybe_compact_with_local_policy(
+        &reqwest::Client::new(),
+        "http://localhost:11434",
+        "qwen:32b",
+        &mut history,
+        budget,
+        &cancel,
+        true,
+    )
+    .await;
+    assert!(compacted, "Compaction must report success");
+
+    let post_compaction_tokens: usize = history
+        .iter()
+        .map(compaction::estimate_message_tokens)
+        .sum();
+    assert!(
+        post_compaction_tokens <= budget,
+        "Post compaction tokens ({post_compaction_tokens}) must be within budget ({budget})"
+    );
+
+    // Verify structured integrity of history after compaction
+    let provider_msgs = history::to_messages(&history, "system prompt");
+    assert!(
+        !provider_msgs.is_empty(),
+        "Provider messages must be non-empty"
+    );
+}
+
+#[test]
+fn session_interruption_and_recovery_safety() {
+    let mut state = crate::app::AppState::new();
+    state.active_session_id = "test-recovery-session".to_string();
+    state
+        .history
+        .push(ChatMessage::new("user", "Write a function"));
+    state.current_response = "<think>\nThinking about function...".to_string();
+    state.current_thought_started_at = Some(std::time::Instant::now());
+    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+        "call-temp",
+        None,
+        "run_command",
+        "Bash",
+        "cargo check",
+    ));
+
+    // Simulate killing/stopping turn: live tool calls & transient thought buffer are cleared
+    state.clear_live_tool_calls();
+    state.current_response.clear();
+    state.current_thought_started_at = None;
+    state.status = crate::app::AppStatus::Idle;
+
+    assert!(state.live_tool_calls.is_empty());
+    assert!(state.current_response.is_empty());
+    assert_eq!(state.status, crate::app::AppStatus::Idle);
+    assert_eq!(state.history.len(), 1);
 }
