@@ -1,3 +1,9 @@
+## [v0.22.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.22.0) - 2026-08-16
+
+### Features
+- **UI/Modals:** Unify all interactive picker modals (`/model`, `/thinking`, `/effort`, `/protocol`, `/verbosity`, `/theme`, and `/command`) to use rounded bordered containers, full-width bullet selection highlighting, and standardized keyboard footers matching the `/history` picker ([#649](https://github.com/LHagfoss/rustcode/pull/649))
+- **UI/Reasoning:** Add interactive `/effort` picker modal with live selection of `Low`, `Medium`, `High`, and `Off` reasoning effort levels ([#649](https://github.com/LHagfoss/rustcode/pull/649))
+
 ## [v0.21.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.21.0) - 2026-08-16
 
 ### Features
