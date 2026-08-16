@@ -141,6 +141,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Summarize the current chat session",
     },
     CommandInfo {
+        name: "/sync",
+        desc: "Sync config, skills, and themes with remote Git repo",
+    },
+    CommandInfo {
         name: "/update",
         desc: "Check the Homebrew tap and upgrade rustcode if a newer version exists",
     },

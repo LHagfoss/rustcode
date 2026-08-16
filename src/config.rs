@@ -1311,18 +1311,75 @@ pub fn get_usage_history() -> std::collections::BTreeMap<String, MonthlyUsage> {
     std::collections::BTreeMap::new()
 }
 
+pub const DEFAULT_SYNC_GITIGNORE: &str = r#"debug.log
+debug.log.*
+*.log
+*.bak
+symbols.db
+tool_output/
+attachments/
+sessions/*/sandbox/
+sessions/*/artifacts/
+sessions/*/subagents/
+sessions/*/image_cache.json
+.DS_Store
+*.tmp
+"#;
+
+pub fn ensure_sync_gitignore(dir: &Path) -> Result<(), String> {
+    let gitignore_path = dir.join(".gitignore");
+    if !gitignore_path.exists() {
+        return fs::write(&gitignore_path, DEFAULT_SYNC_GITIGNORE)
+            .map_err(|e| format!("Failed to write .gitignore: {e}"));
+    }
+
+    let current = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    let mut missing = Vec::new();
+    for line in DEFAULT_SYNC_GITIGNORE.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() && !current.lines().any(|l| l.trim() == trimmed) {
+            missing.push(trimmed);
+        }
+    }
+
+    if !missing.is_empty() {
+        let mut updated = current;
+        if !updated.ends_with('\n') && !updated.is_empty() {
+            updated.push('\n');
+        }
+        for item in missing {
+            updated.push_str(item);
+            updated.push('\n');
+        }
+        fs::write(&gitignore_path, updated)
+            .map_err(|e| format!("Failed to update .gitignore: {e}"))?;
+    }
+    Ok(())
+}
+
+pub fn get_sync_branch(dir: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output();
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !branch.is_empty() && branch != "HEAD" {
+            return branch;
+        }
+    }
+    "main".to_string()
+}
+
 pub fn init_sync_repo(remote_url: &str) -> Result<(), String> {
     let dir = get_config_dir().ok_or("Failed to get config directory")?;
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
     }
 
-    let gitignore_path = dir.join(".gitignore");
-    if !gitignore_path.exists() {
-        let default_gitignore =
-            "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
-        let _ = fs::write(&gitignore_path, default_gitignore);
-    }
+    ensure_sync_gitignore(&dir)?;
 
     let git_dir = dir.join(".git");
     if !git_dir.exists() {
@@ -1365,22 +1422,36 @@ pub fn sync_config_pull() -> Result<(), String> {
         );
     }
 
+    ensure_sync_gitignore(&dir)?;
+    let branch = get_sync_branch(&dir);
+
     let pull_out = std::process::Command::new("git")
-        .args(["pull", "--rebase", "origin", "main"])
+        .args(["pull", "--rebase", "--autostash", "origin", &branch])
         .current_dir(&dir)
         .output()
         .map_err(|e| format!("Failed to pull updates: {e}"))?;
 
     if pull_out.status.success() {
         let msg = String::from_utf8_lossy(&pull_out.stdout);
-        if !msg.contains("Already up to date") && !msg.contains("Current branch main is up to date")
-        {
+        if !msg.contains("Already up to date") && !msg.contains("Current branch") {
             println!("Pull result: {}", msg.trim());
         }
         Ok(())
     } else {
+        // Abort rebase if in progress to keep the repo clean and usable
+        let _ = std::process::Command::new("git")
+            .args(["rebase", "--abort"])
+            .current_dir(&dir)
+            .status();
+
         let err = String::from_utf8_lossy(&pull_out.stderr);
-        Err(format!("Pull failed: {}", err.trim()))
+        let out = String::from_utf8_lossy(&pull_out.stdout);
+        let combined = if !err.trim().is_empty() {
+            err.trim()
+        } else {
+            out.trim()
+        };
+        Err(format!("Pull failed (rebase aborted): {combined}"))
     }
 }
 
@@ -1394,16 +1465,20 @@ pub fn sync_config_push() -> Result<(), String> {
         );
     }
 
+    ensure_sync_gitignore(&dir)?;
+    let branch = get_sync_branch(&dir);
+
     let host = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("HOST"))
-        .unwrap_or_else(|_| "device".to_string());
-
-    let gitignore_path = dir.join(".gitignore");
-    if !gitignore_path.exists() {
-        let default_gitignore =
-            "debug.log\ndebug.log.*\n*.log\n*.bak\nsymbols.db\ntool_output/\nattachments/\n";
-        let _ = fs::write(&gitignore_path, default_gitignore);
-    }
+        .unwrap_or_else(|_| {
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "device".to_string())
+        });
 
     // 1. Stage all files in config directory
     let add_out = std::process::Command::new("git")
@@ -1440,13 +1515,13 @@ pub fn sync_config_push() -> Result<(), String> {
     // 3. Push to remote
     if committed {
         let push_out = std::process::Command::new("git")
-            .args(["push", "-u", "origin", "main"])
+            .args(["push", "-u", "origin", &branch])
             .current_dir(&dir)
             .output()
             .map_err(|e| format!("Failed to push to remote: {e}"))?;
 
         if push_out.status.success() {
-            println!("Successfully pushed config to remote origin/main! 🚀");
+            println!("Successfully pushed config to remote origin/{branch}! 🚀");
             Ok(())
         } else {
             let err = String::from_utf8_lossy(&push_out.stderr);
@@ -1963,5 +2038,32 @@ mod tests {
         assert!(provider_supports_function_calling(
             "https://api.z.ai/v1/chat/completions"
         ));
+    }
+
+    #[test]
+    fn test_ensure_sync_gitignore_creates_and_updates() {
+        let dir = TempDir::new().unwrap();
+        ensure_sync_gitignore(dir.path()).unwrap();
+        let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(content.contains("sessions/*/sandbox/"));
+        assert!(content.contains("sessions/*/artifacts/"));
+        assert!(content.contains("sessions/*/subagents/"));
+        assert!(content.contains("sessions/*/image_cache.json"));
+        assert!(content.contains("*.bak"));
+
+        // Test updating existing with missing entries
+        let custom_dir = TempDir::new().unwrap();
+        fs::write(custom_dir.path().join(".gitignore"), "custom_entry\n").unwrap();
+        ensure_sync_gitignore(custom_dir.path()).unwrap();
+        let updated = fs::read_to_string(custom_dir.path().join(".gitignore")).unwrap();
+        assert!(updated.starts_with("custom_entry\n"));
+        assert!(updated.contains("sessions/*/sandbox/"));
+    }
+
+    #[test]
+    fn test_get_sync_branch_fallback() {
+        let dir = TempDir::new().unwrap();
+        // Non-git directory falls back to main
+        assert_eq!(get_sync_branch(dir.path()), "main");
     }
 }
