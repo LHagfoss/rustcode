@@ -1,3 +1,18 @@
+## [v0.20.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.20.0) - 2026-08-16
+
+### Features
+- **Network/Context:** Implement assistant reasoning retention policy, stripping raw historical `<think>` scratchpads from provider payloads to drastically reduce prompt pressure and prevent context bloat ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`9a09bca`](https://github.com/LHagfoss/rustcode/commit/9a09bca))
+- **Network/Cache:** Keep historical provider messages immutable and attach request-local runtime context tails to maximize provider prompt-cache hit rates across turns ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`9a09bca`](https://github.com/LHagfoss/rustcode/commit/9a09bca))
+- **Network/Compaction:** Make compaction cache-aware and reasoning-aware, reliably reclaiming tens of thousands of tokens from historical scratchpads before resorting to hard trimming ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`9a09bca`](https://github.com/LHagfoss/rustcode/commit/9a09bca))
+- **Config/Providers:** Add explicit local classification for OpenAI-compatible local engines including oMLX, LM Studio, Ollama, and llama.cpp ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`9a09bca`](https://github.com/LHagfoss/rustcode/commit/9a09bca))
+- **Telemetry:** Add metadata-only request lifecycle operational events tracking request start, response headers, and completion token metrics ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`9a09bca`](https://github.com/LHagfoss/rustcode/commit/9a09bca))
+
+### Fixes
+- **UI:** Eliminate duplicate chat inputs and ghost lines on viewport shrink after opening/closing modal pickers by unifying measuring passes into a single layout calculation ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`785586b`](https://github.com/LHagfoss/rustcode/commit/785586b))
+- **UI/Terminal:** Fix buffer reference swap in `InlineTerminal` on odd frames and pre-clear mutable viewport before scrollback line insertion ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`785586b`](https://github.com/LHagfoss/rustcode/commit/785586b))
+- **Network/Text:** Make thought-tag stripping code-fence aware to preserve code blocks containing literal `<think>` tags ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`c7aa89c`](https://github.com/LHagfoss/rustcode/commit/c7aa89c))
+- **UI:** Report specific live activity status (`Thinking` during reasoning, `Working` during generation) ([#641](https://github.com/LHagfoss/rustcode/pull/641) / [`c7aa89c`](https://github.com/LHagfoss/rustcode/commit/c7aa89c))
+
 ## [v0.19.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.19.0) - 2026-08-15
 
 ### Features
