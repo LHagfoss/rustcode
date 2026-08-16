@@ -2985,3 +2985,129 @@ fn final_tool_diff_uses_the_fallback_only_when_it_has_real_content() {
     let diff = final_tool_diff(result, legacy_preview).expect("fallback should be used");
     assert!(diff.contains("old line") && diff.contains("new line"));
 }
+
+#[test]
+fn consecutive_turn_provider_payloads_have_identical_historical_prefix() {
+    // Turn 1: user says hello
+    let history_turn_1 = vec![ChatMessage::new("user", "Hello, assistant!")];
+    let mut msgs_1 = history::to_messages(&history_turn_1, "You are a helpful assistant.");
+    messages::attach_request_context_tail(&mut msgs_1, "time: 12:00:00\ncwd: /tmp");
+
+    // Turn 2: assistant answered, user asks follow-up
+    let history_turn_2 = vec![
+        ChatMessage::new("user", "Hello, assistant!"),
+        ChatMessage::new("assistant", "Hello! How can I help you today?"),
+        ChatMessage::new("user", "What is 2 + 2?"),
+    ];
+    let mut msgs_2 = history::to_messages(&history_turn_2, "You are a helpful assistant.");
+    messages::attach_request_context_tail(&mut msgs_2, "time: 12:01:00\ncwd: /tmp");
+
+    // Turn 1 had [system, user1, context_tail_1]
+    // Turn 2 has [system, user1, assistant1, user2, context_tail_2]
+    // The prefix [system, user1] must be EXACTLY byte-identical between Turn 1 and Turn 2.
+    assert_eq!(msgs_1[0], msgs_2[0], "system prompt must be identical");
+    assert_eq!(
+        msgs_1[1], msgs_2[1],
+        "user 1 message must be completely stable and unmutated"
+    );
+}
+
+#[test]
+fn historical_assistant_reasoning_is_stripped_when_generating_messages() {
+    let history = vec![
+        ChatMessage::new("user", "Calculate fibonacci"),
+        ChatMessage::new(
+            "assistant",
+            "<think>\nLet me think through recursion vs dynamic programming...\n100 lines of reasoning\n</think>\n\nHere is the Fibonacci function:\n```rust\nfn fib(n: u32) -> u32 { ... }\n```",
+        ),
+        ChatMessage::new("user", "Now write tests for it"),
+    ];
+
+    let messages = history::to_messages(&history, "system prompt");
+    let assistant_msg = &messages[2];
+    assert_eq!(
+        assistant_msg.get("role").and_then(|r| r.as_str()),
+        Some("assistant")
+    );
+    let content = assistant_msg.get("content").and_then(|c| c.as_str()).unwrap();
+    assert!(
+        !content.contains("<think>"),
+        "historical assistant reasoning must not be sent to provider"
+    );
+    assert!(
+        content.contains("Here is the Fibonacci function"),
+        "visible answer must be preserved"
+    );
+}
+
+#[test]
+fn compaction_prunes_massive_historical_reasoning() {
+    let mut history = vec![
+        ChatMessage::new("user", "Prompt 1"),
+        ChatMessage::new(
+            "assistant",
+            format!("<think>\n{}\n</think>\nShort answer 1", "deep thoughts ".repeat(5000)),
+        ),
+        ChatMessage::new("user", "Prompt 2"),
+        ChatMessage::new(
+            "assistant",
+            format!("<think>\n{}\n</think>\nShort answer 2", "more thoughts ".repeat(5000)),
+        ),
+        ChatMessage::new("user", "Prompt 3 (recent)"),
+        ChatMessage::new("assistant", "Recent answer"),
+    ];
+
+    let before_tokens: usize = history.iter().map(compaction::estimate_message_tokens).sum();
+    assert!(before_tokens > 10000, "initial tokens should be large");
+
+    let pruned = compaction::prune_historical_reasoning(&mut history, 2);
+    assert_eq!(pruned, 2, "must prune 2 historical assistant messages");
+
+    let after_tokens: usize = history.iter().map(compaction::estimate_message_tokens).sum();
+    assert!(
+        after_tokens < 500,
+        "after reasoning pruning tokens should be drastically lower: got {after_tokens}"
+    );
+    assert_eq!(history[1].content, "Short answer 1");
+    assert_eq!(history[3].content, "Short answer 2");
+}
+
+#[test]
+fn model_profile_is_local_classification() {
+    use crate::config::ModelProfile;
+
+    let omlx_profile = ModelProfile {
+        name: "local-qwen".to_string(),
+        url: "http://127.0.0.1:8000/v1".to_string(),
+        engine: Some("omlx".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(omlx_profile.is_local(), "omlx engine must be classified as local");
+
+    let ollama_profile = ModelProfile {
+        name: "ollama-model".to_string(),
+        url: "http://127.0.0.1:11434".to_string(),
+        engine: Some("ollama".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(ollama_profile.is_local(), "ollama must be classified as local");
+
+    let lmstudio_profile = ModelProfile {
+        name: "lmstudio-model".to_string(),
+        url: "http://localhost:1234/v1".to_string(),
+        engine: Some("lmstudio".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(lmstudio_profile.is_local(), "lmstudio must be classified as local");
+
+    let remote_openai = ModelProfile {
+        name: "gpt-4o".to_string(),
+        url: "https://api.openai.com/v1".to_string(),
+        engine: Some("openai".to_string()),
+        ..ModelProfile::default()
+    };
+    assert!(
+        !remote_openai.is_local(),
+        "remote OpenAI endpoint must not be classified as local"
+    );
+}

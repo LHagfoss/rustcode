@@ -18,7 +18,7 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
 pub(crate) use messages::{
-    append_to_last_message, inject_system_reminder, trim_msgs_to_budget, wrap_runtime_context,
+    attach_request_context_tail, inject_system_reminder, trim_msgs_to_budget,
 };
 
 #[path = "network/text.rs"]
@@ -1052,14 +1052,13 @@ pub(crate) async fn prepare_turn_request(
     {
         let (api_url, model_name, budget, local_model, active_session_id, captured_history) = {
             let s = state.lock().await;
-            let local_model = s.active_model_profile().is_some_and(|profile| {
-                profile.engine.as_deref().is_some_and(|engine| {
-                    matches!(
-                        engine.to_ascii_lowercase().as_str(),
-                        "local" | "ollama" | "llama.cpp" | "llama_cpp" | "lmstudio"
-                    )
-                })
-            });
+            let local_model = s
+                .active_model_profile()
+                .is_some_and(|profile| profile.is_local())
+                || {
+                    let lower = s.api_base_url.to_ascii_lowercase();
+                    lower.contains("11434") || lower.contains("ollama")
+                };
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
@@ -1323,9 +1322,9 @@ pub(crate) async fn prepare_turn_request(
     let mut msgs = history::to_messages(&history_snapshot, system_prompt.clone());
 
     // Attach turn-varying context to the tail so the static system prefix
-    // stays cache-stable. Done before budget trimming so its size counts
-    // toward the budget.
-    append_to_last_message(&mut msgs, &wrap_runtime_context(&dynamic_context));
+    // and historical conversation remain cache-stable. Done before budget
+    // trimming so its size counts toward the budget.
+    attach_request_context_tail(&mut msgs, &dynamic_context);
 
     // `budget_token_limit` already reserves completion, thinking, tool-schema,
     // and provider safety headroom from the active model profile. Keep this

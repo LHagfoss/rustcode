@@ -80,16 +80,28 @@ fn is_user_turn_boundary(message: &serde_json::Value) -> bool {
         && !message
             .get("content")
             .and_then(|content| content.as_str())
-            .is_some_and(|content| content.starts_with("<tool_result>"))
+            .is_some_and(|content| {
+                content.starts_with("<tool_result>") || content.starts_with("<rustcode_context>")
+            })
+}
+
+/// Attach turn-varying context to the tail of `msgs` as a request-local
+/// synthetic message, without mutating historical messages in place.
+///
+/// Keeping the historical prefix byte-identical across consecutive turns
+/// preserves provider prompt caches.
+pub(crate) fn attach_request_context_tail(msgs: &mut Vec<serde_json::Value>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let wrapped = wrap_runtime_context(text);
+    msgs.push(serde_json::json!({
+        "role": "user",
+        "content": wrapped,
+    }));
 }
 
 /// Append `text` to the content of the last message in `msgs`.
-///
-/// Used to place turn-varying context (environment delta, files-in-context,
-/// task plan) at the *tail* of the request rather than in the system prompt.
-/// Keeping the system prompt static across turns preserves the provider's
-/// automatic prefix cache — dynamic content in the prefix would invalidate the
-/// whole cached prefix every round and re-bill the full input.
 pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str) {
     if text.is_empty() {
         return;
