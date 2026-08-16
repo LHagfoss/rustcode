@@ -829,19 +829,21 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
         return 1;
     }
 
+    let indent = 2.min(inner_width);
     let mut lines_count = 1;
-    let mut col = 0;
+    let mut col = indent;
 
     for c in input_buffer.chars() {
         if c == '\n' {
             lines_count += 1;
-            col = 0;
+            col = indent;
         } else {
-            col += c.width().unwrap_or(1);
-            if col == inner_width {
+            let char_width = c.width().unwrap_or(1);
+            if col + char_width > inner_width && col > indent {
                 lines_count += 1;
-                col = 0;
+                col = indent;
             }
+            col += char_width;
         }
     }
     lines_count
@@ -1263,14 +1265,15 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let raw_prefix = &state.input_buffer[..safe_end];
         let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 
-        let prompt_span = Span::styled(
-            "› ",
-            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker),
-        );
+        let prompt_style =
+            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
+        let prompt_span = Span::styled("› ", prompt_style);
+        let continuation_span = Span::styled("  ", prompt_style);
         let mut current_line_spans = vec![prompt_span];
         let mut current_run: Option<(Style, String)> = None;
 
-        let mut col = 2;
+        let indent = 2.min(inner_width);
+        let mut col = indent;
         let mut row = 0;
 
         let total_chars = styled_chars.len();
@@ -1285,18 +1288,19 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
                     current_line_spans.push(Span::styled(s, st));
                 }
                 lines.push(Line::from(current_line_spans.clone()));
-                current_line_spans.clear();
+                current_line_spans = vec![continuation_span.clone()];
                 row += 1;
-                col = 0;
+                col = indent;
             } else {
-                if col >= inner_width {
+                let char_width = c.width().unwrap_or(1);
+                if col + char_width > inner_width && col > indent {
                     if let Some((st, s)) = current_run.take() {
                         current_line_spans.push(Span::styled(s, st));
                     }
                     lines.push(Line::from(current_line_spans.clone()));
-                    current_line_spans.clear();
+                    current_line_spans = vec![continuation_span.clone()];
                     row += 1;
-                    col = 0;
+                    col = indent;
                 }
 
                 match current_run.as_mut() {
@@ -1310,7 +1314,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
                         current_run = Some((style, c.to_string()));
                     }
                 }
-                col += c.width().unwrap_or(1);
+                col += char_width;
             }
         }
 
