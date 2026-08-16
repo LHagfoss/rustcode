@@ -10,7 +10,6 @@ use crate::ui::{
 use crossterm::{
     event::{self, KeyCode, KeyModifiers},
     execute,
-    terminal::{Clear, ClearType},
 };
 use ratatui::layout::Size;
 use std::error::Error;
@@ -393,11 +392,6 @@ impl AppRuntime {
             if observed_size != terminal_size {
                 terminal_runtime.terminal().autoresize()?;
                 if observed_size.width != terminal_size.width {
-                    execute!(
-                        terminal_runtime.terminal().backend_mut(),
-                        Clear(ClearType::Purge),
-                        Clear(ClearType::All)
-                    )?;
                     terminal_runtime.terminal().clear()?;
                     transcript_cursor.reset();
                     transcript_state.reset();
