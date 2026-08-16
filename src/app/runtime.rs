@@ -181,7 +181,6 @@ pub(crate) struct AppRuntime {
     app_event_receiver: mpsc::UnboundedReceiver<AppEvent>,
     agent_ui_event_sender: AgentUiEventSender,
     agent_ui_event_receiver: AgentUiEventReceiver,
-    replay_history: bool,
 }
 
 #[derive(Debug)]
@@ -231,7 +230,6 @@ impl AppRuntime {
             app_event_receiver,
             agent_ui_event_sender,
             agent_ui_event_receiver,
-            replay_history: false,
         })
     }
 
@@ -259,7 +257,6 @@ impl AppRuntime {
             app_event_receiver,
             agent_ui_event_sender,
             agent_ui_event_receiver,
-            replay_history: false,
         }
     }
 
@@ -365,7 +362,6 @@ impl AppRuntime {
             app_event_receiver,
             agent_ui_event_sender,
             agent_ui_event_receiver,
-            replay_history,
         } = self;
         let mut terminal_runtime = terminal_runtime
             .ok_or_else(|| Box::<dyn Error>::from("interactive terminal is unavailable"))?;
@@ -381,22 +377,16 @@ impl AppRuntime {
         let mut frame_stream = frame_stream;
         let mut app_event_receiver = app_event_receiver;
         let mut agent_ui_event_receiver = agent_ui_event_receiver;
-        let mut replay_history = replay_history;
         let composer = ui::Composer::new();
         loop {
             // Ratatui's inline viewport grows/shrinks by appending and clearing
-            // terminal rows. Once scrollback has been emitted those rows cannot be
-            // reflowed in place, so a resize must purge the visible transcript and
-            // replay it from the durable history plus the current stream.
+            // terminal rows. When the terminal is resized, update the viewport
+            // bounds and clear the live area so the active frame redraws cleanly.
             let observed_size = terminal_runtime.terminal().size()?;
             if observed_size != terminal_size {
                 terminal_runtime.terminal().autoresize()?;
                 if observed_size.width != terminal_size.width {
                     terminal_runtime.terminal().clear()?;
-                    transcript_cursor.reset();
-                    transcript_state.reset();
-                    stream_commits.reset();
-                    replay_history = true;
                 }
                 terminal_size = observed_size;
                 needs_redraw = true;
@@ -465,11 +455,7 @@ impl AppRuntime {
                 let terminal_width = terminal_runtime.terminal().size()?.width;
                 let live_response = guard.transcript().live_response().to_owned();
                 transcript_cursor.begin_stream(&live_response);
-                let stable_source = if replay_history {
-                    String::new()
-                } else {
-                    transcript_cursor.pending_stable_source(&live_response)
-                };
+                let stable_source = transcript_cursor.pending_stable_source(&live_response);
                 if !stable_source.is_empty() {
                     let is_continuation = transcript_cursor.has_committed_stream();
                     let lines = crate::ui::render_committed_assistant_chunk(
@@ -485,13 +471,9 @@ impl AppRuntime {
                 }
 
                 let history_len = guard.transcript().history_len();
-                let history_range = if replay_history {
-                    0..history_len
-                } else {
-                    transcript_cursor.pending_history_range(history_len)
-                };
+                let history_range = transcript_cursor.pending_history_range(history_len);
                 let stable_lines = stream_commits
-                    .take_ready(replay_history || !history_range.is_empty() || !response_active);
+                    .take_ready(!history_range.is_empty() || !response_active);
                 if !stable_lines.is_empty() {
                     crate::insert_scrollback_lines(
                         terminal_runtime.terminal(),
@@ -501,7 +483,6 @@ impl AppRuntime {
                 }
                 let mut blocks = Vec::new();
                 if crate::should_clear_mutable_viewport_before_history(
-                    replay_history,
                     response_just_finished,
                     transcript_cursor.is_at_start(),
                     !history_range.is_empty(),
@@ -511,7 +492,7 @@ impl AppRuntime {
                     // cannot survive beneath the newly committed transcript.
                     terminal_runtime.terminal().draw_height(0, |_| {})?;
                 }
-                if !replay_history && transcript_cursor.is_at_start() && !history_range.is_empty() {
+                if transcript_cursor.is_at_start() && !history_range.is_empty() {
                     let banner =
                         crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
                     if !banner.is_empty() {
@@ -597,26 +578,6 @@ impl AppRuntime {
                     )?;
                 }
 
-                // During a resize, history must be inserted before the still-live
-                // response. Re-emit the stable prefix only after the history pass.
-                if replay_history {
-                    let stable_source =
-                        transcript_cursor.pending_stable_source(&guard.current_response);
-                    if !stable_source.is_empty() {
-                        let lines = crate::ui::render_committed_assistant_chunk(
-                            &guard,
-                            &stable_source,
-                            terminal_width,
-                            false,
-                        );
-                        crate::insert_scrollback_lines(
-                            terminal_runtime.terminal(),
-                            lines,
-                            terminal_width,
-                        )?;
-                        transcript_cursor.commit_stable_stream(&stable_source);
-                    }
-                }
                 transcript_cursor.commit_history_through(history_range.end);
 
                 // Update terminal title based on the same activity snapshot used by
@@ -667,7 +628,6 @@ impl AppRuntime {
                     .draw_height(desired_height, |f| {
                         ui::render_with_transcript(f, &mut guard, &mut transcript_state)
                     })?;
-                replay_history = false;
                 drop(guard);
                 needs_redraw = false;
             }

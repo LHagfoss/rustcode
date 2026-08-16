@@ -49,12 +49,11 @@ pub(crate) fn insert_scrollback_lines<B: Backend>(
 }
 
 pub(crate) fn should_clear_mutable_viewport_before_history(
-    replay_history: bool,
     _response_just_finished: bool,
     _transcript_at_start: bool,
     has_pending_history: bool,
 ) -> bool {
-    !replay_history && has_pending_history
+    has_pending_history
 }
 
 fn background_task_history_message(
@@ -418,19 +417,16 @@ mod draw_loop_tests {
     #[test]
     fn pending_history_clears_mutable_cell_before_history_insertion() {
         assert!(should_clear_mutable_viewport_before_history(
-            false, true, false, true,
+            true, false, true,
         ));
         assert!(should_clear_mutable_viewport_before_history(
-            false, false, true, true,
+            false, true, true,
         ));
         assert!(should_clear_mutable_viewport_before_history(
-            false, false, false, true,
+            false, false, true,
         ));
         assert!(!should_clear_mutable_viewport_before_history(
-            true, true, false, true,
-        ));
-        assert!(!should_clear_mutable_viewport_before_history(
-            false, false, false, false,
+            false, false, false,
         ));
     }
 
