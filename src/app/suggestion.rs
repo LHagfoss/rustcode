@@ -165,6 +165,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Toggle automatic tool confirmation",
     },
     CommandInfo {
+        name: "/effort",
+        desc: "Show or set model reasoning effort (low|medium|high|off)",
+    },
+    CommandInfo {
         name: "/theme",
         desc: "Show or set UI color theme (default|light|nord|dracula|tokyo-night)",
     },

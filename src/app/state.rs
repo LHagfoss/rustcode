@@ -1399,6 +1399,7 @@ impl AppState {
                     env_key: None,
                     tool_protocol: None,
                     enable_thinking: None,
+                    reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: None,
                 }
@@ -1957,6 +1958,7 @@ mod protocol_tests {
             env_key: None,
             tool_protocol: Some(ToolProtocol::ApiNative),
             enable_thinking: None,
+            reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
         });

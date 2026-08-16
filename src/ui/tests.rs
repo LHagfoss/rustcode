@@ -122,6 +122,7 @@ fn model_picker_keeps_multiple_models_visible_above_the_composer() {
             env_key: None,
             tool_protocol: None,
             enable_thinking: None,
+            reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
         })
@@ -2575,6 +2576,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
             env_key: None,
             tool_protocol: None,
             enable_thinking: None,
+            reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
         },
@@ -2588,6 +2590,7 @@ fn model_picker_open_then_close_leaves_no_duplicate_composer_or_stale_rows() {
             env_key: None,
             tool_protocol: None,
             enable_thinking: None,
+            reasoning_effort: None,
             max_tokens: None,
             supports_vision: None,
         },
