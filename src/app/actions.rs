@@ -500,6 +500,48 @@ pub async fn handle_enter(
                     s.history.push(ChatMessage::new("system", label));
                 }
             }
+            "/effort" => {
+                let url = s.api_base_url.clone();
+                let value = match tokens.get(1) {
+                    None => {
+                        let current = s
+                            .config
+                            .models
+                            .iter()
+                            .find(|p| p.url == url)
+                            .and_then(|p| p.reasoning_effort.as_deref())
+                            .unwrap_or("default")
+                            .to_string();
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            format!("Current reasoning effort: {current}. Usage: /effort <low|medium|high|off>"),
+                        ));
+                        None
+                    }
+                    Some(&"low") => Some(Some("low".to_string())),
+                    Some(&"med") | Some(&"medium") => Some(Some("medium".to_string())),
+                    Some(&"high") => Some(Some("high".to_string())),
+                    Some(&"off") | Some(&"none") | Some(&"default") => Some(None),
+                    _ => {
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            "Invalid option. Use 'low', 'medium', 'high', or 'off'.",
+                        ));
+                        None
+                    }
+                };
+                if let Some(value) = value {
+                    if let Some(profile) = s.config.models.iter_mut().find(|p| p.url == url) {
+                        profile.reasoning_effort = value.clone();
+                    }
+                    crate::config::save_entire_config(&s.config);
+                    let label = match value {
+                        Some(ref e) => format!("Reasoning effort set to '{e}'."),
+                        None => "Reasoning effort cleared (default).".to_string(),
+                    };
+                    s.history.push(ChatMessage::new("system", label));
+                }
+            }
             "/theme" => {
                 let themes = crate::ui::theme::load_available_themes();
                 match tokens.get(1) {
@@ -898,6 +940,7 @@ pub async fn handle_enter(
                             env_key: None,
                             tool_protocol: None,
                             enable_thinking: None,
+                            reasoning_effort: None,
                             max_tokens: None,
                             supports_vision: None,
                         });
@@ -1044,6 +1087,7 @@ pub async fn handle_enter(
                             env_key: None,
                             tool_protocol: None,
                             enable_thinking: None,
+                            reasoning_effort: None,
                             max_tokens: None,
                             supports_vision: None,
                         });

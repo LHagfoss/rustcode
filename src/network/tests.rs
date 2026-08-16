@@ -3163,6 +3163,23 @@ fn model_profile_is_local_classification() {
 }
 
 #[test]
+fn model_profile_reasoning_effort() {
+    use crate::config::ModelProfile;
+
+    let profile = ModelProfile {
+        name: "qwen-3.8".to_string(),
+        url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
+        model: "Qwen3.8-27B-MTPLX-4bit".to_string(),
+        reasoning_effort: Some("low".to_string()),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("low"));
+    let budget = profile.context_budget();
+    assert!(budget.thinking_reserve > 0);
+}
+
+#[test]
 fn stress_test_long_agent_loop_20_turns_with_prefix_stability() {
     let mut history: Vec<ChatMessage> = Vec::new();
     let mut previous_provider_messages: Option<Vec<serde_json::Value>> = None;
