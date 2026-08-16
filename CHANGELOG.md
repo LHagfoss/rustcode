@@ -1,3 +1,16 @@
+## [v0.23.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.23.0) - 2026-08-16
+
+### Features
+- **Context Management & Optimization:** Overhaul context management for long-running agent coding sessions. Distinguish theoretical context window ceilings from effective soft context targets and hard limits with safe profile-aware completion reserves ([#653](https://github.com/LHagfoss/rustcode/pull/653))
+- **Continuation Reasoning Stripping:** Strip completed `<think>` scratchpads and bound unclosed reasoning traces from continuation assistant messages to eliminate geometric prompt amplification ([#653](https://github.com/LHagfoss/rustcode/pull/653))
+- **Structured Session Memory:** Introduce structured Tier B session memory preserving user goals, explicit constraints, key architectural discoveries, modified files, decisions, and failure records across repeated compaction passes without loss ([#653](https://github.com/LHagfoss/rustcode/pull/653))
+- **Category-Aware Continuations:** Tailor continuation nudges to interruption reasons (token limit cutoff, reasoning-only, unclosed tool syntax, or stated intent) ([#653](https://github.com/LHagfoss/rustcode/pull/653))
+- **Preflight Budgeting & Telemetry:** Implement preflight budgeting and request composition diagnostics with provider token estimation calibration ([#653](https://github.com/LHagfoss/rustcode/pull/653))
+- **CI/CD:** Optimize Windows CI runner build performance ([#651](https://github.com/LHagfoss/rustcode/pull/651))
+
+### Fixes
+- **UI/Terminal:** Prevent history turn duplication and scrollback corruption on terminal window resize ([#652](https://github.com/LHagfoss/rustcode/pull/652))
+
 ## [v0.22.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.22.0) - 2026-08-16
 
 ### Features
