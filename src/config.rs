@@ -18,7 +18,7 @@ const SESSIONS_DIR: &str = "sessions";
 #[allow(dead_code)]
 const MAX_SESSIONS: usize = 30;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct ModelProfile {
     pub name: String,
     pub url: String,
@@ -121,6 +121,22 @@ impl ModelProfile {
 impl ModelProfile {
     pub fn image_input_supported(&self) -> Option<bool> {
         self.supports_vision
+    }
+
+    pub fn is_local(&self) -> bool {
+        if let Some(ref engine) = self.engine {
+            let eng = engine.to_ascii_lowercase();
+            if matches!(
+                eng.as_str(),
+                "local" | "ollama" | "llama.cpp" | "llama_cpp" | "lmstudio" | "omlx" | "mlx" | "vllm" | "tgi"
+            ) {
+                return true;
+            }
+        }
+        let url_lower = self.url.to_ascii_lowercase();
+        url_lower.contains("ollama")
+            || url_lower.contains(":11434")
+            || url_lower.contains(":1234")
     }
 
     pub fn endpoint_url(&self) -> String {
