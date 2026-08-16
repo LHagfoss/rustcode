@@ -200,10 +200,19 @@ pub(crate) fn to_messages(
             "role": "assistant",
             "content": format!("```tool\n{}\n```", serde_json::json!({"name": call.name, "arguments": call.arguments})),
         }),
-        HistoryEntry::Assistant(content) => serde_json::json!({
-            "role": "assistant",
-            "content": content,
-        }),
+        HistoryEntry::Assistant(content) => {
+            let prose = super::text::strip_think_blocks(&content);
+            let prose = prose.trim();
+            let final_content = if prose.is_empty() {
+                "(completed reasoning)".to_string()
+            } else {
+                prose.to_string()
+            };
+            serde_json::json!({
+                "role": "assistant",
+                "content": final_content,
+            })
+        }
         HistoryEntry::System(content) |
         HistoryEntry::CompactionSummary(content) | HistoryEntry::Lifecycle(content) => serde_json::json!({
             "role": "system",

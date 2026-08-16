@@ -154,22 +154,59 @@ pub(crate) fn promote_bare_thought_markers(content: &str) -> String {
     out
 }
 
-/// Remove every `<think>...</think>` span so we can inspect the model's actual
-/// answer/tool output.
+/// Remove top-level `<think>...</think>` spans outside code blocks so we can
+/// inspect the model's actual answer/tool output without corrupting code that
+/// contains literal `<think>` tags.
 pub(crate) fn strip_think_blocks(content: &str) -> String {
     let mut out = String::new();
-    let mut rest = content;
-    while let Some(start) = rest.find("<think>") {
-        out.push_str(&rest[..start]);
-        if let Some(end) = rest[start..].find("</think>") {
-            rest = &rest[start + end + "</think>".len()..];
-        } else {
-            // unclosed — drop the remainder (handled by the unclosed-think check)
-            rest = "";
-            break;
+    let mut in_fence = false;
+    let mut fence_marker = "";
+    let mut in_think = false;
+
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if !in_think && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
+            let marker = if trimmed.starts_with("```") {
+                "```"
+            } else {
+                "~~~"
+            };
+            if !in_fence {
+                in_fence = true;
+                fence_marker = marker;
+            } else if trimmed.starts_with(fence_marker) {
+                in_fence = false;
+            }
+            out.push_str(line);
+            continue;
+        }
+
+        if in_fence {
+            out.push_str(line);
+            continue;
+        }
+
+        let mut rest = line;
+        while !rest.is_empty() {
+            if in_think {
+                if let Some(end) = rest.find("</think>") {
+                    in_think = false;
+                    rest = &rest[end + "</think>".len()..];
+                } else {
+                    break;
+                }
+            } else {
+                if let Some(start) = rest.find("<think>") {
+                    out.push_str(&rest[..start]);
+                    in_think = true;
+                    rest = &rest[start + "<think>".len()..];
+                } else {
+                    out.push_str(rest);
+                    break;
+                }
+            }
         }
     }
-    out.push_str(rest);
     out
 }
 
@@ -381,5 +418,21 @@ mod tests {
     fn test_is_cut_off_ignores_genuine_final_answers() {
         let content = "<think>done</think>\n\nAll files are created and the game runs end to end. Let me know if you'd like any tweaks.";
         assert!(!is_cut_off(content, None));
+    }
+
+    #[test]
+    fn strip_think_blocks_preserves_code_fences_with_think_tags() {
+        let input = "<think>\nThinking about xml structure\n</think>\n\nHere is the config:\n```xml\n<think>This is literal XML</think>\n```\nDone.";
+        let stripped = strip_think_blocks(input);
+        assert!(!stripped.contains("Thinking about xml structure"));
+        assert!(stripped.contains("```xml\n<think>This is literal XML</think>\n```"));
+        assert!(stripped.contains("Done."));
+    }
+
+    #[test]
+    fn strip_think_blocks_drops_unclosed_thought_at_end() {
+        let input = "<think>\nUnfinished thought...";
+        let stripped = strip_think_blocks(input);
+        assert_eq!(stripped.trim(), "");
     }
 }

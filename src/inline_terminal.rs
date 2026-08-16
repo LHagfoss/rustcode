@@ -145,12 +145,13 @@ where
             let clear_at = if self.viewport_area.is_empty() {
                 area.as_position()
             } else {
-                self.viewport_area.as_position()
+                Position::new(0, self.viewport_area.y.min(area.y))
             };
             self.backend.set_cursor_position(clear_at)?;
             self.backend.clear_region(ClearType::AfterCursor)?;
             self.set_viewport_area(area);
-            self.buffers[1 - self.current].reset();
+            self.buffers[0].reset();
+            self.buffers[1].reset();
         }
 
         let mut frame = Frame {
@@ -162,11 +163,11 @@ where
         let cursor_position = frame.cursor_position;
 
         let (previous, current) = if self.current == 0 {
-            let (current, previous) = self.buffers.split_at_mut(1);
-            (&previous[0], &current[0])
+            let (first, second) = self.buffers.split_at_mut(1);
+            (&second[0], &first[0])
         } else {
-            let (previous, current) = self.buffers.split_at_mut(1);
-            (&previous[0], &current[0])
+            let (first, second) = self.buffers.split_at_mut(1);
+            (&first[0], &second[0])
         };
         self.backend.draw(previous.diff_iter(current))?;
 
@@ -210,8 +211,7 @@ where
             let to_draw = buffer_height.min(screen_height);
             let scroll_up = 0.max(drawn_height + to_draw - screen_height);
             self.scroll_screen_up(scroll_up as u16)?;
-            cells =
-                self.draw_rows((drawn_height - scroll_up) as u16, to_draw as u16, cells)?;
+            cells = self.draw_rows((drawn_height - scroll_up) as u16, to_draw as u16, cells)?;
             drawn_height += to_draw - scroll_up;
             buffer_height -= to_draw;
         }
