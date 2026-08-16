@@ -2676,3 +2676,54 @@ fn viewport_expansion_followed_by_shrink_clears_stale_rows() {
         );
     }
 }
+
+#[test]
+fn multiline_input_indentation_aligns_continuation_lines() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    state.input_buffer = "first line\nsecond line\nthird line".to_string();
+    state.cursor_position = state.input_buffer.len();
+
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+
+    terminal
+        .draw_height(10, |f| {
+            render_with_transcript(f, &mut state, &mut transcript);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let mut rendered_lines = Vec::new();
+    for row in 0..10 {
+        let line: String = (0..80).map(|col| buffer[(col, row)].symbol()).collect();
+        if !line.trim().is_empty() {
+            rendered_lines.push(line);
+        }
+    }
+
+    // Check that the first line starts with "› first line" and second line starts with "  second line"
+    let first = rendered_lines.iter().find(|l| l.contains("first line")).expect("first line rendered");
+    let second = rendered_lines.iter().find(|l| l.contains("second line")).expect("second line rendered");
+    let third = rendered_lines.iter().find(|l| l.contains("third line")).expect("third line rendered");
+
+    assert!(first.contains("› first line"), "first line must start with prompt chevron: {first}");
+    assert!(second.contains("  second line"), "second line must have 2-space padding: {second}");
+    assert!(third.contains("  third line"), "third line must have 2-space padding: {third}");
+}
+
+#[test]
+fn count_input_lines_accounts_for_prompt_indent() {
+    assert_eq!(super::count_input_lines("", 80), 1);
+    assert_eq!(super::count_input_lines("hello", 80), 1);
+    assert_eq!(super::count_input_lines("hello\nworld", 80), 2);
+    assert_eq!(super::count_input_lines("line1\nline2\nline3", 80), 3);
+
+    // With width 10, indent is 2, available is 8 chars per line
+    // "12345678" takes 8 chars + 2 indent = 10 -> fits on line 1
+    // Next char triggers wrap to line 2
+    assert_eq!(super::count_input_lines("12345678", 10), 1);
+    assert_eq!(super::count_input_lines("123456789", 10), 2);
+}
