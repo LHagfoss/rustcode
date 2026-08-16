@@ -1,3 +1,12 @@
+## [v0.21.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.21.0) - 2026-08-16
+
+### Features
+- **Config/Reasoning:** Add `/effort` command (`low`, `medium`, `high`, `off`) and forward `reasoning_effort` in OpenAI/oMLX requests to control reasoning token depth without disabling thinking mode ([#647](https://github.com/LHagfoss/rustcode/pull/647) / [`55e7372`](https://github.com/LHagfoss/rustcode/commit/55e7372))
+- **Sync:** Harden gitignore rules, autostash rebase recovery, dynamic branch targeting, and interactive `/sync` ([#645](https://github.com/LHagfoss/rustcode/pull/645) / [`d905950`](https://github.com/LHagfoss/rustcode/commit/d905950))
+
+### Fixes
+- **UI:** Align multiline and wrapped input buffer lines with 2-space indentation padding ([#646](https://github.com/LHagfoss/rustcode/pull/646) / [`b957839`](https://github.com/LHagfoss/rustcode/commit/b957839))
+
 ## [v0.20.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.20.1) - 2026-08-16
 
 ### Fixes
