@@ -246,6 +246,31 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
     pruned
 }
 
+/// Strip `<think>...</think>` blocks from older assistant messages.
+///
+/// Historical reasoning scratchpads in completed turns dominate context growth
+/// without providing continuity value once the answer or tool call is finalized.
+pub fn prune_historical_reasoning(history: &mut [ChatMessage], keep_recent_turns: usize) -> usize {
+    let mut pruned = 0;
+    let cutoff = history.len().saturating_sub(keep_recent_turns);
+    for message in &mut history[..cutoff] {
+        if message.role == "assistant" && message.content.contains("<think>") {
+            let stripped = super::text::strip_think_blocks(&message.content);
+            let trimmed = stripped.trim();
+            let new_content = if trimmed.is_empty() {
+                "(completed reasoning)".to_string()
+            } else {
+                trimmed.to_string()
+            };
+            if new_content != message.content {
+                message.content = new_content;
+                pruned += 1;
+            }
+        }
+    }
+    pruned
+}
+
 fn has_failure_or_diagnostic(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     lower.contains("compiler errors")
@@ -371,6 +396,7 @@ pub async fn maybe_compact_with_local_policy(
 
     let duplicate_reads = prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     let historical_outputs = prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
+    let pruned_reasoning = prune_historical_reasoning(history, KEEP_RECENT_TURNS);
     let old_outputs = prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
 
     // 2. Count the post-prune history once. `history` is not touched again
@@ -392,12 +418,12 @@ pub async fn maybe_compact_with_local_policy(
             total_tokens,
             budget,
             duplicate_reads,
-            historical_outputs + old_outputs,
+            historical_outputs + old_outputs + pruned_reasoning,
             false,
             false,
             history.len(),
         );
-        return duplicate_reads + historical_outputs + old_outputs > 0;
+        return duplicate_reads + historical_outputs + old_outputs + pruned_reasoning > 0;
     }
 
     // Determine how many messages to summarize.
@@ -527,6 +553,7 @@ pub async fn force_compact_with_budget(
     let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
+    prune_historical_reasoning(history, KEEP_RECENT_TURNS);
     let prune_threshold = budget
         .map(|b| (b as f64 * 0.6) as usize)
         .unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD);

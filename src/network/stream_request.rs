@@ -255,6 +255,17 @@ pub async fn stream_request(
         )
     );
 
+    let request_start_time = std::time::Instant::now();
+    crate::logger::operational_event(
+        "provider.request_start",
+        serde_json::json!({
+            "model": model,
+            "messages": message_count,
+            "tools": tool_count,
+            "payload_bytes": payload_bytes,
+        }),
+    );
+
     let resolved_url = {
         let trimmed = url.trim_end_matches('/');
         if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
@@ -321,6 +332,14 @@ pub async fn stream_request(
                 dbg_log!(
                     "stream_request: Received response status: {}",
                     resp.status()
+                );
+                crate::logger::operational_event(
+                    "provider.response_headers",
+                    serde_json::json!({
+                        "model": model,
+                        "status": resp.status().as_u16(),
+                        "elapsed_ms": request_start_time.elapsed().as_millis() as u64,
+                    }),
                 );
                 break resp;
             }
@@ -568,6 +587,18 @@ pub async fn stream_request(
                                             total_tokens: t as u32,
                                             cached_tokens: cached,
                                         });
+
+                                        crate::logger::operational_event(
+                                            "provider.completion",
+                                            serde_json::json!({
+                                                "model": model,
+                                                "prompt_tokens": p,
+                                                "completion_tokens": c,
+                                                "total_tokens": t,
+                                                "cached_tokens": cached,
+                                                "elapsed_ms": request_start_time.elapsed().as_millis() as u64,
+                                            }),
+                                        );
                                     }
                             } else {
                                 dbg_log!("stream_request: Failed to parse JSON from data payload: '{}'", json_str);

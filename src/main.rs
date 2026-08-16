@@ -18,8 +18,8 @@ mod tools;
 mod ui;
 mod update;
 
-use crate::app::{AppState, ChatMessage};
 use crate::app::runtime::AppRuntime;
+use crate::app::{AppState, ChatMessage};
 use crate::ui::TerminalRuntime;
 use clap::Parser;
 use ratatui::{
@@ -50,13 +50,11 @@ pub(crate) fn insert_scrollback_lines<B: Backend>(
 
 pub(crate) fn should_clear_mutable_viewport_before_history(
     replay_history: bool,
-    response_just_finished: bool,
-    transcript_at_start: bool,
+    _response_just_finished: bool,
+    _transcript_at_start: bool,
     has_pending_history: bool,
 ) -> bool {
-    !replay_history
-        && has_pending_history
-        && (response_just_finished || transcript_at_start)
+    !replay_history && has_pending_history
 }
 
 fn background_task_history_message(
@@ -86,7 +84,9 @@ fn background_task_history_message(
 }
 
 fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
-    state.pending_queue.push(format!("__task_wakeup__:{task_id}"));
+    state
+        .pending_queue
+        .push(format!("__task_wakeup__:{task_id}"));
     state.request_redraw();
 }
 
@@ -391,7 +391,7 @@ fn print_exit_summary(summary: &ExitSummary) {
 #[cfg(test)]
 mod draw_loop_tests {
     use super::{
-        background_task_history_message, ExitSummary, format_number, queue_background_wakeup,
+        ExitSummary, background_task_history_message, format_number, queue_background_wakeup,
         should_clear_mutable_viewport_before_history,
     };
 
@@ -416,18 +416,21 @@ mod draw_loop_tests {
     }
 
     #[test]
-    fn finalized_response_clears_mutable_cell_before_history_insertion() {
+    fn pending_history_clears_mutable_cell_before_history_insertion() {
         assert!(should_clear_mutable_viewport_before_history(
             false, true, false, true,
         ));
         assert!(should_clear_mutable_viewport_before_history(
             false, false, true, true,
         ));
-        assert!(!should_clear_mutable_viewport_before_history(
+        assert!(should_clear_mutable_viewport_before_history(
             false, false, false, true,
         ));
         assert!(!should_clear_mutable_viewport_before_history(
             true, true, false, true,
+        ));
+        assert!(!should_clear_mutable_viewport_before_history(
+            false, false, false, false,
         ));
     }
 
