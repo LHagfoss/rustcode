@@ -179,6 +179,7 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
             | AppStatus::AwaitingQuestion
             | AppStatus::VerbosityPicker
             | AppStatus::ThinkingPicker
+            | AppStatus::EffortPicker
             | AppStatus::ProtocolPicker
     );
 
@@ -237,6 +238,7 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
         | AppStatus::AwaitingQuestion
         | AppStatus::VerbosityPicker
         | AppStatus::ThinkingPicker
+        | AppStatus::EffortPicker
         | AppStatus::ProtocolPicker => unreachable!("handled above"),
     }
 }

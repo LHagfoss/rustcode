@@ -89,7 +89,10 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
 
     if matches!(
         s.status,
-        AppStatus::VerbosityPicker | AppStatus::ThinkingPicker | AppStatus::ProtocolPicker
+        AppStatus::VerbosityPicker
+        | AppStatus::ThinkingPicker
+        | AppStatus::EffortPicker
+        | AppStatus::ProtocolPicker
     ) {
         s.status = AppStatus::Idle;
         return CtrlCAction::Handled;
@@ -502,20 +505,21 @@ pub async fn handle_enter(
             }
             "/effort" => {
                 let url = s.api_base_url.clone();
+                let current = s
+                    .config
+                    .models
+                    .iter()
+                    .find(|p| p.url == url)
+                    .and_then(|p| p.reasoning_effort.as_deref());
                 let value = match tokens.get(1) {
                     None => {
-                        let current = s
-                            .config
-                            .models
-                            .iter()
-                            .find(|p| p.url == url)
-                            .and_then(|p| p.reasoning_effort.as_deref())
-                            .unwrap_or("default")
-                            .to_string();
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            format!("Current reasoning effort: {current}. Usage: /effort <low|medium|high|off>"),
-                        ));
+                        s.modal_picker_index = match current {
+                            Some("low") => 0,
+                            Some("medium") => 1,
+                            Some("high") => 2,
+                            _ => 3,
+                        };
+                        s.status = AppStatus::EffortPicker;
                         None
                     }
                     Some(&"low") => Some(Some("low".to_string())),

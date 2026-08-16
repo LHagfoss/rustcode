@@ -1121,6 +1121,45 @@ impl AppRuntime {
                                 continue;
                             }
 
+                            if s.status == AppStatus::EffortPicker {
+                                drop(s);
+                                match key.code {
+                                    KeyCode::Up => {
+                                        let mut s = app_state.lock().await;
+                                        s.modal_picker_index =
+                                            s.modal_picker_index.saturating_sub(1);
+                                    }
+                                    KeyCode::Down => {
+                                        let mut s = app_state.lock().await;
+                                        s.modal_picker_index =
+                                            s.modal_picker_index.saturating_add(1).min(3); // 0 low, 1 medium, 2 high, 3 off
+                                    }
+                                    KeyCode::Enter => {
+                                        let mut s = app_state.lock().await;
+                                        let value = match s.modal_picker_index {
+                                            0 => Some("low".to_string()),
+                                            1 => Some("medium".to_string()),
+                                            2 => Some("high".to_string()),
+                                            _ => None,
+                                        };
+                                        let url = s.api_base_url.clone();
+                                        if let Some(profile) =
+                                            s.config.models.iter_mut().find(|p| p.url == url)
+                                        {
+                                            profile.reasoning_effort = value;
+                                        }
+                                        crate::config::save_entire_config(&s.config);
+                                        s.status = AppStatus::Idle;
+                                    }
+                                    KeyCode::Esc => {
+                                        let mut s = app_state.lock().await;
+                                        s.status = AppStatus::Idle;
+                                    }
+                                    _ => {}
+                                }
+                                continue;
+                            }
+
                             if s.status == AppStatus::ProtocolPicker {
                                 drop(s);
                                 match key.code {

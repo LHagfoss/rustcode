@@ -222,6 +222,7 @@ pub(super) fn input_anchor_rect(
     ratatui::layout::Rect::new(x, y, width, height)
 }
 
+#[allow(dead_code)]
 fn render_padded_panel(f: &mut Frame, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
     render_padded_panel_with_color(f, area, COLOR_PANEL())
 }
@@ -296,10 +297,21 @@ pub(super) fn render_verbosity_picker_modal(
     state: &AppState,
     input_area: ratatui::layout::Rect,
 ) {
-    let p = crate::ui::theme::get_palette(&state.config.theme);
-    let modal_area = input_anchor_rect(f, input_area, 9);
+    let modal_area = input_anchor_rect(f, input_area, 10);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
 
-    let inner_area = render_padded_panel(f, modal_area);
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -313,14 +325,16 @@ pub(super) fn render_verbosity_picker_modal(
 
     let header_line = Line::from(vec![
         Span::styled(
-            "Select Output Verbosity",
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            "Output verbosity",
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(26) as usize),
+            " ".repeat(inner_area.width.saturating_sub(19) as usize),
             Style::default(),
         ),
-        Span::styled("esc", Style::default().fg(p.muted)),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -348,20 +362,38 @@ pub(super) fn render_verbosity_picker_modal(
     for (idx, (name, verbosity_level, desc)) in choices.iter().enumerate() {
         let is_selected = selected_idx == idx;
         let is_current = state.verbosity == *verbosity_level;
-        let active_badge = if is_current { " [active]" } else { "" };
+        let active_badge = if is_current { " (active)" } else { "" };
+        let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
-            let text = format!("› {:<5} — {}{}", name, desc, active_badge);
-            let padding = (inner_area.width as usize).saturating_sub(text.len());
-            Line::from(vec![Span::styled(
-                format!("{}{}", text, " ".repeat(padding)),
-                Style::default()
-                    .fg(p.primary)
-                    .bg(COLOR_PANEL())
-                    .add_modifier(Modifier::BOLD),
-            )])
+            let left_text = format!(" ● {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG())
+                        .bg(COLOR_PRIMARY())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+                Span::styled(
+                    full_desc,
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+            ])
         } else {
-            let text = format!("   {:<5} — {}{}", name, desc, active_badge);
-            Line::from(vec![Span::styled(text, Style::default().fg(p.muted))])
+            let left_text = format!("   {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(full_desc, Style::default().fg(COLOR_MUTED())),
+            ])
         };
         list_lines.push(line);
     }
@@ -371,10 +403,14 @@ pub(super) fn render_verbosity_picker_modal(
         modal_chunks[2],
     );
 
-    let footer_line = Line::from(vec![Span::styled(
-        "↑/↓ Navigate  ·  Enter Select  ·  Esc Close",
-        Style::default().fg(p.muted),
-    )]);
+    let footer_line = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],
@@ -630,10 +666,9 @@ mod tests {
     }
 
     #[test]
-    fn settings_picker_uses_codex_selection_rows_without_a_box() {
+    fn settings_picker_uses_unified_modal_picker_style() {
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         let mut state = AppState::new();
-        let panel = COLOR_PANEL();
         state.modal_picker_index = 1;
         terminal
             .draw(|frame| render_verbosity_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
@@ -641,12 +676,27 @@ mod tests {
         let rendered = terminal.backend().buffer().content.iter()
             .map(|cell| cell.symbol()).collect::<String>();
 
-        assert!(rendered.contains("Select Output Verbosity"));
-        assert!(rendered.contains("› High"));
-        assert!(!rendered.contains('╭') && !rendered.contains('╰'));
-        let buffer = terminal.backend().buffer();
-        assert!((2..98).all(|x| buffer[(x, 3)].bg == panel));
-        assert!((2..98).all(|x| buffer[(x, 11)].bg == panel));
+        assert!(rendered.contains("Output verbosity"));
+        assert!(rendered.contains("● High"));
+        assert!(rendered.contains('╭') || rendered.contains('┌') || rendered.contains('─'));
+    }
+
+    #[test]
+    fn effort_picker_renders_options() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let mut state = AppState::new();
+        state.modal_picker_index = 0;
+        terminal
+            .draw(|frame| render_effort_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
+            .unwrap();
+        let rendered = terminal.backend().buffer().content.iter()
+            .map(|cell| cell.symbol()).collect::<String>();
+
+        assert!(rendered.contains("Reasoning effort"));
+        assert!(rendered.contains("● Low"));
+        assert!(rendered.contains("Medium"));
+        assert!(rendered.contains("High"));
+        assert!(rendered.contains("Off"));
     }
 }
 
@@ -655,10 +705,21 @@ pub(super) fn render_thinking_picker_modal(
     state: &AppState,
     input_area: ratatui::layout::Rect,
 ) {
-    let p = crate::ui::theme::get_palette(&state.config.theme);
     let modal_area = input_anchor_rect(f, input_area, 10);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
 
-    let inner_area = render_padded_panel(f, modal_area);
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -672,14 +733,16 @@ pub(super) fn render_thinking_picker_modal(
 
     let header_line = Line::from(vec![
         Span::styled(
-            "Model Thinking",
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            "Model thinking",
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(19) as usize),
+            " ".repeat(inner_area.width.saturating_sub(17) as usize),
             Style::default(),
         ),
-        Span::styled("esc", Style::default().fg(p.muted)),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -711,20 +774,38 @@ pub(super) fn render_thinking_picker_modal(
     for (idx, (name, val, desc)) in choices.iter().enumerate() {
         let is_selected = selected_idx == idx;
         let is_current = current == *val;
-        let active_badge = if is_current { " [active]" } else { "" };
+        let active_badge = if is_current { " (active)" } else { "" };
+        let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
-            let text = format!("› {:<7} — {}{}", name, desc, active_badge);
-            let padding = (inner_area.width as usize).saturating_sub(text.len());
-            Line::from(vec![Span::styled(
-                format!("{}{}", text, " ".repeat(padding)),
-                Style::default()
-                    .fg(p.primary)
-                    .bg(COLOR_PANEL())
-                    .add_modifier(Modifier::BOLD),
-            )])
+            let left_text = format!(" ● {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG())
+                        .bg(COLOR_PRIMARY())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+                Span::styled(
+                    full_desc,
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+            ])
         } else {
-            let text = format!("   {:<7} — {}{}", name, desc, active_badge);
-            Line::from(vec![Span::styled(text, Style::default().fg(p.muted))])
+            let left_text = format!("   {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(full_desc, Style::default().fg(COLOR_MUTED())),
+            ])
         };
         list_lines.push(line);
     }
@@ -734,10 +815,140 @@ pub(super) fn render_thinking_picker_modal(
         modal_chunks[2],
     );
 
-    let footer_line = Line::from(vec![Span::styled(
-        "↑/↓ Navigate  ·  Enter Select  ·  Esc Close",
-        Style::default().fg(p.muted),
-    )]);
+    let footer_line = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[3],
+    );
+}
+
+pub(super) fn render_effort_picker_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
+    let modal_area = input_anchor_rect(f, input_area, 11);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(4),    // Options list
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    let header_line = Line::from(vec![
+        Span::styled(
+            "Reasoning effort",
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ".repeat(inner_area.width.saturating_sub(19) as usize),
+            Style::default(),
+        ),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
+    f.render_widget(
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[0],
+    );
+
+    let current = state
+        .config
+        .models
+        .iter()
+        .find(|prof| prof.url == state.api_base_url)
+        .and_then(|prof| prof.reasoning_effort.as_deref());
+
+    let choices = [
+        ("Low", Some("low"), "Compact reasoning traces (fastest)"),
+        ("Medium", Some("medium"), "Balanced reasoning depth"),
+        ("High", Some("high"), "Deep reasoning analysis"),
+        ("Off", None, "Clear reasoning effort parameter"),
+    ];
+
+    let selected_idx = state
+        .modal_picker_index
+        .min(choices.len().saturating_sub(1));
+
+    let mut list_lines = Vec::new();
+    for (idx, (name, val, desc)) in choices.iter().enumerate() {
+        let is_selected = selected_idx == idx;
+        let is_current = current == *val;
+        let active_badge = if is_current { " (active)" } else { "" };
+        let full_desc = format!("{}{}", desc, active_badge);
+        let line = if is_selected {
+            let left_text = format!(" ● {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG())
+                        .bg(COLOR_PRIMARY())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+                Span::styled(
+                    full_desc,
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+            ])
+        } else {
+            let left_text = format!("   {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(full_desc, Style::default().fg(COLOR_MUTED())),
+            ])
+        };
+        list_lines.push(line);
+    }
+
+    f.render_widget(
+        Paragraph::new(list_lines).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[2],
+    );
+
+    let footer_line = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],
@@ -749,10 +960,21 @@ pub(super) fn render_protocol_picker_modal(
     state: &AppState,
     input_area: ratatui::layout::Rect,
 ) {
-    let p = crate::ui::theme::get_palette(&state.config.theme);
     let modal_area = input_anchor_rect(f, input_area, 10);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
 
-    let inner_area = render_padded_panel(f, modal_area);
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -766,14 +988,16 @@ pub(super) fn render_protocol_picker_modal(
 
     let header_line = Line::from(vec![
         Span::styled(
-            "Select Tool Protocol",
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            "Tool protocol",
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(23) as usize),
+            " ".repeat(inner_area.width.saturating_sub(16) as usize),
             Style::default(),
         ),
-        Span::styled("esc", Style::default().fg(p.muted)),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -784,6 +1008,11 @@ pub(super) fn render_protocol_picker_modal(
 
     let choices = [
         (
+            "ApiNative",
+            crate::config::ToolProtocol::ApiNative,
+            "Structured API schema (`tools` field + `tool_calls` output)",
+        ),
+        (
             "Json",
             crate::config::ToolProtocol::Json,
             "Standard JSON markdown (```tool)",
@@ -792,11 +1021,6 @@ pub(super) fn render_protocol_picker_modal(
             "Native",
             crate::config::ToolProtocol::Native,
             "Bracketed format ([TOOL_CALLS])",
-        ),
-        (
-            "ApiNative",
-            crate::config::ToolProtocol::ApiNative,
-            "Structured API schema (`tools` field + `tool_calls` output)",
         ),
     ];
 
@@ -808,20 +1032,38 @@ pub(super) fn render_protocol_picker_modal(
     for (idx, (name, val, desc)) in choices.iter().enumerate() {
         let is_selected = selected_idx == idx;
         let is_current = current == *val;
-        let active_badge = if is_current { " [active]" } else { "" };
+        let active_badge = if is_current { " (active)" } else { "" };
+        let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
-            let text = format!("› {:<10} — {}{}", name, desc, active_badge);
-            let padding = (inner_area.width as usize).saturating_sub(text.len());
-            Line::from(vec![Span::styled(
-                format!("{}{}", text, " ".repeat(padding)),
-                Style::default()
-                    .fg(p.primary)
-                    .bg(COLOR_PANEL())
-                    .add_modifier(Modifier::BOLD),
-            )])
+            let left_text = format!(" ● {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG())
+                        .bg(COLOR_PRIMARY())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+                Span::styled(
+                    full_desc,
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+            ])
         } else {
-            let text = format!("   {:<10} — {}{}", name, desc, active_badge);
-            Line::from(vec![Span::styled(text, Style::default().fg(p.muted))])
+            let left_text = format!("   {}", name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(full_desc, Style::default().fg(COLOR_MUTED())),
+            ])
         };
         list_lines.push(line);
     }
@@ -831,10 +1073,14 @@ pub(super) fn render_protocol_picker_modal(
         modal_chunks[2],
     );
 
-    let footer_line = Line::from(vec![Span::styled(
-        "↑/↓ Navigate  ·  Enter Select  ·  Esc Close",
-        Style::default().fg(p.muted),
-    )]);
+    let footer_line = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],
@@ -853,61 +1099,93 @@ pub(super) fn render_model_picker_modal(
         .model_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    let picker_area = input_anchor_rect(f, input_area, 14);
-    let content_area = render_padded_panel(f, picker_area);
-    let header_area = ratatui::layout::Rect::new(
-        content_area.x,
-        content_area.y,
-        content_area.width,
-        1,
-    );
-    let list_area = ratatui::layout::Rect::new(
-        content_area.x,
-        content_area.y.saturating_add(1),
-        content_area.width,
-        content_area.height.saturating_sub(1),
+    let modal_area = input_anchor_rect(f, input_area, 14);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
     );
 
-    let search = if state.model_picker_search.is_empty() {
-        "type to search".to_owned()
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // List area
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    let search_part = if state.model_picker_search.is_empty() {
+        "".to_owned()
     } else {
-        state.model_picker_search.clone()
+        format!(" · {}", state.model_picker_search)
     };
-    let header = Line::from(vec![
+    let title_text = format!("Select model{search_part}");
+    let right_esc = if state.model_picker_search.is_empty() { "type to search  esc" } else { "esc" };
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let header_line = Line::from(vec![
         Span::styled(
-            "Select model",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" · {search}"), Style::default().fg(COLOR_MUTED())),
-        Span::styled(" · ↑↓ enter esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
-        Paragraph::new(header).style(Style::default().bg(COLOR_PANEL())),
-        header_area,
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[0],
     );
 
     let mut list_lines = Vec::new();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let left_text = format!("{}{}", if is_selected { "› " } else { "  " }, item.name);
-        let padding_len =
-            (list_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
-        let line = Line::from(vec![
-            Span::styled(
-                left_text,
-                Style::default()
-                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
-                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
-            ),
-            Span::raw(" ".repeat(padding_len)),
-            Span::styled(item.desc.clone(), Style::default().fg(COLOR_MUTED())),
-        ]);
+        let line = if is_selected {
+            let left_text = format!(" ● {}", item.name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
+            Line::from(vec![
+                Span::styled(
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG())
+                        .bg(COLOR_PRIMARY())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+                Span::styled(
+                    item.desc.clone(),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+            ])
+        } else {
+            let left_text = format!("   {}", item.name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(item.desc.clone(), Style::default().fg(COLOR_MUTED())),
+            ])
+        };
         list_lines.push(line);
     }
 
-    let list_height = list_area.height as usize;
+    let list_height = modal_chunks[2].height as usize;
     let total_lines = list_lines.len();
     let scroll_y: u16 = if total_lines <= list_height {
         0
@@ -920,7 +1198,20 @@ pub(super) fn render_model_picker_modal(
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(list_paragraph, list_area);
+    f.render_widget(list_paragraph, modal_chunks[2]);
+
+    let footer_line = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[3],
+    );
 }
 
 /// Render the session history picker modal overlay (/history).
@@ -1695,60 +1986,93 @@ pub(super) fn render_command_picker_modal(
         .command_picker_index
         .min(filtered_items.len().saturating_sub(1));
 
-    let picker_area = input_anchor_rect(f, input_area, 14);
-    let content_area = render_padded_panel(f, picker_area);
-    let header_area = ratatui::layout::Rect::new(
-        content_area.x,
-        content_area.y,
-        content_area.width,
-        1,
+    let modal_area = input_anchor_rect(f, input_area, 14);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
     );
-    let list_area = ratatui::layout::Rect::new(
-        content_area.x,
-        content_area.y.saturating_add(1),
-        content_area.width,
-        content_area.height.saturating_sub(1),
-    );
-    let search_label = if state.command_picker_search.is_empty() {
-        "type to search".to_owned()
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
+
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // List area
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    let search_part = if state.command_picker_search.is_empty() {
+        "".to_owned()
     } else {
-        state.command_picker_search.clone()
+        format!(" · {}", state.command_picker_search)
     };
-    let header = Line::from(vec![
+    let title_text = format!("Commands{search_part}");
+    let right_esc = if state.command_picker_search.is_empty() { "type to search  esc" } else { "esc" };
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let header_line = Line::from(vec![
         Span::styled(
-            "Commands",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" · {search_label}"), Style::default().fg(COLOR_MUTED())),
-        Span::styled(" · ↑↓ enter esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
-        Paragraph::new(header).style(Style::default().bg(COLOR_PANEL())),
-        header_area,
+        Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[0],
     );
 
     let mut list_lines = Vec::new();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let name_part = format!("{}{}", if is_selected { "› " } else { "  " }, item.name);
-        let padding_len =
-            (list_area.width as usize).saturating_sub(name_part.width() + item.shortcut.width());
-        let line = Line::from(vec![
-            Span::styled(
-                name_part,
-                Style::default()
-                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
-                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
-            ),
-            Span::raw(" ".repeat(padding_len)),
-            Span::styled(item.shortcut.to_string(), Style::default().fg(COLOR_MUTED())),
-        ]);
+        let line = if is_selected {
+            let left_text = format!(" ● {}", item.name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + item.shortcut.width());
+            Line::from(vec![
+                Span::styled(
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG())
+                        .bg(COLOR_PRIMARY())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+                Span::styled(
+                    item.shortcut.to_string(),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+            ])
+        } else {
+            let left_text = format!("   {}", item.name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + item.shortcut.width());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(item.shortcut.to_string(), Style::default().fg(COLOR_MUTED())),
+            ])
+        };
         list_lines.push(line);
     }
 
-    let list_height = list_area.height as usize;
+    let list_height = modal_chunks[2].height as usize;
     let total_lines = list_lines.len();
     let scroll_y: u16 = if total_lines <= list_height {
         0
@@ -1761,7 +2085,20 @@ pub(super) fn render_command_picker_modal(
     let list_paragraph = Paragraph::new(list_lines)
         .scroll((scroll_y, 0))
         .style(Style::default().bg(COLOR_PANEL()));
-    f.render_widget(list_paragraph, list_area);
+    f.render_widget(list_paragraph, modal_chunks[2]);
+
+    let footer_line = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
+    f.render_widget(
+        Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[3],
+    );
 }
 
 pub(super) fn tool_confirmation_height(state: &AppState, available: u16) -> u16 {
@@ -2756,10 +3093,21 @@ pub(super) fn render_theme_picker_modal(
     state: &AppState,
     input_area: ratatui::layout::Rect,
 ) {
-    let p = crate::ui::theme::get_palette(&state.config.theme);
     let modal_area = input_anchor_rect(f, input_area, 12);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(COLOR_PRIMARY()))
+            .style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
 
-    let inner_area = render_padded_panel(f, modal_area);
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 3,
+    });
 
     let modal_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -2773,14 +3121,16 @@ pub(super) fn render_theme_picker_modal(
 
     let header_line = Line::from(vec![
         Span::styled(
-            "Select UI Theme (Live Preview)",
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            "Select theme (live preview)",
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(35) as usize),
+            " ".repeat(inner_area.width.saturating_sub(30) as usize),
             Style::default(),
         ),
-        Span::styled("esc", Style::default().fg(p.muted)),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -2794,39 +3144,65 @@ pub(super) fn render_theme_picker_modal(
     for (idx, theme) in themes.iter().enumerate() {
         let is_selected = selected_idx == idx;
         let is_active = state.theme_picker_initial.eq_ignore_ascii_case(&theme.name);
-        let active_badge = if is_active { " [active]" } else { "" };
+        let active_badge = if is_active { " (active)" } else { "" };
+        let full_desc = format!("{}{}", theme.description, active_badge);
         let line = if is_selected {
-            let text = format!(
-                "› {:<12} — {}{}",
-                theme.name, theme.description, active_badge
-            );
-            let padding = (inner_area.width as usize).saturating_sub(text.len());
-            Line::from(Span::styled(
-                format!("{}{}", text, " ".repeat(padding)),
-                Style::default().fg(p.primary).bg(COLOR_PANEL()).add_modifier(Modifier::BOLD),
-            ))
-        } else {
-            let left = format!("   {:<12} — {}", theme.name, theme.description);
+            let left_text = format!(" ● {}", theme.name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
             Line::from(vec![
-                Span::styled(left, Style::default().fg(p.text).bg(COLOR_PANEL())),
                 Span::styled(
-                    active_badge.to_string(),
-                    Style::default().fg(p.muted).bg(COLOR_PANEL()),
+                    left_text,
+                    Style::default()
+                        .fg(COLOR_BG())
+                        .bg(COLOR_PRIMARY())
+                        .add_modifier(Modifier::BOLD),
                 ),
+                Span::styled(
+                    " ".repeat(padding_len),
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+                Span::styled(
+                    full_desc,
+                    Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                ),
+            ])
+        } else {
+            let left_text = format!("   {}", theme.name);
+            let padding_len =
+                (inner_area.width as usize).saturating_sub(left_text.width() + full_desc.width());
+            Line::from(vec![
+                Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
+                Span::styled(" ".repeat(padding_len), Style::default()),
+                Span::styled(full_desc, Style::default().fg(COLOR_MUTED())),
             ])
         };
         list_lines.push(line);
     }
 
-    f.render_widget(
-        Paragraph::new(list_lines).style(Style::default().bg(COLOR_PANEL())),
-        modal_chunks[2],
-    );
+    let list_height = modal_chunks[2].height as usize;
+    let total_lines = list_lines.len();
+    let scroll_y: u16 = if total_lines <= list_height {
+        0
+    } else {
+        let ideal = selected_idx.saturating_sub(list_height / 3);
+        let lo = selected_idx.saturating_sub(list_height.saturating_sub(1));
+        let hi = selected_idx.min(total_lines - list_height);
+        ideal.clamp(lo, hi)
+    } as u16;
+    let list_paragraph = Paragraph::new(list_lines)
+        .scroll((scroll_y, 0))
+        .style(Style::default().bg(COLOR_PANEL()));
+    f.render_widget(list_paragraph, modal_chunks[2]);
 
-    let footer_line = Line::from(Span::styled(
-        "↑/↓ or j/k: preview theme • Enter: save • Esc: cancel",
-        Style::default().fg(p.muted),
-    ));
+    let footer_line = Line::from(vec![
+        Span::styled("preview ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("cancel ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
     f.render_widget(
         Paragraph::new(footer_line).style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[3],

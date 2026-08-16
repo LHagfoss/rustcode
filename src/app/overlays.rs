@@ -49,7 +49,10 @@ impl<'a> OverlayState<'a> {
             || self.pending_question.is_some()
             || matches!(
                 *self.status,
-                AppStatus::VerbosityPicker | AppStatus::ThinkingPicker | AppStatus::ProtocolPicker
+                AppStatus::VerbosityPicker
+                    | AppStatus::ThinkingPicker
+                    | AppStatus::EffortPicker
+                    | AppStatus::ProtocolPicker
             )
     }
 
@@ -64,7 +67,10 @@ impl<'a> OverlayState<'a> {
         *self.mcp_edit_state = None;
         if matches!(
             *self.status,
-            AppStatus::VerbosityPicker | AppStatus::ThinkingPicker | AppStatus::ProtocolPicker
+            AppStatus::VerbosityPicker
+                | AppStatus::ThinkingPicker
+                | AppStatus::EffortPicker
+                | AppStatus::ProtocolPicker
         ) {
             *self.status = AppStatus::Idle;
         }
@@ -80,6 +86,7 @@ impl<'a> OverlayState<'a> {
             Overlay::McpConfig => *self.show_mcp_config = true,
             Overlay::Verbosity => *self.status = AppStatus::VerbosityPicker,
             Overlay::Thinking => *self.status = AppStatus::ThinkingPicker,
+            Overlay::Effort => *self.status = AppStatus::EffortPicker,
             Overlay::Protocol => *self.status = AppStatus::ProtocolPicker,
             Overlay::ToolConfirmation => {
                 if self.pending_tool_confirmation.is_some() {
