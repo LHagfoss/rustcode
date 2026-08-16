@@ -1593,6 +1593,13 @@ fn input_bar_contains_live_status_and_command_hint() {
             .content,
         " "
     );
+
+    let mut streaming_state = AppState::new();
+    streaming_state.status = AppStatus::Streaming;
+    assert_eq!(activity_status_label(&streaming_state), "Working");
+
+    streaming_state.current_thought_started_at = Some(std::time::Instant::now());
+    assert_eq!(activity_status_label(&streaming_state), "Thinking");
 }
 
 #[test]
