@@ -216,6 +216,7 @@ mod tests {
             env_key: None,
             tool_protocol: None,
             enable_thinking: None,
+            reasoning_effort: None,
             max_tokens: None,
             supports_vision,
         }

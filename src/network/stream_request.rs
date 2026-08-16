@@ -198,6 +198,7 @@ pub async fn stream_request(
                 env_key: None,
                 tool_protocol: None,
                 enable_thinking: None,
+                reasoning_effort: None,
                 max_tokens: None,
                 supports_vision: None,
             }
@@ -217,6 +218,9 @@ pub async fn stream_request(
 
     if let Some(enable_thinking) = profile.as_ref().and_then(|p| p.enable_thinking) {
         payload["enable_thinking"] = serde_json::json!(enable_thinking);
+    }
+    if let Some(ref effort) = profile.as_ref().and_then(|p| p.reasoning_effort.as_ref()) {
+        payload["reasoning_effort"] = serde_json::json!(effort);
     }
 
     if !url.contains("generativelanguage.googleapis.com") {

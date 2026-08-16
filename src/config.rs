@@ -43,6 +43,9 @@ pub struct ModelProfile {
     /// matches prior behavior for profiles that don't opt in.
     #[serde(default)]
     pub enable_thinking: Option<bool>,
+    /// Reasoning effort level (e.g. "low", "medium", "high") sent in OpenAI-compatible payloads.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
     /// Per-profile completion token cap sent as `max_tokens`. `None` falls
     /// back to the shared default, overriding whatever a Modelfile's
     /// `PARAMETER num_predict` says.
@@ -82,7 +85,13 @@ impl ModelProfile {
         let requested_completion = configured_completion
             .min((context_window / 4).max(1))
             .max(1);
-        let requested_thinking = if self.enable_thinking == Some(true) {
+        let requested_thinking = if self.enable_thinking == Some(true)
+            || self
+                .reasoning_effort
+                .as_deref()
+                .map(|e| e != "off" && e != "none")
+                .unwrap_or(false)
+        {
             (context_window / 8).clamp(1, 2048)
         } else {
             0
@@ -93,10 +102,8 @@ impl ModelProfile {
         // Keep the fields honest even for synthetic or unusually small model
         // profiles: the published reserves must never add up to more than the
         // context window, and history always retains a small inspectable tail.
-        let history_floor = (context_window / 4).min(256);
-        let mut reserve_capacity = context_window.saturating_sub(history_floor);
-        let completion_reserve = requested_completion.min(reserve_capacity);
-        reserve_capacity = reserve_capacity.saturating_sub(completion_reserve);
+        let mut reserve_capacity = context_window.saturating_sub(requested_completion);
+        let completion_reserve = requested_completion;
         let thinking_reserve = requested_thinking.min(reserve_capacity);
         reserve_capacity = reserve_capacity.saturating_sub(thinking_reserve);
         let tool_reserve = requested_tool.min(reserve_capacity);
@@ -415,6 +422,7 @@ impl Default for AppConfig {
                     env_key: None,
                     tool_protocol: None,
                     enable_thinking: None,
+                    reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(false),
                 },
@@ -428,6 +436,7 @@ impl Default for AppConfig {
                     env_key: None,
                     tool_protocol: None,
                     enable_thinking: None,
+                    reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(true),
                 },
@@ -441,6 +450,7 @@ impl Default for AppConfig {
                     env_key: None,
                     tool_protocol: None,
                     enable_thinking: None,
+                    reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(true),
                 },
@@ -454,6 +464,7 @@ impl Default for AppConfig {
                     env_key: Some("TINKER_API_KEY".to_string()),
                     tool_protocol: None,
                     enable_thinking: None,
+                    reasoning_effort: None,
                     max_tokens: None,
                     supports_vision: Some(false),
                 },
