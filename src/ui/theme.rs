@@ -104,21 +104,61 @@ static BUILTIN_THEMES: &[(&str, &str)] = &[
     (
         "default.toml",
         r##"name = "default"
-description = "Default dark palette"
+description = "Default dark palette (Cozy Rain)"
 bg = "reset"
+panel = "#15171a"
+element = "#22262a"
+text = "#f0e5de"
+muted = "#88929a"
+primary = "#ec6e5d"
+secondary = "#3c5865"
+green = "#a6e3a1"
+selection = "#f0e5de"
+tip = "#e0a96d"
+status_border = "#3c5865"
+turn_separator = "#24282b"
+notice_bg = "reset"
+hover_bg = "#2b3035"
+"##,
+    ),
+    (
+        "rain.toml",
+        r##"name = "rain"
+description = "Cozy Rain warm dark palette"
+bg = "#15171a"
 panel = "#1a1d20"
 element = "#22262a"
 text = "#f0e5de"
 muted = "#88929a"
 primary = "#ec6e5d"
 secondary = "#3c5865"
-green = "#7fd88f"
-selection = "#f0f0f0"
+green = "#a6e3a1"
+selection = "#f0e5de"
 tip = "#e0a96d"
-status_border = "#5c6268"
-turn_separator = "#484e54"
+status_border = "#3c5865"
+turn_separator = "#24282b"
 notice_bg = "reset"
-hover_bg = "#2d3238"
+hover_bg = "#2b3035"
+"##,
+    ),
+    (
+        "cozy-rain.toml",
+        r##"name = "cozy-rain"
+description = "Cozy Rain warm dark palette"
+bg = "#15171a"
+panel = "#1a1d20"
+element = "#22262a"
+text = "#f0e5de"
+muted = "#88929a"
+primary = "#ec6e5d"
+secondary = "#3c5865"
+green = "#a6e3a1"
+selection = "#f0e5de"
+tip = "#e0a96d"
+status_border = "#3c5865"
+turn_separator = "#24282b"
+notice_bg = "reset"
+hover_bg = "#2b3035"
 "##,
     ),
     (
@@ -269,21 +309,21 @@ pub fn get_palette(name: &str) -> ThemePalette {
         .find(|t| t.name.eq_ignore_ascii_case(name))
         .unwrap_or_else(|| ThemePalette {
             name: "default".to_string(),
-            description: "Default dark palette".to_string(),
+            description: "Default dark palette (Cozy Rain)".to_string(),
             bg: Color::Rgb(21, 23, 26),
-            panel: Color::Rgb(26, 29, 32),
+            panel: Color::Rgb(21, 23, 26),
             element: Color::Rgb(34, 38, 42),
             text: Color::Rgb(240, 229, 222),
             muted: Color::Rgb(136, 146, 154),
             primary: Color::Rgb(236, 110, 93),
             secondary: Color::Rgb(60, 88, 101),
-            green: Color::Rgb(127, 216, 143),
-            selection: Color::Rgb(240, 240, 240),
+            green: Color::Rgb(166, 227, 161),
+            selection: Color::Rgb(240, 229, 222),
             tip: Color::Rgb(224, 169, 109),
-            status_border: Color::Rgb(92, 98, 104),
-            turn_separator: Color::Rgb(72, 78, 84),
-            notice_bg: Color::Rgb(13, 14, 16),
-            hover_bg: Color::Rgb(45, 50, 56),
+            status_border: Color::Rgb(60, 88, 101),
+            turn_separator: Color::Rgb(36, 40, 43),
+            notice_bg: Color::Reset,
+            hover_bg: Color::Rgb(43, 48, 53),
         })
 }
 
