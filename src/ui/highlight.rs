@@ -59,7 +59,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>name</key>
 			<string>Keywords</string>
 			<key>scope</key>
-			<string>keyword, storage, storage.type, storage.modifier</string>
+			<string>keyword, keyword.control, storage, storage.type, storage.modifier, keyword.operator.logical, keyword.operator.pipe</string>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
@@ -70,13 +70,13 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 		</dict>
 		<dict>
 			<key>name</key>
-			<string>Functions and Methods</string>
+			<string>Functions and Commands</string>
 			<key>scope</key>
-			<string>entity.name.function, support.function, meta.function-call</string>
+			<string>entity.name.function, support.function, variable.function</string>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#EC6E5D</string>
+				<string>#F0E5DE</string>
 			</dict>
 		</dict>
 		<dict>
@@ -94,11 +94,11 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>name</key>
 			<string>Strings</string>
 			<key>scope</key>
-			<string>string, string.quoted</string>
+			<string>string, string.quoted, string.quoted.single, string.quoted.double</string>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#F0E5DE</string>
+				<string>#A6E3A1</string>
 			</dict>
 		</dict>
 		<dict>
@@ -114,9 +114,20 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 		</dict>
 		<dict>
 			<key>name</key>
-			<string>Variables and Parameters</string>
+			<string>Flags and Parameters</string>
 			<key>scope</key>
-			<string>variable, variable.parameter, variable.other</string>
+			<string>variable.parameter, variable.parameter.option, punctuation.definition.parameter</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#E0A96D</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Variables</string>
+			<key>scope</key>
+			<string>variable, variable.other, punctuation.definition.variable</string>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
@@ -396,11 +407,11 @@ fn highlight_rust_line_with_colors<'a>(
 
     let color_keyword = Color::Rgb(236, 110, 93); // Coral
     let color_type = Color::Rgb(60, 88, 101); // Slate
-    let color_string = Color::Rgb(240, 229, 222); // Soft cream
+    let color_string = Color::Rgb(166, 227, 161); // Green
     let color_comment = Color::Rgb(90, 109, 119); // Gray slate
-    let color_number = Color::Rgb(236, 110, 93); // Coral
+    let color_number = Color::Rgb(224, 169, 109); // Amber/tip
     let color_macro = Color::Rgb(236, 110, 93); // Coral
-    let color_fn = Color::Rgb(236, 110, 93); // Coral
+    let color_fn = Color::Rgb(240, 229, 222); // Clean white
 
     while i < chars.len() {
         // Comments
@@ -839,7 +850,6 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::COLOR_PANEL;
 
     fn row_width(line: &Line) -> usize {
         line.spans.iter().map(|s| s.content.width()).sum()
@@ -847,32 +857,39 @@ mod tests {
 
     #[test]
     fn shell_highlighting_preserves_text_and_applies_token_styles() {
-        let command = "git commit --message \"release build\" && echo \"$HOME\"";
-        let lines = highlight_shell_command(command, COLOR_PANEL(), false);
-        let rendered = lines
+        let cmd = "cd /Users/lagos/code/lcli && git status --short --branch; echo \"===\"; wc -l src/commands/ls.rs src/main.rs src/cli.rs; echo \"===\"; cargo check 2>&1 | head -40";
+        let test_lines = highlight_shell_command(cmd, COLOR_BG(), false);
+        let rendered = test_lines
             .iter()
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        let mut foregrounds = Vec::new();
-        for foreground in lines
-            .iter()
-            .flat_map(|line| line.spans.iter().filter_map(|span| span.style.fg))
-        {
-            if !foregrounds.contains(&foreground) {
-                foregrounds.push(foreground);
-            }
-        }
+        assert_eq!(rendered, cmd);
 
-        assert_eq!(rendered, command);
-        assert!(
-            foregrounds.len() > 1,
-            "Bash tokens should not all use one foreground: {lines:?}"
-        );
-        assert!(lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .all(|span| span.style.bg == Some(COLOR_PANEL())));
+        let spans: Vec<&Span> = test_lines.iter().flat_map(|l| &l.spans).collect();
+        assert!(spans.iter().all(|s| s.style.bg == Some(COLOR_BG())));
+
+        // Bold orange keywords/operators like &&, ;, |
+        assert!(spans.iter().any(|s| {
+            s.content.as_ref() == "&&"
+                && s.style.fg == Some(Color::Rgb(236, 110, 93))
+                && s.style.add_modifier.contains(Modifier::BOLD)
+        }));
+
+        // Green strings like "==="
+        assert!(spans.iter().any(|s| {
+            s.content.as_ref() == "===" && s.style.fg == Some(Color::Rgb(166, 227, 161))
+        }));
+
+        // Amber flags like short, branch, l, 40
+        assert!(spans.iter().any(|s| {
+            s.content.as_ref() == "short" && s.style.fg == Some(Color::Rgb(224, 169, 109))
+        }));
+
+        // Clean white/cream command names
+        assert!(spans.iter().any(|s| {
+            s.content.as_ref() == "git" && s.style.fg == Some(Color::Rgb(240, 229, 222))
+        }));
     }
 
     #[test]

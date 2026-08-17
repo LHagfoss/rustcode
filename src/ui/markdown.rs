@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use super::lru::LruCache;
 use super::{
     COLOR_BG, COLOR_GREEN, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT,
-    get_themed_style,
+    COLOR_TURN_SEPARATOR, get_themed_style,
 };
 
 /// Maximum number of rendered documents kept in [`RENDER_CACHE`].
@@ -1025,10 +1025,19 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     quote_depth,
                     list_continuation.as_deref(),
                 );
+                if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+                    lines.push(Line::from(""));
+                }
                 lines.push(Line::from(Span::styled(
                     "─".repeat(width.max(1)),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                    get_themed_style(
+                        COLOR_TURN_SEPARATOR(),
+                        COLOR_BG(),
+                        Modifier::empty(),
+                        show_picker,
+                    ),
                 )));
+                lines.push(Line::from(""));
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 flush(
