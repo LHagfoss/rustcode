@@ -191,7 +191,7 @@ pub(crate) fn get_file_preview(name: &str, args: &serde_json::Value) -> Option<(
     ))
 }
 
-pub(crate) fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> std::path::PathBuf {
+pub(crate) fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> Option<std::path::PathBuf> {
     let raw_path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
         Some(p)
     } else if let Some(s) = args.get("src").and_then(|s| s.as_str()) {
@@ -201,9 +201,14 @@ pub(crate) fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> st
     };
 
     let resolved = if let Some(rp) = raw_path {
-        crate::tools::resolve_tool_path(rp)
+        let p = crate::tools::resolve_tool_path(rp);
+        if p.is_relative() {
+            std::env::current_dir().unwrap_or_default().join(p)
+        } else {
+            p
+        }
     } else {
-        std::env::current_dir().unwrap_or_default()
+        return None;
     };
 
     let mut current = if resolved.is_dir() {
@@ -217,10 +222,11 @@ pub(crate) fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> st
 
     loop {
         if current.join("Cargo.toml").exists() || current.join("tsconfig.json").exists() {
-            return current
-                .canonicalize()
-                .or_else(|_| std::env::current_dir())
-                .unwrap_or(current);
+            return Some(
+                current
+                    .canonicalize()
+                    .unwrap_or(current),
+            );
         }
         if let Some(parent) = current.parent() {
             current = parent.to_path_buf();
@@ -229,7 +235,7 @@ pub(crate) fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> st
         }
     }
 
-    std::env::current_dir().unwrap_or_default()
+    None
 }
 
 pub(crate) fn resolve_bin(name: &str) -> std::path::PathBuf {
@@ -632,12 +638,13 @@ pub(crate) async fn confirm_and_execute(
             | "copy_file"
     ) && result.success
     {
-        let cwd = get_tool_project_root(name, args);
-        if let Some(errors) = run_compiler_check(&cwd).await {
-            result.content.push_str("\n\nCompiler errors/warnings:\n");
-            result.content.push_str(&errors);
-            result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
-            result.retryable = true;
+        if let Some(cwd) = get_tool_project_root(name, args) {
+            if let Some(errors) = run_compiler_check(&cwd).await {
+                result.content.push_str("\n\nCompiler errors/warnings:\n");
+                result.content.push_str(&errors);
+                result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
+                result.retryable = true;
+            }
         }
     }
 
