@@ -103,15 +103,31 @@ where
         Ok(())
     }
 
+    /// Clear the entire terminal screen and reset the viewport to the origin.
+    pub fn clear_screen(&mut self) -> Result<(), B::Error> {
+        self.autoresize()?;
+        self.backend.clear_region(ClearType::All)?;
+        self.backend.set_cursor_position(Position::new(0, 0))?;
+        self.viewport_area = Rect::new(0, 0, self.screen_size.width, 0);
+        self.last_cursor_position = Position::new(0, 0);
+        self.buffers[0].reset();
+        self.buffers[1].reset();
+        self.backend.flush()
+    }
+
     pub fn autoresize(&mut self) -> Result<(), B::Error> {
         let size = self.backend.size()?;
-        self.screen_size = size;
-        self.viewport_area.width = size.width;
-        self.viewport_area.y = self
-            .viewport_area
-            .y
-            .min(size.height.saturating_sub(self.viewport_area.height));
-        self.resize_buffers();
+        if size != self.screen_size {
+            self.screen_size = size;
+            self.viewport_area.width = size.width;
+            self.viewport_area.y = self
+                .viewport_area
+                .y
+                .min(size.height.saturating_sub(self.viewport_area.height));
+            self.resize_buffers();
+            self.buffers[0].reset();
+            self.buffers[1].reset();
+        }
         Ok(())
     }
 
@@ -130,7 +146,9 @@ where
     where
         F: FnOnce(&mut Frame<'_>),
     {
+        let old_size = self.screen_size;
         self.autoresize()?;
+        let size_changed = old_size != self.screen_size;
         let mut area = self.viewport_area;
         area.width = self.screen_size.width;
         area.height = height.min(self.screen_size.height);
@@ -141,7 +159,7 @@ where
             area.y = self.screen_size.height.saturating_sub(area.height);
         }
 
-        if area != self.viewport_area {
+        if area != self.viewport_area || size_changed {
             let clear_at = if self.viewport_area.is_empty() {
                 area.as_position()
             } else {
@@ -323,5 +341,28 @@ mod tests {
         assert_eq!(terminal.buffers[0].area, terminal.area());
         assert_eq!(terminal.buffers[1].area, terminal.area());
         terminal.draw_height(4, |_| {}).unwrap();
+    }
+
+    #[test]
+    fn clear_screen_resets_viewport_and_buffers() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal.draw_height(6, |_| {}).unwrap();
+        assert_eq!(terminal.area().height, 6);
+
+        terminal.clear_screen().unwrap();
+        assert_eq!(terminal.area(), Rect::new(0, 0, 80, 0));
+    }
+
+    #[test]
+    fn autoresize_updates_screen_size_and_viewport_width() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal.draw_height(6, |_| {}).unwrap();
+
+        terminal.backend_mut().resize(100, 30);
+        terminal.autoresize().unwrap();
+        assert_eq!(terminal.size().unwrap(), Size::new(100, 30));
+        assert_eq!(terminal.area().width, 100);
     }
 }
