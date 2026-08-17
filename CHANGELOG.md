@@ -1,3 +1,8 @@
+## [v0.23.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.23.1) - 2026-08-17
+
+### Fixes
+- **CI/CD:** Fix YAML syntax error caused by unquoted colon in Windows environment setup step in `build.yml` ([#655](https://github.com/LHagfoss/rustcode/pull/655))
+
 ## [v0.23.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.23.0) - 2026-08-16
 
 ### Features
