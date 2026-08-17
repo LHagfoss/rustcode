@@ -1088,3 +1088,69 @@ fn start_line_alone_anchors_nonunique_target() {
         "fn a() {\n    false,\n}\nfn b() {\n    false,\n    &crate::app::Verbosity::Low,\n}\nfn c() {\n    false,\n}\n"
     );
 }
+
+#[test]
+fn replace_file_content_fuzzy_matches_trailing_whitespace_and_indentation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("indent.rs");
+    std::fs::write(&file, "fn test() {\n    let value = 42;   \n    println!(\"{value}\");\n}\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    // Model target has different indentation and no trailing spaces
+    let result = replace_file_content_tool(&serde_json::json!({
+        "path": path,
+        "target_content": "  let value = 42;\n  println!(\"{value}\");",
+        "replacement_content": "    let value = 100;\n    println!(\"updated: {value}\");",
+    }))
+    .expect("fuzzy indentation and rstrip match should succeed");
+    assert!(result.contains("successfully"), "got: {result}");
+
+    let updated = std::fs::read_to_string(&file).expect("read");
+    assert!(updated.contains("let value = 100;"), "got: {updated}");
+}
+
+#[test]
+fn replace_file_content_normalises_unicode_smart_quotes_and_dashes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("doc.md");
+    std::fs::write(&file, "# Title — Overview\n\nUse “smart” quotes and ‘single’ quotes.\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    // Model emits ASCII quotes and plain dash
+    let result = replace_file_content_tool(&serde_json::json!({
+        "path": path,
+        "target_content": "# Title - Overview\n\nUse \"smart\" quotes and 'single' quotes.",
+        "replacement_content": "# Title - Overview\n\nUse \"standard\" quotes.",
+    }))
+    .expect("unicode-normalized match should succeed");
+    assert!(result.contains("successfully"), "got: {result}");
+
+    let updated = std::fs::read_to_string(&file).expect("read");
+    assert!(updated.contains("standard"), "got: {updated}");
+}
+
+#[test]
+fn write_to_file_defaults_to_overwrite_true() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("existing.txt");
+    std::fs::write(&file, "old content\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    // overwrite is omitted -> should default to true and succeed
+    let result = write_to_file_tool(&serde_json::json!({
+        "path": path,
+        "content": "new content\n",
+    }))
+    .expect("write_to_file without explicit overwrite should succeed");
+    assert!(result.contains("wrote"), "got: {result}");
+    assert_eq!(std::fs::read_to_string(&file).expect("read"), "new content\n");
+
+    // overwrite explicitly false -> should return error
+    let err = write_to_file_tool(&serde_json::json!({
+        "path": path,
+        "content": "another\n",
+        "overwrite": false,
+    }))
+    .expect_err("write_to_file with overwrite: false on existing file must error");
+    assert!(err.contains("already exists"), "got: {err}");
+}
