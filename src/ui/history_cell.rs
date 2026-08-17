@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
-    COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP,
+    COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP,
     get_themed_style, highlight_shell_command,
 };
 
@@ -484,7 +484,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             ),
             Span::styled(
                 call.action.clone(),
-                get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::empty(), show_picker),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
             ),
         ];
         if !call.target.is_empty() && call.target != "?" {
