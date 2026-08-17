@@ -1646,8 +1646,7 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
 
     let line = super::activity_status_line(&state, false).to_string();
 
-    assert!(line.contains("Running"));
-    assert!(line.contains("Bash cargo test"));
+    assert!(line.contains("Working"));
     assert!(!line.contains("tool_calls"));
 }
 

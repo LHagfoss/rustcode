@@ -959,13 +959,19 @@ fn activity_status_label(state: &AppState) -> String {
     } else {
         classify_live_tools(&state.live_tool_calls).unwrap_or(base_activity)
     };
-    if activity.kind == ActivityKind::Working {
-        if state.current_thought_started_at.is_some() {
-            return "Thinking".to_string();
-        }
-        return "Working".to_string();
+    if activity.kind == ActivityKind::ActionRequired {
+        return "Action Required".to_string();
     }
-    activity.label
+    if activity.kind == ActivityKind::Queued {
+        return "Queued".to_string();
+    }
+    if activity.kind == ActivityKind::Ready {
+        return "Idle".to_string();
+    }
+    if state.current_thought_started_at.is_some() {
+        return "Thinking".to_string();
+    }
+    "Working".to_string()
 }
 
 fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
@@ -2086,9 +2092,9 @@ fn tool_child_line(
         Span::styled(
             entry.action.clone(),
             get_themed_style(
-                COLOR_SECONDARY(),
+                COLOR_TEXT(),
                 COLOR_BG(),
-                Modifier::empty(),
+                Modifier::BOLD,
                 show_picker,
             ),
         ),
@@ -2132,9 +2138,9 @@ fn command_child_lines(
             spans.push(Span::styled(
                 entry.action.clone(),
                 get_themed_style(
-                    COLOR_SECONDARY(),
+                    COLOR_TEXT(),
                     COLOR_BG(),
-                    Modifier::empty(),
+                    Modifier::BOLD,
                     show_picker,
                 ),
             ));
@@ -2447,15 +2453,21 @@ fn push_centered_separator<'a>(
     width: u16,
     show_picker: bool,
 ) {
+    if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+        lines.push(Line::from(""));
+    }
     let label = format!(" {} ", label_text.trim());
     let remaining = (width as usize).saturating_sub(label.width());
     let left = remaining / 2;
     let right = remaining - left;
-    let style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
+    let line_style =
+        get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), show_picker);
+    let label_style =
+        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     lines.push(Line::from(vec![
-        Span::styled("─".repeat(left), style),
-        Span::styled(label, style),
-        Span::styled("─".repeat(right), style),
+        Span::styled("─".repeat(left), line_style),
+        Span::styled(label, label_style),
+        Span::styled("─".repeat(right), line_style),
     ]));
 }
 
