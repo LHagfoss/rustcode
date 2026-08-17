@@ -1014,6 +1014,8 @@ pub struct AppState {
     /// Set by background tasks that mutate state outside the input path, so the
     /// draw loop knows to render once even though no key was pressed.
     pub redraw_requested: bool,
+    /// Requests the terminal loop to clear the entire screen and reset the inline viewport.
+    pub clear_screen_requested: bool,
 
     /// Snapshot of environment context from the first turn, used for delta diffing.
     pub context_snapshot: Option<crate::context::ContextSnapshot>,
@@ -1101,6 +1103,12 @@ impl AppState {
     /// while the app is otherwise idle should call this, since the loop no
     /// longer redraws on a fixed timer.
     pub fn request_redraw(&mut self) {
+        self.redraw_requested = true;
+    }
+
+    /// Request that the draw loop clear the physical terminal screen and reset the inline viewport.
+    pub fn request_clear_screen(&mut self) {
+        self.clear_screen_requested = true;
         self.redraw_requested = true;
     }
 
@@ -1302,6 +1310,7 @@ impl AppState {
             current_terminal_title: None,
             session_title_cache: None,
             redraw_requested: false,
+            clear_screen_requested: false,
             last_max_scroll: 0,
             conversation_content_height: 0,
             viewport_height: 0,
