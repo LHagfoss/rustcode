@@ -14,12 +14,129 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
-    COLOR_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_MUTED, COLOR_TEXT,
-    get_themed_style,
+    COLOR_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_MUTED, COLOR_SECONDARY,
+    COLOR_TEXT, get_themed_style,
 };
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static SYNTAX_THEME: OnceLock<Theme> = OnceLock::new();
+
+const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>name</key>
+	<string>Cozy Rain</string>
+	<key>settings</key>
+	<array>
+		<dict>
+			<key>settings</key>
+			<dict>
+				<key>background</key>
+				<string>#15171A</string>
+				<key>foreground</key>
+				<string>#F0E5DE</string>
+				<key>caret</key>
+				<string>#EC6E5D</string>
+				<key>selection</key>
+				<string>#22262A</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Comments</string>
+			<key>scope</key>
+			<string>comment, punctuation.definition.comment</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#5A6D77</string>
+				<key>fontStyle</key>
+				<string>italic</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Keywords</string>
+			<key>scope</key>
+			<string>keyword, storage, storage.type, storage.modifier</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#EC6E5D</string>
+				<key>fontStyle</key>
+				<string>bold</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Functions and Methods</string>
+			<key>scope</key>
+			<string>entity.name.function, support.function, meta.function-call</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#EC6E5D</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Types and Classes</string>
+			<key>scope</key>
+			<string>entity.name.type, entity.name.class, entity.other.inherited-class, support.type, support.class</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#3C5865</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Strings</string>
+			<key>scope</key>
+			<string>string, string.quoted</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#F0E5DE</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Numbers and Constants</string>
+			<key>scope</key>
+			<string>constant.numeric, constant.language, constant.character, constant.other</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#EC6E5D</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Variables and Parameters</string>
+			<key>scope</key>
+			<string>variable, variable.parameter, variable.other</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#F0E5DE</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>name</key>
+			<string>Operators and Punctuation</string>
+			<key>scope</key>
+			<string>keyword.operator, punctuation.separator, punctuation.terminator, punctuation.definition.tag</string>
+			<key>settings</key>
+			<dict>
+				<key>foreground</key>
+				<string>#3C5865</string>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>"#;
 
 fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
@@ -27,11 +144,14 @@ fn syntax_set() -> &'static SyntaxSet {
 
 fn syntax_theme() -> &'static Theme {
     SYNTAX_THEME.get_or_init(|| {
-        let mut themes = ThemeSet::load_defaults().themes;
-        themes
-            .remove("base16-ocean.dark")
-            .or_else(|| themes.into_values().next())
-            .expect("syntect ships at least one default theme")
+        let mut cursor = std::io::Cursor::new(COZY_RAIN_SYNTAX_THEME.as_bytes());
+        ThemeSet::load_from_reader(&mut cursor).unwrap_or_else(|_| {
+            let mut themes = ThemeSet::load_defaults().themes;
+            themes
+                .remove("base16-eighties.dark")
+                .or_else(|| themes.into_values().next())
+                .expect("syntect ships at least one default theme")
+        })
     })
 }
 
@@ -274,13 +394,13 @@ fn highlight_rust_line_with_colors<'a>(
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
 
-    let color_keyword = Color::Rgb(198, 120, 221); // Purple
-    let color_type = Color::Rgb(229, 192, 123); // Yellow
-    let color_string = Color::Rgb(152, 195, 121); // Green
-    let color_comment = Color::Rgb(92, 99, 112); // Gray (muted)
-    let color_number = Color::Rgb(209, 154, 102); // Orange
-    let color_macro = Color::Rgb(97, 175, 239); // Blue
-    let color_fn = Color::Rgb(97, 175, 239); // Blue
+    let color_keyword = Color::Rgb(236, 110, 93); // Coral
+    let color_type = Color::Rgb(60, 88, 101); // Slate
+    let color_string = Color::Rgb(240, 229, 222); // Soft cream
+    let color_comment = Color::Rgb(90, 109, 119); // Gray slate
+    let color_number = Color::Rgb(236, 110, 93); // Coral
+    let color_macro = Color::Rgb(236, 110, 93); // Coral
+    let color_fn = Color::Rgb(236, 110, 93); // Coral
 
     while i < chars.len() {
         // Comments
@@ -648,7 +768,7 @@ pub(super) fn render_unified_diff<'a>(
                 Span::styled(
                     raw.to_string(),
                     get_themed_style(
-                        Color::Rgb(100, 175, 235),
+                        COLOR_SECONDARY(),
                         COLOR_BG(),
                         Modifier::BOLD,
                         show_picker,
