@@ -92,18 +92,30 @@ impl TranscriptState {
         source: &str,
         continuation: bool,
         response_time_ms: Option<u64>,
+        thought_time_ms: Option<u64>,
+        thought_tokens: Option<u32>,
     ) {
         let changed = self.active_key != Some(ActiveHistoryCellKind::Assistant)
             || match self.active.as_ref() {
                 Some(ActiveHistoryCell::Assistant(cell)) => {
-                    cell.source != source || cell.continuation != continuation
+                    cell.source != source
+                        || cell.continuation != continuation
+                        || cell.response_time_ms != response_time_ms
+                        || cell.thought_time_ms != thought_time_ms
+                        || cell.thought_tokens != thought_tokens
                 }
                 _ => true,
             };
         if changed {
             self.revision = self.revision.saturating_add(1);
             self.active = Some(ActiveHistoryCell::Assistant(
-                AssistantMarkdownCell::streaming(source, continuation, response_time_ms),
+                AssistantMarkdownCell::streaming(
+                    source,
+                    continuation,
+                    response_time_ms,
+                    thought_time_ms,
+                    thought_tokens,
+                ),
             ));
         }
         self.active_key = Some(ActiveHistoryCellKind::Assistant);
@@ -209,13 +221,15 @@ impl AssistantMarkdownCell {
         source: &str,
         continuation: bool,
         response_time_ms: Option<u64>,
+        thought_time_ms: Option<u64>,
+        thought_tokens: Option<u32>,
     ) -> Self {
         Self {
             source: source.to_owned(),
             token_usage: None,
             response_time_ms,
-            thought_time_ms: None,
-            thought_tokens: None,
+            thought_time_ms,
+            thought_tokens,
             generating: true,
             continuation,
             cached_display: RefCell::new(None),

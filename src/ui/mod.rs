@@ -544,20 +544,34 @@ fn render_assistant_message<'a>(
     let main_content = main_content_owned.as_str();
 
     if let Some(first_line) = thought_preview {
-        let time_str = thought_time_ms.or(response_time_ms).map(|ms| {
-            if ms >= 1000 {
-                let sec = ms as f32 / 1000.0;
-                if (sec * 10.0).fract() == 0.0 || sec >= 10.0 {
-                    format!("{:.0}s", sec)
+        let time_str = thought_time_ms
+            .or_else(|| {
+                if is_generating {
+                    None
                 } else {
-                    format!("{:.1}s", sec)
+                    response_time_ms
                 }
-            } else {
-                format!("{}ms", ms)
-            }
-        });
+            })
+            .map(|ms| {
+                if ms >= 1000 {
+                    let sec = ms as f32 / 1000.0;
+                    if sec.fract().abs() < 0.001 || sec >= 10.0 {
+                        format!("{:.0}s", sec)
+                    } else {
+                        format!("{:.1}s", sec)
+                    }
+                } else {
+                    format!("{}ms", ms)
+                }
+            });
         let tokens_str = thought_tokens
-            .or_else(|| token_usage.as_ref().map(|u| u.total_tokens))
+            .or_else(|| {
+                if is_generating {
+                    None
+                } else {
+                    token_usage.as_ref().map(|u| u.total_tokens)
+                }
+            })
             .map(|tokens| {
                 if tokens >= 1000 {
                     format!("{:.1}k tokens", tokens as f32 / 1000.0)
@@ -2893,12 +2907,31 @@ pub(crate) fn render_live_tail_with_transcript(
         .to_owned();
 
     if has_visible_active_cell && state.live_tool_calls.is_empty() {
+        let live_thought_time_ms = if state.current_thought_started_at.is_some()
+            || state.current_thought_time_ms > 0
+        {
+            let elapsed_current = state
+                .current_thought_started_at
+                .map(|started| started.elapsed().as_millis() as u64)
+                .unwrap_or(0);
+            let total_ms = state
+                .current_thought_time_ms
+                .saturating_add(elapsed_current);
+            (total_ms > 0).then_some(total_ms)
+        } else {
+            None
+        };
+        let live_thought_tokens = (state.current_thought_tokens > 0)
+            .then_some(state.current_thought_tokens);
+
         transcript.set_assistant(
             &model_tail,
             scrollback::mutable_stream_is_continuation(&state.current_response),
             state
                 .generation_start_time
                 .map(|started| started.elapsed().as_millis() as u64),
+            live_thought_time_ms,
+            live_thought_tokens,
         );
     }
 
@@ -3064,7 +3097,7 @@ pub(crate) fn render_committed_assistant_chunk(
     width: u16,
     is_continuation: bool,
 ) -> Vec<Line<'static>> {
-    history_cell::AssistantMarkdownCell::streaming(content, is_continuation, None)
+    history_cell::AssistantMarkdownCell::streaming(content, is_continuation, None, None, None)
         .display_lines(width)
 }
 
