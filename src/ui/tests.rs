@@ -1803,11 +1803,11 @@ fn question_replaces_composer_with_borderless_bottom_pane() {
 fn active_transcript_cell_updates_in_place_and_clears_without_history() {
     let mut transcript = super::TranscriptState::default();
 
-    transcript.set_assistant("first paragraph", false, None);
+    transcript.set_assistant("first paragraph", false, None, None, None);
     let first_revision = transcript.revision();
     assert!(!transcript.display_lines(80).is_empty());
 
-    transcript.set_assistant("first paragraph\n\nsecond", true, None);
+    transcript.set_assistant("first paragraph\n\nsecond", true, None, None, None);
     assert!(transcript.revision() > first_revision);
     assert!(!transcript.display_lines(80).is_empty());
 
@@ -2733,3 +2733,61 @@ fn count_input_lines_accounts_for_prompt_indent() {
     assert_eq!(super::count_input_lines("12345678", 10), 1);
     assert_eq!(super::count_input_lines("123456789", 10), 2);
 }
+
+#[test]
+fn live_streaming_thinking_block_uses_thought_duration_not_total_generation_time() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.generation_start_time =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(555));
+    state.current_thought_started_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(2300));
+    state.current_thought_tokens = 106;
+    state.current_response = "<think>\nAnalyzing the project\n".to_string();
+
+    let lines = super::render_live_tail(&state, 80, 24);
+    let rendered = lines.iter().map(ratatui::text::Line::to_string).collect::<Vec<_>>();
+    let thought_header = rendered
+        .iter()
+        .find(|l| l.contains("Thought"))
+        .expect("Thought header must be rendered");
+
+    assert!(
+        thought_header.contains("Thought for 2.3s, 106 tokens"),
+        "thought header must show live thought stats: {thought_header}"
+    );
+    assert!(
+        !thought_header.contains("555s"),
+        "thought header must not show total generation duration: {thought_header}"
+    );
+}
+
+#[test]
+fn live_streaming_completed_thought_preserves_duration_while_rest_of_response_streams() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.generation_start_time =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(555));
+    state.current_thought_started_at = None;
+    state.current_thought_time_ms = 43000;
+    state.current_thought_tokens = 1400;
+    state.current_response =
+        "<think>\nAnalyzing the project\n</think>\nHere is the rest of the stream".to_string();
+
+    let lines = super::render_live_tail(&state, 80, 24);
+    let rendered = lines.iter().map(ratatui::text::Line::to_string).collect::<Vec<_>>();
+    let thought_header = rendered
+        .iter()
+        .find(|l| l.contains("Thought"))
+        .expect("Thought header must be rendered");
+
+    assert!(
+        thought_header.contains("Thought for 43s, 1.4k tokens"),
+        "thought header must show completed thought stats: {thought_header}"
+    );
+    assert!(
+        !thought_header.contains("555s"),
+        "thought header must not show total generation duration: {thought_header}"
+    );
+}
+
