@@ -452,6 +452,15 @@ impl AppRuntime {
             if should_draw {
                 let mut guard = app_state.lock().await;
 
+                if guard.clear_screen_requested {
+                    guard.clear_screen_requested = false;
+                    terminal_runtime.terminal().clear_screen().ok();
+                    transcript_cursor.reset();
+                    transcript_cursor.commit_history_through(guard.history_display_start);
+                    transcript_state.reset();
+                    stream_commits.reset();
+                }
+
                 let terminal_width = terminal_runtime.terminal().size()?.width;
                 let live_response = guard.transcript().live_response().to_owned();
                 transcript_cursor.begin_stream(&live_response);
@@ -713,13 +722,17 @@ impl AppRuntime {
                         if (is_ctrl || is_cmd)
                             && (key.code == KeyCode::Char('k') || key.code == KeyCode::Char('K'))
                         {
-                            terminal_runtime.terminal().clear().ok();
+                            let mut s = app_state.lock().await;
+                            s.request_clear_screen();
+                            needs_redraw = true;
                             continue;
                         }
                         if is_ctrl
                             && (key.code == KeyCode::Char('l') || key.code == KeyCode::Char('L'))
                         {
-                            terminal_runtime.terminal().clear().ok();
+                            let mut s = app_state.lock().await;
+                            s.request_clear_screen();
+                            needs_redraw = true;
                             continue;
                         }
 

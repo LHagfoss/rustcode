@@ -2876,7 +2876,9 @@ pub(crate) fn render_live_tail_with_transcript(
         return render_selected_subagent_context(state, width, height);
     }
 
-    if state.history.is_empty()
+    let visible_history_is_empty =
+        state.history.is_empty() || state.history_display_start >= state.history.len();
+    if visible_history_is_empty
         && state.current_response.is_empty()
         && matches!(state.status, AppStatus::Idle)
         && state.running_tools.is_empty()

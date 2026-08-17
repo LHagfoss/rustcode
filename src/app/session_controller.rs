@@ -58,6 +58,7 @@ impl SessionController {
         state: &mut AppState,
     ) -> Result<SessionTransition, SessionError> {
         crate::app::actions::start_new_session(state);
+        state.request_clear_screen();
         Ok(SessionTransition::Started {
             session_id: state.active_session_id.clone(),
         })
@@ -133,7 +134,7 @@ impl SessionController {
         state.current_token_usage = None;
         state.response_time = None;
         state.status = AppStatus::Idle;
-        state.request_redraw();
+        state.request_clear_screen();
         Ok(SessionTransition::Cleared {
             session_id: state.active_session_id.clone(),
         })
