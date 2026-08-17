@@ -1,3 +1,14 @@
+## [v0.25.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.25.0) - 2026-08-17
+
+### Features
+- **Tools/Editing:** Implement Codex-style 4-tier fuzzy matching (`rstrip`, leading/trailing whitespace and indentation `trim`, Unicode smart quote / dash / space normalization, and multi-line block-anchor fallback) for `replace_file_content` and line-anchored edits ([#662](https://github.com/LHagfoss/rustcode/pull/662))
+- **Tools/Filesystem:** Default `write_to_file` `overwrite` parameter to `true` when omitted to eliminate 1-turn file creation rejection loops ([#662](https://github.com/LHagfoss/rustcode/pull/662))
+- **Tools/Exec:** Relax shell command blockers in `run_command` to allow `cat`, `head`, `tail`, `less`, `more`, and `sed` to execute cleanly as read-only utilities with bounded output ([#662](https://github.com/LHagfoss/rustcode/pull/662))
+- **Harness/Diagnostics:** Scope post-edit compiler checks to only run when mutating files within an active Cargo/TS project root, eliminating false diagnostic loops on `/tmp` or sandbox scratch files ([#662](https://github.com/LHagfoss/rustcode/pull/662))
+
+### Fixes
+- **UI/Bash:** Fix bash highlight colors, divider padding/color, and working status styling in interactive terminal rendering ([#661](https://github.com/LHagfoss/rustcode/pull/661))
+
 ## [v0.24.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.24.0) - 2026-08-17
 
 ### Features
