@@ -134,7 +134,7 @@ fn write_to_file_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {
             "path": { "type": "string" }, "content": { "type": "string" },
-            "overwrite": { "type": "boolean", "default": false }
+            "overwrite": { "type": "boolean", "default": true }
         }, "required": ["path", "content"]
     })
 }
@@ -142,7 +142,7 @@ fn write_to_file_schema() -> Value {
 pub const WRITE_TO_FILE: Tool = Tool {
     name: "write_to_file",
     description: "Create a new file or overwrite an existing file with complete content.                       Creates parent directories automatically.",
-    arguments: r#"{"path": "absolute or relative path to file", "content": "entire contents to write", "overwrite": "set true to allow overwriting an existing file (default false)"}"#,
+    arguments: r#"{"path": "absolute or relative path to file", "content": "entire contents to write", "overwrite": "optional boolean, defaults to true to allow overwriting an existing file"}"#,
     handler: write_to_file_tool,
     requires_confirmation: true,
     schema: write_to_file_schema,
@@ -644,7 +644,11 @@ fn apply_single_edit_to_content_inner(
         if window_start <= window_end {
             if start >= 1 && start <= total && end >= start && end <= total {
                 let segment = file_lines[start - 1..end].join("\n");
-                if segment.trim_end() == target_content.trim_end() {
+                if segment.trim_end() == target_content.trim_end()
+                    || segment.trim() == target_content.trim()
+                    || normalise_unicode_punctuation(&segment).trim()
+                        == normalise_unicode_punctuation(target_content).trim()
+                {
                     let has_trailing_newline = content.ends_with('\n');
                     let mut new_lines = Vec::new();
                     new_lines.extend_from_slice(&file_lines[..start - 1]);
@@ -888,6 +892,25 @@ pub fn replace_file_content_tool(args: &Value) -> Result<String, String> {
     Ok(msg)
 }
 
+pub(crate) fn normalise_unicode_punctuation(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            // Various dash / hyphen code-points -> ASCII '-'
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+            | '\u{2212}' => '-',
+            // Fancy single quotes -> '\''
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+            // Fancy double quotes -> '"'
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+            // Non-breaking space and other odd spaces -> normal space
+            '\u{00A0}' | '\u{2002}' | '\u{2003}' | '\u{2004}' | '\u{2005}' | '\u{2006}'
+            | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200A}' | '\u{202F}' | '\u{205F}'
+            | '\u{3000}' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
 fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
     let content_lines: Vec<&str> = content.lines().collect();
     let target_lines: Vec<&str> = target.lines().collect();
@@ -896,29 +919,73 @@ fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
         return None;
     }
 
-    // 1. Line-trimmed match (ignores per-line leading/trailing whitespace)
-    let mut matches = Vec::new();
-    if content_lines.len() >= target_lines.len() {
-        for i in 0..=(content_lines.len() - target_lines.len()) {
-            let window = &content_lines[i..i + target_lines.len()];
-            let matches_trimmed = window
-                .iter()
-                .zip(target_lines.iter())
-                .all(|(c, t)| c.trim() == t.trim());
-            if matches_trimmed {
-                matches.push((i, i + target_lines.len()));
-            }
-        }
+    let n_content = content_lines.len();
+    let n_target = target_lines.len();
+
+    if n_content < n_target {
+        return None;
     }
 
-    if matches.len() == 1 {
-        let (start_idx, end_idx) = matches[0];
+    // Tier 1: Line-rstrip match (ignores trailing whitespace per line)
+    let mut rstrip_matches = Vec::new();
+    for i in 0..=(n_content - n_target) {
+        let window = &content_lines[i..i + n_target];
+        let matches_rstrip = window
+            .iter()
+            .zip(target_lines.iter())
+            .all(|(c, t)| c.trim_end() == t.trim_end());
+        if matches_rstrip {
+            rstrip_matches.push((i, i + n_target));
+        }
+    }
+    if rstrip_matches.len() == 1 {
+        let (start_idx, end_idx) = rstrip_matches[0];
         let byte_start = get_byte_offset_of_line(&content_lines, start_idx);
         let byte_end = get_byte_offset_of_line_end(&content_lines, end_idx - 1, content.len());
         return Some((byte_start, byte_end));
     }
 
-    // 2. Block-anchor match for multi-line blocks (>= 3 lines)
+    // Tier 2: Line-trimmed match (ignores per-line leading/trailing whitespace & indentation)
+    let mut trim_matches = Vec::new();
+    for i in 0..=(n_content - n_target) {
+        let window = &content_lines[i..i + n_target];
+        let matches_trimmed = window
+            .iter()
+            .zip(target_lines.iter())
+            .all(|(c, t)| c.trim() == t.trim());
+        if matches_trimmed {
+            trim_matches.push((i, i + n_target));
+        }
+    }
+    if trim_matches.len() == 1 {
+        let (start_idx, end_idx) = trim_matches[0];
+        let byte_start = get_byte_offset_of_line(&content_lines, start_idx);
+        let byte_end = get_byte_offset_of_line_end(&content_lines, end_idx - 1, content.len());
+        return Some((byte_start, byte_end));
+    }
+
+    // Tier 3: Unicode punctuation normalized match
+    let mut unicode_matches = Vec::new();
+    for i in 0..=(n_content - n_target) {
+        let window = &content_lines[i..i + n_target];
+        let matches_unicode = window
+            .iter()
+            .zip(target_lines.iter())
+            .all(|(c, t)| {
+                normalise_unicode_punctuation(c).trim() == normalise_unicode_punctuation(t).trim()
+            });
+        if matches_unicode {
+            unicode_matches.push((i, i + n_target));
+        }
+    }
+    if unicode_matches.len() == 1 {
+        let (start_idx, end_idx) = unicode_matches[0];
+        let byte_start = get_byte_offset_of_line(&content_lines, start_idx);
+        let byte_end = get_byte_offset_of_line_end(&content_lines, end_idx - 1, content.len());
+        return Some((byte_start, byte_end));
+    }
+
+    // Tier 4: Block-anchor match for multi-line blocks (>= 3 lines)
     if target_lines.len() >= 3 {
         let first_anchor = target_lines[0].trim();
         let last_anchor = target_lines[target_lines.len() - 1].trim();
@@ -926,7 +993,10 @@ fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
 
         let mut anchor_matches: Vec<(usize, usize, f32)> = Vec::new();
         for i in 0..content_lines.len() {
-            if content_lines[i].trim() != first_anchor {
+            if content_lines[i].trim() != first_anchor
+                && normalise_unicode_punctuation(content_lines[i]).trim()
+                    != normalise_unicode_punctuation(first_anchor).trim()
+            {
                 continue;
             }
             // Consider EVERY line matching the closing anchor, not just the
@@ -934,7 +1004,10 @@ fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
             // (e.g. an inner `}` closing a loop before the block's own `}`), so
             // breaking on it discards the real end and the whole match fails.
             for j in (i + 2)..content_lines.len() {
-                if content_lines[j].trim() != last_anchor {
+                if content_lines[j].trim() != last_anchor
+                    && normalise_unicode_punctuation(content_lines[j]).trim()
+                        != normalise_unicode_punctuation(last_anchor).trim()
+                {
                     continue;
                 }
                 let block_len = j - i + 1;
@@ -951,7 +1024,11 @@ fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
                         .iter()
                         .take(min_len)
                         .zip(inner_target.iter().take(min_len))
-                        .filter(|(c, t)| c.trim() == t.trim())
+                        .filter(|(c, t)| {
+                            c.trim() == t.trim()
+                                || normalise_unicode_punctuation(c).trim()
+                                    == normalise_unicode_punctuation(t).trim()
+                        })
                         .count();
                     matched_count as f32 / min_len as f32
                 };
@@ -1160,7 +1237,7 @@ pub fn write_to_file_tool(args: &Value) -> Result<String, String> {
     let overwrite = args
         .get("overwrite")
         .and_then(|o| o.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let resolved_path = resolve(path);
     if resolved_path.exists() && !overwrite {

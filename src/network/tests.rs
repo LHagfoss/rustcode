@@ -1555,10 +1555,14 @@ async fn test_run_compiler_check_success() {
 
 #[test]
 fn project_root_from_relative_file_is_a_real_directory() {
-    let root = get_tool_project_root("delete_file", &serde_json::json!({"path": "src/temp.rs"}));
+    let root = get_tool_project_root("delete_file", &serde_json::json!({"path": "src/temp.rs"}))
+        .expect("should find project root for workspace file");
     assert!(root.is_absolute());
     assert!(root.is_dir());
     assert!(root.join("Cargo.toml").exists());
+
+    let tmp_root = get_tool_project_root("write_to_file", &serde_json::json!({"path": "/tmp/scratch.py"}));
+    assert!(tmp_root.is_none());
 }
 
 // Regression: session 1785600769226. 25 loop warnings were written to

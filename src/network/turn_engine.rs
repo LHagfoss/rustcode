@@ -644,8 +644,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 loop_offender = Some(format!("{} ({category})", call.name));
             }
             if is_mutating_tool(&call.name) {
-                ctx.edit_root = Some(get_tool_project_root(&call.name, &call.arguments));
-                ctx.compile_dirty = true;
+                if let Some(root) = get_tool_project_root(&call.name, &call.arguments) {
+                    ctx.edit_root = Some(root);
+                    ctx.compile_dirty = true;
+                }
             }
         }
         match loop_status {

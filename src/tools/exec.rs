@@ -62,22 +62,6 @@ pub const MANAGE_TASK: Tool = Tool {
 const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
 
-fn is_shell_read_command(cmd: &str) -> bool {
-    let trimmed = cmd.trim();
-    let parts: Vec<&str> = trimmed.split_whitespace().collect();
-    if parts.is_empty() {
-        return false;
-    }
-    let binary = parts[0];
-    if matches!(binary, "cat" | "sed" | "head" | "tail" | "less" | "more") {
-        if trimmed.contains('>') || trimmed.contains("<<") || trimmed.contains('|') {
-            return false;
-        }
-        return true;
-    }
-    false
-}
-
 /// Short sudo options that consume a value (either glued to the flag or as the
 /// following token), e.g. `-u root`, `-p "prompt"`.
 const SUDO_SHORT_OPTS_WITH_VALUE: &str = "CghpRTtUu";
@@ -257,8 +241,9 @@ fn is_read_only_segment(segment: &str) -> bool {
             )
         }),
         Some(
-            "date" | "echo" | "false" | "grep" | "ls" | "printf" | "pwd" | "rg" | "test" | "true"
-            | "type" | "uname" | "which",
+            "cat" | "date" | "echo" | "false" | "grep" | "head" | "less" | "ls" | "more"
+            | "printf" | "pwd" | "rg" | "sed" | "tail" | "test" | "true" | "type" | "uname"
+            | "which",
         ) => true,
         _ => false,
     }
@@ -433,10 +418,6 @@ fn run_command_output_inner(
         .get("command")
         .and_then(|c| c.as_str())
         .ok_or("missing 'command' argument")?;
-
-    if is_shell_read_command(command_str) {
-        return Err("Do not use run_command with cat, sed, head, tail, or less/more to read files. Use the native 'view_file' tool instead. This keeps token usage low and allows the harness to manage file context correctly.".to_string());
-    }
 
     if let Some(reason) = reject_broad_git_stage(command_str) {
         return Err(reason.to_string());
@@ -1139,5 +1120,22 @@ mod tests {
             "result must actually be bounded, got {} bytes",
             result.len()
         );
+    }
+
+    #[test]
+    fn cat_and_head_are_read_only_and_execute_cleanly() {
+        assert!(!command_requires_confirmation(&serde_json::json!({
+            "command": "cat Cargo.toml"
+        })));
+        assert!(!command_requires_confirmation(&serde_json::json!({
+            "command": "head -n 5 Cargo.toml"
+        })));
+
+        let result = run_command(&serde_json::json!({
+            "command": "head -n 2 Cargo.toml"
+        }))
+        .expect("head command should execute cleanly");
+        assert!(result.contains("exit code: 0"));
+        assert!(result.contains("[package]"));
     }
 }
