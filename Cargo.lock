@@ -2931,7 +2931,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode"
-version = "0.23.1"
+version = "0.24.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
