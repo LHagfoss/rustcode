@@ -1,3 +1,12 @@
+## [v0.24.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.24.0) - 2026-08-17
+
+### Features
+- **UI/Themes:** Add Cozy Rain warm dark theme (`#15171A` charcoal, `#EC6E5D` coral, `#3C5865` slate, `#F0E5DE` cream, and `#A6E3A1` green), embedded syntect grammar highlighter, and `rain` / `cozy-rain` presets matching dotfiles ([#659](https://github.com/LHagfoss/rustcode/pull/659))
+- **UI/Modals:** Make all picker modals borderless and full-width, unify inner gutters, and fix `/history` row right-padding calculation ([#658](https://github.com/LHagfoss/rustcode/pull/658))
+
+### Fixes
+- **UI/Thinking:** Fix live reasoning thinking blocks using total request duration and token counts instead of thought-specific duration and reasoning tokens ([#657](https://github.com/LHagfoss/rustcode/pull/657))
+
 ## [v0.23.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.23.1) - 2026-08-17
 
 ### Fixes
