@@ -42,7 +42,7 @@ jobs:
                   Set-MpPreference -DisableRealtimeMonitoring $true -DisableArchiveScanning $true -DisableBehaviorMonitoring $true -DisableScriptScanning $true
                   Set-MpPreference -ExclusionPath "C:\", "D:\"
 
-            - name: Configure Windows D: Drive Environment
+            - name: "Configure Windows D: Drive Environment"
               if: runner.os == 'Windows'
               shell: powershell
               run: |
