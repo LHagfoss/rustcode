@@ -209,15 +209,14 @@ pub fn get_filtered_picker_items(state: &AppState) -> Vec<PickerItem> {
 
 /// Computes a rect for an inline picker anchored directly above the chat input box (`input_area`).
 pub(super) fn input_anchor_rect(
-    f: &Frame,
+    _f: &Frame,
     input_area: ratatui::layout::Rect,
     max_height: u16,
 ) -> ratatui::layout::Rect {
-    let screen = f.area();
-    let width = input_area.width.clamp(40, screen.width.saturating_sub(4));
+    let width = input_area.width;
     let available_h = input_area.y;
     let height = max_height.min(available_h).max(4);
-    let x = input_area.x + (input_area.width.saturating_sub(width)) / 2;
+    let x = input_area.x;
     let y = input_area.y.saturating_sub(height);
     ratatui::layout::Rect::new(x, y, width, height)
 }
@@ -300,17 +299,13 @@ pub(super) fn render_verbosity_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 10);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -323,18 +318,18 @@ pub(super) fn render_verbosity_picker_modal(
         ])
         .split(inner_area);
 
+    let title_text = "Output verbosity";
+    let right_esc = "esc";
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
-            "Output verbosity",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(19) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -678,7 +673,7 @@ mod tests {
 
         assert!(rendered.contains("Output verbosity"));
         assert!(rendered.contains("● High"));
-        assert!(rendered.contains('╭') || rendered.contains('┌') || rendered.contains('─'));
+        assert!(rendered.contains("Pure model text output"));
     }
 
     #[test]
@@ -698,6 +693,31 @@ mod tests {
         assert!(rendered.contains("High"));
         assert!(rendered.contains("Off"));
     }
+
+    #[test]
+    fn history_picker_renders_borderless_full_width_options() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let mut state = AppState::new();
+        state.history_picker_sessions = vec![
+            crate::config::SessionMeta {
+                path: std::path::PathBuf::from("/tmp/test-1.json"),
+                title: "Build a polished browser tower-defense game with canvas".to_string(),
+                message_count: 6,
+                when: "17:35".to_string(),
+            },
+        ];
+        state.history_picker_index = 0;
+        terminal
+            .draw(|frame| render_history_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
+            .unwrap();
+        let rendered = terminal.backend().buffer().content.iter()
+            .map(|cell| cell.symbol()).collect::<String>();
+
+        assert!(rendered.contains("Resume session"));
+        assert!(rendered.contains("●"));
+        assert!(rendered.contains("6 msgs"));
+        assert!(rendered.contains("17:35"));
+    }
 }
 
 pub(super) fn render_thinking_picker_modal(
@@ -708,17 +728,13 @@ pub(super) fn render_thinking_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 10);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -731,18 +747,18 @@ pub(super) fn render_thinking_picker_modal(
         ])
         .split(inner_area);
 
+    let title_text = "Model thinking";
+    let right_esc = "esc";
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
-            "Model thinking",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(17) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -837,17 +853,13 @@ pub(super) fn render_effort_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 11);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -860,18 +872,18 @@ pub(super) fn render_effort_picker_modal(
         ])
         .split(inner_area);
 
+    let title_text = "Reasoning effort";
+    let right_esc = "esc";
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
-            "Reasoning effort",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(19) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -963,17 +975,13 @@ pub(super) fn render_protocol_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 10);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -986,18 +994,18 @@ pub(super) fn render_protocol_picker_modal(
         ])
         .split(inner_area);
 
+    let title_text = "Tool protocol";
+    let right_esc = "esc";
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
-            "Tool protocol",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(16) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -1102,17 +1110,13 @@ pub(super) fn render_model_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -1151,8 +1155,10 @@ pub(super) fn render_model_picker_modal(
     let mut list_lines = Vec::new();
     for (idx, item) in filtered_items.iter().enumerate() {
         let is_selected = selected_idx == idx;
+        let max_name_width = (inner_area.width as usize).saturating_sub(item.desc.width() + 5);
+        let name_display = truncate_middle_to_width(&item.name, max_name_width);
         let line = if is_selected {
-            let left_text = format!(" ● {}", item.name);
+            let left_text = format!(" ● {}", name_display);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
             Line::from(vec![
@@ -1173,7 +1179,7 @@ pub(super) fn render_model_picker_modal(
                 ),
             ])
         } else {
-            let left_text = format!("   {}", item.name);
+            let left_text = format!("   {}", name_display);
             let padding_len =
                 (inner_area.width as usize).saturating_sub(left_text.width() + item.desc.width());
             Line::from(vec![
@@ -1225,16 +1231,13 @@ pub(super) fn render_history_picker_modal(
         let modal_area = input_anchor_rect(f, input_area, 10);
         f.render_widget(Clear, modal_area);
         f.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(COLOR_PRIMARY()))
-                .style(Style::default().bg(COLOR_PANEL())),
+            Block::default().style(Style::default().bg(COLOR_PANEL())),
             modal_area,
         );
 
         let inner_area = modal_area.inner(Margin {
             vertical: 1,
-            horizontal: 3,
+            horizontal: 2,
         });
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1319,17 +1322,13 @@ pub(super) fn render_history_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -1342,18 +1341,18 @@ pub(super) fn render_history_picker_modal(
         ])
         .split(inner_area);
 
+    let title_text = "Resume session";
+    let right_esc = "esc";
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
-            "Resume session",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(17) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -1364,10 +1363,12 @@ pub(super) fn render_history_picker_modal(
     for (idx, session) in sessions.iter().enumerate() {
         let desc = format!("{} msgs  {}", session.message_count, session.when);
         let is_selected = selected_idx == idx;
+        let max_title_width = (inner_area.width as usize).saturating_sub(desc.width() + 5);
+        let title_display = truncate_middle_to_width(&session.title, max_title_width);
         let line = if is_selected {
-            let left_text = format!(" ● {}", session.title);
+            let left_text = format!(" ● {}", title_display);
             let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.len() + desc.len());
+                (inner_area.width as usize).saturating_sub(left_text.width() + desc.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -1383,9 +1384,9 @@ pub(super) fn render_history_picker_modal(
                 Span::styled(desc, Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY())),
             ])
         } else {
-            let left_text = format!("   {}", session.title);
+            let left_text = format!("   {}", title_display);
             let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.len() + desc.len());
+                (inner_area.width as usize).saturating_sub(left_text.width() + desc.width());
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
@@ -1446,11 +1447,7 @@ pub(super) fn render_subagent_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 18);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
@@ -1467,15 +1464,19 @@ pub(super) fn render_subagent_picker_modal(
             Constraint::Length(1),
         ])
         .split(inner);
+    let title_text = "Agent contexts";
+    let right_esc = "esc";
+    let padding_header = (inner.width as usize).saturating_sub(title_text.width() + right_esc.width());
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "Agent contexts",
+                title_text,
                 Style::default()
                     .fg(COLOR_TEXT())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  esc", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" ".repeat(padding_header), Style::default()),
+            Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
         ]))
         .style(Style::default().bg(COLOR_PANEL())),
         chunks[0],
@@ -1589,17 +1590,13 @@ pub(super) fn render_mcp_config_modal(
     let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -1710,18 +1707,18 @@ pub(super) fn render_mcp_config_modal(
         );
     } else {
         // --- LIST MODE ---
+        let title_text = "MCP Servers Configuration";
+        let right_esc = "esc";
+        let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
         let header_line = Line::from(vec![
             Span::styled(
-                "MCP Servers Configuration",
+                title_text,
                 Style::default()
                     .fg(COLOR_TEXT())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                " ".repeat(inner_area.width.saturating_sub(29) as usize),
-                Style::default(),
-            ),
-            Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+            Span::styled(" ".repeat(padding_header), Style::default()),
+            Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
         ]);
         f.render_widget(
             Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
@@ -1744,7 +1741,7 @@ pub(super) fn render_mcp_config_modal(
                 let left_text = format!(" ● {}", srv.name);
                 let right_text = format!(" [{}] {}", status, cmd_text);
                 let padding_len =
-                    (inner_area.width as usize).saturating_sub(left_text.len() + right_text.len());
+                    (inner_area.width as usize).saturating_sub(left_text.width() + right_text.width());
 
                 Line::from(vec![
                     Span::styled(
@@ -1989,17 +1986,13 @@ pub(super) fn render_command_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -3096,17 +3089,13 @@ pub(super) fn render_theme_picker_modal(
     let modal_area = input_anchor_rect(f, input_area, 12);
     f.render_widget(Clear, modal_area);
     f.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(COLOR_PRIMARY()))
-            .style(Style::default().bg(COLOR_PANEL())),
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
         modal_area,
     );
 
     let inner_area = modal_area.inner(Margin {
         vertical: 1,
-        horizontal: 3,
+        horizontal: 2,
     });
 
     let modal_chunks = Layout::default()
@@ -3119,18 +3108,18 @@ pub(super) fn render_theme_picker_modal(
         ])
         .split(inner_area);
 
+    let title_text = "Select theme (live preview)";
+    let right_esc = "esc";
+    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
-            "Select theme (live preview)",
+            title_text,
             Style::default()
                 .fg(COLOR_TEXT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(inner_area.width.saturating_sub(30) as usize),
-            Style::default(),
-        ),
-        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+        Span::styled(" ".repeat(padding_header), Style::default()),
+        Span::styled(right_esc, Style::default().fg(COLOR_MUTED())),
     ]);
     f.render_widget(
         Paragraph::new(header_line).style(Style::default().bg(COLOR_PANEL())),
