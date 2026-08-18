@@ -21,18 +21,12 @@ jobs:
                     - os: ubuntu-24.04
                       target: x86_64-unknown-linux-gnu
                       name: rustcode-linux-x86_64
-                      target-dir: target
                     - os: macos-latest
                       target: aarch64-apple-darwin
                       name: rustcode-macos-aarch64
-                      target-dir: target
-                    - os: windows-2025
-                      target: x86_64-pc-windows-gnu
+                    - os: windows-latest
+                      target: x86_64-pc-windows-msvc
                       name: rustcode-windows-x86_64
-                      target-dir: D:/target
-
-        env:
-            CARGO_TARGET_DIR: ${{ matrix.target-dir }}
 
         steps:
             - name: Disable Windows Defender
@@ -42,26 +36,21 @@ jobs:
                   Set-MpPreference -DisableRealtimeMonitoring $true -DisableArchiveScanning $true -DisableBehaviorMonitoring $true -DisableScriptScanning $true
                   Set-MpPreference -ExclusionPath "C:\", "D:\"
 
-            - name: "Configure Windows D: Drive Environment"
-              if: runner.os == 'Windows'
-              shell: powershell
-              run: |
-                  New-Item -ItemType Directory -Force -Path "D:\.cargo", "D:\target" | Out-Null
-                  "CARGO_HOME=D:\.cargo" | Out-File -FilePath $env:GITHUB_ENV -Append
-
             - uses: actions/checkout@v4
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
               with:
-                  fetch-depth: 1
+                  targets: ${{ matrix.target }}
 
-            - name: Set up Rust
-              shell: bash
-              run: |
-                  rustup default stable
-                  rustup target add ${{ matrix.target }}
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  key: ${{ matrix.target }}
 
-            - name: Install Linux deps (Ubuntu)
+            - name: Set up mold linker (Linux)
               if: runner.os == 'Linux'
-              run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+              uses: rui314/setup-mold@v1
 
             - name: Build release
               shell: bash
@@ -71,7 +60,7 @@ jobs:
               if: runner.os != 'Windows'
               shell: bash
               run: |
-                  cp ${{ matrix.target-dir }}/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
+                  cp target/${{ matrix.target }}/release/rustcode ${{ matrix.name }}
                   chmod +x ${{ matrix.name }}
                   tar czf ${{ matrix.name }}.tar.gz -C . ${{ matrix.name }}
 
@@ -79,7 +68,7 @@ jobs:
               if: runner.os == 'Windows'
               shell: powershell
               run: |
-                  Copy-Item "${{ matrix.target-dir }}/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
+                  Copy-Item "target/${{ matrix.target }}/release/rustcode.exe" "${{ matrix.name }}.exe"
                   Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
 
             - name: Upload artifact
