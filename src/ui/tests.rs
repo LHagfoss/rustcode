@@ -2790,3 +2790,53 @@ fn live_streaming_completed_thought_preserves_duration_while_rest_of_response_st
     );
 }
 
+#[test]
+fn command_child_lines_wrap_with_indentation() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::High;
+    let long_cmd = "curl -sS https://example.com/api/v1/organizations/test -H 'Authorization: Bearer test_token' --data '{\"field\":\"very long content here\"}'";
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "run_command".to_owned(),
+            arguments: serde_json::json!({"command": long_cmd}).to_string(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "ok")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                arguments_hash: String::new(),
+                success: true,
+                exit_code: Some(0),
+                changed_paths: Vec::new(),
+                truncated: false,
+                full_output_artifact: None,
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 40, false);
+    assert!(rendered.len() > 2, "long command should wrap across multiple lines: {rendered:?}");
+    assert!(rendered[0].to_string().starts_with("• Ran"));
+    assert!(rendered[1].to_string().starts_with("  └ Bash"));
+    // Continuation lines must have indentation ("    ")
+    for line in &rendered[2..] {
+        let text = line.to_string();
+        assert!(
+            text.starts_with("    ") || text.is_empty(),
+            "wrapped line must be indented with 4 spaces: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn default_turn_separator_is_lighter_color() {
+    let default_palette = super::theme::get_palette("default");
+    assert_eq!(default_palette.turn_separator, ratatui::style::Color::Rgb(90, 112, 126));
+}
+
+
