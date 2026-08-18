@@ -144,28 +144,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if cli_args.upgrade {
+    if cli_args.update {
+        println!("Checking if new release...");
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()?;
-        match crate::update::upgrade_if_available(&client).await {
-            Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
-                println!(
-                    "No update available. rustcode v{} is up to date (latest published: v{}).",
-                    crate::update::format_version(current),
-                    crate::update::format_version(latest)
-                );
-            }
-            Ok(crate::update::UpdateCheck::Available { current, latest }) => {
-                println!(
-                    "Updated rustcode from v{} to v{}.",
-                    crate::update::format_version(current),
-                    crate::update::format_version(latest)
-                );
-            }
+        let check = match crate::update::check_for_update(&client).await {
+            Ok(check) => check,
             Err(error) => {
-                eprintln!("Upgrade failed: {error}");
+                eprintln!("Update check failed: {error}");
                 std::process::exit(1);
+            }
+        };
+
+        match check {
+            crate::update::UpdateCheck::UpToDate { current, latest } => {
+                println!(
+                    "No new release. rustcode v{} is up to date (latest: v{}).",
+                    crate::update::format_version(current),
+                    crate::update::format_version(latest)
+                );
+            }
+            crate::update::UpdateCheck::Available { current, latest } => {
+                println!(
+                    "Found new release: v{} → v{}, updating now...",
+                    crate::update::format_version(current),
+                    crate::update::format_version(latest)
+                );
+
+                let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                let running_clone = std::sync::Arc::clone(&running);
+
+                let handle = std::thread::spawn(move || {
+                    let mut idx = 0;
+                    while running_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                        print!("\r  {} Running Homebrew update & upgrade...", spinner[idx % spinner.len()]);
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                        idx += 1;
+                    }
+                    print!("\r\x1b[2K");
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                });
+
+                let upgrade_res = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
+                running.store(false, std::sync::atomic::Ordering::Relaxed);
+                let _ = handle.join();
+
+                match upgrade_res {
+                    Ok(Ok(())) => {
+                        println!(
+                            "🎉 Successfully updated rustcode to v{}!",
+                            crate::update::format_version(latest)
+                        );
+                    }
+                    Ok(Err(error)) => {
+                        eprintln!("Update failed: {error}");
+                        std::process::exit(1);
+                    }
+                    Err(error) => {
+                        eprintln!("Update task error: {error}");
+                        std::process::exit(1);
+                    }
+                }
             }
         }
         return Ok(());
