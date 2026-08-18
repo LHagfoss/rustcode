@@ -2653,7 +2653,7 @@ fn render_status_panel<'a>(
 
     let box_w = (width as usize).saturating_sub(2).max(40);
     let inner_w = box_w.saturating_sub(2);
-    let content_w = inner_w.saturating_sub(4);
+    let content_w = inner_w.saturating_sub(2);
 
     // Top border: ╭─ >_ RustCode v0.17.0 ──────────────────────────────────────────╮
     let title_str = format!(">_ RustCode v{version}");
@@ -2724,6 +2724,7 @@ fn render_status_panel<'a>(
             || trimmed.starts_with("Up/Down")
             || trimmed.starts_with("Ctrl+")
             || trimmed.starts_with("Alt+")
+            || trimmed.starts_with('?')
         {
             let parts: Vec<&str> = trimmed.splitn(2, "  ").collect();
             let key = parts.first().copied().unwrap_or("").trim();
