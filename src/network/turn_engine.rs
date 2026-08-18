@@ -518,6 +518,12 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             }
             LoopRecoveryAction::ForceFinal => {
                 dbg_log!("Reasoning loop recovery exhausted — forcing wrap-up turn");
+                crate::logger::operational_event(
+                    loop_detect::DIAG_RECOVERY_EXHAUSTED,
+                    serde_json::json!({
+                        "attempt": ctx.reasoning_recovery_attempts,
+                    }),
+                );
                 ctx.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
                 ctx.force_final = true;
                 let mut s = state.lock().await;
@@ -1027,12 +1033,37 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         success: metadata.success,
                     },
                 );
-                let cross_turn_status = ctx
-                    .reasoning_loop_detector
-                    .record_turn_reasoning(&ctx.final_content, changed_workspace);
+                let target_file = call.and_then(|c| {
+                    c.arguments
+                        .get("path")
+                        .or_else(|| c.arguments.get("target_file"))
+                        .or_else(|| c.arguments.get("TargetFile"))
+                        .and_then(|v| v.as_str())
+                });
+                let target_files = match target_file {
+                    Some(f) => vec![f],
+                    None => vec![],
+                };
+                let cross_turn_status = ctx.reasoning_loop_detector.record_turn_evidence(
+                    &loop_detect::TurnEvidence {
+                        reasoning: &ctx.final_content,
+                        target_files: &target_files,
+                        made_progress: changed_workspace,
+                        had_edits: is_mutating_tool(&name),
+                        tool_count: 1,
+                        no_progress_streak: ctx.progress_ledger.no_progress_streak(),
+                    },
+                );
                 if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = cross_turn_status {
                     ctx.reasoning_loops_detected += 1;
                     dbg_log!("Cross-turn reasoning loop detected: {reason}");
+                    crate::logger::operational_event(
+                        reason,
+                        serde_json::json!({
+                            "round": ctx.tool_rounds,
+                            "reason": reason,
+                        }),
+                    );
                     if evidence_recovery.is_none() {
                         evidence_recovery = Some((
                             loop_detect::ProgressReason::NoNewInformation,
@@ -1137,6 +1168,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         return true;
                     }
                     LoopRecoveryAction::ForceFinal => {
+                        crate::logger::operational_event(
+                            loop_detect::DIAG_RECOVERY_EXHAUSTED,
+                            serde_json::json!({
+                                "recovery_attempts": ctx.loop_recovery_attempts,
+                                "reason": reason.label(),
+                            }),
+                        );
                         s.history.push(ChatMessage::new(
                             "system",
                             format!("{evidence}\n{FORCE_ANSWER_PROMPT}"),

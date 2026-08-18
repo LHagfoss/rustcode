@@ -3651,3 +3651,301 @@ fn test_reasoning_loop_detector_integration_and_resets() {
         loop_detect::ReasoningLoopStatus::Ok
     );
 }
+
+#[test]
+fn test_adversarial_1_paraphrased_same_plan_same_files_no_edits_interrupts() {
+    // Scenario 1: Model understands architecture, repeatedly reads the same file,
+    // paraphrases the same plan with different wording, and never edits.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let file = "src/network/turn_engine.rs";
+
+    let turn1 = "I have analyzed the engine. I will edit src/network/turn_engine.rs to add the new loop recovery mechanism.";
+    let res1 = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+        reasoning: turn1,
+        target_files: &[file],
+        made_progress: false,
+        had_edits: false,
+        tool_count: 1,
+        no_progress_streak: 1,
+    });
+    assert_eq!(res1, loop_detect::ReasoningLoopStatus::Ok);
+
+    let turn2 = "The architecture is clear. We are ready to modify src/network/turn_engine.rs to include the new loop recovery behavior.";
+    let res2 = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+        reasoning: turn2,
+        target_files: &[file],
+        made_progress: false,
+        had_edits: false,
+        tool_count: 1,
+        no_progress_streak: 2,
+    });
+    assert_eq!(
+        res2,
+        loop_detect::ReasoningLoopStatus::LoopDetected(loop_detect::DIAG_CROSS_TURN_SAME_PLAN)
+    );
+}
+
+#[test]
+fn test_adversarial_2_broad_investigation_across_files_does_not_interrupt() {
+    // Scenario 2: Agent investigates many different files and continuously discovers
+    // new information without editing -> must NOT interrupt.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let files = [
+        "src/app/actions.rs",
+        "src/network/loop_detect.rs",
+        "src/network/turn_engine.rs",
+        "src/tools/exec.rs",
+        "src/ui/mod.rs",
+        "src/config.rs",
+        "src/main.rs",
+        "src/memory.rs",
+    ];
+
+    for (i, file) in files.iter().enumerate() {
+        let thought = format!("Step {i}: Inspecting module {file} to understand its public API and dependencies.");
+        let status = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: &thought,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: i + 1,
+        });
+        assert_eq!(
+            status,
+            loop_detect::ReasoningLoopStatus::Ok,
+            "Broad investigation across {file} must not be interrupted"
+        );
+    }
+}
+
+#[test]
+fn test_adversarial_3_long_advancing_reasoning_does_not_interrupt() {
+    // Scenario 3: Agent spends a long time reasoning, but reasoning continues
+    // materially advancing -> must NOT interrupt.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    for step in 0..100 {
+        let advance = match step % 4 {
+            0 => format!("Phase {step}: Evaluating caching layer invariants in src/cache/storage_{step}.rs.\n\n"),
+            1 => format!("Phase {step}: Analyzing thread pool scheduler policies for runtime_{step}.\n\n"),
+            2 => format!("Phase {step}: Reviewing serialization schema definitions in src/proto/message_{step}.rs.\n\n"),
+            _ => format!("Phase {step}: Verifying cryptographic checksum verification logic in src/crypto/auth_{step}.rs.\n\n"),
+        };
+        let status = detector.feed_chunk(&advance);
+        assert_eq!(
+            status,
+            loop_detect::ReasoningLoopStatus::Ok,
+            "Advancing reasoning step {step} must not trigger loop detector"
+        );
+    }
+}
+
+#[test]
+fn test_adversarial_4_ready_to_implement_hesitation_reads_interrupts() {
+    // Scenario 4: Agent says it is ready to implement several times but repeatedly
+    // performs equivalent verification reads without editing -> should interrupt.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let file = "src/tools/filesystem.rs";
+
+    let turn1 = "Everything is mapped out. I am ready to implement the changes in src/tools/filesystem.rs. Let's do one more check on the view_file signature.";
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: turn1,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+
+    let turn2 = "Signature is confirmed. Now proceed with implementation in src/tools/filesystem.rs. Let me do a quick check on start_line handling first.";
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: turn2,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
+        loop_detect::ReasoningLoopStatus::LoopDetected(loop_detect::DIAG_SEMANTIC_NO_PROGRESS)
+    );
+}
+
+#[test]
+fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
+    // Scenario 5: Loop detector fires, recovery succeeds and an edit occurs -> state resets correctly.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let file = "src/network/loop_detect.rs";
+
+    let plan1 = "We will modify src/network/loop_detect.rs to add new loop signals.";
+    let plan2 = "We are ready to modify src/network/loop_detect.rs to add new loop signals.";
+
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan1,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan2,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
+        loop_detect::ReasoningLoopStatus::LoopDetected(loop_detect::DIAG_CROSS_TURN_SAME_PLAN)
+    );
+
+    // Recovery succeeds: edit occurs and makes progress
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: "Applied the edit to src/network/loop_detect.rs successfully.",
+            target_files: &[file],
+            made_progress: true,
+            had_edits: true,
+            tool_count: 1,
+            no_progress_streak: 0,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+
+    // Subsequent normal inspection starts from clean state
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: "Now reading src/network/loop_detect.rs to verify compiler output.",
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+}
+
+#[test]
+fn test_adversarial_6_bounded_recovery_escalation_prevents_runaway() {
+    // Scenario 6: Loop detector fires, recovery loops again -> bounded recovery prevents runaway.
+    assert_eq!(reasoning_loop_recovery_action(0), LoopRecoveryAction::Recover);
+    assert_eq!(reasoning_loop_recovery_action(1), LoopRecoveryAction::Recover);
+    assert_eq!(reasoning_loop_recovery_action(2), LoopRecoveryAction::ForceFinal);
+    assert_eq!(reasoning_loop_recovery_action(u8::MAX), LoopRecoveryAction::ForceFinal);
+}
+
+#[test]
+fn test_adversarial_7_file_reread_after_change_is_fresh_not_stale() {
+    // Scenario 7: Same file is reread because it changed on disk -> must NOT be treated as stale repetition.
+    let mut ledger = loop_detect::ProgressLedger::default();
+
+    // 1. Initial read
+    let obs1 = loop_detect::ProgressObservation {
+        action: "view_file:src/lib.rs#0".to_string(),
+        output_fingerprint: loop_detect::stable_hash("initial content"),
+        state_fingerprint: None,
+        failure_fingerprint: None,
+        changed_workspace: false,
+        fresh_read: true,
+        search_result: false,
+        no_result: false,
+        verification: false,
+        read_only: true,
+        replayed: false,
+        success: true,
+    };
+    let a1 = ledger.observe(&obs1);
+    assert_eq!(a1.reason, loop_detect::ProgressReason::FreshRead);
+    assert!(a1.meaningful);
+
+    // 2. Edit occurs
+    let obs2 = loop_detect::ProgressObservation {
+        action: "edit:src/lib.rs".to_string(),
+        output_fingerprint: loop_detect::stable_hash("applied"),
+        state_fingerprint: Some(loop_detect::stable_hash("src/lib.rs\n+new line")),
+        failure_fingerprint: None,
+        changed_workspace: true,
+        fresh_read: false,
+        search_result: false,
+        no_result: false,
+        verification: false,
+        read_only: false,
+        replayed: false,
+        success: true,
+    };
+    let a2 = ledger.observe(&obs2);
+    assert_eq!(a2.reason, loop_detect::ProgressReason::WorkspaceChanged);
+    assert!(a2.meaningful);
+
+    // 3. Post-edit re-read with updated content (replayed is false)
+    let obs3 = loop_detect::ProgressObservation {
+        action: "view_file:src/lib.rs#0".to_string(),
+        output_fingerprint: loop_detect::stable_hash("new updated content"),
+        state_fingerprint: None,
+        failure_fingerprint: None,
+        changed_workspace: false,
+        fresh_read: true,
+        search_result: false,
+        no_result: false,
+        verification: false,
+        read_only: true,
+        replayed: false,
+        success: true,
+    };
+    let a3 = ledger.observe(&obs3);
+    assert_eq!(a3.reason, loop_detect::ProgressReason::FreshRead);
+    assert!(a3.meaningful);
+    assert_eq!(ledger.no_progress_streak(), 0);
+}
+
+#[test]
+fn test_adversarial_8_readonly_analysis_task_does_not_false_positive() {
+    // Scenario 8: Read-only/analysis task with no expected workspace edits ->
+    // no-progress-by-no-edit must not create false positives.
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let mut ledger = loop_detect::ProgressLedger::default();
+
+    let analysis_steps = [
+        ("src/network/stream_request.rs", "Examining stream_request for SSE chunk parsing and backpressure."),
+        ("src/network/runner.rs", "Checking how runner collects chunks and manages timeouts."),
+        ("src/network/turn_engine.rs", "Synthesizing turn execution lifecycle for final explanation."),
+    ];
+
+    for (file, reasoning) in analysis_steps {
+        let obs = loop_detect::ProgressObservation {
+            action: format!("view_file:{file}#0"),
+            output_fingerprint: loop_detect::stable_hash(file),
+            state_fingerprint: None,
+            failure_fingerprint: None,
+            changed_workspace: false,
+            fresh_read: true,
+            search_result: false,
+            no_result: false,
+            verification: false,
+            read_only: true,
+            replayed: false,
+            success: true,
+        };
+        let assessment = ledger.observe(&obs);
+        assert!(assessment.meaningful);
+
+        let status = detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: ledger.no_progress_streak(),
+        });
+        assert_eq!(status, loop_detect::ReasoningLoopStatus::Ok);
+    }
+}
