@@ -123,7 +123,10 @@ Do not repeat the same tool call or the same exact edit. Re-read a broader file 
 then use a grounded approach. If emitting a tool call in this recovery attempt, output the ```tool block cleanly. \
 If the requested change is already present or cannot be applied safely, explain that instead of retrying. This is the final recovery attempt.";
 
+pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. Stop re-evaluating and do not restate your plan. Use what you have already learned and take the next concrete action now.]";
+
 pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
+pub(crate) const MAX_REASONING_RECOVERY_ROUNDS: u8 = 2;
 
 /// Safety budgets for a single agent turn. These are deliberately generous —
 /// the goal is to catch a runaway session (the benchmark that motivated this
@@ -291,6 +294,14 @@ pub(crate) enum LoopRecoveryAction {
 
 pub(crate) fn loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
     if attempts < MAX_LOOP_RECOVERY_ROUNDS {
+        LoopRecoveryAction::Recover
+    } else {
+        LoopRecoveryAction::ForceFinal
+    }
+}
+
+pub(crate) fn reasoning_loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
+    if attempts < MAX_REASONING_RECOVERY_ROUNDS {
         LoopRecoveryAction::Recover
     } else {
         LoopRecoveryAction::ForceFinal

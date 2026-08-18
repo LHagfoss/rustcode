@@ -3566,3 +3566,88 @@ fn test_local_model_profile_completion_reserve_defaults() {
         "Local profile must have a realistic soft context target below the theoretical context window"
     );
 }
+
+#[test]
+fn test_reasoning_loop_recovery_action_escalation() {
+    assert_eq!(
+        reasoning_loop_recovery_action(0),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(1),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(2),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(3),
+        LoopRecoveryAction::ForceFinal
+    );
+}
+
+#[test]
+fn test_reasoning_loop_is_cut_off_behavior() {
+    // When finish_reason is "reasoning_loop", is_cut_off must be false so runner returns collected response
+    assert!(!is_cut_off("<think>repetitive thoughts", Some("reasoning_loop")));
+    assert!(!is_cut_off("<think>thoughts</think>", Some("reasoning_loop")));
+}
+
+#[test]
+fn test_turn_context_reasoning_benchmark_summary() {
+    let mut ctx = TurnContext::new();
+    assert_eq!(ctx.reasoning_loops_detected, 0);
+    assert_eq!(ctx.reasoning_recovery_attempts, 0);
+
+    ctx.reasoning_loops_detected = 1;
+    ctx.reasoning_recovery_attempts = 1;
+
+    let summary = ctx.benchmark_summary();
+    assert_eq!(summary["reasoning_loops_detected"], 1);
+    assert_eq!(summary["reasoning_recovery_attempts"], 1);
+}
+
+#[test]
+fn test_reasoning_loop_detector_integration_and_resets() {
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+
+    // 1. Pathological consecutive loop
+    let s = "We should inspect the configuration file in src/config.rs to verify settings.\n";
+    assert_eq!(detector.feed_chunk(s), loop_detect::ReasoningLoopStatus::Ok);
+    assert_eq!(detector.feed_chunk(s), loop_detect::ReasoningLoopStatus::Ok);
+    assert!(matches!(
+        detector.feed_chunk(s),
+        loop_detect::ReasoningLoopStatus::LoopDetected(_)
+    ));
+
+    // Reset clears state
+    detector.reset();
+
+    // 2. Legitimate long reasoning with varied sentences
+    for step in 0..50 {
+        let sentence = format!("Analyzing architectural step {step} with specialized component handler_{step}.\n");
+        assert_eq!(
+            detector.feed_chunk(&sentence),
+            loop_detect::ReasoningLoopStatus::Ok
+        );
+    }
+
+    // 3. Cross-turn plan repetition
+    let plan = "Plan: Inspect all routes in src/routes.rs and verify handler types.";
+    assert_eq!(
+        detector.record_turn_reasoning(plan, false),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+    assert!(matches!(
+        detector.record_turn_reasoning(plan, false),
+        loop_detect::ReasoningLoopStatus::LoopDetected(_)
+    ));
+
+    // 4. Progress resets cross-turn plan
+    detector.record_turn_reasoning(plan, true);
+    assert_eq!(
+        detector.record_turn_reasoning(plan, false),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+}
