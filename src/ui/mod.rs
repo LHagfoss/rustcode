@@ -1101,16 +1101,13 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
         ));
     }
 
-    let detail = if activity.kind == ActivityKind::ActionRequired {
-        action_detail
-    } else {
-        activity.detail.clone()
-    };
-    if let Some(detail) = detail {
-        spans.push(Span::styled(
-            format!(" · {detail}"),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
+    if activity.kind == ActivityKind::ActionRequired {
+        if let Some(detail) = action_detail {
+            spans.push(Span::styled(
+                format!(" · {detail}"),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
     }
 
     if matches!(
@@ -1389,7 +1386,10 @@ fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &Ap
     } else if matches!(state.status, AppStatus::Idle) {
         format!("  {}", state.model_name)
     } else {
-        format!("  tab to queue message · {}", state.model_name)
+        format!(
+            "  Enter message then press enter to queue · {}",
+            state.model_name
+        )
     };
     let right = format!("{remaining}% context left  ");
     let left = fit_to_width(
