@@ -10,6 +10,10 @@ pub(crate) fn has_intended_tool_call(content: &str) -> bool {
 }
 
 pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
+    if finish_reason == Some("reasoning_loop") {
+        return false;
+    }
+
     // If the model already produced a valid tool call, we don't need to continue text generation.
     // We should execute the tool and get its output first.
     if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty() {
