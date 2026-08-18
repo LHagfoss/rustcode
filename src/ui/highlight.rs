@@ -14,32 +14,50 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
-    COLOR_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_MUTED, COLOR_SECONDARY,
-    COLOR_TEXT, get_themed_style,
+    COLOR_BG, COLOR_DIFF_ADD_FG, COLOR_DIFF_REMOVE_FG, COLOR_ELEMENT, COLOR_GREEN, COLOR_MUTED,
+    COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
 };
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static SYNTAX_THEME: OnceLock<Theme> = OnceLock::new();
+static CURRENT_SYNTAX_THEME: std::sync::RwLock<Option<(String, Theme)>> =
+    std::sync::RwLock::new(None);
 
-const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+fn color_to_hex(c: Color, fallback: &str) -> String {
+    match c {
+        Color::Rgb(r, g, b) => format!("#{:02X}{:02X}{:02X}", r, g, b),
+        _ => fallback.to_string(),
+    }
+}
+
+pub fn create_syntect_theme(palette: &super::theme::ThemePalette) -> Theme {
+    let bg_hex = color_to_hex(palette.bg, "#15171A");
+    let fg_hex = color_to_hex(palette.text, "#F0E5DE");
+    let primary_hex = color_to_hex(palette.primary, "#EC6E5D");
+    let secondary_hex = color_to_hex(palette.secondary, "#3C5865");
+    let green_hex = color_to_hex(palette.green, "#A6E3A1");
+    let tip_hex = color_to_hex(palette.tip, "#E0A96D");
+    let muted_hex = color_to_hex(palette.muted, "#88929A");
+
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>name</key>
-	<string>Cozy Rain</string>
+	<string>{name}</string>
 	<key>settings</key>
 	<array>
 		<dict>
 			<key>settings</key>
 			<dict>
 				<key>background</key>
-				<string>#15171A</string>
+				<string>{bg_hex}</string>
 				<key>foreground</key>
-				<string>#F0E5DE</string>
+				<string>{fg_hex}</string>
 				<key>caret</key>
-				<string>#EC6E5D</string>
+				<string>{primary_hex}</string>
 				<key>selection</key>
-				<string>#22262A</string>
+				<string>{primary_hex}</string>
 			</dict>
 		</dict>
 		<dict>
@@ -50,7 +68,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#5A6D77</string>
+				<string>{muted_hex}</string>
 				<key>fontStyle</key>
 				<string>italic</string>
 			</dict>
@@ -63,7 +81,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#EC6E5D</string>
+				<string>{primary_hex}</string>
 				<key>fontStyle</key>
 				<string>bold</string>
 			</dict>
@@ -76,7 +94,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#F0E5DE</string>
+				<string>{fg_hex}</string>
 			</dict>
 		</dict>
 		<dict>
@@ -87,7 +105,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#3C5865</string>
+				<string>{secondary_hex}</string>
 			</dict>
 		</dict>
 		<dict>
@@ -98,7 +116,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#A6E3A1</string>
+				<string>{green_hex}</string>
 			</dict>
 		</dict>
 		<dict>
@@ -109,7 +127,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#EC6E5D</string>
+				<string>{primary_hex}</string>
 			</dict>
 		</dict>
 		<dict>
@@ -120,7 +138,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#E0A96D</string>
+				<string>{tip_hex}</string>
 			</dict>
 		</dict>
 		<dict>
@@ -131,7 +149,7 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#F0E5DE</string>
+				<string>{fg_hex}</string>
 			</dict>
 		</dict>
 		<dict>
@@ -142,28 +160,52 @@ const COZY_RAIN_SYNTAX_THEME: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 			<key>settings</key>
 			<dict>
 				<key>foreground</key>
-				<string>#3C5865</string>
+				<string>{secondary_hex}</string>
 			</dict>
 		</dict>
 	</array>
 </dict>
-</plist>"#;
+</plist>"#,
+        name = palette.name,
+        bg_hex = bg_hex,
+        fg_hex = fg_hex,
+        primary_hex = primary_hex,
+        secondary_hex = secondary_hex,
+        green_hex = green_hex,
+        tip_hex = tip_hex,
+        muted_hex = muted_hex,
+    );
+
+    let mut cursor = std::io::Cursor::new(xml.as_bytes());
+    ThemeSet::load_from_reader(&mut cursor).unwrap_or_else(|_| {
+        let mut themes = ThemeSet::load_defaults().themes;
+        themes
+            .remove("base16-eighties.dark")
+            .or_else(|| themes.into_values().next())
+            .expect("syntect ships at least one default theme")
+    })
+}
 
 fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-fn syntax_theme() -> &'static Theme {
-    SYNTAX_THEME.get_or_init(|| {
-        let mut cursor = std::io::Cursor::new(COZY_RAIN_SYNTAX_THEME.as_bytes());
-        ThemeSet::load_from_reader(&mut cursor).unwrap_or_else(|_| {
-            let mut themes = ThemeSet::load_defaults().themes;
-            themes
-                .remove("base16-eighties.dark")
-                .or_else(|| themes.into_values().next())
-                .expect("syntect ships at least one default theme")
-        })
-    })
+fn syntax_theme() -> Theme {
+    let active_name = super::theme::active_palette().name;
+    if let Ok(guard) = CURRENT_SYNTAX_THEME.read() {
+        if let Some((cached_name, theme)) = guard.as_ref() {
+            if cached_name == &active_name {
+                return theme.clone();
+            }
+        }
+    }
+
+    let palette = super::theme::active_palette();
+    let theme = create_syntect_theme(&palette);
+    if let Ok(mut guard) = CURRENT_SYNTAX_THEME.write() {
+        *guard = Some((palette.name, theme.clone()));
+    }
+    theme
 }
 
 fn syntect_style(style: SyntectStyle, show_picker: bool) -> Style {
@@ -228,7 +270,8 @@ pub(super) fn highlight_shell_command(
     let Some(syntax) = syntax_set().find_syntax_by_token("bash") else {
         return plain();
     };
-    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    let theme = syntax_theme();
+    let mut highlighter = HighlightLines::new(syntax, &theme);
     let mut lines = Vec::new();
     for line in command.lines() {
         let Ok(ranges) = highlighter.highlight_line(line, syntax_set()) else {
@@ -266,7 +309,8 @@ pub(super) fn highlight_code_line<'a>(
     let syntax: &SyntaxReference = syntax_set()
         .find_syntax_by_token(language)
         .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
-    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    let theme = syntax_theme();
+    let mut highlighter = HighlightLines::new(syntax, &theme);
     match highlighter.highlight_line(line, syntax_set()) {
         Ok(ranges) => ranges
             .into_iter()
@@ -289,7 +333,8 @@ pub(super) fn highlight_code_block(
     let syntax: &SyntaxReference = syntax_set()
         .find_syntax_by_token(language)
         .unwrap_or_else(|| syntax_set().find_syntax_plain_text());
-    let mut highlighter = HighlightLines::new(syntax, syntax_theme());
+    let theme = syntax_theme();
+    let mut highlighter = HighlightLines::new(syntax, &theme);
     code.lines()
         .map(
             |line| match highlighter.highlight_line(line, syntax_set()) {
@@ -405,13 +450,13 @@ fn highlight_rust_line_with_colors<'a>(
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
 
-    let color_keyword = Color::Rgb(236, 110, 93); // Coral
-    let color_type = Color::Rgb(60, 88, 101); // Slate
-    let color_string = Color::Rgb(166, 227, 161); // Green
-    let color_comment = Color::Rgb(90, 109, 119); // Gray slate
-    let color_number = Color::Rgb(224, 169, 109); // Amber/tip
-    let color_macro = Color::Rgb(236, 110, 93); // Coral
-    let color_fn = Color::Rgb(240, 229, 222); // Clean white
+    let color_keyword = COLOR_PRIMARY();
+    let color_type = COLOR_SECONDARY();
+    let color_string = COLOR_GREEN();
+    let color_comment = COLOR_MUTED();
+    let color_number = COLOR_TIP();
+    let color_macro = COLOR_PRIMARY();
+    let color_fn = COLOR_TEXT();
 
     while i < chars.len() {
         // Comments

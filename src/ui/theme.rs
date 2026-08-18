@@ -276,7 +276,9 @@ pub fn ensure_themes_dir() -> Option<PathBuf> {
 
     for (filename, content) in BUILTIN_THEMES {
         let file_path = themes_dir.join(filename);
-        let _ = fs::write(file_path, content);
+        if !file_path.exists() {
+            let _ = fs::write(file_path, content);
+        }
     }
 
     Some(themes_dir)
@@ -301,9 +303,13 @@ pub fn load_available_themes() -> Vec<ThemePalette> {
         }
     }
 
-    if themes.is_empty() {
-        for (_, content) in BUILTIN_THEMES {
-            if let Ok(file_struct) = toml::from_str::<ThemeFile>(content) {
+    // Always ensure all builtin themes are available even if disk read is partial or failed
+    for (_, content) in BUILTIN_THEMES {
+        if let Ok(file_struct) = toml::from_str::<ThemeFile>(content) {
+            if !themes
+                .iter()
+                .any(|t| t.name.eq_ignore_ascii_case(&file_struct.name))
+            {
                 themes.push(ThemePalette::from(&file_struct));
             }
         }
@@ -327,23 +333,32 @@ pub fn get_palette(name: &str) -> ThemePalette {
     themes
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(name))
-        .unwrap_or_else(|| ThemePalette {
-            name: "default".to_string(),
-            description: "Default dark palette (Cozy Rain)".to_string(),
-            bg: Color::Rgb(21, 23, 26),
-            panel: Color::Rgb(21, 23, 26),
-            element: Color::Rgb(34, 38, 42),
-            text: Color::Rgb(240, 229, 222),
-            muted: Color::Rgb(136, 146, 154),
-            primary: Color::Rgb(236, 110, 93),
-            secondary: Color::Rgb(60, 88, 101),
-            green: Color::Rgb(166, 227, 161),
-            selection: Color::Rgb(240, 229, 222),
-            tip: Color::Rgb(224, 169, 109),
-            status_border: Color::Rgb(60, 88, 101),
-            turn_separator: Color::Rgb(90, 112, 126),
-            notice_bg: Color::Reset,
-            hover_bg: Color::Rgb(43, 48, 53),
+        .unwrap_or_else(|| {
+            for (_, content) in BUILTIN_THEMES {
+                if let Ok(file_struct) = toml::from_str::<ThemeFile>(content) {
+                    if file_struct.name == "default" {
+                        return ThemePalette::from(&file_struct);
+                    }
+                }
+            }
+            ThemePalette {
+                name: "default".to_string(),
+                description: "Default dark palette (Cozy Rain)".to_string(),
+                bg: Color::Reset,
+                panel: Color::Rgb(21, 23, 26),
+                element: Color::Rgb(34, 38, 42),
+                text: Color::Rgb(240, 229, 222),
+                muted: Color::Rgb(136, 146, 154),
+                primary: Color::Rgb(236, 110, 93),
+                secondary: Color::Rgb(60, 88, 101),
+                green: Color::Rgb(166, 227, 161),
+                selection: Color::Rgb(240, 229, 222),
+                tip: Color::Rgb(224, 169, 109),
+                status_border: Color::Rgb(60, 88, 101),
+                turn_separator: Color::Rgb(90, 112, 126),
+                notice_bg: Color::Reset,
+                hover_bg: Color::Rgb(43, 48, 53),
+            }
         })
 }
 
