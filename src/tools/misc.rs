@@ -78,6 +78,74 @@ pub const COMPLETE_TASK: Tool = Tool {
     safety: ToolSafety::Unknown,
 };
 
+fn remember_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "key": { "type": "string", "description": "Unique key for the fact (e.g. 'package_manager', 'db_port', 'test_runner')" },
+            "value": { "type": "string", "description": "The concise fact or rule to remember (max 512 characters)" },
+            "category": { "type": "string", "description": "Optional category tag (e.g. 'build', 'architecture', 'convention', 'preference')", "default": "general" },
+            "scope": { "type": "string", "enum": ["project", "global"], "description": "Scope of the memory. 'project' (default) is scoped to the current repository; 'global' applies across all projects.", "default": "project" }
+        },
+        "required": ["key", "value"]
+    })
+}
+
+pub const REMEMBER: Tool = Tool {
+    name: "remember",
+    description: "Store a concise, high-value fact, user preference, architecture detail, or convention into persistent memory. Use this when explicitly asked by the user to remember something, or when a durable project convention is established. Do not store secrets, tokens, or entire files.",
+    arguments: r#"{"key": "package_manager", "value": "Use pnpm for all install and build commands", "category": "build", "scope": "project"}"#,
+    handler: remember,
+    requires_confirmation: false,
+    schema: remember_schema,
+    capabilities: &[ToolCapability::SessionState],
+    safety: ToolSafety::Unknown,
+};
+
+fn recall_memory_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "query": { "type": "string", "description": "Search query terms to match against stored memory keys, categories, and values" },
+            "scope": { "type": "string", "enum": ["all", "project", "global"], "description": "Scope to search. Defaults to 'all'.", "default": "all" }
+        },
+        "required": ["query"]
+    })
+}
+
+pub const RECALL_MEMORY: Tool = Tool {
+    name: "recall_memory",
+    description: "Search persistent project and global memory for remembered facts, user preferences, architecture decisions, or build instructions matching a query.",
+    arguments: r#"{"query": "database port", "scope": "all"}"#,
+    handler: recall_memory,
+    requires_confirmation: false,
+    schema: recall_memory_schema,
+    capabilities: &[],
+    safety: ToolSafety::ReadOnly,
+};
+
+fn forget_memory_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "key": { "type": "string", "description": "The exact key or category of the fact to remove" },
+            "scope": { "type": "string", "enum": ["project", "global", "all"], "description": "Scope to remove from. Defaults to 'project'.", "default": "project" }
+        },
+        "required": ["key"]
+    })
+}
+
+pub const FORGET_MEMORY: Tool = Tool {
+    name: "forget_memory",
+    description: "Remove a fact from persistent memory by key or category. Use when a remembered fact is obsolete, contradicted, or when asked by the user to forget something.",
+    arguments: r#"{"key": "package_manager", "scope": "project"}"#,
+    handler: forget_memory,
+    requires_confirmation: false,
+    schema: forget_memory_schema,
+    capabilities: &[ToolCapability::SessionState],
+    safety: ToolSafety::Unknown,
+};
+
 fn use_skill_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"]
@@ -367,4 +435,86 @@ pub fn use_skill(args: &Value) -> Result<String, String> {
     );
     out.push_str("</skill_content>\n");
     Ok(out)
+}
+
+pub fn remember(args: &Value) -> Result<String, String> {
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or("missing required argument 'key'")?;
+    let value = args
+        .get("value")
+        .and_then(|v| v.as_str())
+        .ok_or("missing required argument 'value'")?;
+    let category = args
+        .get("category")
+        .and_then(|v| v.as_str())
+        .unwrap_or("general");
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("project");
+
+    let fact = crate::memory::fact(category, key, value, "agent memory tool");
+    if scope == "global" {
+        crate::memory::upsert_global(fact)?;
+        Ok(format!("Remembered globally: [{category}] {key} = {value}"))
+    } else {
+        crate::memory::upsert(None, fact)?;
+        Ok(format!("Remembered for this project: [{category}] {key} = {value}"))
+    }
+}
+
+pub fn recall_memory(args: &Value) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or("missing required argument 'query'")?;
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("all");
+
+    let facts = crate::memory::search_facts(None, query, scope);
+    if facts.is_empty() {
+        return Ok(format!("No remembered facts found matching '{query}'."));
+    }
+
+    let mut output = format!("Found {} relevant memory item(s):\n", facts.len());
+    for (item_scope, fact) in facts {
+        output.push_str(&format!(
+            "- ({item_scope}) [{}] {}: {}\n",
+            fact.category, fact.key, fact.value
+        ));
+    }
+    Ok(output.trim_end().to_string())
+}
+
+pub fn forget_memory(args: &Value) -> Result<String, String> {
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or("missing required argument 'key'")?;
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("project");
+
+    let mut total_removed = 0;
+    if scope == "all" || scope == "global" {
+        if let Ok(removed) = crate::memory::remove_global(key) {
+            total_removed += removed;
+        }
+    }
+    if scope == "all" || scope == "project" {
+        if let Ok(removed) = crate::memory::remove(None, key) {
+            total_removed += removed;
+        }
+    }
+
+    if total_removed == 0 {
+        Ok(format!("No memory facts found for '{key}' in scope '{scope}'."))
+    } else {
+        Ok(format!("Removed {total_removed} fact(s) matching '{key}'."))
+    }
 }

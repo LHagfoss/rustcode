@@ -601,6 +601,9 @@ pub const TOOLS: &[Tool] = &[
     filesystem::WRITE_TO_FILE,
     misc::COMPLETE_TASK,
     misc::USE_SKILL,
+    misc::REMEMBER,
+    misc::RECALL_MEMORY,
+    misc::FORGET_MEMORY,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {
@@ -2711,5 +2714,32 @@ mod tests {
         );
         assert!(prompt.contains("never claim a check, test, formatter, or lint command passed"));
         assert!(prompt.contains("Stage only explicit feature paths in Git"));
+    }
+
+    #[test]
+    fn memory_tools_lifecycle_execution() {
+        assert!(TOOLS.iter().any(|t| t.name == "remember"));
+        assert!(TOOLS.iter().any(|t| t.name == "recall_memory"));
+        assert!(TOOLS.iter().any(|t| t.name == "forget_memory"));
+
+        let res = (super::misc::REMEMBER.handler)(&serde_json::json!({
+            "key": "test_db_port",
+            "value": "5433",
+            "category": "database",
+            "scope": "global"
+        })).unwrap();
+        assert!(res.contains("Remembered globally"));
+
+        let recall_res = (super::misc::RECALL_MEMORY.handler)(&serde_json::json!({
+            "query": "test_db_port",
+            "scope": "global"
+        })).unwrap();
+        assert!(recall_res.contains("5433"));
+
+        let forget_res = (super::misc::FORGET_MEMORY.handler)(&serde_json::json!({
+            "key": "test_db_port",
+            "scope": "global"
+        })).unwrap();
+        assert!(forget_res.contains("Removed"));
     }
 }
