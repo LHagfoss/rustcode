@@ -657,15 +657,14 @@ pub async fn handle_enter(
                 }
             }
             "/history" => {
-                let sessions = build_session_list(&s);
+                let (sessions, truncated) = build_session_list_with_truncation(&s);
                 if sessions.is_empty() {
                     s.history
                         .push(ChatMessage::new("system", "No saved sessions found."));
                 } else {
                     s.history_picker_sessions = sessions;
                     s.history_picker_index = 0;
-                    let total = crate::config::list_sessions().len();
-                    s.history_picker_truncated = is_session_list_truncated(total);
+                    s.history_picker_truncated = truncated;
                     s.show_history_picker = true;
                 }
             }
@@ -1431,21 +1430,29 @@ pub fn parse_token_count(input: &str) -> Option<u32> {
 /// Sessions available to resume: archived ones plus the live history file
 /// from the previous run (only when the current chat has no real prompt yet,
 /// otherwise the live file just mirrors what's already on screen).
-pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
-    let mut list = crate::config::list_sessions();
+pub fn build_session_list_with_truncation(s: &AppState) -> (Vec<crate::config::SessionMeta>, bool) {
+    const MAX_SESSIONS: usize = 50;
+    let (mut list, mut truncated) = crate::config::list_sessions_limited(MAX_SESSIONS);
     if !crate::config::session_has_content(&s.history)
         && let Some(live) = crate::config::live_session_meta()
+        && !list.iter().any(|m| m.path == live.path)
     {
         list.insert(0, live);
+        if list.len() > MAX_SESSIONS {
+            list.truncate(MAX_SESSIONS);
+            truncated = true;
+        }
     }
-    const MAX_SESSIONS: usize = 50;
-    if list.len() > MAX_SESSIONS {
-        list.truncate(MAX_SESSIONS);
-    }
+    (list, truncated)
+}
+
+pub fn build_session_list(s: &AppState) -> Vec<crate::config::SessionMeta> {
+    let (list, _) = build_session_list_with_truncation(s);
     list
 }
 
 /// Returns whether the session list was truncated at MAX_SESSIONS.
+#[allow(dead_code)]
 pub fn is_session_list_truncated(total_sessions: usize) -> bool {
     total_sessions > 50
 }
@@ -1463,14 +1470,14 @@ pub fn resume_latest_session(s: &mut AppState) {
     }
 }
 
-pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
+pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) -> bool {
     let mut loaded = crate::config::load_session_file(&meta.path);
     if loaded.is_empty() {
         s.history.push(ChatMessage::new(
             "system",
             format!("Could not load session '{}'", meta.title),
         ));
-        return;
+        return false;
     }
 
     // Strip legacy "Resumed session " system messages from loaded transcript
@@ -1481,13 +1488,11 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
 
-    // Extract session ID from the loaded path parent
-    if let Some(parent) = meta.path.parent()
-        && let Some(session_id_str) = parent.file_name().and_then(|n| n.to_str())
-    {
+    // Extract session ID from the loaded path
+    if let Some(session_id_str) = crate::config::session_id_from_path(&meta.path) {
         // Flush the outgoing session's queued history before retargeting.
         crate::config::flush_history();
-        s.active_session_id = session_id_str.to_string();
+        s.active_session_id = session_id_str;
         s.config.last_active_session_id = Some(s.active_session_id.clone());
         crate::config::save_entire_config(&s.config);
         crate::config::set_active_session_id(&s.active_session_id);
@@ -1507,6 +1512,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) {
     s.history
         .push(ChatMessage::new("system", format!("Resumed session \"{}\"", meta.title)));
     crate::config::save_session_history(&s.active_session_id, &s.history);
+    true
 }
 
 pub fn extract_code_blocks_or_content(content: &str) -> String {
