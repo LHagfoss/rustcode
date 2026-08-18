@@ -275,14 +275,185 @@ pub fn render(root: Option<&Path>) -> Result<String, String> {
     Ok(output.trim_end().to_string())
 }
 
+pub fn global_location() -> PathBuf {
+    crate::config::get_config_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("rustcode"))
+        .join("global-memory.json")
+}
+
+pub fn load_global() -> Result<ProjectMemory, String> {
+    let path = global_location();
+    if fs::metadata(&path)
+        .map(|metadata| metadata.len() as usize > MAX_MEMORY_BYTES)
+        .unwrap_or(false)
+    {
+        return Err("global memory exceeds its bounded file size".to_string());
+    }
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ProjectMemory {
+                version: MEMORY_VERSION,
+                identity: "global".to_string(),
+                facts: Vec::new(),
+            });
+        }
+        Err(error) => return Err(format!("could not read global memory: {error}")),
+    };
+    let mut memory: ProjectMemory = serde_json::from_str(&raw).map_err(|error| {
+        format!("invalid global memory {}: {error}", path.display())
+    })?;
+    if memory.version != MEMORY_VERSION || memory.identity != "global" {
+        return Err("global memory version or identity does not match".to_string());
+    }
+    memory.facts.retain(|fact| valid_fact(fact));
+    for fact in &mut memory.facts {
+        fact.confidence = fact.confidence.clamp(1, 100);
+    }
+    memory.facts.truncate(MAX_FACTS);
+    Ok(memory)
+}
+
+pub fn save_global(memory: &ProjectMemory) -> Result<(), String> {
+    let _guard = memory_write_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    save_global_unlocked(memory)
+}
+
+fn save_global_unlocked(memory: &ProjectMemory) -> Result<(), String> {
+    let path = global_location();
+    if memory.version != MEMORY_VERSION || memory.identity != "global" {
+        return Err("global memory identity/version mismatch".to_string());
+    }
+    if memory.facts.len() > MAX_FACTS || memory.facts.iter().any(|fact| !valid_fact(fact)) {
+        return Err("global memory contains an invalid or oversized fact".to_string());
+    }
+    let json = serde_json::to_vec_pretty(memory).map_err(|error| error.to_string())?;
+    if json.len() > MAX_MEMORY_BYTES {
+        return Err("global memory is full; remove stale facts before adding more".to_string());
+    }
+    fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
+        .map_err(|error| error.to_string())?;
+    let tmp = path.with_extension(format!(
+        "json.{}.{}.{}.tmp",
+        std::process::id(),
+        now_nanos(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&tmp, json).map_err(|error| error.to_string())?;
+    fs::rename(&tmp, &path).map_err(|error| error.to_string())
+}
+
+pub fn upsert_global(mut fact: MemoryFact) -> Result<(), String> {
+    fact.category = clean_field(&fact.category, 48)?;
+    fact.key = clean_field(&fact.key, 96)?;
+    fact.value = clean_value(&fact.value)?;
+    fact.source = clean_field(&fact.source, 160)?;
+    fact.confidence = fact.confidence.clamp(1, 100);
+    safe_fact(&fact)?;
+    let _guard = memory_write_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut memory = load_global()?;
+    if let Some(existing) = memory
+        .facts
+        .iter_mut()
+        .find(|existing| existing.category == fact.category && existing.key == fact.key)
+    {
+        *existing = fact;
+    } else {
+        memory.facts.push(fact);
+    }
+    memory
+        .facts
+        .sort_by(|a, b| a.category.cmp(&b.category).then_with(|| a.key.cmp(&b.key)));
+    memory.facts.truncate(MAX_FACTS);
+    save_global_unlocked(&memory)
+}
+
+pub fn remove_global(key: &str) -> Result<usize, String> {
+    let _guard = memory_write_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut memory = load_global()?;
+    let before = memory.facts.len();
+    memory
+        .facts
+        .retain(|fact| fact.key != key && fact.category != key);
+    save_global_unlocked(&memory)?;
+    Ok(before.saturating_sub(memory.facts.len()))
+}
+
+pub fn search_facts(
+    root: Option<&Path>,
+    query: &str,
+    scope: &str,
+) -> Vec<(String, MemoryFact)> {
+    let query_words = words(query);
+    let mut results = Vec::new();
+
+    if scope == "all" || scope == "global" {
+        if let Ok(global_mem) = load_global() {
+            for fact in global_mem.facts {
+                let haystack = format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
+                let score = if query_words.is_empty() {
+                    1
+                } else {
+                    query_words.iter().filter(|w| haystack.contains(*w)).count()
+                };
+                if score > 0 {
+                    results.push(("global".to_string(), score, fact));
+                }
+            }
+        }
+    }
+
+    if scope == "all" || scope == "project" {
+        if let Ok(proj_mem) = load(root) {
+            for fact in proj_mem.facts {
+                let haystack = format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
+                let score = if query_words.is_empty() {
+                    1
+                } else {
+                    query_words.iter().filter(|w| haystack.contains(*w)).count()
+                };
+                if score > 0 {
+                    results.push(("project".to_string(), score, fact));
+                }
+            }
+        }
+    }
+
+    results.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.2.confidence.cmp(&a.2.confidence))
+            .then_with(|| b.2.updated_at.cmp(&a.2.updated_at))
+    });
+
+    results
+        .into_iter()
+        .take(16)
+        .map(|(scope_name, _, fact)| (scope_name, fact))
+        .collect()
+}
+
 pub fn render_relevant(root: Option<&Path>, query: &str, max_tokens: usize) -> Option<String> {
-    let memory = load(root).ok()?;
-    if memory.facts.is_empty() || max_tokens == 0 {
+    if max_tokens == 0 {
         return None;
     }
     let query_words = words(query);
-    let mut ranked = memory
-        .facts
+    let mut all_facts = Vec::new();
+    if let Ok(memory) = load(root) {
+        all_facts.extend(memory.facts);
+    }
+    if let Ok(global_memory) = load_global() {
+        all_facts.extend(global_memory.facts);
+    }
+    if all_facts.is_empty() {
+        return None;
+    }
+    let mut ranked = all_facts
         .into_iter()
         .filter_map(|fact| {
             let stale = now().saturating_sub(fact.updated_at) > STALE_AFTER_SECONDS;
@@ -302,7 +473,7 @@ pub fn render_relevant(root: Option<&Path>, query: &str, max_tokens: usize) -> O
     });
     let max_bytes = max_tokens.saturating_mul(4).min(8 * 1024);
     let mut output = String::from(
-        "# Relevant project memory (AGENTS.md/CLAUDE.md and the current task remain authoritative)\n",
+        "# Relevant memory (AGENTS.md/CLAUDE.md and the current task remain authoritative)\n",
     );
     for (_, stale, fact) in ranked {
         let freshness = if stale {
@@ -690,5 +861,42 @@ mod tests {
             fs::canonicalize(&non_git).unwrap()
         );
         assert_ne!(location(Some(&non_git)).identity, main_location.identity);
+    }
+
+    #[test]
+    fn global_memory_lifecycle_and_search() {
+        upsert_global(fact("preference", "editor", "kakoune", "user")).unwrap();
+        let loaded = load_global().unwrap();
+        assert!(loaded.facts.iter().any(|f| f.key == "editor" && f.value == "kakoune"));
+
+        let results = search_facts(None, "kakoune", "global");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.key, "editor");
+
+        remove_global("editor").unwrap();
+        let after = load_global().unwrap();
+        assert!(!after.facts.iter().any(|f| f.key == "editor"));
+    }
+
+    #[test]
+    fn search_facts_multi_scope() {
+        let root = tempfile::tempdir().unwrap();
+        upsert(Some(root.path()), fact("build", "package_manager", "pnpm", "user")).unwrap();
+        upsert_global(fact("style", "indent", "4 spaces", "user")).unwrap();
+
+        let proj_results = search_facts(Some(root.path()), "pnpm", "project");
+        assert_eq!(proj_results.len(), 1);
+        assert_eq!(proj_results[0].1.key, "package_manager");
+
+        let global_results = search_facts(Some(root.path()), "indent", "global");
+        assert_eq!(global_results.len(), 1);
+        assert_eq!(global_results[0].1.key, "indent");
+
+        let all_results = search_facts(Some(root.path()), "", "all");
+        assert!(all_results.len() >= 2);
+
+        // cleanup
+        remove(Some(root.path()), "package_manager").unwrap();
+        remove_global("indent").unwrap();
     }
 }

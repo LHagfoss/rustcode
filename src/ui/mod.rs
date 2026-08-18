@@ -1451,6 +1451,9 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         "get_project_map" => "ProjectMap".to_string(),
         "manage_task" => "ManageTask".to_string(),
         "background_task" => "TaskDone".to_string(),
+        "remember" => "Remember".to_string(),
+        "recall_memory" => "Recall".to_string(),
+        "forget_memory" => "Forget".to_string(),
         other => to_pascal_case(other),
     };
 
@@ -1498,9 +1501,14 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
-        "search_web" | "codebase_search" | "find_symbol" | "codebase_symbol" => args
+        "search_web" | "codebase_search" | "find_symbol" | "codebase_symbol" | "recall_memory" => args
             .get("query")
             .or_else(|| args.get("Query"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        "remember" | "forget_memory" => args
+            .get("key")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),

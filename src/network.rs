@@ -1174,7 +1174,7 @@ pub(crate) async fn prepare_turn_request(
     let project_memory = crate::memory::render_relevant_async(
         workspace_root.clone(),
         memory_query,
-        (budget_token_limit / 8).min(768) as usize,
+        (budget_token_limit / 16).min(192) as usize,
     )
     .await;
     let mut dynamic_context = build_dynamic_context_tail_with_memory(
