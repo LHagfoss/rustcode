@@ -138,10 +138,10 @@ fn format_session_transition(
 
 fn open_overlay(state: &mut AppState, overlay: crate::app::events::Overlay) {
     if matches!(overlay, crate::app::events::Overlay::History) {
-        state.history_picker_sessions = crate::app::actions::build_session_list(state);
+        let (sessions, truncated) = crate::app::actions::build_session_list_with_truncation(state);
+        state.history_picker_sessions = sessions;
         state.history_picker_index = 0;
-        let total = crate::config::list_sessions().len();
-        state.history_picker_truncated = crate::app::actions::is_session_list_truncated(total);
+        state.history_picker_truncated = truncated;
     }
     if matches!(overlay, crate::app::events::Overlay::Subagents) {
         state.subagent_picker_index = 0;

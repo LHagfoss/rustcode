@@ -911,16 +911,12 @@ pub fn session_has_content(history: &[ChatMessage]) -> bool {
         .any(|m| m.role == "user" && !m.content.starts_with('/'))
 }
 
-/// A session is worth showing in `/history` or resuming only once a real
-/// exchange happened: a genuine user prompt AND at least one assistant reply.
-/// This hides abandoned prompt-only or goal-only sessions (e.g. a `/goal` that
-/// never produced output) so they don't bury the real chats or get picked by
-/// `/resume`.
+#[allow(dead_code)]
 pub fn session_is_resumable(history: &[ChatMessage]) -> bool {
     session_has_content(history) && history.iter().any(|m| m.role == "assistant")
 }
 
-fn session_title(history: &[ChatMessage]) -> String {
+pub(crate) fn session_title(history: &[ChatMessage]) -> String {
     let title = history
         .iter()
         .find(|m| m.role == "user" && !m.content.starts_with('/'))
@@ -934,36 +930,93 @@ fn session_title(history: &[ChatMessage]) -> String {
     }
 }
 
-fn session_meta_from(path: PathBuf, history: &[ChatMessage]) -> SessionMeta {
-    // Try to load custom title from session directory
-    let title = if let Some(session_dir) = path.parent().and_then(|p| p.parent()) {
-        if session_dir
-            .components()
-            .next_back()
-            .map(|c| c.as_os_str() == SESSIONS_DIR)
+pub(crate) fn session_id_from_path(path: &Path) -> Option<String> {
+    if path.file_name().map(|n| n == HISTORY_FILE).unwrap_or(false) {
+        let parent = path.parent()?;
+        if parent
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|c| c == SESSIONS_DIR)
             .unwrap_or(false)
         {
-            if let Some(session_id) = session_dir.file_name() {
-                load_session_title(session_id.to_str().unwrap_or(""))
-            } else {
-                None
-            }
-        } else {
-            None
+            return parent.file_name().and_then(|s| s.to_str()).map(str::to_owned);
         }
-    } else {
-        None
-    };
-
-    SessionMeta {
-        title: title.unwrap_or_else(|| session_title(history)),
-        when: history
-            .first()
-            .map(|m| m.timestamp.clone())
-            .unwrap_or_default(),
-        message_count: history.len(),
-        path,
+    } else if path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|c| c == SESSIONS_DIR)
+        .unwrap_or(false)
+    {
+        return path.file_stem().and_then(|s| s.to_str()).map(str::to_owned);
     }
+    None
+}
+
+#[derive(Deserialize)]
+struct ChatMessageMetaRef<'a> {
+    #[serde(borrow)]
+    role: std::borrow::Cow<'a, str>,
+    #[serde(borrow, default)]
+    content: std::borrow::Cow<'a, str>,
+    #[serde(borrow, default)]
+    timestamp: std::borrow::Cow<'a, str>,
+}
+
+pub fn load_session_meta(path: &Path) -> Option<SessionMeta> {
+    let content = fs::read_to_string(path).ok()?;
+    let messages: Vec<ChatMessageMetaRef> = serde_json::from_str(&content).ok()?;
+    let has_user = messages
+        .iter()
+        .any(|m| m.role == "user" && !m.content.starts_with('/'));
+    let has_assistant = messages.iter().any(|m| m.role == "assistant");
+    if !has_user || !has_assistant {
+        return None;
+    }
+
+    let title = session_id_from_path(path)
+        .as_deref()
+        .and_then(load_session_title)
+        .unwrap_or_else(|| {
+            let first_user = messages
+                .iter()
+                .find(|m| m.role == "user" && !m.content.starts_with('/'))
+                .map(|m| m.content.lines().next().unwrap_or("").trim())
+                .unwrap_or("(no prompt)");
+            if first_user.chars().count() > 48 {
+                let truncated: String = first_user.chars().take(45).collect();
+                format!("{truncated}...")
+            } else if first_user.is_empty() {
+                "(no prompt)".to_string()
+            } else {
+                first_user.to_string()
+            }
+        });
+
+    let when = messages
+        .first()
+        .map(|m| m.timestamp.to_string())
+        .unwrap_or_default();
+
+    Some(SessionMeta {
+        title,
+        when,
+        message_count: messages.len(),
+        path: path.to_path_buf(),
+    })
+}
+
+pub fn session_id_has_content(session_id: &str) -> bool {
+    if let Some(dir) = get_config_dir() {
+        let path = dir.join(SESSIONS_DIR).join(session_id).join(HISTORY_FILE);
+        if let Ok(content) = fs::read_to_string(&path)
+            && let Ok(messages) = serde_json::from_str::<Vec<ChatMessageMetaRef>>(&content)
+        {
+            return messages
+                .iter()
+                .any(|m| m.role == "user" && !m.content.starts_with('/'));
+        }
+    }
+    false
 }
 
 /// Archive a chat into the sessions directory. No-op for histories without
@@ -1182,7 +1235,7 @@ pub fn start_session(config: &mut AppConfig) -> String {
     if last.is_empty() {
         return last;
     }
-    if session_has_content(&load_session_history_direct(&last)) {
+    if session_id_has_content(&last) {
         create_new_session(config)
     } else {
         last
@@ -1235,7 +1288,7 @@ fn prune_sessions(dir: &Path) {
     }
 }
 
-pub fn list_sessions() -> Vec<SessionMeta> {
+pub fn sorted_session_paths() -> Vec<PathBuf> {
     let Some(dir) = get_config_dir() else {
         return Vec::new();
     };
@@ -1257,16 +1310,54 @@ pub fn list_sessions() -> Vec<SessionMeta> {
     paths.sort();
     paths.reverse();
     paths
-        .into_iter()
-        .filter_map(|p| {
-            let history = load_session_file(&p);
-            if session_is_resumable(&history) {
-                Some(session_meta_from(p, &history))
+}
+
+pub fn latest_resumable_session_meta() -> Option<SessionMeta> {
+    for path in sorted_session_paths() {
+        if let Some(meta) = load_session_meta(&path) {
+            return Some(meta);
+        }
+    }
+    None
+}
+
+pub fn session_meta_by_id(id: &str) -> Option<SessionMeta> {
+    let dir = get_config_dir()?;
+    let dir_path = dir.join(SESSIONS_DIR).join(id).join("history.json");
+    if dir_path.exists() {
+        if let Some(meta) = load_session_meta(&dir_path) {
+            return Some(meta);
+        }
+    }
+    let flat_path = dir.join(SESSIONS_DIR).join(format!("{id}.json"));
+    if flat_path.exists() {
+        if let Some(meta) = load_session_meta(&flat_path) {
+            return Some(meta);
+        }
+    }
+    None
+}
+
+pub fn list_sessions_limited(limit: usize) -> (Vec<SessionMeta>, bool) {
+    let mut list = Vec::new();
+    let mut truncated = false;
+    for path in sorted_session_paths() {
+        if let Some(meta) = load_session_meta(&path) {
+            if list.len() < limit {
+                list.push(meta);
             } else {
-                None
+                truncated = true;
+                break;
             }
-        })
-        .collect()
+        }
+    }
+    (list, truncated)
+}
+
+#[allow(dead_code)]
+pub fn list_sessions() -> Vec<SessionMeta> {
+    let (list, _) = list_sessions_limited(usize::MAX);
+    list
 }
 
 pub fn archive_live_history() {
@@ -1280,9 +1371,8 @@ pub fn live_session_meta() -> Option<SessionMeta> {
             .join(SESSIONS_DIR)
             .join(&session_id)
             .join("history.json");
-        let history = load_session_file(&path);
-        if session_is_resumable(&history) {
-            return Some(session_meta_from(path, &history));
+        if path.exists() {
+            return load_session_meta(&path);
         }
     }
     None
@@ -2123,5 +2213,48 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // Non-git directory falls back to main
         assert_eq!(get_sync_branch(dir.path()), "main");
+    }
+
+    #[test]
+    fn test_load_session_meta_fast_path() {
+        let dir = TempDir::new().unwrap();
+        let session_dir = dir.path().join(SESSIONS_DIR).join("12345");
+        fs::create_dir_all(&session_dir).unwrap();
+        let history_file = session_dir.join(HISTORY_FILE);
+
+        let json = r#"[
+            {"role": "user", "content": "hello world\nsecond line", "timestamp": "12:00", "images": ["massive_base64_data_12345"]},
+            {"role": "assistant", "content": "hi there", "timestamp": "12:01"}
+        ]"#;
+        fs::write(&history_file, json).unwrap();
+
+        let meta = load_session_meta(&history_file).expect("should parse meta");
+        assert_eq!(meta.title, "hello world");
+        assert_eq!(meta.when, "12:00");
+        assert_eq!(meta.message_count, 2);
+        assert_eq!(meta.path, history_file);
+        assert_eq!(session_id_from_path(&history_file).as_deref(), Some("12345"));
+    }
+
+    #[test]
+    fn test_load_session_meta_unresumable_abandoned_session() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.json");
+        // User prompt with no assistant reply is not resumable
+        let json = r#"[{"role": "user", "content": "unfinished", "timestamp": "12:00"}]"#;
+        fs::write(&file, json).unwrap();
+        assert!(load_session_meta(&file).is_none());
+    }
+
+    #[test]
+    fn test_session_id_from_path_variations() {
+        let path1 = PathBuf::from("/home/user/.config/rustcode/sessions/sess-abc/history.json");
+        assert_eq!(session_id_from_path(&path1).as_deref(), Some("sess-abc"));
+
+        let path2 = PathBuf::from("/home/user/.config/rustcode/sessions/sess-xyz.json");
+        assert_eq!(session_id_from_path(&path2).as_deref(), Some("sess-xyz"));
+
+        let path3 = PathBuf::from("/tmp/history.json");
+        assert_eq!(session_id_from_path(&path3), None);
     }
 }
