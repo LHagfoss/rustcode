@@ -2812,7 +2812,7 @@ pub(crate) fn build_claude_startup_banner(
     let reset_bg = COLOR_BG();
 
     // Top border
-    let title_str = format!("RustCode v{version}");
+    let title_str = format!(">_ RustCode v{version}");
     let top_pad = inner_w.saturating_sub(title_str.chars().count() + 3);
     let top_border = format!("╭─ {title_str} {}╮", "─".repeat(top_pad));
     banner.push(Line::from(vec![Span::styled(
