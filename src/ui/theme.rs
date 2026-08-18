@@ -116,7 +116,7 @@ green = "#a6e3a1"
 selection = "#f0e5de"
 tip = "#e0a96d"
 status_border = "#3c5865"
-turn_separator = "#3c5865"
+turn_separator = "#5a707e"
 notice_bg = "reset"
 hover_bg = "#2b3035"
 "##,
@@ -136,7 +136,7 @@ green = "#a6e3a1"
 selection = "#f0e5de"
 tip = "#e0a96d"
 status_border = "#3c5865"
-turn_separator = "#3c5865"
+turn_separator = "#5a707e"
 notice_bg = "reset"
 hover_bg = "#2b3035"
 "##,
@@ -156,7 +156,7 @@ green = "#a6e3a1"
 selection = "#f0e5de"
 tip = "#e0a96d"
 status_border = "#3c5865"
-turn_separator = "#3c5865"
+turn_separator = "#5a707e"
 notice_bg = "reset"
 hover_bg = "#2b3035"
 "##,
@@ -196,7 +196,7 @@ green = "#a3be8c"
 selection = "#eceff4"
 tip = "#ebcb8b"
 status_border = "#4c566a"
-turn_separator = "#4c566a"
+turn_separator = "#5e6b84"
 notice_bg = "reset"
 hover_bg = "#4c566a"
 "##,
@@ -236,7 +236,7 @@ green = "#9ece6a"
 selection = "#c0caf5"
 tip = "#e0af68"
 status_border = "#414868"
-turn_separator = "#414868"
+turn_separator = "#565f89"
 notice_bg = "reset"
 hover_bg = "#292e42"
 "##,
@@ -321,7 +321,7 @@ pub fn get_palette(name: &str) -> ThemePalette {
             selection: Color::Rgb(240, 229, 222),
             tip: Color::Rgb(224, 169, 109),
             status_border: Color::Rgb(60, 88, 101),
-            turn_separator: Color::Rgb(60, 88, 101),
+            turn_separator: Color::Rgb(90, 112, 126),
             notice_bg: Color::Reset,
             hover_bg: Color::Rgb(43, 48, 53),
         })
