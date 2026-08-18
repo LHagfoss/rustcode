@@ -1687,6 +1687,20 @@ fn test_build_dynamic_context_tail() {
     assert!(with_files.contains("- src/a.rs"));
     assert!(with_files.contains("- src/b.rs"));
 
+    // Files-in-context section bounds oversized file lists.
+    let many_files: Vec<String> = (0..50)
+        .map(|i| {
+            if i == 0 {
+                "src/stale.rs (STALE — changed on disk; re-read before editing)".to_string()
+            } else {
+                format!("src/file_{i}.rs (snapshot current)")
+            }
+        })
+        .collect();
+    let bounded = build_dynamic_context_tail("# Env".to_string(), &many_files, &[]);
+    assert!(bounded.contains("src/stale.rs (STALE"));
+    assert!(bounded.contains("more unchanged files omitted from context tail"));
+
     // Task plan renders status markers and 1-based ordering.
     let with_todos = build_dynamic_context_tail(
         String::new(),
