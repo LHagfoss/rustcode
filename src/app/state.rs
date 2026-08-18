@@ -879,6 +879,7 @@ pub struct AppState {
     pub image_analysis_cache: std::collections::HashMap<String, String>,
     pub config: crate::config::AppConfig,
 
+    #[allow(dead_code)]
     pub cwd_and_branch: String,
     /// Workspace root supplied by an external frontend such as ACP.
     pub workspace_root: Option<std::path::PathBuf>,
@@ -979,6 +980,7 @@ pub struct AppState {
     /// uses this to keep the composer close to short conversations.
     pub conversation_content_height: u16,
     pub viewport_height: u16,
+    #[allow(dead_code)]
     pub mouse_capture_enabled: bool,
     pub agent_mode: crate::config::AgentMode,
     pub chat_area: Option<ratatui::layout::Rect>,
@@ -987,7 +989,9 @@ pub struct AppState {
     pub input_text_area: Option<ratatui::layout::Rect>,
     pub scroll_to_bottom_btn: Option<ratatui::layout::Rect>,
     /// Clickable element the pointer is over, refreshed on every mouse move.
+    #[allow(dead_code)]
     pub hover: HoverTarget,
+    #[allow(dead_code)]
     pub selected_text: Option<String>,
     pub sel_start: Option<(u16, u16)>,
     pub sel_end: Option<(u16, u16)>,
@@ -1066,6 +1070,7 @@ impl AppState {
             .unwrap_or(self.history.as_slice())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn active_history_display_start(&self) -> usize {
         if self.selected_subagent_id.is_some() {
             0
@@ -1214,6 +1219,7 @@ impl AppState {
         std::mem::take(&mut self.redraw_requested)
     }
 
+    #[allow(dead_code)]
     pub fn scroll_to_bottom(&mut self) {
         self.scroll_row = self.last_max_scroll;
     }
@@ -1702,12 +1708,14 @@ impl AppState {
         self.composer().history_down();
     }
 
+    #[allow(dead_code)]
     pub fn scroll_up(&mut self, amount: u16) {
         self.clear_selection();
         self.is_scroll_locked_to_bottom = false;
         self.scroll_row = self.scroll_row.saturating_sub(amount);
     }
 
+    #[allow(dead_code)]
     pub fn scroll_down(&mut self, amount: u16) {
         self.clear_selection();
         let max = self.last_max_scroll;
@@ -1719,6 +1727,7 @@ impl AppState {
     }
 
     /// One page = the visible conversation height, minus a line of overlap for context.
+    #[allow(dead_code)]
     pub fn page_rows(&self) -> u16 {
         self.viewport_height.saturating_sub(1).max(1)
     }

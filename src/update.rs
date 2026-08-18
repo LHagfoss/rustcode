@@ -48,6 +48,7 @@ pub async fn check_for_update(client: &reqwest::Client) -> Result<UpdateCheck, S
     })
 }
 
+#[allow(dead_code)]
 pub async fn upgrade_if_available(client: &reqwest::Client) -> Result<UpdateCheck, String> {
     let check = check_for_update(client).await?;
     if matches!(check, UpdateCheck::Available { .. }) {
