@@ -946,4 +946,393 @@ mod tests {
         assert_eq!(assessment.reason, ProgressReason::Churn);
         assert!(!assessment.meaningful);
     }
+
+    #[test]
+    fn reasoning_loop_detector_catches_consecutive_repeated_sentences() {
+        let mut detector = ReasoningLoopDetector::default();
+        let sentence = "We need to inspect the network module to check the turn engine implementation.\n";
+        assert_eq!(detector.feed_chunk(sentence), ReasoningLoopStatus::Ok);
+        assert_eq!(detector.feed_chunk(sentence), ReasoningLoopStatus::Ok);
+        assert!(matches!(
+            detector.feed_chunk(sentence),
+            ReasoningLoopStatus::LoopDetected(_)
+        ));
+    }
+
+    #[test]
+    fn reasoning_loop_detector_catches_alternating_2_cycle() {
+        let mut detector = ReasoningLoopDetector::default();
+        let a = "First let us inspect the network engine to understand turn execution.\n";
+        let b = "Now we should review the loop detection rules in loop_detect module.\n";
+        assert_eq!(detector.feed_chunk(a), ReasoningLoopStatus::Ok);
+        assert_eq!(detector.feed_chunk(b), ReasoningLoopStatus::Ok);
+        assert_eq!(detector.feed_chunk(a), ReasoningLoopStatus::Ok);
+        assert_eq!(detector.feed_chunk(b), ReasoningLoopStatus::Ok);
+        assert!(matches!(
+            detector.feed_chunk(a),
+            ReasoningLoopStatus::LoopDetected(_)
+        ));
+    }
+
+    #[test]
+    fn reasoning_loop_detector_catches_paragraph_repetition() {
+        let mut detector = ReasoningLoopDetector::default();
+        let para = "In this step we are carefully inspecting the entire test suite to ensure that all tests pass without errors and no regressions are introduced.\n\n";
+        assert_eq!(detector.feed_chunk(para), ReasoningLoopStatus::Ok);
+        assert_eq!(detector.feed_chunk(para), ReasoningLoopStatus::Ok);
+        assert!(matches!(
+            detector.feed_chunk(para),
+            ReasoningLoopStatus::LoopDetected(_)
+        ));
+    }
+
+    #[test]
+    fn reasoning_loop_detector_allows_legitimate_long_reasoning() {
+        let mut detector = ReasoningLoopDetector::default();
+        for i in 0..60 {
+            let unique_thought = format!(
+                "Step {i}: Considering function handler_{i} in module_{i} for comprehensive architectural refactoring.\n"
+            );
+            assert_eq!(
+                detector.feed_chunk(&unique_thought),
+                ReasoningLoopStatus::Ok,
+                "legitimate unique reasoning step {i} should not trigger loop detector"
+            );
+        }
+    }
+
+    #[test]
+    fn reasoning_loop_detector_ignores_short_common_phrases() {
+        let mut detector = ReasoningLoopDetector::default();
+        for _ in 0..10 {
+            assert_eq!(detector.feed_chunk("Let's see.\n"), ReasoningLoopStatus::Ok);
+            assert_eq!(detector.feed_chunk("Wait.\n"), ReasoningLoopStatus::Ok);
+            assert_eq!(detector.feed_chunk("Okay.\n"), ReasoningLoopStatus::Ok);
+        }
+    }
+
+    #[test]
+    fn reasoning_loop_detector_catches_cross_turn_stagnant_plan() {
+        let mut detector = ReasoningLoopDetector::default();
+        let plan = "Plan: We need to inspect src/network/turn_engine.rs to check how single turns execute.";
+        assert_eq!(
+            detector.record_turn_reasoning(plan, false),
+            ReasoningLoopStatus::Ok
+        );
+        assert!(matches!(
+            detector.record_turn_reasoning(plan, false),
+            ReasoningLoopStatus::LoopDetected(_)
+        ));
+
+        // Workspace progress resets cross-turn plan tracking
+        detector.record_turn_reasoning(plan, true);
+        assert_eq!(
+            detector.record_turn_reasoning(plan, false),
+            ReasoningLoopStatus::Ok
+        );
+    }
+}
+
+/// Status returned by reasoning repetition checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReasoningLoopStatus {
+    Ok,
+    /// Repetition was confidently detected in reasoning/thinking. Holds the diagnostic reason.
+    LoopDetected(&'static str),
+}
+
+/// Detects pathological repetition in model reasoning/thinking streams and cross-turn plans.
+#[derive(Debug, Clone, Default)]
+pub struct ReasoningLoopDetector {
+    /// In-flight unparsed reasoning text buffer.
+    stream_buffer: String,
+    /// Sliding window of recent normalized sentence hashes.
+    recent_sentences: VecDeque<u64>,
+    /// Counts of sentence hashes in the sliding window.
+    sentence_counts: HashMap<u64, usize>,
+    /// Tracks consecutive repeats of a single sentence: (hash, count).
+    consecutive_sentence: (Option<u64>, usize),
+    /// Sliding window of recent normalized paragraph hashes.
+    recent_paragraphs: VecDeque<u64>,
+    /// Counts of paragraph hashes in the recent paragraph window.
+    paragraph_counts: HashMap<u64, usize>,
+    /// Last turn's normalized plan/reasoning fingerprint.
+    last_plan_fingerprint: Option<u64>,
+    /// Consecutive turns with the same plan fingerprint and no workspace changes.
+    consecutive_same_plan_turns: usize,
+}
+
+impl ReasoningLoopDetector {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clear all reasoning state. Called when the agent makes real progress (e.g. successful edit).
+    pub fn reset(&mut self) {
+        self.stream_buffer.clear();
+        self.recent_sentences.clear();
+        self.sentence_counts.clear();
+        self.consecutive_sentence = (None, 0);
+        self.recent_paragraphs.clear();
+        self.paragraph_counts.clear();
+        self.last_plan_fingerprint = None;
+        self.consecutive_same_plan_turns = 0;
+    }
+
+    /// Feed a newly streamed chunk of reasoning text and check for intra-stream loops.
+    pub fn feed_chunk(&mut self, chunk: &str) -> ReasoningLoopStatus {
+        self.stream_buffer.push_str(chunk);
+
+        // Check for paragraph boundaries (\n\n)
+        while let Some(pos) = self.stream_buffer.find("\n\n") {
+            let paragraph = self.stream_buffer[..pos].to_string();
+            self.stream_buffer.drain(..pos + 2);
+            let status = self.observe_paragraph(&paragraph);
+            if status != ReasoningLoopStatus::Ok {
+                return status;
+            }
+            let s_status = self.observe_text_sentences(&paragraph);
+            if s_status != ReasoningLoopStatus::Ok {
+                return s_status;
+            }
+        }
+
+        // Check sentence boundaries (. , ! , ? , \n)
+        let mut search_start = 0;
+        while let Some(rel_pos) = find_sentence_boundary(&self.stream_buffer[search_start..]) {
+            let boundary = search_start + rel_pos;
+            let sentence = self.stream_buffer[..boundary].to_string();
+            self.stream_buffer.drain(..boundary);
+            search_start = 0;
+            let status = self.observe_sentence(&sentence);
+            if status != ReasoningLoopStatus::Ok {
+                return status;
+            }
+        }
+
+        ReasoningLoopStatus::Ok
+    }
+
+    /// Evaluate complete reasoning text directly.
+    #[allow(dead_code)]
+    pub fn check_text(&mut self, text: &str) -> ReasoningLoopStatus {
+        for p in text.split("\n\n") {
+            let status = self.observe_paragraph(p);
+            if status != ReasoningLoopStatus::Ok {
+                return status;
+            }
+            let s_status = self.observe_text_sentences(p);
+            if s_status != ReasoningLoopStatus::Ok {
+                return s_status;
+            }
+        }
+        ReasoningLoopStatus::Ok
+    }
+
+    /// Record turn reasoning to detect "plan -> inspect -> same plan" cycles across turns.
+    pub fn record_turn_reasoning(&mut self, reasoning: &str, made_progress: bool) -> ReasoningLoopStatus {
+        if made_progress {
+            self.reset();
+            return ReasoningLoopStatus::Ok;
+        }
+
+        let sentences: Vec<String> = reasoning
+            .split(&['\n', '.', '!', '?'][..])
+            .filter_map(normalize_sentence)
+            .collect();
+
+        if sentences.is_empty() {
+            return ReasoningLoopStatus::Ok;
+        }
+
+        // Hash the first several key sentences to capture the core plan
+        let plan_text = sentences.iter().take(5).cloned().collect::<Vec<_>>().join(" | ");
+        let plan_hash = stable_hash(&plan_text);
+
+        if self.last_plan_fingerprint == Some(plan_hash) {
+            self.consecutive_same_plan_turns += 1;
+            if self.consecutive_same_plan_turns >= 2 {
+                return ReasoningLoopStatus::LoopDetected(
+                    "identical reasoning plan repeated across turns without progress",
+                );
+            }
+        } else {
+            self.last_plan_fingerprint = Some(plan_hash);
+            self.consecutive_same_plan_turns = 1;
+        }
+
+        ReasoningLoopStatus::Ok
+    }
+
+    fn observe_sentence(&mut self, s: &str) -> ReasoningLoopStatus {
+        let Some(norm) = normalize_sentence(s) else {
+            return ReasoningLoopStatus::Ok;
+        };
+        let hash = stable_hash(&norm);
+
+        // 1. Consecutive repetition
+        if self.consecutive_sentence.0 == Some(hash) {
+            self.consecutive_sentence.1 += 1;
+            if self.consecutive_sentence.1 >= 3 {
+                return ReasoningLoopStatus::LoopDetected("consecutive sentence repeated 3 times");
+            }
+        } else {
+            self.consecutive_sentence = (Some(hash), 1);
+        }
+
+        // 2. Sliding window recording
+        self.recent_sentences.push_back(hash);
+        *self.sentence_counts.entry(hash).or_insert(0) += 1;
+
+        const SENTENCE_WINDOW_SIZE: usize = 16;
+        if self.recent_sentences.len() > SENTENCE_WINDOW_SIZE {
+            if let Some(old) = self.recent_sentences.pop_front()
+                && let std::collections::hash_map::Entry::Occupied(mut entry) =
+                    self.sentence_counts.entry(old)
+            {
+                *entry.get_mut() -= 1;
+                if *entry.get() == 0 {
+                    entry.remove();
+                }
+            }
+        }
+
+        // 3. Sliding window frequency check
+        if let Some(&count) = self.sentence_counts.get(&hash)
+            && count >= 3
+        {
+            return ReasoningLoopStatus::LoopDetected("sentence repeated 3 times in sliding window");
+        }
+
+        // 4. Alternating cycle checks
+        let n = self.recent_sentences.len();
+        if n >= 6 {
+            let s0 = self.recent_sentences[n - 1];
+            let s1 = self.recent_sentences[n - 2];
+            let s2 = self.recent_sentences[n - 3];
+            let s3 = self.recent_sentences[n - 4];
+            let s4 = self.recent_sentences[n - 5];
+            let s5 = self.recent_sentences[n - 6];
+
+            // 2-cycle: A, B, A, B, A, B
+            if s0 == s2 && s2 == s4 && s1 == s3 && s1 == s5 && s0 != s1 {
+                return ReasoningLoopStatus::LoopDetected("alternating 2-cycle repeated 3 times");
+            }
+
+            // 3-cycle: A, B, C, A, B, C
+            if s0 == s3 && s1 == s4 && s2 == s5 && s0 != s1 && s1 != s2 && s0 != s2 {
+                if n >= 9 {
+                    let s6 = self.recent_sentences[n - 7];
+                    let s7 = self.recent_sentences[n - 8];
+                    let s8 = self.recent_sentences[n - 9];
+                    if s0 == s6 && s1 == s7 && s2 == s8 {
+                        return ReasoningLoopStatus::LoopDetected("alternating 3-cycle repeated 3 times");
+                    }
+                }
+            }
+        }
+
+        ReasoningLoopStatus::Ok
+    }
+
+    fn observe_paragraph(&mut self, p: &str) -> ReasoningLoopStatus {
+        let trimmed = p.trim();
+        if trimmed.len() < 60 {
+            return ReasoningLoopStatus::Ok;
+        }
+        let cleaned: String = trimmed
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        let hash = stable_hash(&cleaned);
+
+        self.recent_paragraphs.push_back(hash);
+        *self.paragraph_counts.entry(hash).or_insert(0) += 1;
+
+        const PARAGRAPH_WINDOW_SIZE: usize = 8;
+        if self.recent_paragraphs.len() > PARAGRAPH_WINDOW_SIZE {
+            if let Some(old) = self.recent_paragraphs.pop_front()
+                && let std::collections::hash_map::Entry::Occupied(mut entry) =
+                    self.paragraph_counts.entry(old)
+            {
+                *entry.get_mut() -= 1;
+                if *entry.get() == 0 {
+                    entry.remove();
+                }
+            }
+        }
+
+        if let Some(&count) = self.paragraph_counts.get(&hash) {
+            if cleaned.len() >= 150 && count >= 2 {
+                return ReasoningLoopStatus::LoopDetected("large reasoning paragraph repeated");
+            }
+            if count >= 3 {
+                return ReasoningLoopStatus::LoopDetected("reasoning paragraph repeated 3 times");
+            }
+        }
+
+        ReasoningLoopStatus::Ok
+    }
+
+    fn observe_text_sentences(&mut self, text: &str) -> ReasoningLoopStatus {
+        for part in text.split(&['\n', '.', '!', '?'][..]) {
+            let status = self.observe_sentence(part);
+            if status != ReasoningLoopStatus::Ok {
+                return status;
+            }
+        }
+        ReasoningLoopStatus::Ok
+    }
+}
+
+fn find_sentence_boundary(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            return Some(i + 1);
+        }
+        if (b == b'.' || b == b'!' || b == b'?') && i + 1 < bytes.len() {
+            let next = bytes[i + 1];
+            if next.is_ascii_whitespace() {
+                return Some(i + 2);
+            }
+        }
+        if b == b';' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            return Some(i + 2);
+        }
+    }
+    None
+}
+
+fn normalize_sentence(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    let stripped = trimmed
+        .trim_start_matches(|c: char| {
+            c == '-' || c == '*' || c == '#' || c.is_ascii_digit() || c == '.' || c == ')'
+        })
+        .trim();
+    let cleaned: String = stripped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let cleaned = cleaned.trim_matches(|c: char| {
+        c == '.'
+            || c == ','
+            || c == '!'
+            || c == '?'
+            || c == ':'
+            || c == ';'
+            || c == '"'
+            || c == '\''
+            || c == '`'
+    });
+
+    if cleaned.len() >= 25 && cleaned.split_whitespace().count() >= 4 {
+        Some(cleaned.to_string())
+    } else {
+        None
+    }
 }

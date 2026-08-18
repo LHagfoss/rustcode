@@ -2524,6 +2524,8 @@ fn is_hidden_system_notice(content: &str) -> bool {
         || content.contains("Oversized response:")
         || content.starts_with(crate::network::compaction::SUMMARY_MARKER)
         || content.starts_with("[harness: stopped after ")
+        || content.contains("Your reasoning became repetitive")
+        || content.contains("reasoning loop")
 }
 
 fn tool_result_follows(history: &[ChatMessage], assistant_index: usize) -> bool {
@@ -2581,6 +2583,10 @@ fn render_status_panel<'a>(
         || content.contains("CRITICAL — you are stuck in a loop")
     {
         Some("Repetitive tool loop detected — stopping tools and requesting final response")
+    } else if content.contains("Your reasoning became repetitive")
+        || content.contains("reasoning loop")
+    {
+        Some("Reasoning loop detected — continuing turn to take concrete action")
     } else if content.contains("Evidence-based recovery:")
         || content.contains("previous tool action repeated without making progress")
     {

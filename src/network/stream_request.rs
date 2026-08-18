@@ -575,6 +575,7 @@ pub async fn stream_request(
     }
     let mut accumulators: Vec<ToolAccumulator> = Vec::new();
     let mut fences = ToolFenceCounter::default();
+    let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
     let runaway_limit = crate::tools::MAX_TOOL_CALLS_PER_RESPONSE;
 
     dbg_log!("stream_request: Starting SSE stream read loop");
@@ -630,7 +631,7 @@ pub async fn stream_request(
                                                  }
                                                  let acc = &mut accumulators[idx];
                                                  if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
-                                                     acc.id.push_str(id);
+                                                      acc.id.push_str(id);
                                                  }
                                                  if let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) {
                                                      acc.name.push_str(name);
@@ -648,6 +649,7 @@ pub async fn stream_request(
                                          }
 
                                          let mut chunk = String::new();
+                                         let mut reasoning_loop_cut = false;
                                         if let Some(r_token) = reasoning {
                                             if !in_reasoning {
                                                 in_reasoning = true;
@@ -674,6 +676,19 @@ pub async fn stream_request(
                                                     .saturating_add(thought_tokens);
                                             }
                                             chunk.push_str(r_token);
+                                            if let super::loop_detect::ReasoningLoopStatus::LoopDetected(reason) =
+                                                reasoning_detector.feed_chunk(r_token)
+                                            {
+                                                dbg_log!(
+                                                    "stream_request: reasoning loop detected ({reason}) — stopping stream cleanly"
+                                                );
+                                                crate::logger::operational_event(
+                                                    "stream.reasoning_loop_cut",
+                                                    serde_json::json!({ "reason": reason }),
+                                                );
+                                                finish_reason = Some("reasoning_loop".to_string());
+                                                reasoning_loop_cut = true;
+                                            }
                                         } else if let Some(c_token) = content {
                                             if in_reasoning {
                                                 in_reasoning = false;
@@ -720,6 +735,10 @@ pub async fn stream_request(
                                                     s.update_speculative_live_tool_call(None, &tool_name, &tool_args);
                                                 }
                                             }
+                                        }
+                                        if reasoning_loop_cut {
+                                            line_buf.clear();
+                                            break;
                                         }
                                         if runaway {
                                             dbg_log!(
