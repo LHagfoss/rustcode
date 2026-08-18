@@ -523,7 +523,12 @@ impl AppRuntime {
                             false,
                         );
                         if !block.is_empty() {
-                            block.push(ratatui::text::Line::from(""));
+                            if !crate::ui::tool_result_needs_assistant_gap(
+                                &guard.history,
+                                indices.last().copied().unwrap_or(index),
+                            ) {
+                                block.push(ratatui::text::Line::from(""));
+                            }
                             blocks.push(block);
                         }
                         index = group_end;

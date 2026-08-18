@@ -2480,6 +2480,7 @@ pub(crate) fn render_work_separator_before_assistant(
         "─".repeat(width.max(1) as usize)
     };
     vec![
+        Line::from(""),
         Line::from(Span::styled(
             text,
             get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false),
@@ -2536,7 +2537,10 @@ fn next_visible_message(history: &[ChatMessage], index: usize) -> Option<&ChatMe
     })
 }
 
-fn tool_result_needs_assistant_gap(history: &[ChatMessage], tool_index: usize) -> bool {
+pub(crate) fn tool_result_needs_assistant_gap(
+    history: &[ChatMessage],
+    tool_index: usize,
+) -> bool {
     next_visible_message(history, tool_index).is_some_and(|message| message.role == "assistant")
 }
 
@@ -3132,7 +3136,7 @@ pub(crate) fn render_committed_history_block(
                     .active_history()
                     .get(message_index + 1)
                     .is_some_and(|m| m.role == "tool");
-                if !next_is_tool {
+                if !next_is_tool && !tool_result_needs_assistant_gap(history, message_index) {
                     lines.push(Line::from(""));
                 }
             }
