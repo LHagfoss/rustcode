@@ -17,13 +17,15 @@ use super::title::{record_prompt_to_history, spawn_title_generation};
 use super::tool_exec::{execute_tool_batch, get_tool_project_root, tool_result_history_message};
 use super::verification;
 use super::{
-    FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction, accumulate_tokens_used,
-    active_todo_checkpoint, cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
+    FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction, MAX_REASONING_RECOVERY_ROUNDS,
+    REASONING_LOOP_RECOVERY_PROMPT, accumulate_tokens_used, active_todo_checkpoint,
+    cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
     completion_block_message, completion_claims_unapplied_work, failure_replan_message,
     fetch_model_quota, is_mutating_tool, loop_recovery_action, mutation_made_progress,
     prepare_turn_request, probe_function_calling, push_or_replace_loop_warning,
-    record_provider_error, stop_turn_for_budget, truncated_batch_summary, turn_budget_exceeded,
-    unanswered_call_results, unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
+    reasoning_loop_recovery_action, record_provider_error, stop_turn_for_budget,
+    truncated_batch_summary, turn_budget_exceeded, unanswered_call_results,
+    unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
 };
 
 /// Tracks fence depth while streaming text so an incomplete ````tool block
@@ -60,7 +62,10 @@ pub struct TurnContext {
     pub oversized_batch_rejections: u8,
     pub loop_detector: loop_detect::LoopDetector,
     pub progress_ledger: loop_detect::ProgressLedger,
+    pub reasoning_loop_detector: loop_detect::ReasoningLoopDetector,
     pub loop_recovery_attempts: u8,
+    pub reasoning_recovery_attempts: u8,
+    pub reasoning_loops_detected: usize,
     pub force_final: bool,
     pub made_edits: bool,
     pub failed_mutations: usize,
@@ -113,7 +118,10 @@ impl TurnContext {
             oversized_batch_rejections: 0,
             loop_detector: loop_detect::LoopDetector::new(6),
             progress_ledger: loop_detect::ProgressLedger::default(),
+            reasoning_loop_detector: loop_detect::ReasoningLoopDetector::default(),
             loop_recovery_attempts: 0,
+            reasoning_recovery_attempts: 0,
+            reasoning_loops_detected: 0,
             force_final: false,
             made_edits: false,
             failed_mutations: 0,
@@ -165,6 +173,8 @@ impl TurnContext {
             "failure_replans": self.failure_replans,
             "evidence_recoveries": self.evidence_recoveries,
             "progress_no_information_streak": self.progress_ledger.no_progress_streak(),
+            "reasoning_loops_detected": self.reasoning_loops_detected,
+            "reasoning_recovery_attempts": self.reasoning_recovery_attempts,
             "last_progress_reason": self.last_progress_reason.map(|reason| reason.label()),
             "compiler_diagnostic_streak": self.consecutive_compiler_diagnostics,
             "provider_errors": self.provider_errors,
@@ -465,6 +475,71 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         let mut s = state.lock().await;
         s.current_token_usage = None;
         return false;
+    }
+
+    let is_reasoning_loop = response_finish_reason.as_deref() == Some("reasoning_loop");
+    if is_reasoning_loop && !ctx.force_final {
+        ctx.reasoning_loops_detected += 1;
+        dbg_log!(
+            "Reasoning loop detected during stream (attempt {}/{})",
+            ctx.reasoning_recovery_attempts + 1,
+            MAX_REASONING_RECOVERY_ROUNDS
+        );
+        match reasoning_loop_recovery_action(ctx.reasoning_recovery_attempts) {
+            LoopRecoveryAction::Recover => {
+                ctx.reasoning_recovery_attempts += 1;
+                ctx.reasoning_loop_detector.reset();
+                crate::logger::operational_event(
+                    "turn.reasoning_loop_recovery",
+                    serde_json::json!({
+                        "attempt": ctx.reasoning_recovery_attempts,
+                    }),
+                );
+                let mut s = state.lock().await;
+                let mut msg = ChatMessage::new("assistant", &ctx.final_content);
+                msg.response_time_ms = Some(turn_response_time_ms);
+                msg.token_usage = turn_token_usage.clone();
+                msg.thought_time_ms = thought_time_ms;
+                msg.thought_tokens = thought_tokens;
+                s.history.push(msg);
+                ctx.final_content_persisted = true;
+                s.history.push(ChatMessage::new(
+                    "system",
+                    REASONING_LOOP_RECOVERY_PROMPT,
+                ));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                s.status = AppStatus::Streaming;
+                s.stream_tracker = Some(StreamTracker::new());
+                drop(s);
+                ctx.turn_machine.abandon_tool_phase();
+                ctx.tool_rounds += 1;
+                return true;
+            }
+            LoopRecoveryAction::ForceFinal => {
+                dbg_log!("Reasoning loop recovery exhausted — forcing wrap-up turn");
+                ctx.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+                ctx.force_final = true;
+                let mut s = state.lock().await;
+                let mut msg = ChatMessage::new("assistant", &ctx.final_content);
+                msg.response_time_ms = Some(turn_response_time_ms);
+                msg.token_usage = turn_token_usage.clone();
+                msg.thought_time_ms = thought_time_ms;
+                msg.thought_tokens = thought_tokens;
+                s.history.push(msg);
+                ctx.final_content_persisted = true;
+                s.history.push(ChatMessage::new(
+                    "system",
+                    FORCE_ANSWER_PROMPT,
+                ));
+                crate::config::save_history(&s.history);
+                s.current_response.clear();
+                drop(s);
+                ctx.turn_machine.abandon_tool_phase();
+                ctx.tool_rounds += 1;
+                return true;
+            }
+        }
     }
 
     if ctx.force_final {
@@ -899,6 +974,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     }
                     if made_progress {
                         ctx.loop_detector.reset();
+                        ctx.reasoning_loop_detector.reset();
+                        ctx.reasoning_recovery_attempts = 0;
                     }
                 }
 
@@ -950,6 +1027,20 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         success: metadata.success,
                     },
                 );
+                let cross_turn_status = ctx
+                    .reasoning_loop_detector
+                    .record_turn_reasoning(&ctx.final_content, changed_workspace);
+                if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = cross_turn_status {
+                    ctx.reasoning_loops_detected += 1;
+                    dbg_log!("Cross-turn reasoning loop detected: {reason}");
+                    if evidence_recovery.is_none() {
+                        evidence_recovery = Some((
+                            loop_detect::ProgressReason::NoNewInformation,
+                            ctx.reasoning_recovery_attempts as usize + 1,
+                            format!("reasoning loop: {reason}"),
+                        ));
+                    }
+                }
                 ctx.last_progress_reason = Some(assessment.reason);
                 if assessment.meaningful {
                     ctx.consecutive_no_progress = 0;
