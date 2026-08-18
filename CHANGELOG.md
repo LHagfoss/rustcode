@@ -1,3 +1,16 @@
+## [v0.26.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.26.0) - 2026-08-18
+
+### Features
+- **Memory/Brain Tools:** Add active agent memory tools `remember`, `recall_memory`, and `forget_memory` with multi-scope support (global `~/.config/rustcode/global-memory.json` and project repository memory) ([#666](https://github.com/LHagfoss/rustcode/pull/666))
+- **Context & Cache Optimization:** Strictly clamp passive context tail memory budget to ≤192 tokens to maintain 100% prefix KV-cache stability and prevent prompt bloat on local models ([#666](https://github.com/LHagfoss/rustcode/pull/666))
+- **UI/Themes:** Add built-in `sky` theme inspired by summer azure sky (`#3894F0`), meadow green (`#88C438`), sunlight gold (`#FFD152`), and transparent terminal background ([#667](https://github.com/LHagfoss/rustcode/pull/667), [#668](https://github.com/LHagfoss/rustcode/pull/668))
+
+### Fixes
+- **UI/Typography:** Style markdown bold text, table headers, and H1–H3 headings with the primary accent color ([#665](https://github.com/LHagfoss/rustcode/pull/665))
+- **UI/Dividers:** Lighten `turn_separator` and horizontal rules for enhanced legibility on dark terminal backgrounds ([#665](https://github.com/LHagfoss/rustcode/pull/665))
+- **UI/Wrapping:** Ensure continuation line indentation (`    `) on wrapped tool calls, command outputs, and command summary trees ([#665](https://github.com/LHagfoss/rustcode/pull/665))
+- **UI/Terminal:** Fix terminal resize reflow and screen clearing in `/clear` and `Ctrl+L` ([#664](https://github.com/LHagfoss/rustcode/pull/664))
+
 ## [v0.25.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.25.0) - 2026-08-17
 
 ### Features
