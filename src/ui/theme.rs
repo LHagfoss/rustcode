@@ -245,7 +245,7 @@ hover_bg = "#292e42"
         "sky.toml",
         r##"name = "sky"
 description = "Summer sky azure and meadow green palette"
-bg = "#0f1724"
+bg = "reset"
 panel = "#162032"
 element = "#1e2c44"
 text = "#f0f6fc"
