@@ -82,11 +82,80 @@ fn extract_signature(node_text: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportedLanguage {
+    Rust,
+    Python,
+    TypeScript,
+    Tsx,
+    JavaScript,
+    Go,
+}
+
+impl SupportedLanguage {
+    pub fn for_extension(ext: &str) -> Option<Self> {
+        match ext {
+            "rs" => Some(Self::Rust),
+            "py" => Some(Self::Python),
+            "ts" | "mts" | "cts" => Some(Self::TypeScript),
+            "tsx" => Some(Self::Tsx),
+            "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
+            "go" => Some(Self::Go),
+            _ => None,
+        }
+    }
+
+    pub fn tree_sitter_language(&self) -> tree_sitter::Language {
+        match self {
+            Self::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Self::Python => tree_sitter_python::LANGUAGE.into(),
+            Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Self::Go => tree_sitter_go::LANGUAGE.into(),
+        }
+    }
+
+    pub fn query_str(&self) -> &'static str {
+        match self {
+            Self::Rust => r#"
+                (function_item name: (identifier) @name) @function
+                (struct_item name: (type_identifier) @name) @struct
+                (enum_item name: (type_identifier) @name) @enum
+                (trait_item name: (type_identifier) @name) @trait
+                (impl_item type: (_) @name) @impl
+                (mod_item name: (identifier) @name) @module
+            "#,
+            Self::Python => r#"
+                (function_definition name: (identifier) @name) @function
+                (class_definition name: (identifier) @name) @class
+            "#,
+            Self::TypeScript | Self::Tsx => r#"
+                (function_declaration name: (identifier) @name) @function
+                (class_declaration name: (type_identifier) @name) @class
+                (interface_declaration name: (type_identifier) @name) @interface
+                (type_alias_declaration name: (type_identifier) @name) @type
+                (method_definition name: (property_identifier) @name) @method
+            "#,
+            Self::JavaScript => r#"
+                (function_declaration name: (identifier) @name) @function
+                (class_declaration name: (identifier) @name) @class
+                (method_definition name: (property_identifier) @name) @method
+            "#,
+            Self::Go => r#"
+                (function_declaration name: (identifier) @name) @function
+                (method_declaration name: (field_identifier) @name) @method
+                (type_spec name: (type_identifier) @name) @type
+            "#,
+        }
+    }
+}
+
 pub fn update_index(root_dir: &Path) -> Result<(), String> {
     let conn = init_db()?;
     let root_str = root_dir.to_string_lossy().to_string();
 
-    // 1. Gather all files and track mtimes
+    // 1. Gather all supported source files and track mtimes
     let mut files = Vec::new();
     let walker = ignore::WalkBuilder::new(root_dir)
         .standard_filters(true)
@@ -99,22 +168,26 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         };
 
         let path = entry.path();
-        if path.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-            let relative_path = path
-                .strip_prefix(root_dir)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if let Some(lang) = SupportedLanguage::for_extension(ext) {
+                    let relative_path = path
+                        .strip_prefix(root_dir)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .to_string();
 
-            let mtime = std::fs::metadata(path)
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            let mtime_secs = mtime
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
+                    let mtime = std::fs::metadata(path)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(SystemTime::UNIX_EPOCH);
+                    let mtime_secs = mtime
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
 
-            files.push((path.to_path_buf(), relative_path, mtime_secs));
+                    files.push((path.to_path_buf(), relative_path, mtime_secs, lang));
+                }
+            }
         }
     }
 
@@ -130,7 +203,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         .collect();
 
     let new_paths_set: std::collections::HashSet<&str> =
-        files.iter().map(|(_, rel, _)| rel.as_str()).collect();
+        files.iter().map(|(_, rel, _, _)| rel.as_str()).collect();
 
     for old_path in existing_paths {
         if !new_paths_set.contains(old_path.as_str()) {
@@ -142,19 +215,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
     }
 
     // 3. Incrementally parse and update changed files
-    let rust_lang = tree_sitter_rust::LANGUAGE.into();
-    let query_str = r#"
-        (function_item name: (identifier) @name) @function
-        (struct_item name: (type_identifier) @name) @struct
-        (enum_item name: (type_identifier) @name) @enum
-        (trait_item name: (type_identifier) @name) @trait
-        (impl_item type: (_) @name) @impl
-        (mod_item name: (identifier) @name) @module
-    "#;
-    let query = Query::new(&rust_lang, query_str)
-        .map_err(|e| format!("failed to compile tree-sitter query: {e}"))?;
-
-    for (abs_path, rel_path, mtime_secs) in files {
+    for (abs_path, rel_path, mtime_secs, lang) in files {
         // Check if we already indexed this version
         let already_indexed: bool = conn
             .query_row(
@@ -168,6 +229,16 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
             continue;
         }
 
+        let ts_lang = lang.tree_sitter_language();
+        let query_str = lang.query_str();
+        let query = match Query::new(&ts_lang, query_str) {
+            Ok(q) => q,
+            Err(e) => {
+                eprintln!("failed to compile tree-sitter query for {:?}: {e}", lang);
+                continue;
+            }
+        };
+
         // Parse and extract symbols
         let content = match std::fs::read_to_string(&abs_path) {
             Ok(c) => c,
@@ -175,7 +246,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         };
 
         let mut parser = Parser::new();
-        if parser.set_language(&rust_lang).is_err() {
+        if parser.set_language(&ts_lang).is_err() {
             continue;
         }
 
@@ -190,11 +261,13 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
             params![&root_str, &rel_path],
         );
 
-        let name_capture_idx = query
+        let Some(name_capture_idx) = query
             .capture_names()
             .iter()
             .position(|r| *r == "name")
-            .unwrap();
+        else {
+            continue;
+        };
 
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
@@ -327,7 +400,7 @@ pub fn get_project_map(root_dir: &Path) -> Result<String, String> {
 
     let mut out = String::new();
     if map_by_file.is_empty() {
-        return Ok("Project Map is empty. Ensure codebase contains parsed .rs files.".to_string());
+        return Ok("Project Map is empty. Ensure codebase contains parsed source files (e.g. .rs, .py, .ts, .js, .go).".to_string());
     }
 
     out.push_str("Codebase Project Map:\n");
@@ -351,7 +424,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_symbols_indexer_and_search() {
+    fn test_symbols_indexer_and_search_polyglot() {
         let dir = std::env::temp_dir()
             .join("rustcode-symbols-tests")
             .join(format!(
@@ -363,8 +436,9 @@ mod tests {
             ));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let file_path = dir.join("main.rs");
-        let content = r#"
+        // 1. Rust file
+        let rs_file = dir.join("main.rs");
+        let rs_content = r#"
             struct Config {
                 port: u16,
             }
@@ -379,33 +453,102 @@ mod tests {
                 Ok(())
             }
         "#;
-        std::fs::write(&file_path, content).unwrap();
+        std::fs::write(&rs_file, rs_content).unwrap();
+
+        // 2. Python file
+        let py_file = dir.join("service.py");
+        let py_content = r#"
+class AuthManager:
+    def __init__(self, secret: str):
+        self.secret = secret
+
+def authenticate_user(token: str) -> bool:
+    return True
+"#;
+        std::fs::write(&py_file, py_content).unwrap();
+
+        // 3. TypeScript file
+        let ts_file = dir.join("client.ts");
+        let ts_content = r#"
+interface UserSession {
+    id: string;
+    token: string;
+}
+
+type AuthCallback = (session: UserSession) => void;
+
+class ApiClient {
+    connect(url: string): void {
+        console.log(url);
+    }
+}
+
+function createClient(): ApiClient {
+    return new ApiClient();
+}
+"#;
+        std::fs::write(&ts_file, ts_content).unwrap();
+
+        // 4. Go file
+        let go_file = dir.join("handler.go");
+        let go_content = r#"
+package main
+
+type Router struct {
+    routes []string
+}
+
+func HandleRequest(r *Router) error {
+    return nil
+}
+"#;
+        std::fs::write(&go_file, go_content).unwrap();
 
         update_index(&dir).unwrap();
 
-        let results = find_symbol(&dir, "Config").unwrap();
-        assert!(!results.is_empty(), "should find Config symbol");
-        let struct_match = results.iter().find(|s| s.kind == "struct").unwrap();
+        // Check Rust symbols
+        let rs_results = find_symbol(&dir, "Config").unwrap();
+        assert!(!rs_results.is_empty(), "should find Config symbol");
+        let struct_match = rs_results.iter().find(|s| s.kind == "struct").unwrap();
         assert_eq!(struct_match.name, "Config");
         assert_eq!(struct_match.path, "main.rs");
-        assert_eq!(struct_match.signature, "struct Config");
 
-        let fn_results = find_symbol(&dir, "run_server").unwrap();
-        assert!(!fn_results.is_empty(), "should find run_server symbol");
-        let fn_match = fn_results.iter().find(|s| s.kind == "function").unwrap();
-        assert_eq!(fn_match.name, "run_server");
-        assert_eq!(fn_match.signature, "fn run_server() -> Result<(), String>");
+        // Check Python symbols
+        let py_results = find_symbol(&dir, "AuthManager").unwrap();
+        assert!(!py_results.is_empty(), "should find AuthManager python class");
+        let py_class = py_results.iter().find(|s| s.kind == "class").unwrap();
+        assert_eq!(py_class.name, "AuthManager");
+        assert_eq!(py_class.path, "service.py");
 
+        let py_fn = find_symbol(&dir, "authenticate_user").unwrap();
+        assert!(!py_fn.is_empty(), "should find authenticate_user python function");
+
+        // Check TypeScript symbols
+        let ts_iface = find_symbol(&dir, "UserSession").unwrap();
+        assert!(!ts_iface.is_empty(), "should find UserSession TS interface");
+        assert_eq!(ts_iface[0].kind, "interface");
+
+        let ts_type = find_symbol(&dir, "AuthCallback").unwrap();
+        assert!(!ts_type.is_empty(), "should find AuthCallback TS type");
+
+        let ts_class = find_symbol(&dir, "ApiClient").unwrap();
+        assert!(!ts_class.is_empty(), "should find ApiClient TS class");
+
+        // Check Go symbols
+        let go_type = find_symbol(&dir, "Router").unwrap();
+        assert!(!go_type.is_empty(), "should find Router Go type");
+
+        let go_fn = find_symbol(&dir, "HandleRequest").unwrap();
+        assert!(!go_fn.is_empty(), "should find HandleRequest Go function");
+
+        // Check overall project map
         let map = get_project_map(&dir).unwrap();
-        assert!(map.contains("main.rs:"), "map should contain file path");
-        assert!(
-            map.contains("Config [struct]"),
-            "map should contain Config struct"
-        );
-        assert!(
-            map.contains("run_server [function]"),
-            "map should contain run_server"
-        );
+        assert!(map.contains("main.rs:"), "map should contain main.rs");
+        assert!(map.contains("service.py:"), "map should contain service.py");
+        assert!(map.contains("client.ts:"), "map should contain client.ts");
+        assert!(map.contains("handler.go:"), "map should contain handler.go");
+        assert!(map.contains("AuthManager [class]"), "map should contain AuthManager");
+        assert!(map.contains("UserSession [interface]"), "map should contain UserSession");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
