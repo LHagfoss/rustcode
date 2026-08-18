@@ -25,7 +25,8 @@ use highlight::{
     render_unified_diff, wrap_code_spans,
 };
 use markdown::{
-    render_markdown, unwrap_markdown_table_fences, wrap_prefixed_plain_text, wrap_styled_spans,
+    push_wrapped_with_continuation, render_markdown, unwrap_markdown_table_fences,
+    wrap_prefixed_plain_text, wrap_styled_spans,
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
@@ -1801,6 +1802,7 @@ fn indent_tool_result_body(
     lines: Vec<Line<'static>>,
     tool_name: &str,
     verbosity: &crate::app::Verbosity,
+    width: u16,
 ) -> Vec<Line<'static>> {
     if matches!(verbosity, crate::app::Verbosity::High) {
         return Vec::new();
@@ -1829,25 +1831,25 @@ fn indent_tool_result_body(
             .cloned()
             .collect()
     };
-    let mut indented = visible
-        .into_iter()
-        .enumerate()
-        .map(|(index, line)| {
-            if line.spans.is_empty() {
-                return line;
-            }
-            let mut spans = Vec::with_capacity(line.spans.len() + 1);
-            spans.push(Span::styled(
-                if index == 0 { "  └ " } else { "    " },
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-            ));
-            spans.extend(line.spans);
-            let mut indented = Line::from(spans);
-            indented.style = line.style;
-            indented.alignment = line.alignment;
-            indented
-        })
-        .collect::<Vec<_>>();
+    let max_w = (width as usize).max(10);
+    let mut indented = Vec::new();
+    for (index, line) in visible.into_iter().enumerate() {
+        if line.spans.is_empty() {
+            indented.push(line);
+            continue;
+        }
+        let mut spans = Vec::with_capacity(line.spans.len() + 1);
+        spans.push(Span::styled(
+            if index == 0 { "  └ " } else { "    " },
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        ));
+        spans.extend(line.spans);
+        let continuation = Span::styled(
+            "    ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        );
+        push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
+    }
     if omitted > 0 {
         indented.insert(
             head_count,
@@ -2082,8 +2084,9 @@ fn tool_child_line(
     entry: &ToolTranscriptEntry,
     first: bool,
     show_hint: bool,
+    width: u16,
     show_picker: bool,
-) -> Line<'static> {
+) -> Vec<Line<'static>> {
     let mut spans = vec![
         Span::styled(
             if first { "  └ " } else { "    " },
@@ -2112,12 +2115,19 @@ fn tool_child_line(
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
         ));
     }
-    Line::from(spans)
+    let mut lines = Vec::new();
+    let continuation = Span::styled(
+        "    ",
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    );
+    push_wrapped_with_continuation(&mut lines, spans, (width as usize).max(10), Some(continuation));
+    lines
 }
 
 fn command_child_lines(
     entry: &ToolTranscriptEntry,
     first: bool,
+    width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     let mut commands = highlight_shell_command(&entry.target, COLOR_BG(), show_picker);
@@ -2125,6 +2135,7 @@ fn command_child_lines(
         commands.push(Line::default());
     }
     let mut lines = Vec::with_capacity(commands.len());
+    let max_w = (width as usize).max(10);
     for (command_index, command) in commands.into_iter().enumerate() {
         let mut spans = vec![Span::styled(
             if first && command_index == 0 {
@@ -2154,7 +2165,11 @@ fn command_child_lines(
         if entry.target != "?" {
             spans.extend(command.spans);
         }
-        lines.push(Line::from(spans));
+        let continuation = Span::styled(
+            "    ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        );
+        push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
     }
     if !entry.success {
         if let Some(line) = lines.last_mut() {
@@ -2167,7 +2182,11 @@ fn command_child_lines(
     lines
 }
 
-fn command_summary_lines(entry: &ToolTranscriptEntry, show_picker: bool) -> Vec<Line<'static>> {
+fn command_summary_lines(
+    entry: &ToolTranscriptEntry,
+    width: u16,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
     let bullet_color = if entry.success {
         COLOR_GREEN()
     } else {
@@ -2179,44 +2198,48 @@ fn command_summary_lines(entry: &ToolTranscriptEntry, show_picker: bool) -> Vec<
         commands.push(Line::default());
     }
     let last = commands.len().saturating_sub(1);
-    commands
-        .into_iter()
-        .enumerate()
-        .map(|(index, command)| {
-            let mut spans = if index == 0 {
-                vec![
-                    Span::styled(
-                        "• ",
-                        get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
-                    ),
-                    Span::styled(
-                        if has_command { "Ran $ " } else { "Ran Bash" },
-                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-                    ),
-                ]
-            } else {
-                vec![Span::styled(
-                    "    ",
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                )]
-            };
-            if has_command {
-                spans.extend(command.spans);
-            }
-            if index == last {
-                spans.push(Span::styled(
-                    format!(" · {}", entry.status),
-                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-                ));
-            }
-            Line::from(spans)
-        })
-        .collect()
+    let max_w = (width as usize).max(10);
+    let mut lines = Vec::new();
+    for (index, command) in commands.into_iter().enumerate() {
+        let mut spans = if index == 0 {
+            vec![
+                Span::styled(
+                    "• ",
+                    get_themed_style(bullet_color, COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+                Span::styled(
+                    if has_command { "Ran $ " } else { "Ran Bash" },
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+                ),
+            ]
+        } else {
+            vec![Span::styled(
+                "    ",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            )]
+        };
+        if has_command {
+            spans.extend(command.spans);
+        }
+        if index == last {
+            spans.push(Span::styled(
+                format!(" · {}", entry.status),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
+        let continuation = Span::styled(
+            "    ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        );
+        push_wrapped_with_continuation(&mut lines, spans, max_w, Some(continuation));
+    }
+    lines
 }
 
 fn indent_generic_tool_body(
     lines: Vec<Line<'static>>,
     verbosity: &crate::app::Verbosity,
+    width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
     if matches!(verbosity, crate::app::Verbosity::High) {
@@ -2236,24 +2259,25 @@ fn indent_generic_tool_body(
             .cloned()
             .collect()
     };
-    let mut indented = visible
-        .into_iter()
-        .map(|line| {
-            if line.spans.is_empty() {
-                return line;
-            }
-            let mut spans = Vec::with_capacity(line.spans.len() + 1);
-            spans.push(Span::styled(
-                "    ",
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
-            spans.extend(line.spans);
-            let mut indented = Line::from(spans);
-            indented.style = line.style;
-            indented.alignment = line.alignment;
-            indented
-        })
-        .collect::<Vec<_>>();
+    let max_w = (width as usize).max(10);
+    let mut indented = Vec::new();
+    for line in visible {
+        if line.spans.is_empty() {
+            indented.push(line);
+            continue;
+        }
+        let mut spans = Vec::with_capacity(line.spans.len() + 1);
+        spans.push(Span::styled(
+            "    ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+        spans.extend(line.spans);
+        let continuation = Span::styled(
+            "    ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        );
+        push_wrapped_with_continuation(&mut indented, spans, max_w, Some(continuation));
+    }
     if omitted > 0 {
         indented.insert(
             head_count,
@@ -2299,15 +2323,16 @@ pub(crate) fn render_committed_tool_result_group(
             if matches!(state.verbosity, crate::app::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
-                    lines.extend(command_child_lines(entry, child_index == 0, show_picker));
+                    lines.extend(command_child_lines(entry, child_index == 0, width, show_picker));
                 }
             } else {
                 let entry = &group[0];
-                lines.extend(command_summary_lines(entry, show_picker));
+                lines.extend(command_summary_lines(entry, width, show_picker));
                 lines.extend(indent_tool_result_body(
                     entry.body.clone(),
                     &entry.tool_name,
                     &state.verbosity,
+                    width,
                 ));
             }
         } else {
@@ -2334,6 +2359,7 @@ pub(crate) fn render_committed_tool_result_group(
                     lines.extend(indent_generic_tool_body(
                         entry.body.clone(),
                         &state.verbosity,
+                        width,
                         show_picker,
                     ));
                 }
@@ -2358,7 +2384,7 @@ pub(crate) fn render_committed_tool_result_group(
                         && !entry.body.is_empty()
                         && !is_expanded
                         && matches!(state.verbosity, crate::app::Verbosity::Low);
-                    lines.push(tool_child_line(entry, first_child, show_hint, show_picker));
+                    lines.extend(tool_child_line(entry, first_child, show_hint, width, show_picker));
                     first_child = false;
                     if kind == ToolTranscriptKind::Tool
                         && is_expanded
@@ -2367,6 +2393,7 @@ pub(crate) fn render_committed_tool_result_group(
                         lines.extend(indent_generic_tool_body(
                             entry.body.clone(),
                             &state.verbosity,
+                            width,
                             show_picker,
                         ));
                     }

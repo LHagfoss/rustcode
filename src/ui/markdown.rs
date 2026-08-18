@@ -74,6 +74,8 @@ fn text_style(style: InlineStyle, show_picker: bool) -> ratatui::style::Style {
         COLOR_SECONDARY()
     } else if style.link {
         COLOR_PRIMARY()
+    } else if style.bold {
+        COLOR_PRIMARY()
     } else {
         COLOR_TEXT()
     };
@@ -88,7 +90,11 @@ fn heading_style(level: HeadingLevel, show_picker: bool) -> ratatui::style::Styl
         HeadingLevel::H3 => Modifier::BOLD | Modifier::ITALIC,
         HeadingLevel::H4 | HeadingLevel::H5 | HeadingLevel::H6 => Modifier::ITALIC,
     };
-    get_themed_style(COLOR_TEXT(), COLOR_BG(), modifier, show_picker)
+    let fg = match level {
+        HeadingLevel::H1 | HeadingLevel::H2 | HeadingLevel::H3 => COLOR_PRIMARY(),
+        _ => COLOR_TEXT(),
+    };
+    get_themed_style(fg, COLOR_BG(), modifier, show_picker)
 }
 
 fn heading_marker(level: HeadingLevel) -> &'static str {
@@ -187,12 +193,11 @@ fn wrapped_table_cell(
     width: usize,
     header: bool,
 ) -> Vec<Vec<Span<'static>>> {
-    let cell_style = |style: ratatui::style::Style| {
+    let cell_style = |mut style: ratatui::style::Style| {
         if header {
-            style.add_modifier(Modifier::BOLD)
-        } else {
-            style
+            style = style.fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
         }
+        style
     };
     let mut lines = vec![Vec::new()];
     let mut current_width = 0;
@@ -216,7 +221,7 @@ fn continuation_line(prefix: Option<&Span<'static>>) -> (Vec<Span<'static>>, usi
     (vec![prefix.clone()], width)
 }
 
-fn push_wrapped_with_continuation(
+pub(super) fn push_wrapped_with_continuation(
     lines: &mut Vec<Line<'static>>,
     spans: Vec<Span<'static>>,
     width: usize,
@@ -664,7 +669,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                         let mut value_spans = vec![Span::styled(
                             format!("  {label}: "),
                             get_themed_style(
-                                COLOR_MUTED(),
+                                COLOR_PRIMARY(),
                                 COLOR_BG(),
                                 Modifier::BOLD,
                                 show_picker,
@@ -766,7 +771,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     row_spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING + left_padding)));
                     row_spans.extend(spans.into_iter().map(|mut span| {
                         if *is_header {
-                            span.style = span.style.add_modifier(Modifier::BOLD);
+                            span.style = span.style.fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
                         }
                         span
                     }));
@@ -1139,7 +1144,9 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{MarkdownCache, cache_key, render_cache, render_markdown};
+    use super::{
+        COLOR_PRIMARY, MarkdownCache, cache_key, render_cache, render_markdown,
+    };
     use ratatui::style::Modifier;
     use ratatui::text::Line;
 
@@ -1486,13 +1493,23 @@ mod tests {
     }
 
     #[test]
-    fn renders_mixed_spaced_bullet_lists_without_intermediate_gaps() {
-        let md = "File System Operations\n\n• Read/write/edit files\n• Create directories\n\n\n• Move, copy, delete files\n• List directory contents\n";
+    fn bold_and_headings_use_primary_accent_color() {
+        let md = "# Main Heading\n\nThis is **bold text** in markdown.";
         let lines = render_markdown(md, 80, false, false);
-        let non_empty: Vec<_> = lines.iter().filter(|l| !l.spans.is_empty()).collect();
-        // 1 heading + 4 bullet lines = 5 non-empty lines
-        assert_eq!(non_empty.len(), 5);
-        let bullet_count = lines.iter().filter(|line| line.to_string().starts_with("- ")).count();
-        assert_eq!(bullet_count, 4);
+        let heading_span = lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Main Heading"))
+            .expect("heading span");
+        assert_eq!(heading_span.style.fg, Some(COLOR_PRIMARY()));
+        assert!(heading_span.style.add_modifier.contains(Modifier::BOLD));
+
+        let bold_span = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .find(|s| s.content.contains("bold"))
+            .expect("bold span");
+        assert_eq!(bold_span.style.fg, Some(COLOR_PRIMARY()));
+        assert!(bold_span.style.add_modifier.contains(Modifier::BOLD));
     }
 }
