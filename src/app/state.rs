@@ -1143,6 +1143,45 @@ impl AppState {
         key
     }
 
+    /// Update or project a speculative live tool call during stream reception
+    /// so partial arguments (e.g. TargetFile, CommandLine, Query) render live.
+    pub fn update_speculative_live_tool_call(
+        &mut self,
+        provider_call_id: Option<&str>,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) {
+        if tool_name.is_empty() {
+            return;
+        }
+        let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
+
+        if let Some(call) = self.live_tool_calls.iter_mut().find(|c| {
+            provider_call_id.is_some() && c.provider_call_id.as_deref() == provider_call_id
+                || c.tool_name == tool_name
+        }) {
+            call.action = action;
+            call.target = target;
+            self.redraw_requested = true;
+            return;
+        }
+
+        let sequence = self.live_tool_call_sequence;
+        self.live_tool_call_sequence = self.live_tool_call_sequence.saturating_add(1);
+        let key = match provider_call_id {
+            Some(call_id) => format!("provider:{call_id}:{sequence}"),
+            None => format!("local:{sequence}"),
+        };
+        self.live_tool_calls.push(LiveToolCall::new(
+            key,
+            provider_call_id.map(str::to_owned),
+            tool_name,
+            action,
+            target,
+        ));
+        self.request_redraw();
+    }
+
     /// Append bounded command output to one presentation-only live tool cell.
     /// `stderr` is retained so failures can be styled independently while the
     /// canonical tool result continues to own the complete bounded payload.
@@ -2146,6 +2185,30 @@ mod live_tool_tests {
         assert_ne!(first, second);
         assert!(first.contains("provider-call-7"));
         assert_eq!(state.live_tool_calls[0].provider_call_id.as_deref(), Some("provider-call-7"));
+    }
+
+    #[test]
+    fn speculative_tool_call_updates_target_as_arguments_stream() {
+        let mut state = AppState::new();
+
+        // 1. Initial stream chunk with only tool name
+        state.update_speculative_live_tool_call(Some("call-99"), "replace_file_content", &serde_json::json!({}));
+        assert_eq!(state.live_tool_calls.len(), 1);
+        assert_eq!(state.live_tool_calls[0].action, "Edit");
+        assert_eq!(state.live_tool_calls[0].target, "?");
+
+        // 2. Mid-stream chunk with TargetFile parsed
+        state.update_speculative_live_tool_call(
+            Some("call-99"),
+            "replace_file_content",
+            &serde_json::json!({"TargetFile": "src/symbols.rs"}),
+        );
+        assert_eq!(state.live_tool_calls.len(), 1);
+        assert_eq!(state.live_tool_calls[0].target, "src/symbols.rs");
+
+        // 3. Clear live tool calls at end of turn cleans speculative projections
+        state.clear_live_tool_calls();
+        assert!(state.live_tool_calls.is_empty());
     }
 
     #[test]
