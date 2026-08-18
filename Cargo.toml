@@ -22,7 +22,7 @@ pulldown-cmark = "0.12.2"
 rand = "0.10.2"
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 regex = "1"
-reqwest = { version = "0.13.4", features = ["json", "stream", "blocking"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream", "blocking", "rustls"] }
 reqwest-middleware = "0.4.2"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 scraper = "0.22.0"
@@ -52,8 +52,8 @@ opt-level = 2
 
 [profile.release]
 opt-level = 3
-codegen-units = 1
-lto = "fat"
+codegen-units = 16
+lto = "thin"
 strip = true
 incremental = false
 debug = false
