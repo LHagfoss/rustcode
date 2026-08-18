@@ -1296,6 +1296,57 @@ fn parse_tool_calls_tags(text: &str, calls: &mut Vec<ToolCall>) {
     }
 }
 
+/// Locate the matching closing fence for a tool block.
+///
+/// Unlike a naive `after_tag.find("```")`, this parser respects JSON string
+/// literals and escape sequences so backticks inside string arguments (such as
+/// Markdown code fences inside `target_content`, `replacement_content`, or shell
+/// scripts) do not prematurely terminate the tool call block.
+pub(crate) fn find_closing_tool_fence(after_tag: &str) -> (usize, usize) {
+    let mut in_string = false;
+    let mut escaped = false;
+    let bytes = after_tag.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        let b = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+        } else {
+            match b {
+                b'"' => {
+                    in_string = true;
+                    escaped = false;
+                    i += 1;
+                }
+                b'`' => {
+                    // Check for at least 3 consecutive backticks outside of JSON strings
+                    let count = bytes[i..].iter().take_while(|&&c| c == b'`').count();
+                    if count >= 3 {
+                        let block_end = i;
+                        let next_start = i + count;
+                        return (block_end, next_start);
+                    }
+                    i += count;
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    (len, len)
+}
+
 fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<ToolCall>) {
     // Walk every ```tool fence, not just the first, so a model can batch
     // multiple tool calls in one turn (the executor runs them in parallel).
@@ -1305,10 +1356,9 @@ fn parse_tool_calls_fenced(text: &str, calls: &mut Vec<ToolCall>) {
     let mut search = text;
     while let Some(rel) = search.find("```tool") {
         let after_tag = &search[rel + 7..];
-        let (block, next) = match after_tag.find("```") {
-            Some(end) => (&after_tag[..end], &after_tag[end + 3..]),
-            None => (after_tag, ""),
-        };
+        let (rel_end, next_rel) = find_closing_tool_fence(after_tag);
+        let block = &after_tag[..rel_end];
+        let next = &after_tag[next_rel..];
 
         let is_tool_fence = after_tag.chars().next().is_none_or(|c| c.is_whitespace());
         if is_tool_fence {
@@ -1341,10 +1391,9 @@ pub fn diagnose_failed_tool_call(text: &str) -> Option<String> {
     let mut search = text;
     while let Some(rel) = search.find("```tool") {
         let after_tag = &search[rel + 7..];
-        let (block, next) = match after_tag.find("```") {
-            Some(end) => (&after_tag[..end], &after_tag[end + 3..]),
-            None => (after_tag, ""),
-        };
+        let (rel_end, next_rel) = find_closing_tool_fence(after_tag);
+        let block = &after_tag[..rel_end];
+        let next = &after_tag[next_rel..];
         let is_tool_fence = after_tag.chars().next().is_none_or(|c| c.is_whitespace());
         if is_tool_fence {
             let repaired = repair_json(block.trim());
@@ -1871,6 +1920,40 @@ mod tests {
             calls[0].arguments.get("content").unwrap().as_str().unwrap(),
             "hello"
         );
+    }
+
+    #[test]
+    fn test_parse_tool_call_with_nested_code_fences_in_arguments() {
+        let text = "```tool\n{\"name\": \"replace_file_content\", \"arguments\": {\"path\": \"SKILL.md\", \"target_content\": \"```sh\\nT=$(cut -d'\\\"' -f2 .env)\\n```\\n\", \"replacement_content\": \"## Auth\\n```sh\\nT=\\\"$TOKEN\\\"\\n```\"}}\n```\nFollow-up prose.";
+        let calls = parse_tool_calls(text, crate::config::ToolProtocol::Json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "replace_file_content");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "SKILL.md"
+        );
+        assert_eq!(
+            calls[0]
+                .arguments
+                .get("target_content")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "```sh\nT=$(cut -d'\"' -f2 .env)\n```\n"
+        );
+        assert_eq!(
+            calls[0]
+                .arguments
+                .get("replacement_content")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "## Auth\n```sh\nT=\"$TOKEN\"\n```"
+        );
+        assert!(diagnose_failed_tool_call(text).is_none());
+
+        let stripped = crate::network::text::strip_tool_call_syntax(text);
+        assert_eq!(stripped.trim(), "Follow-up prose.");
     }
 
     #[test]
