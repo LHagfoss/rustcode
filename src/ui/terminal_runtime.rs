@@ -26,6 +26,7 @@ impl Lifecycle {
         !self.restored
     }
 
+    #[allow(dead_code)]
     fn mark_active(&mut self) {
         self.restored = false;
     }
@@ -113,6 +114,7 @@ impl TerminalRuntime {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn activate(&mut self) -> io::Result<()> {
         if self.lifecycle.is_active() {
             return Ok(());
@@ -132,6 +134,7 @@ impl TerminalRuntime {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn with_restored<F, Fut, T>(&mut self, f: F) -> T
     where
         F: FnOnce() -> Fut,

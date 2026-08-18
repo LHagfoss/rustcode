@@ -391,6 +391,7 @@ pub fn color_secondary() -> Color {
 pub fn color_green() -> Color {
     active_palette().green
 }
+#[allow(dead_code)]
 pub fn color_selection() -> Color {
     active_palette().selection
 }
@@ -404,6 +405,7 @@ pub fn color_status_border() -> Color {
 pub fn color_turn_separator() -> Color {
     active_palette().turn_separator
 }
+#[allow(dead_code)]
 pub fn color_hover_bg() -> Color {
     active_palette().hover_bg
 }

@@ -339,6 +339,7 @@ pub(crate) fn continuation_nudge_for_category(
 }
 
 /// Nudge sent to resume a cut-off turn.
+#[allow(dead_code)]
 pub(crate) fn continuation_nudge(previous: &str) -> &'static str {
     continuation_nudge_for_category(previous, None)
 }
