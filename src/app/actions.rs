@@ -349,7 +349,7 @@ pub async fn handle_enter(
                 trigger_sync(state, sub, arg);
                 return false;
             }
-            "/update" => {
+            "/update" | "/upgrade" => {
                 s.input_buffer.clear();
                 s.cursor_position = 0;
                 drop(s);
@@ -1825,7 +1825,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             let mut s = state_clone.lock().await;
             s.status = crate::app::AppStatus::Streaming;
             s.update_check = crate::update::UpdateState::Checking;
-            s.set_notice("⚡ Running brew update & checking for updates...");
+            s.set_notice("🔍 Checking if new release...");
         }
 
         let check = match crate::update::check_for_update(&client_clone).await {
@@ -1848,7 +1848,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
                 s.status = crate::app::AppStatus::Idle;
                 s.update_check = crate::update::UpdateState::UpToDate(latest);
                 let notice = format!(
-                    "✨ RustCode v{} is up to date.",
+                    "✨ RustCode v{} is up to date (no new release).",
                     crate::update::format_version(current)
                 );
                 s.set_notice(notice);
@@ -1861,7 +1861,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
             s.status = crate::app::AppStatus::Streaming;
             s.update_check = crate::update::UpdateState::Available(latest);
             let notice = format!(
-                "🚀 Update available: v{} → v{}\nRunning `brew update && brew upgrade rustcode`...",
+                "🚀 Found new release: v{} → v{}\nUpdating now via Homebrew...",
                 crate::update::format_version(current),
                 crate::update::format_version(latest)
             );
@@ -1874,7 +1874,7 @@ pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
         match result {
             Ok(Ok(())) => {
                 let text = format!(
-                    "🎉 Successfully installed RustCode v{}!\nRestart rustcode to launch the new version.",
+                    "🎉 Successfully updated to RustCode v{}!\nRestart rustcode to launch the new version.",
                     crate::update::format_version(latest)
                 );
                 s.set_notice(text);
