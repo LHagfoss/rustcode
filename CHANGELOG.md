@@ -1,3 +1,12 @@
+## [v0.26.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.26.2) - 2026-08-18
+
+### Fixes
+- **UI/Layout:** Align right border on `/help` and system info card boxes (`render_status_panel`) and format `?` keyboard shortcut ([#674](https://github.com/LHagfoss/rustcode/pull/674))
+- **UI/Startup:** Add prompt prefix `>_ ` to welcome startup banner header to match `/help` and system info card header styling ([#673](https://github.com/LHagfoss/rustcode/pull/673))
+
+### Performance & CI
+- **CI/Build:** Optimize build workflow and compiler settings with parallel mold linking and single-codegen unit for fast multiplatform builds ([#672](https://github.com/LHagfoss/rustcode/pull/672))
+
 ## [v0.26.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.26.1) - 2026-08-18
 
 ### Features
