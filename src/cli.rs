@@ -24,8 +24,8 @@ pub struct Cli {
     pub model: Option<String>,
 
     /// Check for and install the latest Homebrew release, if available
-    #[arg(long = "upgrade")]
-    pub upgrade: bool,
+    #[arg(long = "update", alias = "upgrade")]
+    pub update: bool,
 
     /// Run as a headless Agent Client Protocol server over stdio
     #[arg(long = "acp")]
@@ -63,9 +63,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_upgrade_flag() {
-        let cli = Cli::try_parse_from(["rustcode", "--upgrade"]).unwrap();
-        assert!(cli.upgrade);
+    fn parses_update_and_upgrade_flags() {
+        let cli = Cli::try_parse_from(["rustcode", "--update"]).unwrap();
+        assert!(cli.update);
+        let cli_alias = Cli::try_parse_from(["rustcode", "--upgrade"]).unwrap();
+        assert!(cli_alias.update);
     }
 
     #[test]
