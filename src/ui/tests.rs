@@ -378,6 +378,28 @@ fn theme_change_changes_cache_keys() {
         key1, key2,
         "cache key must differ when active theme changes"
     );
+    theme::set_active_theme("default");
+}
+
+#[test]
+fn sky_theme_loads_and_updates_syntax_highlighting() {
+    use super::theme;
+
+    let sky = theme::get_palette("sky");
+    assert_eq!(sky.name, "sky");
+    assert_eq!(sky.primary, ratatui::style::Color::Rgb(56, 148, 240));
+    assert_eq!(sky.secondary, ratatui::style::Color::Rgb(136, 196, 56));
+    assert_eq!(sky.panel, ratatui::style::Color::Rgb(22, 32, 50));
+
+    theme::set_active_theme("sky");
+    assert_eq!(super::COLOR_PRIMARY(), ratatui::style::Color::Rgb(56, 148, 240));
+    assert_eq!(super::COLOR_SECONDARY(), ratatui::style::Color::Rgb(136, 196, 56));
+
+    let spans = super::highlight_code_line("let x = 42;", "rust", false);
+    assert!(!spans.is_empty());
+
+    // Restore default theme
+    theme::set_active_theme("default");
 }
 
 #[test]
