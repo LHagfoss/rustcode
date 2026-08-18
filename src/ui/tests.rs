@@ -659,20 +659,45 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 2);
+    assert_eq!(separator.len(), 3);
+    assert!(separator[0].to_string().is_empty());
     assert!(
-        separator[0]
+        separator[1]
             .to_string()
             .starts_with("─ Worked for 2m 05s ─")
     );
-    assert!(separator[1].to_string().is_empty());
+    assert!(separator[2].to_string().is_empty());
 
     state.history[2].response_time_ms = Some(12_000);
     assert_eq!(
-        super::render_work_separator_before_assistant(&state, 2, 12)[0].to_string(),
+        super::render_work_separator_before_assistant(&state, 2, 12)[1].to_string(),
         "────────────"
     );
     assert!(super::render_work_separator_before_assistant(&state, 0, 80).is_empty());
+}
+
+#[test]
+fn tool_followed_by_work_separator_has_padding_gap() {
+    use crate::app::{ChatMessage, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "explore"));
+    state.history.push(
+        ChatMessage::new("tool", "view_file: read main.rs").with_tool_result(ToolResultRecord {
+            tool_name: "view_file".to_owned(),
+            success: true,
+            ..Default::default()
+        }),
+    );
+    let mut assistant = ChatMessage::new("assistant", "Found it.");
+    assistant.response_time_ms = Some(254_000);
+    state.history.push(assistant);
+
+    let separator = super::render_work_separator_before_assistant(&state, 2, 80);
+    assert_eq!(separator.len(), 3);
+    assert_eq!(separator[0].to_string(), "");
+    assert!(separator[1].to_string().starts_with("─ Worked for 4m 14s ─"));
+    assert_eq!(separator[2].to_string(), "");
 }
 
 #[test]
