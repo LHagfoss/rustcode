@@ -239,8 +239,10 @@ pub(crate) fn strip_tool_call_syntax(content: &str) -> String {
     // Remove ```tool ... ``` / ```json ... ``` fenced blocks.
     for fence in ["```tool", "```json"] {
         while let Some(start) = out.to_lowercase().find(fence) {
-            if let Some(rel_end) = out[start + fence.len()..].find("```") {
-                let end = start + fence.len() + rel_end + 3;
+            let after_tag = &out[start + fence.len()..];
+            let (rel_end, next_rel) = crate::tools::find_closing_tool_fence(after_tag);
+            if rel_end < after_tag.len() {
+                let end = start + fence.len() + next_rel;
                 out.replace_range(start..end, "");
             } else {
                 out.truncate(start); // unclosed fence — drop the remainder
