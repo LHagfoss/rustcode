@@ -1273,6 +1273,7 @@ impl AppState {
         let history = Vec::new();
         let cwd_and_branch = get_cwd_and_branch();
         crate::ui::theme::ensure_themes_dir();
+        crate::ui::theme::set_active_theme(&config.theme);
 
         let app = Self {
             input_buffer: String::new(),
