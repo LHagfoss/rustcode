@@ -1461,6 +1461,28 @@ fn status_panels_render_minimal_inline() {
 }
 
 #[test]
+fn status_panel_help_box_lines_have_uniform_width() {
+    use super::render_status_panel;
+
+    let help_text = crate::app::actions::build_help_text();
+    let mut lines = Vec::new();
+    let total_width = 100u16;
+    render_status_panel(&help_text, total_width, false, &mut lines);
+
+    assert!(lines.len() > 10, "help text should render a full card");
+
+    let expected_box_width = lines[0].width();
+    for (i, line) in lines.iter().enumerate() {
+        assert_eq!(
+            line.width(),
+            expected_box_width,
+            "line {i} ({:?}) must match box width {expected_box_width}",
+            line.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+        );
+    }
+}
+
+#[test]
 fn new_chat_separator_spans_width_and_centers_label() {
     use super::push_new_chat_separator;
     use unicode_width::UnicodeWidthStr;
