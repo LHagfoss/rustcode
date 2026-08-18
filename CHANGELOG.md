@@ -1,3 +1,8 @@
+## [v0.26.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.26.1) - 2026-08-18
+
+### Features
+- **CLI/Self-Update:** Add `--update` flag (with `--upgrade` alias), `/upgrade` command alias, interactive `Checking if new release...` status messages, and animated terminal spinner during Homebrew upgrades ([#670](https://github.com/LHagfoss/rustcode/pull/670))
+
 ## [v0.26.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.26.0) - 2026-08-18
 
 ### Features
