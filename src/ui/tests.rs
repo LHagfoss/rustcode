@@ -1662,6 +1662,7 @@ fn input_bar_contains_live_status_and_command_hint() {
 fn live_tool_activity_is_rendered_without_protocol_text() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
+    state.generation_start_time = Some(std::time::Instant::now());
     state.live_tool_calls.push(crate::app::LiveToolCall::new(
         "call-1",
         None,
@@ -1673,7 +1674,33 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
     let line = super::activity_status_line(&state, false).to_string();
 
     assert!(line.contains("Working"));
+    assert!(line.contains("esc interrupt"));
     assert!(!line.contains("tool_calls"));
+    assert!(!line.contains("Bash"));
+    assert!(!line.contains("cargo test"));
+}
+
+#[test]
+fn composer_footer_shows_queue_hint_when_busy() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut state))
+        .unwrap();
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("Enter message then press enter to queue"));
+    assert!(!rendered.contains("tab to queue"));
 }
 
 #[test]
