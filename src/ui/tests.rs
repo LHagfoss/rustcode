@@ -236,6 +236,10 @@ fn welcome_banner_renders_without_a_conversation() {
         rendered.contains("Welcome back!"),
         "the empty chat must display its welcome banner: {rendered:?}"
     );
+    assert!(
+        rendered.contains(">_ RustCode"),
+        "the welcome banner header must include '>_ RustCode': {rendered:?}"
+    );
 }
 
 #[test]
