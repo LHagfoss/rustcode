@@ -48,6 +48,42 @@ mod tests {
         assert_eq!(line, "data: ready\n");
         writer_task.await.unwrap();
     }
+
+    #[test]
+    fn parse_speculative_arguments_extracts_complete_and_partial_json() {
+        // Complete JSON
+        let complete = r#"{"TargetFile": "src/symbols.rs", "Instruction": "fix bug"}"#;
+        let parsed = parse_speculative_arguments(complete);
+        assert_eq!(parsed["TargetFile"], "src/symbols.rs");
+        assert_eq!(parsed["Instruction"], "fix bug");
+
+        // Partial JSON cut mid-string
+        let partial_string = r#"{"TargetFile": "src/main.rs", "Instruction": "refactor"#;
+        let parsed_partial = parse_speculative_arguments(partial_string);
+        assert_eq!(parsed_partial["TargetFile"], "src/main.rs");
+
+        // Early partial JSON
+        let early_partial = r#"{"CommandLine": "cargo check --tests""#;
+        let parsed_early = parse_speculative_arguments(early_partial);
+        assert_eq!(parsed_early["CommandLine"], "cargo check --tests");
+
+        // Grep pattern
+        let grep_partial = r#"{"pattern": "Config", "path": "src/""#;
+        let parsed_grep = parse_speculative_arguments(grep_partial);
+        assert_eq!(parsed_grep["pattern"], "Config");
+        assert_eq!(parsed_grep["path"], "src/");
+    }
+
+    #[test]
+    fn parse_speculative_text_tool_call_extracts_in_flight_fences() {
+        let in_flight = "Let me search the codebase:\n```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"AppConfig\"";
+        let (name, args) = parse_speculative_text_tool_call(in_flight).expect("should extract in-flight call");
+        assert_eq!(name, "grep");
+        assert_eq!(args["pattern"], "AppConfig");
+
+        let completed = "Done:\n```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```\nHere are the results:";
+        assert!(parse_speculative_text_tool_call(completed).is_none(), "completed fence is not in-flight");
+    }
 }
 
 async fn read_sse_line<R: tokio::io::AsyncBufRead + Unpin>(
@@ -111,6 +147,98 @@ pub(crate) fn parse_native_tool_arguments(raw: &str) -> serde_json::Value {
             "_parse_error": error.to_string(),
         }),
     }
+}
+
+/// Speculatively parse partial JSON argument fragments emitted chunk-by-chunk
+/// by the model over SSE, allowing the TUI to project tool names and targets in real time.
+pub(crate) fn parse_speculative_arguments(raw: &str) -> serde_json::Value {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({});
+    }
+
+    // 1. Exact parse if complete
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if value.is_object() {
+            return value;
+        }
+    }
+
+    // 2. Synthesize closing quotes / brackets / braces for in-flight streams
+    let mut repaired = trimmed.to_string();
+    let mut in_quote = false;
+    let mut escaped = false;
+    for ch in repaired.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_quote = !in_quote;
+        }
+    }
+    if in_quote {
+        repaired.push('"');
+    }
+    let open_braces = repaired.chars().filter(|&c| c == '{').count();
+    let close_braces = repaired.chars().filter(|&c| c == '}').count();
+    for _ in close_braces..open_braces {
+        repaired.push('}');
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&repaired) {
+        if value.is_object() {
+            return value;
+        }
+    }
+
+    // 3. Fallback: Extract key arguments via pattern matching from partial stream
+    let mut map = serde_json::Map::new();
+    let keys = [
+        "TargetFile",
+        "AbsolutePath",
+        "path",
+        "DirectoryPath",
+        "SearchPath",
+        "CommandLine",
+        "command",
+        "pattern",
+        "Query",
+        "query",
+        "name",
+        "src",
+        "dest",
+    ];
+    for key in keys {
+        let pattern = format!(r#""{}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"#, key);
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            if let Some(caps) = re.captures(trimmed) {
+                if let Some(m) = caps.get(1) {
+                    map.insert(
+                        key.to_string(),
+                        serde_json::Value::String(m.as_str().replace(r#"\""#, "\"")),
+                    );
+                }
+            }
+        }
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Speculatively extract tool name and arguments from an in-flight text-fenced tool call (```tool ...).
+pub(crate) fn parse_speculative_text_tool_call(content: &str) -> Option<(String, serde_json::Value)> {
+    let pos = content.rfind("```tool\n").or_else(|| content.rfind("```tool\r\n"))?;
+    let tail = &content[pos + 7..];
+    if tail.contains("\n```") {
+        return None;
+    }
+    let parsed = parse_speculative_arguments(tail);
+    let name = parsed.get("name").and_then(|n| n.as_str())?.to_string();
+    let args = parsed.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+    Some((name, args))
 }
 
 pub(crate) async fn estimate_token_usage(
@@ -510,6 +638,12 @@ pub async fn stream_request(
                                                  if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()) {
                                                      acc.arguments.push_str(args);
                                                  }
+                                                 if !quiet && !acc.name.is_empty() {
+                                                     let parsed_args = parse_speculative_arguments(&acc.arguments);
+                                                     let id_opt = if acc.id.is_empty() { None } else { Some(acc.id.as_str()) };
+                                                     let mut s = state.lock().await;
+                                                     s.update_speculative_live_tool_call(id_opt, &acc.name, &parsed_args);
+                                                 }
                                              }
                                          }
 
@@ -577,6 +711,13 @@ pub async fn stream_request(
                                                     use std::io::Write;
                                                     print!("{chunk}");
                                                     let _ = std::io::stdout().flush();
+                                                }
+                                            }
+                                            if !quiet {
+                                                let buf_content = { buffer.lock().await.content.clone() };
+                                                if let Some((tool_name, tool_args)) = parse_speculative_text_tool_call(&buf_content) {
+                                                    let mut s = state.lock().await;
+                                                    s.update_speculative_live_tool_call(None, &tool_name, &tool_args);
                                                 }
                                             }
                                         }
