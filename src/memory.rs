@@ -314,6 +314,7 @@ pub fn load_global() -> Result<ProjectMemory, String> {
     Ok(memory)
 }
 
+#[allow(dead_code)]
 pub fn save_global(memory: &ProjectMemory) -> Result<(), String> {
     let _guard = memory_write_lock()
         .lock()

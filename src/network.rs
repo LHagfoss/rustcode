@@ -59,7 +59,7 @@ pub(crate) use tool_exec::{
 #[path = "network/turn_engine.rs"]
 pub(crate) mod turn_engine;
 pub(crate) use turn_engine::ToolFenceCounter;
-pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn, run_single_turn};
+pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn};
 pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
 
 #[path = "network/lifecycle.rs"]
@@ -99,6 +99,7 @@ pub(crate) use subagents::{handle_agent_tool, run_subagent, set_subagent_status}
 #[path = "network/title.rs"]
 pub(crate) mod title;
 pub use title::generate_title;
+#[allow(unused_imports)]
 pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
 
 #[path = "network/context_tail.rs"]

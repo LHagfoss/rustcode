@@ -121,15 +121,46 @@ pub(crate) fn build_dynamic_context_tail_with_memory(
     }
 
     if !read_files.is_empty() {
+        const MAX_FILES_IN_CONTEXT: usize = 30;
+        let (files_to_render, truncated_count) = if read_files.len() > MAX_FILES_IN_CONTEXT {
+            let mut selected = Vec::new();
+            // Prioritize stale files first
+            for f in read_files.iter().filter(|f| f.contains("STALE")) {
+                if selected.len() < MAX_FILES_IN_CONTEXT {
+                    selected.push(f.clone());
+                }
+            }
+            // Fill remainder with most recent files
+            for f in read_files.iter().rev() {
+                if selected.len() >= MAX_FILES_IN_CONTEXT {
+                    break;
+                }
+                if !selected.contains(f) {
+                    selected.push(f.clone());
+                }
+            }
+            selected.sort();
+            let trunc = read_files.len() - selected.len();
+            (selected, trunc)
+        } else {
+            (read_files.to_vec(), 0)
+        };
+
+        let mut files_body = files_to_render
+            .iter()
+            .map(|f| format!("- {f}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if truncated_count > 0 {
+            files_body.push_str(&format!(
+                "\n- ... ({truncated_count} more unchanged files omitted from context tail)"
+            ));
+        }
+
         fragments.push(history::ContextFragment::new(
             "files",
             format!(
-                "# Files already in context (re-read files marked stale or named by compiler diagnostics before editing)\n{}",
-                read_files
-                    .iter()
-                    .map(|f| format!("- {f}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                "# Files already in context (re-read files marked stale or named by compiler diagnostics before editing)\n{files_body}"
             ),
         ));
     }

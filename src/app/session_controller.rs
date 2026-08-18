@@ -49,6 +49,7 @@ impl std::error::Error for SessionError {}
 pub(crate) struct SessionController;
 
 impl SessionController {
+    #[allow(dead_code)]
     pub(crate) fn active_session(&self, state: &AppState) -> String {
         state.active_session_id.clone()
     }

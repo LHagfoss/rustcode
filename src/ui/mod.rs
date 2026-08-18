@@ -109,7 +109,7 @@ pub fn COLOR_SECONDARY() -> Color {
 pub fn COLOR_GREEN() -> Color {
     theme::color_green()
 }
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[inline]
 pub fn COLOR_SELECTION() -> Color {
     theme::color_selection()
@@ -129,7 +129,7 @@ pub fn COLOR_STATUS_BORDER() -> Color {
 pub fn COLOR_TURN_SEPARATOR() -> Color {
     theme::color_turn_separator()
 }
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[inline]
 pub fn COLOR_HOVER_BG() -> Color {
     theme::color_hover_bg()
@@ -1652,6 +1652,7 @@ fn resolve_tool_result_name(
 /// width, expanded-thoughts, modal state, or copy-badge state changes — so we
 /// cache them and reuse across the many frames where nothing but the scroll
 /// offset moved.
+#[allow(dead_code)]
 struct ChatCache {
     key: ChatKey,
     lines: Vec<Line<'static>>,
@@ -1660,8 +1661,10 @@ struct ChatCache {
     total_wrapped_lines: u16,
 }
 
+#[allow(dead_code)]
 type RenderedConversation = (Vec<Line<'static>>, Vec<(u16, String)>, Vec<u16>, u16);
 
+#[allow(dead_code)]
 #[derive(PartialEq, Clone)]
 struct ChatKey {
     hist_len: usize,
@@ -1679,6 +1682,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+#[allow(dead_code)]
 fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
     let history = state.active_history();
     ChatKey {
