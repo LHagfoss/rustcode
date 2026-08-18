@@ -241,6 +241,26 @@ notice_bg = "reset"
 hover_bg = "#292e42"
 "##,
     ),
+    (
+        "sky.toml",
+        r##"name = "sky"
+description = "Summer sky azure and meadow green palette"
+bg = "#0f1724"
+panel = "#162032"
+element = "#1e2c44"
+text = "#f0f6fc"
+muted = "#7890a8"
+primary = "#3894f0"
+secondary = "#88c438"
+green = "#88c438"
+selection = "#f0f6fc"
+tip = "#ffd152"
+status_border = "#2a3d5c"
+turn_separator = "#48658a"
+notice_bg = "reset"
+hover_bg = "#253754"
+"##,
+    ),
 ];
 
 pub fn get_themes_dir() -> Option<PathBuf> {
