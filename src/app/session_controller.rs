@@ -73,11 +73,11 @@ impl SessionController {
         let meta = self.resolve_meta(state, action)?;
         let session_id = session_id_from_meta(&meta)
             .ok_or_else(|| SessionError::SessionNotFound(meta.title.clone()))?;
-        if crate::config::load_session_file(&meta.path).is_empty() {
+
+        if !crate::app::actions::load_session_into(state, &meta) {
             return Err(SessionError::SessionNotFound(session_id));
         }
 
-        crate::app::actions::load_session_into(state, &meta);
         Ok(SessionTransition::Resumed {
             session_id: state.active_session_id.clone(),
         })
@@ -189,17 +189,20 @@ impl SessionController {
         state: &AppState,
         action: SessionAction,
     ) -> Result<crate::config::SessionMeta, SessionError> {
-        let sessions = crate::app::actions::build_session_list(state);
         match action {
-            SessionAction::Latest => sessions
-                .into_iter()
-                .next()
-                .ok_or(SessionError::NoSessionToResume),
+            SessionAction::Latest => {
+                if !crate::config::session_has_content(&state.history)
+                    && let Some(live) = crate::config::live_session_meta()
+                {
+                    Ok(live)
+                } else {
+                    crate::config::latest_resumable_session_meta()
+                        .ok_or(SessionError::NoSessionToResume)
+                }
+            }
             SessionAction::Id(id) => {
                 validate_session_id(&id)?;
-                sessions
-                    .into_iter()
-                    .find(|meta| session_id_from_meta(meta).as_deref() == Some(id.as_str()))
+                crate::config::session_meta_by_id(&id)
                     .ok_or(SessionError::SessionNotFound(id))
             }
         }
@@ -207,11 +210,7 @@ impl SessionController {
 }
 
 pub(crate) fn session_id_from_meta(meta: &crate::config::SessionMeta) -> Option<String> {
-    meta.path
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .map(str::to_owned)
+    crate::config::session_id_from_path(&meta.path)
 }
 
 fn validate_session_id(id: &str) -> Result<(), SessionError> {
@@ -315,6 +314,38 @@ mod tests {
                 .history
                 .iter()
                 .any(|message| message.content == "saved task")
+        );
+    }
+
+    #[test]
+    fn resume_latest_restores_the_latest_session() {
+        let mut state = AppState::new();
+        let saved_id = state.active_session_id.clone();
+        state.history.push(ChatMessage::new("user", "latest task"));
+        state
+            .history
+            .push(ChatMessage::new("assistant", "latest answer"));
+
+        SessionController::default()
+            .start_fresh(&mut state)
+            .expect("new session should succeed");
+        assert_ne!(state.active_session_id, saved_id);
+
+        let transition = SessionController::default()
+            .resume(&mut state, SessionAction::Latest)
+            .expect("latest session should resume");
+
+        assert_eq!(
+            transition,
+            SessionTransition::Resumed {
+                session_id: saved_id
+            }
+        );
+        assert!(
+            state
+                .history
+                .iter()
+                .any(|message| message.content == "latest task")
         );
     }
 
