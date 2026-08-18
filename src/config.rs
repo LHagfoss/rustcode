@@ -23,49 +23,49 @@ pub struct ModelProfile {
     pub name: String,
     pub url: String,
     pub model: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_key: Option<String>,
     /// Forces a tool protocol for this profile, overriding provider detection.
     /// Set it when a self-hosted server implements OpenAI-style function
     /// calling (or advertises it but gets it wrong).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_protocol: Option<ToolProtocol>,
     /// Sends Qwen3's top-level `enable_thinking` request field when set.
     /// `Some(false)` skips `<think>` generation entirely at the chat-template
     /// level (much faster, no reasoning trace); `Some(true)` forces it on;
     /// `None` (default) leaves the server's own template default in place —
     /// matches prior behavior for profiles that don't opt in.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_thinking: Option<bool>,
     /// Reasoning effort level (e.g. "low", "medium", "high") sent in OpenAI-compatible payloads.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     /// Per-profile completion token cap sent as `max_tokens`. `None` falls
     /// back to the shared default, overriding whatever a Modelfile's
     /// `PARAMETER num_predict` says.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     /// Whether this model accepts image input. `None` means unsupported until
     /// the profile is explicitly configured, avoiding a provider failure as a
     /// capability probe.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_vision: Option<bool>,
     /// Effective soft context target at which proactive compaction and context
     /// optimization trigger, preventing requests from routinely driving close to
     /// the theoretical maximum.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soft_context_target: Option<u32>,
     /// Hard upper limit on estimated prompt tokens plus completion reserve.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hard_effective_limit: Option<u32>,
     /// Conservative safety margin for provider chat-template framing and tokenizer variations.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_overhead_margin: Option<u32>,
 }
 
