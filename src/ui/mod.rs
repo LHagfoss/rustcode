@@ -440,11 +440,13 @@ fn strip_rendered_tool_blocks(content: &str) -> String {
         while let Some(relative_start) = output[search_from..].find(fence) {
             let start = search_from + relative_start;
             let block_start = start + fence.len();
-            let Some(relative_end) = output[block_start..].find("```") else {
+            let after_tag = &output[block_start..];
+            let (rel_end, next_rel) = crate::tools::find_closing_tool_fence(after_tag);
+            if rel_end == after_tag.len() && !after_tag.is_empty() {
                 break;
-            };
-            let end = block_start + relative_end + 3;
-            let block = &output[block_start..block_start + relative_end];
+            }
+            let end = block_start + next_rel;
+            let block = &after_tag[..rel_end];
             let is_tool_call =
                 crate::tools::parse_tool_call(block, crate::config::ToolProtocol::Json).is_some();
 
