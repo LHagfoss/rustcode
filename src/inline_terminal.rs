@@ -47,6 +47,7 @@ pub struct InlineTerminal<B: Backend> {
     viewport_area: Rect,
     screen_size: Size,
     last_cursor_position: Position,
+    needs_clear: bool,
 }
 
 impl<B> InlineTerminal<B>
@@ -68,6 +69,7 @@ where
             viewport_area: Rect::new(0, cursor.y, screen_size.width, 0),
             screen_size,
             last_cursor_position: cursor,
+            needs_clear: false,
         })
     }
 
@@ -99,7 +101,9 @@ where
                 .set_cursor_position(self.viewport_area.as_position())?;
             self.backend.clear_region(ClearType::AfterCursor)?;
         }
-        self.buffers[1 - self.current].reset();
+        self.buffers[0].reset();
+        self.buffers[1].reset();
+        self.needs_clear = false;
         Ok(())
     }
 
@@ -110,6 +114,7 @@ where
         self.backend.set_cursor_position(Position::new(0, 0))?;
         self.viewport_area = Rect::new(0, 0, self.screen_size.width, 0);
         self.last_cursor_position = Position::new(0, 0);
+        self.needs_clear = false;
         self.buffers[0].reset();
         self.buffers[1].reset();
         self.backend.flush()
@@ -118,12 +123,19 @@ where
     pub fn autoresize(&mut self) -> Result<(), B::Error> {
         let size = self.backend.size()?;
         if size != self.screen_size {
+            let was_at_bottom = self.screen_size.height > 0
+                && self.viewport_area.bottom() >= self.screen_size.height;
             self.screen_size = size;
             self.viewport_area.width = size.width;
-            self.viewport_area.y = self
-                .viewport_area
-                .y
-                .min(size.height.saturating_sub(self.viewport_area.height));
+            if was_at_bottom {
+                self.viewport_area.y = size.height.saturating_sub(self.viewport_area.height);
+            } else {
+                self.viewport_area.y = self
+                    .viewport_area
+                    .y
+                    .min(size.height.saturating_sub(self.viewport_area.height));
+            }
+            self.needs_clear = true;
             self.resize_buffers();
             self.buffers[0].reset();
             self.buffers[1].reset();
@@ -146,9 +158,7 @@ where
     where
         F: FnOnce(&mut Frame<'_>),
     {
-        let old_size = self.screen_size;
         self.autoresize()?;
-        let size_changed = old_size != self.screen_size;
         let mut area = self.viewport_area;
         area.width = self.screen_size.width;
         area.height = height.min(self.screen_size.height);
@@ -159,7 +169,7 @@ where
             area.y = self.screen_size.height.saturating_sub(area.height);
         }
 
-        if area != self.viewport_area || size_changed {
+        if area != self.viewport_area || self.needs_clear {
             let clear_at = if self.viewport_area.is_empty() {
                 area.as_position()
             } else {
@@ -170,6 +180,7 @@ where
             self.set_viewport_area(area);
             self.buffers[0].reset();
             self.buffers[1].reset();
+            self.needs_clear = false;
         }
 
         let mut frame = Frame {
@@ -248,7 +259,9 @@ where
 
         self.backend
             .set_cursor_position(self.last_cursor_position)?;
-        self.buffers[1 - self.current].reset();
+        self.buffers[0].reset();
+        self.buffers[1].reset();
+        self.needs_clear = true;
         Ok(())
     }
 
@@ -364,5 +377,46 @@ mod tests {
         terminal.autoresize().unwrap();
         assert_eq!(terminal.size().unwrap(), Size::new(100, 30));
         assert_eq!(terminal.area().width, 100);
+    }
+
+    #[test]
+    fn autoresize_maintains_bottom_anchoring_when_terminal_grows_and_shrinks() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        // Insert history so viewport moves down and scrolls to bottom
+        terminal.insert_before(20, |_| {}).unwrap();
+        terminal.draw_height(10, |_| {}).unwrap();
+        assert_eq!(terminal.area(), Rect::new(0, 14, 80, 10));
+
+        // Terminal height grows from 24 to 34 -> bottom anchor moves y to 34 - 10 = 24
+        terminal.backend_mut().resize(80, 34);
+        terminal.autoresize().unwrap();
+        assert_eq!(terminal.area(), Rect::new(0, 24, 80, 10));
+
+        // Terminal height shrinks back from 34 to 20 -> bottom anchor moves y to 20 - 10 = 10
+        terminal.backend_mut().resize(80, 20);
+        terminal.autoresize().unwrap();
+        assert_eq!(terminal.area(), Rect::new(0, 10, 80, 10));
+    }
+
+    #[test]
+    fn autoresize_clears_and_redraws_even_when_requested_height_is_unchanged() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal.draw_height(6, |f| {
+            f.render_widget(ratatui::widgets::Paragraph::new("Hello"), f.area());
+        }).unwrap();
+
+        // Resize width
+        terminal.backend_mut().resize(100, 24);
+        // Pre-run autoresize (as happens in event loop before draw)
+        terminal.autoresize().unwrap();
+        assert!(terminal.needs_clear);
+
+        // draw_height with same height 6 should clear and redraw without diff artifacts
+        terminal.draw_height(6, |f| {
+            f.render_widget(ratatui::widgets::Paragraph::new("World"), f.area());
+        }).unwrap();
+        assert!(!terminal.needs_clear);
     }
 }
