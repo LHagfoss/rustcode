@@ -35,12 +35,19 @@ pub struct Cli {
     #[arg(long = "yolo")]
     pub yolo: bool,
 
+    /// Create a project-local .rustcode/config.toml from global defaults
+    #[arg(long = "init")]
+    pub init: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Commands {
+    /// Create a project-local .rustcode/config.toml from global defaults
+    Init,
+
     /// Run as a headless Agent Client Protocol server over stdio
     Acp,
 
@@ -88,5 +95,15 @@ mod tests {
     fn parses_yolo_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--yolo"]).unwrap();
         assert!(cli.yolo);
+    }
+
+    #[test]
+    fn parses_project_init_flag_and_subcommand() {
+        let flag = Cli::try_parse_from(["rustcode", "--init"]).unwrap();
+        assert!(flag.init);
+        assert!(matches!(
+            Cli::try_parse_from(["rustcode", "init"]).unwrap().command,
+            Some(Commands::Init)
+        ));
     }
 }

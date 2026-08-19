@@ -72,6 +72,27 @@ Writes use a temporary file and replacement so an interrupted save does not
 leave a truncated configuration. On Unix, the file is written with owner-only
 permissions because model profiles may contain API keys.
 
+### Project configuration
+
+Create a project-local override with:
+
+```bash
+rustcode init
+# or: rustcode --init
+```
+
+This creates `.rustcode/config.toml` from the global model defaults and adds
+`.rustcode/config.toml` to the project `.gitignore`. It intentionally does not
+copy API keys, MCP servers, or session state. Project configuration is loaded
+from parent to child directories, so the nearest file wins:
+
+```text
+CLI overrides > nearest project config > global config > built-in defaults
+```
+
+Project files are partial overrides; omitted fields continue to come from the
+lower-precedence layer.
+
 ### via homebrew
 
 You can easily install it using Homebrew (Needs Apple Silicon).
