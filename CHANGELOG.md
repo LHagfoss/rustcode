@@ -1,3 +1,9 @@
+## [v0.29.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.7) - 2026-08-19
+
+### Features
+- **UI/Startup:** Enrich startup welcome box with active git branch context and discoverable help shortcut hint ([#708](https://github.com/LHagfoss/rustcode/pull/708))
+- **UI/Footer:** Display current branch and working path in the composer footer alongside active model and context token usage ([#709](https://github.com/LHagfoss/rustcode/pull/709))
+
 ## [v0.29.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.6) - 2026-08-19
 
 ### Fixes
