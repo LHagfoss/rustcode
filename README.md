@@ -4,14 +4,6 @@
 <img src="./images/header.png" alt="rustcode screenshot 1"/>
 </div>
 
-<table>
-  <tr>
-    <td align="center"><img src="./images/small-1.png" alt="screenshot 2" width="200"/></td>
-    <td align="center"><img src="./images/small-2.png" alt="screenshot 3" width="200"/></td>
-    <td align="center"><img src="./images/small-3.png" alt="screenshot 4" width="200"/></td>
-  </tr>
-</table>
-
 ## about
 
 `rustcode` is a lightweight Terminal User Interface (TUI) agent harness.
