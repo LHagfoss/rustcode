@@ -171,7 +171,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     crate::update::format_version(current),
                     crate::update::format_version(latest)
                 );
-                let upgrade_res = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
+                let upgrade_res = tokio::task::spawn_blocking(move || {
+                    crate::update::run_brew_upgrade(latest)
+                })
+                .await;
 
                 match upgrade_res {
                     Ok(Ok(())) => {
