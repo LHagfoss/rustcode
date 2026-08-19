@@ -2,13 +2,14 @@
 //!
 //! `/update` reads the formula straight from the tap repo on GitHub, compares
 //! its version to the running binary, and — only when the tap is newer — runs
-//! `brew upgrade rustcode`.
+//! `brew update` followed by `brew upgrade rustcode`.
 
 use regex::Regex;
 use std::io::Write;
 use std::process::Command;
 use std::sync::LazyLock;
 
+pub const BREW_UPDATE_COMMAND: &str = "brew update";
 pub const BREW_UPGRADE_COMMAND: &str = "brew upgrade rustcode";
 
 /// The formula lives in the tap repo `lhagfoss/homebrew-tap` at
@@ -129,10 +130,23 @@ pub async fn latest_tap_version(client: &reqwest::Client) -> Option<Version> {
     None
 }
 
-/// Run the Homebrew upgrade with inherited stdout/stderr so Homebrew can show
-/// its normal progress output. Blocking — call from `spawn_blocking` when the
-/// caller is async.
+/// Refresh Homebrew and run the upgrade with inherited stdout/stderr so
+/// Homebrew can show its normal progress output. Blocking — call from
+/// `spawn_blocking` when the caller is async.
 pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
+    println!("Refreshing Homebrew via `{BREW_UPDATE_COMMAND}`...");
+    let _ = std::io::stdout().flush();
+
+    let update_status = Command::new("brew")
+        .arg("update")
+        .status()
+        .map_err(|e| format!("failed to run brew (is Homebrew installed?): {e}"))?;
+    if !update_status.success() {
+        return Err(format!(
+            "`{BREW_UPDATE_COMMAND}` failed with status {update_status}"
+        ));
+    }
+
     println!("Updating RustCode via `{BREW_UPGRADE_COMMAND}`...");
     let _ = std::io::stdout().flush();
 
@@ -147,7 +161,7 @@ pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
     let installed = installed_brew_version()?;
     if installed < expected {
         return Err(format!(
-            "Homebrew reported success, but rustcode v{} is still installed; expected v{}. Run `brew update` and retry.",
+            "Homebrew reported success, but rustcode v{} is still installed; expected v{} after refreshing the tap.",
             format_version(installed),
             format_version(expected),
         ));
@@ -235,6 +249,7 @@ mod tests {
 
     #[test]
     fn update_command_is_the_formula_upgrade() {
+        assert_eq!(BREW_UPDATE_COMMAND, "brew update");
         assert_eq!(BREW_UPGRADE_COMMAND, "brew upgrade rustcode");
     }
 
