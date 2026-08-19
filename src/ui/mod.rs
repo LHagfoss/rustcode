@@ -1374,6 +1374,17 @@ fn composer_footer_visible(
     !state.modal_open() && !has_command_completions && !has_file_completions
 }
 
+fn footer_location(state: &AppState) -> String {
+    let (path, branch) = state
+        .cwd_and_branch
+        .rsplit_once(':')
+        .unwrap_or((&state.cwd_and_branch, "unknown"));
+    let branch = if branch.is_empty() { "unknown" } else { branch };
+    let branch = fit_to_width(branch, 24).trim_end().to_string();
+    let path = if path.is_empty() { "~" } else { path };
+    format!("{branch} · {path}")
+}
+
 fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1382,14 +1393,15 @@ fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &Ap
     let (used, _) = context_usage(state);
     let window = state.active_context_window().max(1);
     let remaining = crate::app::status::context_remaining_percent(used, window);
+    let location = footer_location(state);
     let left_content = if let Some(agent) = state.selected_subagent() {
-        format!("  {} · {}", agent.name, state.model_name)
+        format!("  {} · {} · {}", agent.name, state.model_name, location)
     } else if matches!(state.status, AppStatus::Idle) {
-        format!("  {}", state.model_name)
+        format!("  {} · {}", state.model_name, location)
     } else {
         format!(
-            "  Enter message then press enter to queue · {}",
-            state.model_name
+            "  Enter message then press enter to queue · {} · {}",
+            state.model_name, location
         )
     };
     let right = format!("{remaining}% context left  ");
