@@ -99,6 +99,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_args = cli::Cli::parse();
     let model_override = cli_args.model.clone();
 
+    if cli_args.init || matches!(cli_args.command.as_ref(), Some(cli::Commands::Init)) {
+        let workspace = std::env::current_dir()?;
+        match config::init_project_config(&workspace) {
+            Ok(path) => println!(
+                "Created project config at {}\nAdded {} to .gitignore.",
+                path.display(),
+                ".rustcode/config.toml"
+            ),
+            Err(error) => {
+                eprintln!("Project config initialization failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     if let Some(cli::Commands::Sync { command }) = cli_args.command {
         match command {
             Some(cli::SyncCommands::Pull) => {

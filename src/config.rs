@@ -16,6 +16,9 @@ pub const MODELS_FILE: &str = "models.json";
 pub const CONFIG_FILE: &str = "config.json";
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 pub const CONFIG_FORMAT_VERSION: u32 = 1;
+pub const PROJECT_CONFIG_DIR: &str = ".rustcode";
+pub const PROJECT_CONFIG_FILE: &str = "config.toml";
+const PROJECT_GITIGNORE_ENTRY: &str = ".rustcode/config.toml";
 const HISTORY_FILE: &str = "history.json";
 const SESSIONS_DIR: &str = "sessions";
 #[allow(dead_code)]
@@ -356,6 +359,32 @@ impl DefaultConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+enum DefaultOverride {
+    Simple(String),
+    Table {
+        #[serde(default, alias = "big_model")]
+        big: Option<String>,
+        #[serde(default, alias = "small_model")]
+        small: Option<String>,
+    },
+    Array(Vec<DefaultConfigTable>),
+}
+
+impl From<DefaultConfig> for DefaultOverride {
+    fn from(value: DefaultConfig) -> Self {
+        match value {
+            DefaultConfig::Simple(value) => Self::Simple(value),
+            DefaultConfig::Table { big, small } => Self::Table {
+                big: Some(big),
+                small: Some(small),
+            },
+            DefaultConfig::Array(value) => Self::Array(value),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub default: DefaultConfig,
     pub models: Vec<ModelProfile>,
@@ -431,12 +460,12 @@ struct RuntimeConfig {
 /// Fields are optional so users can keep a small hand-written config while
 /// the runtime still supplies defaults for everything they omit. The two
 /// JSON files remain readable as a compatibility path for older installs.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    default: Option<DefaultConfig>,
+    default: Option<DefaultOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     models: Option<Vec<ModelProfile>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -675,6 +704,32 @@ pub fn load_config() -> (String, String, AppConfig) {
     }
 }
 
+/// Load global configuration and overlay project configuration files from
+/// repository ancestors. Later (closer) project files take precedence over
+/// earlier ones, and all project files take precedence over the global file.
+pub fn load_config_for_workspace(workspace: &Path) -> (String, String, AppConfig) {
+    let (_, _, mut config) = load_config();
+    for path in project_config_paths(workspace) {
+        match read_toml_config(&path) {
+            Ok(file) => apply_project_toml_config(&mut config, file),
+            Err(error) => eprintln!("[rustcode] WARNING: {error}"),
+        }
+    }
+    let (url, model) = resolve_model_endpoint(&config, config.default.big());
+    (url, model, config)
+}
+
+fn project_config_paths(workspace: &Path) -> Vec<PathBuf> {
+    let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let mut ancestors: Vec<PathBuf> = workspace.ancestors().map(Path::to_path_buf).collect();
+    ancestors.reverse();
+    ancestors
+        .into_iter()
+        .map(|ancestor| ancestor.join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
 pub fn resolve_model_endpoint(config: &AppConfig, name: &str) -> (String, String) {
     config
         .models
@@ -794,7 +849,16 @@ pub fn save_entire_config(config: &AppConfig) {
         return;
     }
     if let Some(dir) = get_config_dir() {
-        save_config_to(&dir, config);
+        let mut persisted = config.clone();
+        if let Ok(workspace) = std::env::current_dir() {
+            let (_, _, global) = load_config_from(&dir);
+            for path in project_config_paths(&workspace) {
+                if let Ok(file) = read_toml_config(&path) {
+                    preserve_project_overrides(&mut persisted, &global, &file);
+                }
+            }
+        }
+        save_config_to(&dir, &persisted);
     }
 }
 
@@ -812,7 +876,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
 
     let file = TomlConfig {
         version: Some(CONFIG_FORMAT_VERSION),
-        default: Some(config.default.clone()),
+        default: Some(config.default.clone().into()),
         models: Some(config.models.clone()),
         vision_model: config.vision_model.clone(),
         tool_protocol: Some(config.tool_protocol),
@@ -837,9 +901,27 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
     }
 }
 
+fn read_toml_config(path: &Path) -> Result<TomlConfig, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
+    let file = toml::from_str::<TomlConfig>(&contents)
+        .map_err(|error| format!("Failed to parse {}: {error}", path.display()))?;
+    if let Some(version) = file.version
+        && version > CONFIG_FORMAT_VERSION
+    {
+        return Err(format!(
+            "{} uses unsupported config format version {} (this version supports up to {})",
+            path.display(),
+            version,
+            CONFIG_FORMAT_VERSION
+        ));
+    }
+    Ok(file)
+}
+
 fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(default) = file.default {
-        config.default = default;
+        apply_default_override(config, default);
     }
     if let Some(models) = file.models {
         config.models = models;
@@ -877,6 +959,124 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if file.start_time.is_some() {
         config.start_time = file.start_time;
     }
+}
+
+fn apply_default_override(config: &mut AppConfig, default: DefaultOverride) {
+    match default {
+        DefaultOverride::Simple(name) => config.default = DefaultConfig::Simple(name),
+        DefaultOverride::Table { big, small } => {
+            let current_big = config.default.big().to_string();
+            let current_small = config.default.small().to_string();
+            config.default = DefaultConfig::Table {
+                big: big.unwrap_or(current_big),
+                small: small.unwrap_or(current_small),
+            };
+        }
+        DefaultOverride::Array(values) => config.default = DefaultConfig::Array(values),
+    }
+}
+
+fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
+    // Session state belongs to the user config, never to a project checkout.
+    file.last_active_session_id = None;
+    file.start_time = None;
+    apply_toml_config(config, file);
+}
+
+fn preserve_project_overrides(
+    persisted: &mut AppConfig,
+    global: &AppConfig,
+    file: &TomlConfig,
+) {
+    if file.default.is_some() {
+        persisted.default = global.default.clone();
+    }
+    if file.models.is_some() {
+        persisted.models = global.models.clone();
+    }
+    if file.vision_model.is_some() {
+        persisted.vision_model = global.vision_model.clone();
+    }
+    if file.tool_protocol.is_some() {
+        persisted.tool_protocol = global.tool_protocol;
+    }
+    if file.max_tool_rounds.is_some() {
+        persisted.max_tool_rounds = global.max_tool_rounds;
+    }
+    if file.subagent_concurrency_limit.is_some() {
+        persisted.subagent_concurrency_limit = global.subagent_concurrency_limit;
+    }
+    if file.mcp_servers.is_some() {
+        persisted.mcp_servers = global.mcp_servers.clone();
+    }
+    if file.agent_mode.is_some() {
+        persisted.agent_mode = global.agent_mode;
+    }
+    if file.verbosity.is_some() {
+        persisted.verbosity = global.verbosity.clone();
+    }
+    if file.debug_verbose_network_logging.is_some() {
+        persisted.debug_verbose_network_logging = global.debug_verbose_network_logging;
+    }
+    if file.theme.is_some() {
+        persisted.theme = global.theme.clone();
+    }
+}
+
+/// Create a small project override from global model selection. Deliberately
+/// do not copy model profiles, API keys, MCP servers, session state, or other
+/// machine-specific state into a project file.
+pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
+    let workspace = fs::canonicalize(workspace)
+        .map_err(|error| format!("could not resolve workspace {}: {error}", workspace.display()))?;
+    let project_dir = workspace.join(PROJECT_CONFIG_DIR);
+    let path = project_dir.join(PROJECT_CONFIG_FILE);
+    if path.exists() {
+        return Err(format!("project config already exists: {}", path.display()));
+    }
+
+    let (_, _, global) = load_config();
+    let file = TomlConfig {
+        version: Some(CONFIG_FORMAT_VERSION),
+        default: Some(global.default.into()),
+        models: None,
+        vision_model: None,
+        tool_protocol: None,
+        max_tool_rounds: None,
+        subagent_concurrency_limit: None,
+        last_active_session_id: None,
+        mcp_servers: None,
+        agent_mode: None,
+        verbosity: None,
+        debug_verbose_network_logging: None,
+        theme: None,
+        start_time: None,
+    };
+    let contents = toml::to_string_pretty(&file)
+        .map_err(|error| format!("could not serialize project config: {error}"))?;
+
+    fs::create_dir_all(&project_dir)
+        .map_err(|error| format!("could not create {}: {error}", project_dir.display()))?;
+    write_config_file(&path, &contents)
+        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    ensure_project_gitignore(&workspace)?;
+    Ok(path)
+}
+
+fn ensure_project_gitignore(workspace: &Path) -> Result<(), String> {
+    let path = workspace.join(".gitignore");
+    let current = fs::read_to_string(&path).unwrap_or_default();
+    if current.lines().any(|line| line.trim() == PROJECT_GITIGNORE_ENTRY) {
+        return Ok(());
+    }
+
+    let mut updated = current;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(PROJECT_GITIGNORE_ENTRY);
+    updated.push('\n');
+    fs::write(&path, updated).map_err(|error| format!("could not update {}: {error}", path.display()))
 }
 
 fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -1379,7 +1579,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
         let _ = fs::remove_file(&legacy_history_path);
 
         config.last_active_session_id = Some(session_id.clone());
-        save_config_to(&dir, config);
+        save_entire_config(config);
         set_active_session_id(&session_id);
         return session_id;
     }
@@ -1391,7 +1591,7 @@ pub fn init_active_session(config: &mut AppConfig) -> String {
     let _ = fs::create_dir_all(session_dir.join("artifacts"));
 
     config.last_active_session_id = Some(session_id.clone());
-    save_config_to(&dir, config);
+    save_entire_config(config);
     set_active_session_id(&session_id);
     session_id
 }
@@ -1408,7 +1608,7 @@ pub fn create_new_session(config: &mut AppConfig) -> String {
     let _ = fs::create_dir_all(session_dir.join("artifacts"));
 
     config.last_active_session_id = Some(session_id.clone());
-    save_config_to(&dir, config);
+    save_entire_config(config);
     // Any history still queued belongs to the session we are leaving; write it
     // out before the active session id changes.
     flush_history();
@@ -2449,6 +2649,72 @@ mod tests {
 
         assert_eq!(config.default.big(), AppConfig::default().default.big());
         assert!(!config.is_valid);
+    }
+
+    #[test]
+    fn project_config_overrides_global_defaults_from_near_to_far() {
+        let root = TempDir::new().unwrap();
+        let workspace = root.path().join("nested");
+        fs::create_dir_all(workspace.join(PROJECT_CONFIG_DIR)).unwrap();
+        fs::create_dir_all(root.path().join(PROJECT_CONFIG_DIR)).unwrap();
+        fs::write(
+            root.path().join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE),
+            "version = 1\n[default]\nbig = \"parent\"\nsmall = \"parent-small\"\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace
+                .join(PROJECT_CONFIG_DIR)
+                .join(PROJECT_CONFIG_FILE),
+            "version = 1\n[default]\nbig = \"child\"\n",
+        )
+        .unwrap();
+
+        let (_, _, config) = load_config_for_workspace(&workspace);
+
+        assert_eq!(config.default.big(), "child");
+        assert_eq!(config.default.small(), "parent-small");
+    }
+
+    #[test]
+    fn project_overrides_are_not_persisted_into_global_config() {
+        let global = AppConfig::default();
+        let mut merged = global.clone();
+        let project: TomlConfig = toml::from_str(
+            "version = 1\n[default]\nbig = \"project\"\nsmall = \"project-small\"\n",
+        )
+        .unwrap();
+        apply_project_toml_config(&mut merged, project.clone());
+        assert_eq!(merged.default.big(), "project");
+
+        preserve_project_overrides(&mut merged, &global, &project);
+
+        assert_eq!(merged.default.big(), global.default.big());
+        assert_eq!(merged.default.small(), global.default.small());
+    }
+
+    #[test]
+    fn project_init_writes_safe_template_and_gitignore_entry() {
+        let workspace = TempDir::new().unwrap();
+        let path = init_project_config(workspace.path()).unwrap();
+
+        assert_eq!(
+            path,
+            fs::canonicalize(workspace.path())
+                .unwrap()
+                .join(PROJECT_CONFIG_DIR)
+                .join(PROJECT_CONFIG_FILE)
+        );
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(contents.contains("version = 1"));
+        assert!(contents.contains("[default]"));
+        assert!(!contents.contains("api_key"));
+        assert!(!contents.contains("mcp_servers"));
+        assert_eq!(
+            fs::read_to_string(workspace.path().join(".gitignore")).unwrap(),
+            ".rustcode/config.toml\n"
+        );
+        assert!(init_project_config(workspace.path()).is_err());
     }
 
     #[test]
