@@ -911,6 +911,7 @@ pub struct AppState {
     pub pending_delete_session_idx: Option<usize>,
     pub show_subagent_picker: bool,
     pub subagent_picker_index: usize,
+    pub show_context_modal: bool,
     pub active_session_id: String,
 
     pub show_mcp_config: bool,
@@ -1327,6 +1328,7 @@ impl AppState {
             pending_delete_session_idx: None,
             show_subagent_picker: false,
             subagent_picker_index: 0,
+            show_context_modal: false,
             show_mcp_config: false,
             mcp_picker_index: 0,
             mcp_edit_state: None,
@@ -1393,6 +1395,7 @@ impl AppState {
             || self.show_command_picker
             || self.show_history_picker
             || self.show_subagent_picker
+            || self.show_context_modal
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation
             || self.status == AppStatus::AwaitingQuestion

@@ -36,11 +36,12 @@ pub(crate) use modals::{
 };
 use modals::{
     question_height, render_at_popup_menu, render_command_picker_modal,
-    render_effort_picker_modal, render_history_picker_modal, render_mcp_config_modal,
-    render_model_picker_modal, render_popup_menu, render_protocol_picker_modal,
-    render_question_modal, render_subagent_picker_modal, render_theme_picker_modal,
-    render_thinking_picker_modal, render_tool_confirmation_modal,
-    render_verbosity_picker_modal, tool_confirmation_height,
+    render_context_modal, render_effort_picker_modal, render_history_picker_modal,
+    render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
+    render_protocol_picker_modal, render_question_modal, render_subagent_picker_modal,
+    render_theme_picker_modal, render_thinking_picker_modal,
+    render_tool_confirmation_modal, render_verbosity_picker_modal,
+    tool_confirmation_height,
 };
 use tool_result::render_tool_result;
 
@@ -3535,6 +3536,10 @@ pub fn render_with_transcript(
 
     if state.show_subagent_picker {
         render_subagent_picker_modal(f, state, input_box_area);
+    }
+
+    if state.show_context_modal {
+        render_context_modal(f, state, input_box_area);
     }
 
     if state.show_mcp_config {

@@ -127,6 +127,10 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
         s.show_command_picker = false;
         return CtrlCAction::Handled;
     }
+    if s.show_context_modal {
+        s.show_context_modal = false;
+        return CtrlCAction::Handled;
+    }
 
     if !s.input_buffer.is_empty() {
         let draft = s.input_buffer.trim().to_string();
@@ -705,24 +709,7 @@ pub async fn handle_enter(
                         }
                     }
                 } else {
-                    let window = s
-                        .config
-                        .models
-                        .iter()
-                        .find(|m| m.name == default_name)
-                        .and_then(|p| p.context_window);
-                    let text = match window {
-                        Some(w) => format!("Context window for '{}': {} tokens", default_name, w),
-                        None => format!(
-                            "Context window for '{}': not set (using default {})",
-                            default_name,
-                            crate::config::DEFAULT_CONTEXT_WINDOW
-                        ),
-                    };
-                    s.history.push(ChatMessage::new(
-                        "system",
-                        format!("{text}\nSet with: /context <tokens>"),
-                    ));
+                    s.show_context_modal = true;
                 }
             }
             "/status" => {
@@ -1748,7 +1735,7 @@ pub fn build_help_text() -> String {
             &[
                 ("/model", "Open model picker or switch profile"),
                 ("/quota", "Show provider quota and remaining limits"),
-                ("/context", "Show or set active profile context window"),
+                ("/context", "Show context usage or set context window"),
                 ("/mcp", "Configure Model Context Protocol (MCP) servers"),
                 ("/ollama", "Configure or list Ollama models"),
                 ("/provider", "Add or update model provider profile"),
@@ -2622,5 +2609,45 @@ mod tests {
             s.input_buffer = format!("/theme {}", initial_theme);
         }
         let _ = super::handle_enter(&state, &client, &mut cancel_token).await;
+    }
+
+    #[tokio::test]
+    async fn context_command_opens_modal_and_sets_window() {
+        use crate::app::state::AppState;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let client = reqwest::Client::new();
+        let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+        // 1. /context with no args opens show_context_modal
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/context".to_string();
+        }
+        let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(!trigger);
+        {
+            let s = state.lock().await;
+            assert!(s.show_context_modal);
+            assert!(s.modal_open());
+        }
+
+        // 2. /context with token count sets context window
+        {
+            let mut s = state.lock().await;
+            s.show_context_modal = false;
+            s.input_buffer = "/context 256k".to_string();
+        }
+        let trigger2 = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(!trigger2);
+        {
+            let s = state.lock().await;
+            assert!(!s.show_context_modal);
+            let default_name = s.config.default.big().to_string();
+            let profile = s.config.models.iter().find(|m| m.name == default_name);
+            assert_eq!(profile.and_then(|p| p.context_window), Some(262144));
+        }
     }
 }

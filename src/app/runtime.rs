@@ -1242,6 +1242,20 @@ impl AppRuntime {
                             continue;
                         }
 
+                        if s.show_context_modal {
+                            match key.code {
+                                KeyCode::Esc
+                                | KeyCode::Enter
+                                | KeyCode::Char('q')
+                                | KeyCode::Char('Q') => {
+                                    s.show_context_modal = false;
+                                }
+                                _ => {}
+                            }
+                            drop(s);
+                            continue;
+                        }
+
                         if s.show_history_picker {
                             // Ctrl+D triggers delete confirmation overlay
                             if key.modifiers.contains(event::KeyModifiers::CONTROL)

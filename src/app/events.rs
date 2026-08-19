@@ -33,6 +33,7 @@ pub(crate) enum Overlay {
     ToolConfirmation,
     Question,
     Subagents,
+    Context,
 }
 
 #[allow(dead_code)]

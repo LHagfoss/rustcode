@@ -22,7 +22,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/context",
-        desc: "Show or set active profile's context window",
+        desc: "Show context usage or set context window",
     },
     CommandInfo {
         name: "/copy",

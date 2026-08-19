@@ -2942,4 +2942,24 @@ fn default_turn_separator_is_lighter_color() {
     assert_eq!(default_palette.turn_separator, ratatui::style::Color::Rgb(90, 112, 126));
 }
 
+#[test]
+fn acceptance_context_modal_renders_usage_and_breakdown() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new("user", "Hello assistant"));
+    state.history.push(ChatMessage::new("assistant", "Hello! How can I help you today?"));
+    state.show_context_modal = true;
+
+    let breakdown = modals::calculate_context_breakdown(&state);
+    assert!(breakdown.user_tokens > 0);
+    assert!(breakdown.assistant_tokens > 0);
+    assert!(breakdown.total_used > 0);
+
+    let rendered = render_state_to_text(&mut state, 120, 24);
+    assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
+    assert!(rendered.contains("Token usage by category"), "rendered: {rendered:?}");
+    assert!(rendered.contains("User messages"), "rendered: {rendered:?}");
+    assert!(rendered.contains("Agent responses"), "rendered: {rendered:?}");
+    assert!(rendered.contains("Free space"), "rendered: {rendered:?}");
+}
+
 
