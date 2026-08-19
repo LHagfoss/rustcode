@@ -236,7 +236,10 @@ fn welcome_banner_renders_without_a_conversation() {
         .collect();
 
     assert!(
-        rendered.contains("model:") && rendered.contains("directory:"),
+        rendered.contains("model:")
+            && rendered.contains("effort:")
+            && rendered.contains("context:")
+            && rendered.contains("directory:"),
         "the empty chat must display its welcome banner: {rendered:?}"
     );
     assert!(
@@ -247,6 +250,38 @@ fn welcome_banner_renders_without_a_conversation() {
         rendered.contains("branch:") && rendered.contains("help:") && rendered.contains("/help"),
         "the welcome banner must include branch and help rows: {rendered:?}"
     );
+}
+
+#[test]
+fn welcome_banner_shows_active_model_effort_and_context_window() {
+    let mut state = AppState::new();
+    state.api_base_url = "http://localhost/test".to_string();
+    state.model_name = "test-model".to_string();
+    state.config.models = vec![crate::config::ModelProfile {
+        name: "test-profile".to_string(),
+        url: state.api_base_url.clone(),
+        model: state.model_name.clone(),
+        context_window: Some(128_000),
+        reasoning_effort: Some("high".to_string()),
+        ..Default::default()
+    }];
+
+    let lines = super::build_claude_startup_banner(&state, 100, 28);
+    let rendered = lines
+        .iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("effort:      high"),
+        "rendered: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("context:     128.0K tokens"),
+        "rendered: {rendered:?}"
+    );
+    assert!(rendered.contains("/context to change"));
 }
 
 #[test]
@@ -3020,5 +3055,4 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert!(rendered.contains("Agent responses"), "rendered: {rendered:?}");
     assert!(rendered.contains("Free space"), "rendered: {rendered:?}");
 }
-
 
