@@ -1963,6 +1963,46 @@ pub fn sync_config_pull() -> Result<(), String> {
     ensure_sync_gitignore(&dir)?;
     let branch = get_sync_branch(&dir);
 
+    // A config directory can have a .git directory and a remote configured
+    // without having a local commit yet (for example after `sync init`). Git
+    // refuses to pull in that state when remote files would overwrite the
+    // existing untracked config. Record the local snapshot first so the
+    // normal rebase pull can merge it with the remote history.
+    let has_head = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(&dir)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if !has_head {
+        let add_out = std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&dir)
+            .status()
+            .map_err(|e| format!("Failed to stage initial config snapshot: {e}"))?;
+        if !add_out.success() {
+            return Err("Failed to stage initial config snapshot".to_string());
+        }
+
+        let commit_out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=rustcode",
+                "-c",
+                "user.email=rustcode@localhost",
+                "commit",
+                "-m",
+                "Initialize local config snapshot",
+            ])
+            .current_dir(&dir)
+            .output()
+            .map_err(|e| format!("Failed to create initial config snapshot: {e}"))?;
+        if !commit_out.status.success() {
+            let err = String::from_utf8_lossy(&commit_out.stderr);
+            return Err(format!("Failed to create initial config snapshot: {}", err.trim()));
+        }
+    }
+
     let pull_out = std::process::Command::new("git")
         .args(["pull", "--rebase", "--autostash", "origin", &branch])
         .current_dir(&dir)
