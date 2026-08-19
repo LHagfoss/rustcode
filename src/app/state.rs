@@ -947,6 +947,7 @@ pub struct AppState {
 
     pub auto_confirm: bool,
 
+    pub(crate) subagent_supervisor: crate::app::SubagentSupervisor,
     pub subagents: Vec<SubAgent>,
     /// Selected conversation context for the subagent picker. `None` keeps
     /// the root conversation active without changing its stored history.
@@ -1269,6 +1270,8 @@ impl AppState {
         let active_session_id = crate::config::start_session(&mut config);
         let agent_mode = config.agent_mode;
         let verbosity = config.verbosity.clone();
+        let subagent_supervisor =
+            crate::app::SubagentSupervisor::new(config.subagent_concurrency_limit);
         let history = Vec::new();
         let cwd_and_branch = get_cwd_and_branch();
         crate::ui::theme::ensure_themes_dir();
@@ -1340,6 +1343,7 @@ impl AppState {
             live_tool_call_sequence: 0,
             stream_tracker: None,
             auto_confirm: false,
+            subagent_supervisor,
             active_session_id,
             subagents: Vec::new(),
             selected_subagent_id: None,
