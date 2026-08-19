@@ -2903,7 +2903,61 @@ pub(crate) fn build_claude_startup_banner(
     }
     banner.push(make_row(model_spans));
 
-    // Row 2: directory
+    // Row 2: reasoning effort
+    let effort = state
+        .active_model_profile()
+        .and_then(|profile| profile.reasoning_effort)
+        .unwrap_or_else(|| "default".to_string());
+    banner.push(make_row(vec![
+        Span::styled(
+            fit_to_width("  effort:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(
+            effort,
+            Style::default()
+                .fg(text_c)
+                .bg(reset_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("    ", Style::default().bg(reset_bg)),
+        Span::styled("/effort", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(" to change", Style::default().fg(muted_c).bg(reset_bg)),
+    ]));
+
+    // Row 3: context window
+    let context_window = format!(
+        "{} tokens",
+        format_token_count(state.active_context_window())
+    );
+    let mut context_spans = vec![
+        Span::styled(
+            fit_to_width("  context:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(
+            context_window.clone(),
+            Style::default()
+                .fg(text_c)
+                .bg(reset_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    let used_for_context = label_w + context_window.chars().count();
+    if inner_w >= used_for_context + 22 {
+        context_spans.push(Span::styled("    ", Style::default().bg(reset_bg)));
+        context_spans.push(Span::styled(
+            "/context",
+            Style::default().fg(primary).bg(reset_bg),
+        ));
+        context_spans.push(Span::styled(
+            " to change",
+            Style::default().fg(muted_c).bg(reset_bg),
+        ));
+    }
+    banner.push(make_row(context_spans));
+
+    // Row 4: directory
     let dir_display = std::env::current_dir()
         .ok()
         .map(|path| {
@@ -2926,7 +2980,7 @@ pub(crate) fn build_claude_startup_banner(
         Span::styled(dir_fitted, Style::default().fg(text_c).bg(reset_bg)),
     ]));
 
-    // Row 3: branch
+    // Row 5: branch
     let branch_name = state
         .cwd_and_branch
         .rsplit_once(':')
@@ -2942,7 +2996,7 @@ pub(crate) fn build_claude_startup_banner(
         Span::styled(branch_fitted, Style::default().fg(text_c).bg(reset_bg)),
     ]));
 
-    // Row 4: permissions
+    // Row 6: permissions
     let (perm_text, perm_style) = if state.auto_confirm {
         (
             "YOLO mode",
