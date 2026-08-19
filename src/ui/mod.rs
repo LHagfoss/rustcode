@@ -1531,6 +1531,15 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        "wait_agent" | "cancel_agent" => args
+            .get("id")
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| value.to_string())
+            })
+            .unwrap_or_default(),
         "set_goal" => args
             .get("goal")
             .and_then(|v| v.as_str())

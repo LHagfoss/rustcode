@@ -1341,6 +1341,9 @@ pub fn toggle_auto_confirm(s: &mut AppState) {
 }
 
 pub fn start_new_session(s: &mut AppState) {
+    s.subagent_supervisor.shutdown();
+    s.subagent_supervisor =
+        crate::app::SubagentSupervisor::new(s.config.subagent_concurrency_limit);
     if crate::config::session_has_content(&s.history) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
@@ -2203,6 +2206,26 @@ mod tests {
         assert_eq!(state.history.len(), 1);
         assert_eq!(state.history[0].role, "system");
         assert_eq!(state.history[0].content, "✨ New chat started");
+    }
+
+    #[tokio::test]
+    async fn start_new_session_cancels_active_subagent_tasks() {
+        let mut state = crate::app::AppState::new();
+        let supervisor = state.subagent_supervisor.clone();
+        let id = crate::app::SubagentId::from_raw(1);
+        supervisor
+            .spawn(
+                id,
+                tokio_util::sync::CancellationToken::new(),
+                std::future::pending::<Result<String, String>>(),
+            )
+            .unwrap();
+
+        super::start_new_session(&mut state);
+
+        let completion = supervisor.wait(id).await.unwrap();
+        assert_eq!(completion.status, crate::app::SubAgentStatus::Cancelled);
+        assert!(state.subagents.is_empty());
     }
 
     #[test]

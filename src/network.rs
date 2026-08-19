@@ -668,6 +668,7 @@ pub(crate) fn is_mutating_tool(name: &str) -> bool {
             | "copy_file"
             | "spawn_agent"
             | "send_agent"
+            | "cancel_agent"
     )
 }
 
@@ -901,8 +902,6 @@ pub async fn probe_function_calling(
         }
     }
 }
-
-const MAX_ACTIVE_SUBAGENTS: usize = 4;
 
 fn push_status_line(s: &mut AppState, text: String) {
     s.history.push(ChatMessage::new("system", text));
