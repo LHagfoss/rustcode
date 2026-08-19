@@ -243,6 +243,10 @@ fn welcome_banner_renders_without_a_conversation() {
         rendered.contains(">_ RustCode"),
         "the welcome banner header must include '>_ RustCode': {rendered:?}"
     );
+    assert!(
+        rendered.contains("branch:") && rendered.contains("help:") && rendered.contains("/help"),
+        "the welcome banner must include branch and help rows: {rendered:?}"
+    );
 }
 
 #[test]
@@ -255,6 +259,25 @@ fn welcome_banner_includes_padding_below() {
     assert!(
         last.spans.is_empty() || last.spans.iter().all(|s| s.content.trim().is_empty()),
         "welcome banner must end with a blank padding line"
+    );
+}
+
+#[test]
+fn welcome_banner_includes_padding_before_bottom_border() {
+    let state = AppState::new();
+    let lines = super::render_live_tail(&state, 100, 28);
+    let bottom_border = lines
+        .iter()
+        .position(|line| line.to_string().contains('╰'))
+        .expect("welcome banner must include a bottom border");
+    assert!(bottom_border > 0);
+    assert!(
+        lines[bottom_border - 1]
+            .to_string()
+            .trim_matches('│')
+            .trim()
+            .is_empty(),
+        "welcome banner must have a blank line before its bottom border"
     );
 }
 
