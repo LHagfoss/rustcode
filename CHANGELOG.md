@@ -1,3 +1,8 @@
+## [v0.29.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.1) - 2026-08-19
+
+### Fixes
+- **CLI/ACP:** Add `rustcode acp` subcommand alias alongside `--acp` for compatibility with external harness orchestrators ([#696](https://github.com/LHagfoss/rustcode/pull/696))
+
 ## [v0.29.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.0) - 2026-08-19
 
 ### Features
