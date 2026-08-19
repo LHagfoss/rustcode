@@ -1,3 +1,8 @@
+## [v0.30.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.1) - 2026-08-19
+
+### Fixes
+- **CLI/Self-Update:** Refresh Homebrew tap metadata before upgrading so newly published versions install even when the local tap checkout is stale ([#716](https://github.com/LHagfoss/rustcode/pull/716))
+
 ## [v0.30.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.0) - 2026-08-19
 
 ### Features
