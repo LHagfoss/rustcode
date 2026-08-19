@@ -885,6 +885,10 @@ pub struct AppState {
     pub workspace_root: Option<std::path::PathBuf>,
 
     pub update_check: crate::update::UpdateState,
+    pub show_update_prompt: bool,
+    pub update_prompt_index: usize,
+    pub dismissed_update_version: Option<crate::update::Version>,
+    pub update_requested: bool,
 
     pub active_suggestion_index: Option<usize>,
     /// Completion token explicitly dismissed with Esc. It remains suppressed
@@ -1307,6 +1311,10 @@ impl AppState {
             cwd_and_branch,
             workspace_root: None,
             update_check: crate::update::UpdateState::Unknown,
+            show_update_prompt: false,
+            update_prompt_index: 0,
+            dismissed_update_version: None,
+            update_requested: false,
             active_suggestion_index: None,
             dismissed_completion: None,
             show_model_picker: false,
@@ -1396,6 +1404,7 @@ impl AppState {
             || self.show_history_picker
             || self.show_subagent_picker
             || self.show_context_modal
+            || self.show_update_prompt
             || self.show_mcp_config
             || self.status == AppStatus::AwaitingToolConfirmation
             || self.status == AppStatus::AwaitingQuestion

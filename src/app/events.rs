@@ -20,6 +20,14 @@ pub(crate) enum QuestionAnswer {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateDecision {
+    UpdateNow,
+    Skip,
+    SkipUntilNextVersion,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Overlay {
     CommandPalette,
     History,
@@ -50,6 +58,7 @@ pub(crate) enum AppEvent {
     CancelActiveTurn,
     ApprovalDecision(ApprovalDecision),
     AnswerQuestion(QuestionAnswer),
+    UpdateDecision(UpdateDecision),
     ClearSession,
     ArchiveSession,
     DeleteSession(SessionAction),
@@ -98,6 +107,7 @@ impl AppEventSender {
 mod tests {
     use super::{
         AppEvent, AppEventSender, ApprovalDecision, Overlay, QuestionAnswer, SessionAction,
+        UpdateDecision,
     };
     use crate::ui::TuiEvent;
 
@@ -125,6 +135,10 @@ mod tests {
             AppEvent::CancelActiveTurn
         ));
         assert!(matches!(AppEvent::Exit, AppEvent::Exit));
+        assert!(matches!(
+            AppEvent::UpdateDecision(UpdateDecision::UpdateNow),
+            AppEvent::UpdateDecision(UpdateDecision::UpdateNow)
+        ));
         assert!(matches!(
             AppEvent::OpenOverlay(Overlay::History),
             AppEvent::OpenOverlay(Overlay::History)

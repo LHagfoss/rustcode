@@ -131,6 +131,10 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
         s.show_context_modal = false;
         return CtrlCAction::Handled;
     }
+    if s.show_update_prompt {
+        s.show_update_prompt = false;
+        return CtrlCAction::Handled;
+    }
 
     if !s.input_buffer.is_empty() {
         let draft = s.input_buffer.trim().to_string();
@@ -356,8 +360,9 @@ pub async fn handle_enter(
             "/update" | "/upgrade" => {
                 s.input_buffer.clear();
                 s.cursor_position = 0;
-                drop(s);
-                trigger_update(state, client);
+                s.update_requested = true;
+                s.update_check = crate::update::UpdateState::Checking;
+                s.set_notice("🔍 Checking for a RustCode update...");
                 return false;
             }
             "/new" => {
@@ -1807,86 +1812,6 @@ pub fn select_picker_model(s: &mut AppState) {
         crate::config::save_entire_config(&s.config);
         s.set_notice(format!("Switched to model profile '{}'", profile.name));
     }
-}
-
-/// Check the Homebrew tap for a newer rustcode and, if one exists, run
-/// `brew upgrade rustcode`. Spawns its own task so the UI stays live during the
-/// network fetch and the (potentially slow) brew upgrade. Progress and results
-/// are pushed into the chat history as system messages.
-pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
-    let state_clone = Arc::clone(state);
-    let client_clone = client.clone();
-    tokio::spawn(async move {
-        {
-            let mut s = state_clone.lock().await;
-            s.status = crate::app::AppStatus::Streaming;
-            s.update_check = crate::update::UpdateState::Checking;
-            s.set_notice("🔍 Checking if new release...");
-        }
-
-        let check = match crate::update::check_for_update(&client_clone).await {
-            Ok(check) => check,
-            Err(_) => {
-                let mut s = state_clone.lock().await;
-                s.status = crate::app::AppStatus::Idle;
-                s.update_check = crate::update::UpdateState::Failed;
-                s.set_warning_notice(
-                    "Update check failed: couldn't read the Homebrew tap. Try running: brew update && brew upgrade rustcode",
-                );
-                return;
-            }
-        };
-
-        let (current, latest) = match check {
-            crate::update::UpdateCheck::Available { current, latest } => (current, latest),
-            crate::update::UpdateCheck::UpToDate { current, latest } => {
-                let mut s = state_clone.lock().await;
-                s.status = crate::app::AppStatus::Idle;
-                s.update_check = crate::update::UpdateState::UpToDate(latest);
-                let notice = format!(
-                    "✨ RustCode v{} is up to date (no new release).",
-                    crate::update::format_version(current)
-                );
-                s.set_notice(notice);
-                return;
-            }
-        };
-
-        {
-            let mut s = state_clone.lock().await;
-            s.status = crate::app::AppStatus::Streaming;
-            s.update_check = crate::update::UpdateState::Available(latest);
-            let notice = format!(
-                "🚀 Found new release: v{} → v{}\nUpdating now via Homebrew...",
-                crate::update::format_version(current),
-                crate::update::format_version(latest)
-            );
-            s.set_notice(notice);
-        }
-
-        let result = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
-        let mut s = state_clone.lock().await;
-        s.status = crate::app::AppStatus::Idle;
-        match result {
-            Ok(Ok(())) => {
-                let text = format!(
-                    "🎉 Successfully updated to RustCode v{}!\nRestart rustcode to launch the new version.",
-                    crate::update::format_version(latest)
-                );
-                s.set_notice(text);
-            }
-            Ok(Err(e)) => {
-                let text = format!(
-                    "brew upgrade failed: {e}\nRun manually: brew update && brew upgrade rustcode"
-                );
-                s.set_warning_notice(text);
-            }
-            Err(e) => {
-                let text = format!("Update task error: {e}");
-                s.set_warning_notice(text);
-            }
-        }
-    });
 }
 
 pub fn trigger_sync(state: &Arc<Mutex<AppState>>, subcommand: Option<String>, arg: Option<String>) {
