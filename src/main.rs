@@ -215,7 +215,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if cli_args.acp {
+    let acp_subcommand = matches!(cli_args.command.as_ref(), Some(cli::Commands::Acp));
+    if cli_args.acp || acp_subcommand {
         crate::acp::run_acp(cli_args.yolo).await?;
         crate::config::flush_history();
         return Ok(());
