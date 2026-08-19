@@ -22,7 +22,10 @@ fn acceptance_empty_session_has_welcome_and_composer() {
     let mut state = AppState::new();
     let rendered = render_state_to_text(&mut state, 100, 28);
 
-    assert!(rendered.contains("Welcome back!"), "rendered: {rendered:?}");
+    assert!(
+        rendered.contains(">_ RustCode") && rendered.contains("model:"),
+        "rendered: {rendered:?}"
+    );
     assert!(
         rendered.contains("Ask RustCode to do anything"),
         "rendered: {rendered:?}"
@@ -233,7 +236,7 @@ fn welcome_banner_renders_without_a_conversation() {
         .collect();
 
     assert!(
-        rendered.contains("Welcome back!"),
+        rendered.contains("model:") && rendered.contains("directory:"),
         "the empty chat must display its welcome banner: {rendered:?}"
     );
     assert!(
@@ -266,7 +269,7 @@ fn welcome_banner_adapts_to_small_viewports_without_truncating_box() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
 
-    assert!(text.contains("Welcome back!"));
+    assert!(text.contains("model:"));
     assert!(
         text.contains("╰"),
         "banner must end cleanly with a bottom border"
@@ -284,7 +287,7 @@ fn inline_notice_finishes_the_welcome_cell_and_compacts_the_viewport() {
     assert!(
         !lines
             .iter()
-            .any(|line| line.to_string().contains("Welcome back!")),
+            .any(|line| line.to_string().contains("directory:")),
         "the welcome banner must not be rendered again after a transcript notice"
     );
 
