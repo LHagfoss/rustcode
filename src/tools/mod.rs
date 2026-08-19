@@ -584,6 +584,8 @@ pub fn allowed_in_plan_mode(name: &str) -> bool {
 pub const TOOLS: &[Tool] = &[
     misc::ASK_QUESTION,
     misc::GET_TIME,
+    misc::WAIT_AGENT,
+    misc::CANCEL_AGENT,
     search::GREP,
     search::GLOB,
     search::LIST_DIRECTORY,
@@ -609,7 +611,7 @@ pub const TOOLS: &[Tool] = &[
 pub fn is_agent_tool(name: &str) -> bool {
     matches!(
         name,
-        "spawn_agent" | "send_agent" | "set_goal" | "todo_write"
+        "spawn_agent" | "send_agent" | "wait_agent" | "cancel_agent" | "set_goal" | "todo_write"
     )
 }
 
@@ -666,12 +668,12 @@ pub fn isolate_control_plane_call(calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize
 const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     (
         "spawn_agent",
-        "Delegate a task to a read-only subagent. Write access, allowed paths, and verification must be explicit.",
+        "Start an asynchronous read-only subagent and return its id. Use wait_agent for completion. Write access, allowed paths, and verification must be explicit.",
         r#"{"task": "task description", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test"}"#,
     ),
     (
         "send_agent",
-        "Send a follow-up message to a running subagent.",
+        "Start one follow-up turn for a completed subagent. Running subagents reject follow-ups.",
         r#"{"id": "subagent id", "message": "message text"}"#,
     ),
     (
@@ -868,6 +870,9 @@ fn collect_mcp_tools() -> Vec<(String, String, Value)> {
 pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
+        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
+            continue;
+        }
         tools.push(serde_json::json!({
             "type": "function",
             "function": {
@@ -1062,6 +1067,9 @@ pub fn tool_system_prompt(
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
+        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
+            continue;
+        }
         if agent_mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(t.name) {
             continue;
         }
@@ -1084,7 +1092,7 @@ pub fn tool_system_prompt(
     if include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str(
             "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
-            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Send follow-up to subagent.\n\
+            - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Start a follow-up for a completed subagent; running subagents reject it.\n\
             - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n\
             - todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n",
         );
@@ -1860,7 +1868,10 @@ mod tests {
         assert!(disabled.iter().all(|t| {
             !matches!(
                 t["function"]["name"].as_str(),
-                Some("spawn_agent") | Some("send_agent")
+                Some("spawn_agent")
+                    | Some("send_agent")
+                    | Some("wait_agent")
+                    | Some("cancel_agent")
             )
         }));
         assert!(
@@ -1873,6 +1884,27 @@ mod tests {
                 .iter()
                 .any(|t| t["function"]["name"] == "send_agent")
         );
+    }
+
+    #[test]
+    fn subagent_lifecycle_tools_are_registered_and_model_facing() {
+        let builtin_names = TOOLS.iter().map(|tool| tool.name).collect::<Vec<_>>();
+        assert!(builtin_names.contains(&"wait_agent"));
+        assert!(builtin_names.contains(&"cancel_agent"));
+
+        let enabled = native_tools_schema(true);
+        assert!(
+            enabled
+                .iter()
+                .any(|tool| tool["function"]["name"] == "wait_agent")
+        );
+        assert!(
+            enabled
+                .iter()
+                .any(|tool| tool["function"]["name"] == "cancel_agent")
+        );
+        assert_eq!(tool_safety("wait_agent"), ToolSafety::Delegation);
+        assert_eq!(tool_safety("cancel_agent"), ToolSafety::Delegation);
     }
 
     #[test]

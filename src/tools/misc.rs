@@ -42,6 +42,52 @@ pub const GET_TIME: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+fn subagent_id_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "id": {
+                "oneOf": [{"type": "integer", "minimum": 1}, {"type": "string"}],
+                "description": "Subagent id returned by spawn_agent"
+            }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+    })
+}
+
+fn async_agent_tool(_args: &Value) -> Result<String, String> {
+    Err("agent lifecycle tools require the asynchronous session executor".to_owned())
+}
+
+pub const WAIT_AGENT: Tool = Tool {
+    name: "wait_agent",
+    description: "Wait for a subagent to reach one terminal state and return its bounded completion result. This waits for lifecycle activity instead of polling.",
+    arguments: r#"{"id": "subagent id"}"#,
+    handler: async_agent_tool,
+    requires_confirmation: false,
+    schema: subagent_id_schema,
+    capabilities: &[
+        ToolCapability::AgentDelegation,
+        ToolCapability::SessionState,
+    ],
+    safety: ToolSafety::Delegation,
+};
+
+pub const CANCEL_AGENT: Tool = Tool {
+    name: "cancel_agent",
+    description: "Cancel a running or queued subagent task by id.",
+    arguments: r#"{"id": "subagent id"}"#,
+    handler: async_agent_tool,
+    requires_confirmation: false,
+    schema: subagent_id_schema,
+    capabilities: &[
+        ToolCapability::AgentDelegation,
+        ToolCapability::SessionState,
+    ],
+    safety: ToolSafety::Delegation,
+};
+
 fn search_web_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {

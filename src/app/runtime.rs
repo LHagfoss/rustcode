@@ -291,6 +291,7 @@ impl AppRuntime {
             }
             AppEvent::Exit => {
                 let state = self.app_state.lock().await;
+                state.subagent_supervisor.shutdown();
                 Ok(AppRunControl::Exit(crate::ExitSummary::from_state(&state)))
             }
             AppEvent::CloseOverlay => {
@@ -2282,6 +2283,7 @@ impl AppRuntime {
 
         let exit_summary = {
             let s = app_state.lock().await;
+            s.subagent_supervisor.shutdown();
             crate::ExitSummary::from_state(&s)
         };
         crate::config::flush_history();

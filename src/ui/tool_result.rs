@@ -74,7 +74,7 @@ pub(super) fn render_tool_result<'a>(
         | "copy_file" => render_mutation_result(result, width, show_picker),
         // The action line already communicates control-plane lifecycle. Their
         // raw acknowledgement is implementation noise in the transcript.
-        "use_skill" | "set_goal" | "todo_write" | "spawn_agent" | "send_agent"
+        "use_skill" | "set_goal" | "todo_write" | "spawn_agent" | "send_agent" | "cancel_agent"
         | "complete_task" | "ask_question" => Vec::new(),
         _ => render_generic_result(result, show_picker),
     };
