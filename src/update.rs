@@ -5,8 +5,11 @@
 //! `brew upgrade rustcode`.
 
 use regex::Regex;
+use std::io::Write;
 use std::process::Command;
 use std::sync::LazyLock;
+
+pub const BREW_UPGRADE_COMMAND: &str = "brew upgrade rustcode";
 
 /// The formula lives in the tap repo `lhagfoss/homebrew-tap` at
 /// `Formula/rustcode.rb`. Read it directly from GitHub raw so the check works
@@ -126,23 +129,21 @@ pub async fn latest_tap_version(client: &reqwest::Client) -> Option<Version> {
     None
 }
 
-/// Run `brew update` followed by `brew upgrade rustcode`. Blocking — call from `spawn_blocking`.
+/// Run the Homebrew upgrade with inherited stdout/stderr so Homebrew can show
+/// its normal progress output. Blocking — call from `spawn_blocking` when the
+/// caller is async.
 pub fn run_brew_upgrade() -> Result<(), String> {
-    let _ = Command::new("brew").arg("update").output();
+    println!("Updating RustCode via `{BREW_UPGRADE_COMMAND}`...");
+    let _ = std::io::stdout().flush();
 
-    let out = Command::new("brew")
+    let status = Command::new("brew")
         .args(["upgrade", "rustcode"])
-        .output()
+        .status()
         .map_err(|e| format!("failed to run brew (is Homebrew installed?): {e}"))?;
-    if out.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() {
-            "brew exited with a non-zero status".to_string()
-        } else {
-            err
-        })
+        Err(format!("`{BREW_UPGRADE_COMMAND}` failed with status {status}"))
     }
 }
 
@@ -196,5 +197,10 @@ mod tests {
             current_version(),
             parse_semver(env!("CARGO_PKG_VERSION")).unwrap()
         );
+    }
+
+    #[test]
+    fn update_command_is_the_formula_upgrade() {
+        assert_eq!(BREW_UPGRADE_COMMAND, "brew upgrade rustcode");
     }
 }

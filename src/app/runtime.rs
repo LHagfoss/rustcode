@@ -1,6 +1,6 @@
 use crate::app::{
     AppEvent, AppEventSender, AppState, AppStatus, ApprovalDecision, ChatMessage, QuestionAnswer,
-    Verbosity,
+    UpdateDecision, Verbosity,
 };
 use crate::network::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSender};
 use crate::ui;
@@ -76,6 +76,31 @@ async fn apply_question_answer(
         state.status = AppStatus::Idle;
     }
     state.request_redraw();
+}
+
+fn apply_update_decision(state: &mut AppState, decision: UpdateDecision) -> bool {
+    let latest = match state.update_check {
+        crate::update::UpdateState::Available(latest) => Some(latest),
+        _ => None,
+    };
+
+    state.show_update_prompt = false;
+    state.update_prompt_index = 0;
+    if matches!(decision, UpdateDecision::SkipUntilNextVersion) {
+        state.dismissed_update_version = latest;
+    }
+    state.request_redraw();
+
+    matches!(decision, UpdateDecision::UpdateNow) && latest.is_some()
+}
+
+async fn run_update_command(terminal_runtime: &mut TerminalRuntime) -> Result<(), String> {
+    terminal_runtime
+        .restore()
+        .map_err(|error| format!("failed to restore the terminal before updating: {error}"))?;
+    tokio::task::spawn_blocking(crate::update::run_brew_upgrade)
+        .await
+        .map_err(|error| format!("update task error: {error}"))?
 }
 
 fn apply_session_event(
@@ -318,6 +343,13 @@ impl AppRuntime {
                 .await;
                 Ok(AppRunControl::Continue)
             }
+            AppEvent::UpdateDecision(decision) => {
+                let mut state = self.app_state.lock().await;
+                if apply_update_decision(&mut state, decision) {
+                    state.update_requested = true;
+                }
+                Ok(AppRunControl::Continue)
+            }
             AppEvent::OpenOverlay(overlay) => {
                 let mut state = self.app_state.lock().await;
                 open_overlay(&mut state, overlay);
@@ -378,8 +410,58 @@ impl AppRuntime {
         let mut frame_stream = frame_stream;
         let mut app_event_receiver = app_event_receiver;
         let mut agent_ui_event_receiver = agent_ui_event_receiver;
+        let mut update_exit = false;
         let composer = ui::Composer::new();
         loop {
+            let update_requested = {
+                let mut state = app_state.lock().await;
+                let requested = state.update_requested;
+                state.update_requested = false;
+                requested
+            };
+            if update_requested {
+                let check = crate::update::check_for_update(&client).await;
+                match check {
+                    Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
+                        let mut state = app_state.lock().await;
+                        state.update_check = crate::update::UpdateState::UpToDate(latest);
+                        state.set_notice(format!(
+                            "✨ RustCode v{} is up to date (latest: v{}).",
+                            crate::update::format_version(current),
+                            crate::update::format_version(latest)
+                        ));
+                        needs_redraw = true;
+                        continue;
+                    }
+                    Ok(crate::update::UpdateCheck::Available { current, latest }) => {
+                        {
+                            let mut state = app_state.lock().await;
+                            state.update_check = crate::update::UpdateState::Available(latest);
+                            state.set_notice(format!(
+                                "Found new release: v{} → v{}",
+                                crate::update::format_version(current),
+                                crate::update::format_version(latest)
+                            ));
+                        }
+                        match run_update_command(&mut terminal_runtime).await {
+                            Ok(()) => println!(
+                                "🎉 Update ran successfully! Please restart rustcode."
+                            ),
+                            Err(error) => eprintln!("Update failed: {error}"),
+                        }
+                        update_exit = true;
+                        break;
+                    }
+                    Err(error) => {
+                        let mut state = app_state.lock().await;
+                        state.update_check = crate::update::UpdateState::Failed;
+                        state.set_warning_notice(format!("Update check failed: {error}"));
+                        needs_redraw = true;
+                        continue;
+                    }
+                }
+            }
+
             // Ratatui's inline viewport grows/shrinks by appending and clearing
             // terminal rows. When the terminal is resized, update the viewport
             // bounds and clear the live area so the active frame redraws cleanly.
@@ -668,6 +750,23 @@ impl AppRuntime {
                     apply_question_answer(&app_state, &mut current_cancel_token, answer).await;
                     needs_redraw = true;
                 }
+                AppEvent::UpdateDecision(decision) => {
+                    let should_update = {
+                        let mut state = app_state.lock().await;
+                        apply_update_decision(&mut state, decision)
+                    };
+                    if should_update {
+                        match run_update_command(&mut terminal_runtime).await {
+                            Ok(()) => println!(
+                                "🎉 Update ran successfully! Please restart rustcode."
+                            ),
+                            Err(error) => eprintln!("Update failed: {error}"),
+                        }
+                        update_exit = true;
+                        break;
+                    }
+                    needs_redraw = true;
+                }
                 AppEvent::OpenOverlay(overlay) => {
                     let mut state = app_state.lock().await;
                     open_overlay(&mut state, overlay);
@@ -749,6 +848,44 @@ impl AppRuntime {
                                 break;
                             }
                             continue;
+                        }
+
+                        {
+                            let selected = {
+                                let state = app_state.lock().await;
+                                state
+                                    .show_update_prompt
+                                    .then_some(state.update_prompt_index)
+                            };
+                            if let Some(selected) = selected {
+                                match key.code {
+                                    KeyCode::Up => {
+                                        let mut state = app_state.lock().await;
+                                        state.update_prompt_index =
+                                            state.update_prompt_index.saturating_sub(1);
+                                    }
+                                    KeyCode::Down => {
+                                        let mut state = app_state.lock().await;
+                                        state.update_prompt_index =
+                                            (state.update_prompt_index + 1).min(2);
+                                    }
+                                    KeyCode::Enter => {
+                                        let decision = match selected {
+                                            0 => UpdateDecision::UpdateNow,
+                                            1 => UpdateDecision::Skip,
+                                            _ => UpdateDecision::SkipUntilNextVersion,
+                                        };
+                                        let _ = app_event_sender
+                                            .send(AppEvent::UpdateDecision(decision));
+                                    }
+                                    KeyCode::Esc => {
+                                        let _ = app_event_sender
+                                            .send(AppEvent::UpdateDecision(UpdateDecision::Skip));
+                                    }
+                                    _ => {}
+                                }
+                                continue;
+                            }
                         }
 
                         {
@@ -1745,9 +1882,10 @@ impl AppRuntime {
                                                 );
                                             }
                                             "/update" => {
-                                                crate::app::actions::trigger_update(
-                                                    &app_state, &client,
-                                                );
+                                                s.update_requested = true;
+                                                s.update_check =
+                                                    crate::update::UpdateState::Checking;
+                                                s.set_notice("🔍 Checking for a RustCode update...");
                                             }
                                             "/copy" => {
                                                 crate::app::copy_last_reply(&mut s);
@@ -2295,11 +2433,14 @@ impl AppRuntime {
             }
         }
 
-        let exit_summary = {
+        let mut exit_summary = {
             let s = app_state.lock().await;
             s.subagent_supervisor.shutdown();
             crate::ExitSummary::from_state(&s)
         };
+        if update_exit {
+            exit_summary.print_handoff = false;
+        }
         crate::config::flush_history();
         terminal_runtime.restore_at(exit_summary.composer_y)?;
         Ok(exit_summary)
@@ -2308,10 +2449,10 @@ impl AppRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppRunControl, AppRuntime};
+    use super::{AppRunControl, AppRuntime, apply_update_decision};
     use crate::app::{
         AppEvent, AppState, AppStatus, ApprovalDecision, PendingQuestion, QuestionAnswer,
-        SessionAction,
+        SessionAction, UpdateDecision,
     };
 
     #[tokio::test]
@@ -2332,6 +2473,27 @@ mod tests {
         let state = runtime.app_state().await;
         assert_eq!(state.input_buffer, "hello");
         assert!(state.redraw_requested);
+    }
+
+    #[test]
+    fn update_prompt_decisions_close_prompt_and_remember_version() {
+        let mut state = AppState::new();
+        state.show_update_prompt = true;
+        state.update_check = crate::update::UpdateState::Available((0, 30, 0));
+
+        assert!(!apply_update_decision(&mut state, UpdateDecision::Skip));
+        assert!(!state.show_update_prompt);
+
+        state.show_update_prompt = true;
+        assert!(!apply_update_decision(
+            &mut state,
+            UpdateDecision::SkipUntilNextVersion
+        ));
+        assert_eq!(state.dismissed_update_version, Some((0, 30, 0)));
+
+        state.show_update_prompt = true;
+        assert!(apply_update_decision(&mut state, UpdateDecision::UpdateNow));
+        assert!(!state.show_update_prompt);
     }
 
     #[tokio::test]

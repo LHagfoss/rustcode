@@ -171,35 +171,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     crate::update::format_version(current),
                     crate::update::format_version(latest)
                 );
-
-                let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-                let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-                let running_clone = std::sync::Arc::clone(&running);
-
-                let handle = std::thread::spawn(move || {
-                    let mut idx = 0;
-                    while running_clone.load(std::sync::atomic::Ordering::Relaxed) {
-                        print!("\r  {} Running Homebrew update & upgrade...", spinner[idx % spinner.len()]);
-                        use std::io::Write;
-                        let _ = std::io::stdout().flush();
-                        std::thread::sleep(std::time::Duration::from_millis(80));
-                        idx += 1;
-                    }
-                    print!("\r\x1b[2K");
-                    use std::io::Write;
-                    let _ = std::io::stdout().flush();
-                });
-
                 let upgrade_res = tokio::task::spawn_blocking(crate::update::run_brew_upgrade).await;
-                running.store(false, std::sync::atomic::Ordering::Relaxed);
-                let _ = handle.join();
 
                 match upgrade_res {
                     Ok(Ok(())) => {
-                        println!(
-                            "🎉 Successfully updated rustcode to v{}!",
-                            crate::update::format_version(latest)
-                        );
+                        println!("🎉 Update ran successfully! Please restart rustcode.");
                     }
                     Ok(Err(error)) => {
                         eprintln!("Update failed: {error}");
@@ -283,6 +259,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 crate::update::UpdateState::UpToDate(latest)
             }
             Ok(crate::update::UpdateCheck::Available { latest, .. }) => {
+                if state.dismissed_update_version != Some(latest) {
+                    state.show_update_prompt = true;
+                    state.update_prompt_index = 0;
+                }
                 crate::update::UpdateState::Available(latest)
             }
             Err(_) => crate::update::UpdateState::Failed,
@@ -340,7 +320,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_runtime = AppRuntime::new(terminal_runtime, app_state, client)?;
     let exit_summary = app_runtime.run().await?;
-    print_exit_summary(&exit_summary);
+    if exit_summary.print_handoff {
+        print_exit_summary(&exit_summary);
+    }
     Ok(())
 }
 
@@ -352,6 +334,7 @@ pub(crate) struct ExitSummary {
     pub(crate) reasoning_tokens: u64,
     pub(crate) session_id: String,
     pub(crate) composer_y: Option<u16>,
+    pub(crate) print_handoff: bool,
 }
 
 impl ExitSummary {
@@ -363,6 +346,7 @@ impl ExitSummary {
             reasoning_tokens: 0,
             session_id: state.active_session_id.clone(),
             composer_y: state.input_text_area.map(|area| area.y),
+            print_handoff: true,
         };
 
         for message in &state.history {
@@ -449,6 +433,7 @@ mod draw_loop_tests {
             reasoning_tokens: 48_884,
             session_id: "session-id".to_string(),
             composer_y: Some(12),
+            print_handoff: true,
         };
         assert_eq!(
             summary.usage_line().as_deref(),

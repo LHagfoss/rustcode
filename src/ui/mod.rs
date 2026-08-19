@@ -39,7 +39,7 @@ use modals::{
     render_context_modal, render_effort_picker_modal, render_history_picker_modal,
     render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
     render_protocol_picker_modal, render_question_modal, render_subagent_picker_modal,
-    render_theme_picker_modal, render_thinking_picker_modal,
+    render_theme_picker_modal, render_thinking_picker_modal, render_update_prompt_modal,
     render_tool_confirmation_modal, render_verbosity_picker_modal,
     tool_confirmation_height,
 };
@@ -3540,6 +3540,10 @@ pub fn render_with_transcript(
 
     if state.show_context_modal {
         render_context_modal(f, state, input_box_area);
+    }
+
+    if state.show_update_prompt {
+        render_update_prompt_modal(f, state, input_box_area);
     }
 
     if state.show_mcp_config {

@@ -1,6 +1,6 @@
 pub mod events;
 pub(crate) use events::{
-    AppEvent, AppEventSender, ApprovalDecision, QuestionAnswer, SessionAction,
+    AppEvent, AppEventSender, ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision,
 };
 pub mod composer;
 pub mod transcript;

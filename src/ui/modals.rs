@@ -1095,6 +1095,141 @@ pub(super) fn render_protocol_picker_modal(
     );
 }
 
+/// Render the startup Homebrew update prompt directly above the chat input.
+pub(super) fn render_update_prompt_modal(
+    f: &mut Frame,
+    state: &AppState,
+    input_area: ratatui::layout::Rect,
+) {
+    let modal_area = input_anchor_rect(f, input_area, 14);
+    f.render_widget(Clear, modal_area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COLOR_PANEL())),
+        modal_area,
+    );
+
+    let inner_area = modal_area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let modal_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Length(1), // Versions
+            Constraint::Length(1), // Command
+            Constraint::Length(1), // Spacer
+            Constraint::Min(3),    // Options
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner_area);
+
+    let title = "RustCode update available";
+    let header = Line::from(vec![
+        Span::styled(
+            title,
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  esc to skip", Style::default().fg(COLOR_MUTED())),
+    ]);
+    f.render_widget(
+        Paragraph::new(header).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[0],
+    );
+
+    let latest = match state.update_check {
+        crate::update::UpdateState::Available(latest) => latest,
+        _ => crate::update::current_version(),
+    };
+    let versions = format!(
+        "v{} → v{}",
+        crate::update::format_version(crate::update::current_version()),
+        crate::update::format_version(latest)
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("New version: ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(versions, Style::default().fg(COLOR_TEXT())),
+        ]))
+        .style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[1],
+    );
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Command: ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(
+                crate::update::BREW_UPGRADE_COMMAND,
+                Style::default().fg(COLOR_PRIMARY()),
+            ),
+        ]))
+        .style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[2],
+    );
+
+    let options = [
+        ("Update now", "run Homebrew and restart rustcode"),
+        ("Skip", "do not update this time"),
+        ("Skip until next version", "hide this version for this run"),
+    ];
+    let selected = state.update_prompt_index.min(options.len() - 1);
+    let option_lines = options
+        .iter()
+        .enumerate()
+        .map(|(index, (label, description))| {
+            let selected = index == selected;
+            let prefix = if selected { " ● " } else { "   " };
+            let left = format!("{prefix}{label}");
+            let padding = (inner_area.width as usize)
+                .saturating_sub(left.width() + description.width());
+            if selected {
+                Line::from(vec![
+                    Span::styled(
+                        left,
+                        Style::default()
+                            .fg(COLOR_BG())
+                            .bg(COLOR_PRIMARY())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        " ".repeat(padding),
+                        Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    ),
+                    Span::styled(
+                        *description,
+                        Style::default().fg(COLOR_BG()).bg(COLOR_PRIMARY()),
+                    ),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(left, Style::default().fg(COLOR_TEXT())),
+                    Span::styled(" ".repeat(padding), Style::default()),
+                    Span::styled(*description, Style::default().fg(COLOR_MUTED())),
+                ])
+            }
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        Paragraph::new(option_lines).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[4],
+    );
+
+    let footer = Line::from(vec![
+        Span::styled("select ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("↑/↓   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("confirm ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("enter   ", Style::default().fg(COLOR_MUTED())),
+        Span::styled("skip ", Style::default().fg(COLOR_TEXT())),
+        Span::styled("esc", Style::default().fg(COLOR_MUTED())),
+    ]);
+    f.render_widget(
+        Paragraph::new(footer).style(Style::default().bg(COLOR_PANEL())),
+        modal_chunks[5],
+    );
+}
+
 /// Render the model picker directly above the chat input.
 pub(super) fn render_model_picker_modal(
     f: &mut Frame,
