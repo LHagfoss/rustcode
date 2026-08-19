@@ -54,8 +54,8 @@ pub async fn check_for_update(client: &reqwest::Client) -> Result<UpdateCheck, S
 #[allow(dead_code)]
 pub async fn upgrade_if_available(client: &reqwest::Client) -> Result<UpdateCheck, String> {
     let check = check_for_update(client).await?;
-    if matches!(check, UpdateCheck::Available { .. }) {
-        tokio::task::spawn_blocking(run_brew_upgrade)
+    if let UpdateCheck::Available { latest, .. } = check {
+        tokio::task::spawn_blocking(move || run_brew_upgrade(latest))
             .await
             .map_err(|e| format!("update task error: {e}"))??;
     }
@@ -132,7 +132,7 @@ pub async fn latest_tap_version(client: &reqwest::Client) -> Option<Version> {
 /// Run the Homebrew upgrade with inherited stdout/stderr so Homebrew can show
 /// its normal progress output. Blocking — call from `spawn_blocking` when the
 /// caller is async.
-pub fn run_brew_upgrade() -> Result<(), String> {
+pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
     println!("Updating RustCode via `{BREW_UPGRADE_COMMAND}`...");
     let _ = std::io::stdout().flush();
 
@@ -140,11 +140,45 @@ pub fn run_brew_upgrade() -> Result<(), String> {
         .args(["upgrade", "rustcode"])
         .status()
         .map_err(|e| format!("failed to run brew (is Homebrew installed?): {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("`{BREW_UPGRADE_COMMAND}` failed with status {status}"))
+    if !status.success() {
+        return Err(format!("`{BREW_UPGRADE_COMMAND}` failed with status {status}"));
     }
+
+    let installed = installed_brew_version()?;
+    if installed < expected {
+        return Err(format!(
+            "Homebrew reported success, but rustcode v{} is still installed; expected v{}. Run `brew update` and retry.",
+            format_version(installed),
+            format_version(expected),
+        ));
+    }
+
+    Ok(())
+}
+
+fn installed_brew_version() -> Result<Version, String> {
+    let output = Command::new("brew")
+        .args(["list", "--versions", "rustcode"])
+        .output()
+        .map_err(|e| format!("failed to inspect the installed brew formula: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "could not inspect the installed rustcode formula (brew list exited with {})",
+            output.status
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    installed_brew_version_from_output(&stdout).ok_or_else(|| {
+        "Homebrew did not report an installed rustcode version after the upgrade".to_string()
+    })
+}
+
+fn installed_brew_version_from_output(output: &str) -> Option<Version> {
+    output
+        .split_whitespace()
+        .filter_map(parse_semver)
+        .max()
 }
 
 #[cfg(test)]
@@ -202,5 +236,18 @@ mod tests {
     #[test]
     fn update_command_is_the_formula_upgrade() {
         assert_eq!(BREW_UPGRADE_COMMAND, "brew upgrade rustcode");
+    }
+
+    #[test]
+    fn parses_installed_brew_version_output() {
+        assert_eq!(
+            installed_brew_version_from_output("rustcode 0.29.6\n"),
+            Some((0, 29, 6))
+        );
+        assert_eq!(
+            installed_brew_version_from_output("rustcode 0.29.5 0.29.6\n"),
+            Some((0, 29, 6))
+        );
+        assert_eq!(installed_brew_version_from_output(""), None);
     }
 }
