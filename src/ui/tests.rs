@@ -2507,10 +2507,46 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
         !footer.contains("? for shortcuts"),
         "composer footer: {footer:?}"
     );
+    assert!(
+        footer.contains(" · "),
+        "composer footer should include model/location separators: {footer:?}"
+    );
     assert_eq!(buffer[(0, prompt_row - 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
     assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
+}
+
+#[test]
+fn composer_footer_shows_path_and_truncates_long_branch() {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let mut state = AppState::new();
+    state.cwd_and_branch =
+        "~/code/rustcode:feature/a-branch-name-that-is-definitely-too-long".to_string();
+    let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut state))
+        .unwrap();
+
+    let footer_row = (0..12)
+        .find(|row| {
+            (0..120)
+                .map(|column| terminal.backend().buffer()[(column, *row)].symbol())
+                .collect::<String>()
+                .contains("context left")
+        })
+        .expect("composer footer should be rendered");
+    let footer = (0..120)
+        .map(|column| terminal.backend().buffer()[(column, footer_row)].symbol())
+        .collect::<String>();
+    assert!(footer.contains("~/code/rustcode"));
+    assert!(footer.contains("feature/a-branch-name-t…"));
+    assert!(
+        !footer.contains("definitely-too-long"),
+        "footer should not contain the untruncated branch: {footer:?}"
+    );
 }
 
 #[test]
