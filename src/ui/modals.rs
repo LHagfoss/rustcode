@@ -3504,7 +3504,9 @@ pub(super) fn render_context_modal(
         ])
         .split(modal_chunks[2]);
 
-    let grid_area = cols[0];
+    let mut grid_area = cols[0];
+    grid_area.y = grid_area.y.saturating_add(1);
+    grid_area.height = grid_area.height.saturating_sub(1);
     let stats_area = cols[2];
 
     // Build the matrix of token dots/blocks

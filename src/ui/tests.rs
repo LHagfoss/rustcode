@@ -3055,5 +3055,15 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert!(rendered.contains("User messages"), "rendered: {rendered:?}");
     assert!(rendered.contains("Agent responses"), "rendered: {rendered:?}");
     assert!(rendered.contains("Free space"), "rendered: {rendered:?}");
-}
 
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let summary_row = lines
+        .iter()
+        .position(|line| line.contains(" tokens (") && line.contains(" · "))
+        .expect("context summary should be rendered");
+    let first_grid_row = lines
+        .iter()
+        .position(|line| line.chars().take(60).collect::<String>().contains("● "))
+        .expect("context grid should be rendered");
+    assert_eq!(first_grid_row, summary_row + 1);
+}
