@@ -3653,6 +3653,27 @@ fn test_reasoning_loop_detector_integration_and_resets() {
 }
 
 #[test]
+fn reasoning_loop_detector_treats_a_multi_tool_batch_as_one_turn() {
+    let mut detector = loop_detect::ReasoningLoopDetector::default();
+    let plan = "I will inspect the repository history and verify the changelog entries.";
+
+    // A single model response can contain several independent read-only
+    // calls. They must contribute one cross-turn record, not one record per
+    // tool result, or the batch will look like an immediate repeated plan.
+    assert_eq!(
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 2,
+            no_progress_streak: 0,
+        }),
+        loop_detect::ReasoningLoopStatus::Ok
+    );
+}
+
+#[test]
 fn test_adversarial_1_paraphrased_same_plan_same_files_no_edits_interrupts() {
     // Scenario 1: Model understands architecture, repeatedly reads the same file,
     // paraphrases the same plan with different wording, and never edits.

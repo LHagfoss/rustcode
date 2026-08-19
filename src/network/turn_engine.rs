@@ -908,6 +908,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             let mut stagnation = loop_detect::LoopStatus::Ok;
             let mut failure_replan = None;
             let mut evidence_recovery = None;
+            let mut cross_turn_made_progress = false;
+            let mut cross_turn_had_edits = false;
+            let mut cross_turn_target_files = Vec::new();
+            let mut cross_turn_tool_count = 0;
             let executed = results.len();
             for (position, result) in results.into_iter().enumerate() {
                 let call = tool_calls.get(position);
@@ -1040,37 +1044,11 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         .or_else(|| c.arguments.get("TargetFile"))
                         .and_then(|v| v.as_str())
                 });
-                let target_files = match target_file {
-                    Some(f) => vec![f],
-                    None => vec![],
-                };
-                let cross_turn_status = ctx.reasoning_loop_detector.record_turn_evidence(
-                    &loop_detect::TurnEvidence {
-                        reasoning: &ctx.final_content,
-                        target_files: &target_files,
-                        made_progress: changed_workspace,
-                        had_edits: is_mutating_tool(&name),
-                        tool_count: 1,
-                        no_progress_streak: ctx.progress_ledger.no_progress_streak(),
-                    },
-                );
-                if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = cross_turn_status {
-                    ctx.reasoning_loops_detected += 1;
-                    dbg_log!("Cross-turn reasoning loop detected: {reason}");
-                    crate::logger::operational_event(
-                        reason,
-                        serde_json::json!({
-                            "round": ctx.tool_rounds,
-                            "reason": reason,
-                        }),
-                    );
-                    if evidence_recovery.is_none() {
-                        evidence_recovery = Some((
-                            loop_detect::ProgressReason::NoNewInformation,
-                            ctx.reasoning_recovery_attempts as usize + 1,
-                            format!("reasoning loop: {reason}"),
-                        ));
-                    }
+                cross_turn_tool_count += 1;
+                cross_turn_made_progress |= changed_workspace;
+                cross_turn_had_edits |= is_mutating_tool(&name);
+                if let Some(target_file) = target_file {
+                    cross_turn_target_files.push(target_file.to_string());
                 }
                 ctx.last_progress_reason = Some(assessment.reason);
                 if assessment.meaningful {
@@ -1114,6 +1092,45 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     },
                     answered_call,
                 ));
+            }
+
+            // `record_turn_evidence` models a complete model turn. Record the
+            // batch once after all results are processed; calling it for each
+            // result makes two read-only calls from one response look like two
+            // repeated turns and triggers a false cross-turn loop.
+            if cross_turn_tool_count > 0 {
+                let target_file_refs = cross_turn_target_files
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                let cross_turn_status = ctx.reasoning_loop_detector.record_turn_evidence(
+                    &loop_detect::TurnEvidence {
+                        reasoning: &ctx.final_content,
+                        target_files: &target_file_refs,
+                        made_progress: cross_turn_made_progress,
+                        had_edits: cross_turn_had_edits,
+                        tool_count: cross_turn_tool_count,
+                        no_progress_streak: ctx.progress_ledger.no_progress_streak(),
+                    },
+                );
+                if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = cross_turn_status {
+                    ctx.reasoning_loops_detected += 1;
+                    dbg_log!("Cross-turn reasoning loop detected: {reason}");
+                    crate::logger::operational_event(
+                        reason,
+                        serde_json::json!({
+                            "round": ctx.tool_rounds,
+                            "reason": reason,
+                        }),
+                    );
+                    if evidence_recovery.is_none() {
+                        evidence_recovery = Some((
+                            loop_detect::ProgressReason::NoNewInformation,
+                            ctx.reasoning_recovery_attempts as usize + 1,
+                            format!("reasoning loop: {reason}"),
+                        ));
+                    }
+                }
             }
             if executed < call_refs.len() {
                 for message in
