@@ -152,13 +152,17 @@ fn approval_requirement(
 }
 
 struct AcpEventStream {
-    streamed_text: String,
+    streamed_prose: String,
+    pending: String,
+    in_thought: bool,
 }
 
 impl AcpEventStream {
     fn new() -> Self {
         Self {
-            streamed_text: String::new(),
+            streamed_prose: String::new(),
+            pending: String::new(),
+            in_thought: false,
         }
     }
 
@@ -168,16 +172,97 @@ impl AcpEventStream {
         ))))
     }
 
+    fn thought_update(text: String) -> SessionUpdate {
+        SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(TextContent::new(
+            text,
+        ))))
+    }
+
+    fn flush(&mut self) -> Vec<SessionUpdate> {
+        let mut updates = Vec::new();
+        if !self.pending.is_empty() {
+            let pending = std::mem::take(&mut self.pending);
+            if self.in_thought {
+                updates.push(Self::thought_update(pending));
+            } else {
+                self.streamed_prose.push_str(&pending);
+                updates.push(Self::text_update(pending));
+            }
+        }
+        updates
+    }
+
+    fn process_text_delta(&mut self, text: String) -> Vec<SessionUpdate> {
+        const OPEN_TAG: &str = "<think>";
+        const CLOSE_TAG: &str = "</think>";
+        const OPEN_PREFIXES: &[&str] = &["<think", "<thin", "<thi", "<th", "<t", "<"];
+        const CLOSE_PREFIXES: &[&str] = &["</think", "</thin", "</thi", "</th", "</t", "</", "<"];
+
+        let mut updates = Vec::new();
+        self.pending.push_str(&text);
+
+        while !self.pending.is_empty() {
+            if self.in_thought {
+                if let Some(idx) = self.pending.find(CLOSE_TAG) {
+                    let thought = self.pending[..idx].to_string();
+                    if !thought.is_empty() {
+                        updates.push(Self::thought_update(thought));
+                    }
+                    self.pending.drain(..idx + CLOSE_TAG.len());
+                    self.in_thought = false;
+                } else {
+                    let matched_prefix_len = CLOSE_PREFIXES
+                        .iter()
+                        .find(|prefix| self.pending.ends_with(**prefix))
+                        .map(|prefix| prefix.len())
+                        .unwrap_or(0);
+
+                    let emit_len = self.pending.len() - matched_prefix_len;
+                    if emit_len > 0 {
+                        let thought: String = self.pending.drain(..emit_len).collect();
+                        updates.push(Self::thought_update(thought));
+                    }
+                    break;
+                }
+            } else {
+                if let Some(idx) = self.pending.find(OPEN_TAG) {
+                    let prose = self.pending[..idx].to_string();
+                    if !prose.is_empty() {
+                        self.streamed_prose.push_str(&prose);
+                        updates.push(Self::text_update(prose));
+                    }
+                    self.pending.drain(..idx + OPEN_TAG.len());
+                    self.in_thought = true;
+                } else {
+                    let matched_prefix_len = OPEN_PREFIXES
+                        .iter()
+                        .find(|prefix| self.pending.ends_with(**prefix))
+                        .map(|prefix| prefix.len())
+                        .unwrap_or(0);
+
+                    let emit_len = self.pending.len() - matched_prefix_len;
+                    if emit_len > 0 {
+                        let prose: String = self.pending.drain(..emit_len).collect();
+                        self.streamed_prose.push_str(&prose);
+                        updates.push(Self::text_update(prose));
+                    }
+                    break;
+                }
+            }
+        }
+
+        updates
+    }
+
     fn updates(&mut self, event: crate::network::AgentUiEvent) -> Vec<SessionUpdate> {
         match event {
-            crate::network::AgentUiEvent::TextDelta { text } => {
-                self.streamed_text.push_str(&text);
-                vec![Self::text_update(text)]
-            }
+            crate::network::AgentUiEvent::TextDelta { text } => self.process_text_delta(text),
             crate::network::AgentUiEvent::ToolStarted { name, id } => {
-                vec![SessionUpdate::ToolCall(
+                let mut updates = self.flush();
+                updates.push(SessionUpdate::ToolCall(
                     AcpToolCall::new(id, name).status(ToolCallStatus::InProgress),
-                )]
+                ));
+                updates
             }
             crate::network::AgentUiEvent::ToolFinished { id, result } => {
                 let status = if result.metadata.success {
@@ -185,7 +270,8 @@ impl AcpEventStream {
                 } else {
                     ToolCallStatus::Failed
                 };
-                vec![SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                let mut updates = self.flush();
+                updates.push(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                     id,
                     ToolCallUpdateFields::new()
                         .status(status)
@@ -195,23 +281,31 @@ impl AcpEventStream {
                             "changedPaths": result.metadata.changed_paths,
                             "truncated": result.metadata.truncated,
                         })),
-                ))]
+                )));
+                updates
             }
             crate::network::AgentUiEvent::TurnRecovered { message } => {
-                vec![SessionUpdate::AgentThoughtChunk(ContentChunk::new(
-                    ContentBlock::Text(TextContent::new(message)),
-                ))]
+                let mut updates = self.flush();
+                updates.push(Self::thought_update(message));
+                updates
             }
-            crate::network::AgentUiEvent::TurnFinished { content, .. }
-                if !content.trim().is_empty() && !self.streamed_text.ends_with(&content) =>
-            {
-                self.streamed_text.push_str(&content);
-                vec![Self::text_update(content)]
+            crate::network::AgentUiEvent::TurnFinished { content, .. } => {
+                let mut updates = self.flush();
+                let promoted = crate::network::text::promote_bare_thought_markers(&content);
+                let prose = crate::network::text::strip_think_blocks(&promoted);
+                let trimmed_prose = prose.trim();
+                if !trimmed_prose.is_empty()
+                    && !self.streamed_prose.ends_with(&prose)
+                    && !self.streamed_prose.ends_with(trimmed_prose)
+                {
+                    self.streamed_prose.push_str(&prose);
+                    updates.push(Self::text_update(prose));
+                }
+                updates
             }
             crate::network::AgentUiEvent::PromptStarted { .. }
             | crate::network::AgentUiEvent::SubagentUpdated { .. }
             | crate::network::AgentUiEvent::ApprovalRequested { .. }
-            | crate::network::AgentUiEvent::TurnFinished { .. }
             | crate::network::AgentUiEvent::Cancelled { .. }
             | crate::network::AgentUiEvent::Error { .. } => Vec::new(),
         }
@@ -714,6 +808,191 @@ mod tests {
             updates.as_slice(),
             [SessionUpdate::AgentMessageChunk(chunk)]
                 if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "done")
+        ));
+    }
+
+    #[test]
+    fn acp_event_stream_plain_text_remains_unchanged() {
+        let mut stream = AcpEventStream::new();
+        let updates = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "Hello, how can I help you today?".to_string(),
+        });
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(
+            &updates[0],
+            SessionUpdate::AgentMessageChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Hello, how can I help you today?")
+        ));
+    }
+
+    #[test]
+    fn acp_event_stream_complete_think_blocks_emitted_as_thought_chunks() {
+        let mut stream = AcpEventStream::new();
+        let updates = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "<think>Let me analyze the problem first.</think>".to_string(),
+        });
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(
+            &updates[0],
+            SessionUpdate::AgentThoughtChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Let me analyze the problem first.")
+        ));
+    }
+
+    #[test]
+    fn acp_event_stream_thought_tags_split_across_multiple_text_delta_events() {
+        let mut stream = AcpEventStream::new();
+
+        // Opening tag split: "<th" + "ink>Internal reasoning</th" + "ink>Visible answer"
+        let mut all_updates = Vec::new();
+        all_updates.extend(stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "<th".to_string(),
+        }));
+        all_updates.extend(stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "ink>Internal reasoning</th".to_string(),
+        }));
+        all_updates.extend(stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "ink>Visible answer".to_string(),
+        }));
+
+        let message_chunks: Vec<String> = all_updates
+            .iter()
+            .filter_map(|u| match u {
+                SessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
+                    ContentBlock::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        let thought_chunks: Vec<String> = all_updates
+            .iter()
+            .filter_map(|u| match u {
+                SessionUpdate::AgentThoughtChunk(chunk) => match &chunk.content {
+                    ContentBlock::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(thought_chunks.join(""), "Internal reasoning");
+        assert_eq!(message_chunks.join(""), "Visible answer");
+    }
+
+    #[test]
+    fn acp_event_stream_text_before_and_after_thought_block() {
+        let mut stream = AcpEventStream::new();
+        let updates = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "Prefix prose. <think>Secret reasoning.</think> Suffix prose.".to_string(),
+        });
+
+        assert_eq!(updates.len(), 3);
+        assert!(matches!(
+            &updates[0],
+            SessionUpdate::AgentMessageChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Prefix prose. ")
+        ));
+        assert!(matches!(
+            &updates[1],
+            SessionUpdate::AgentThoughtChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Secret reasoning.")
+        ));
+        assert!(matches!(
+            &updates[2],
+            SessionUpdate::AgentMessageChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == " Suffix prose.")
+        ));
+    }
+
+    #[test]
+    fn acp_event_stream_tool_call_round_followed_by_final_answer() {
+        let mut stream = AcpEventStream::new();
+
+        // Round 1: Model thinks about calling get_time, then calls tool
+        let r1_deltas = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "<think>I need to check the current time.</think>".to_string(),
+        });
+        assert!(matches!(
+            r1_deltas.as_slice(),
+            [SessionUpdate::AgentThoughtChunk(chunk)]
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "I need to check the current time.")
+        ));
+
+        let tool_start = stream.updates(crate::network::AgentUiEvent::ToolStarted {
+            name: "get_time".to_string(),
+            id: "call-1".to_string(),
+        });
+        assert!(matches!(
+            tool_start.as_slice(),
+            [SessionUpdate::ToolCall(call)]
+                if call.tool_call_id.to_string() == "call-1"
+        ));
+
+        let tool_finish = stream.updates(crate::network::AgentUiEvent::ToolFinished {
+            id: "call-1".to_string(),
+            result: crate::network::events::ToolResult {
+                tool_name: "get_time".to_string(),
+                content: "12:20 PM".to_string(),
+                diff: None,
+                file_preview: None,
+                metadata: crate::network::events::ToolResultMetadata {
+                    call_id: Some("call-1".to_string()),
+                    arguments_hash: "hash".to_string(),
+                    success: true,
+                    exit_code: None,
+                    changed_paths: Vec::new(),
+                    truncated: false,
+                    full_output_artifact: None,
+                    replayed: false,
+                    error_kind: None,
+                    retryable: false,
+                },
+            },
+        });
+        assert!(matches!(
+            tool_finish.as_slice(),
+            [SessionUpdate::ToolCallUpdate(update)]
+                if update.tool_call_id.to_string() == "call-1"
+        ));
+
+        // Round 2: Model thinks about the result and emits the final answer
+        let r2_deltas = stream.updates(crate::network::AgentUiEvent::TextDelta {
+            text: "<think>The time is 12:20 PM.</think>The current time is 12:20 PM.".to_string(),
+        });
+        assert_eq!(r2_deltas.len(), 2);
+        assert!(matches!(
+            &r2_deltas[0],
+            SessionUpdate::AgentThoughtChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "The time is 12:20 PM.")
+        ));
+        assert!(matches!(
+            &r2_deltas[1],
+            SessionUpdate::AgentMessageChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "The current time is 12:20 PM.")
+        ));
+
+        // TurnFinished does not duplicate
+        let turn_finished = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "<think>The time is 12:20 PM.</think>The current time is 12:20 PM.".to_string(),
+            completed: true,
+        });
+        assert!(turn_finished.is_empty(), "TurnFinished must not duplicate final answer");
+    }
+
+    #[test]
+    fn acp_event_stream_turn_finished_fallback_strips_think_blocks_when_not_streamed() {
+        let mut stream = AcpEventStream::new();
+        let finished = stream.updates(crate::network::AgentUiEvent::TurnFinished {
+            content: "<think>Reasoning scratchpad</think>Unstreamed answer".to_string(),
+            completed: true,
+        });
+        assert_eq!(finished.len(), 1);
+        assert!(matches!(
+            &finished[0],
+            SessionUpdate::AgentMessageChunk(chunk)
+                if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "Unstreamed answer")
         ));
     }
 
