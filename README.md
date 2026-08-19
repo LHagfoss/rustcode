@@ -48,21 +48,29 @@ rustcode --acp
 The process speaks stable ACP v1 JSON-RPC on stdin/stdout. A runtime such as
 Multica can launch it as a subprocess, create a session with `session/new`, and
 send work with `session/prompt`. The working directory supplied to
-`session/new` becomes the workspace root for rustcode's tools. Rustcode reads
-model profiles from `~/.config/rustcode/models.json` and runtime/MCP settings
-from `~/.config/rustcode/config.json`. Missing or invalid files fall back to
-defaults compiled into Rustcode; the deprecated `config.toml` file is ignored.
+`session/new` becomes the workspace root for rustcode's tools. Rustcode stores
+its canonical configuration in `config.toml`. On macOS and Linux this is
+`${XDG_CONFIG_HOME:-~/.config}/rustcode/config.toml`; on Windows it is
+`%APPDATA%\rustcode\config.toml`. `RUSTCODE_CONFIG_DIR` overrides the
+directory on every platform, which is useful for portable installs and tests.
+
+Older installations using `models.json` and `config.json` are still read. On
+the next normal save, Rustcode writes the merged configuration to
+`config.toml` and leaves the legacy files intact as a rollback copy. Missing
+fields use compiled defaults. Malformed or newer unsupported TOML is preserved
+and reported instead of being overwritten.
 Configured MCP servers are started by Rustcode before ACP prompts are handled;
 ACP's optional MCP-over-ACP transport is not required.
 
 ### Configuration files
 
-`models.json` contains the `default` model selection and `models` array.
-`config.json` contains runtime preferences and integrations such as MCP
-servers, tool protocol, agent mode, verbosity, theme, the active session, and
-the per-turn `max_tool_rounds` safety backstop. It defaults to 40 rounds and is
-only a final limit after semantic loop and failure guards.
-Rustcode does not create or overwrite either file during fallback loading.
+The TOML file contains the `default` model selection, `models` array, runtime
+preferences, MCP servers, tool protocol, agent mode, verbosity, theme, active
+session, and the per-turn `max_tool_rounds` safety backstop. It defaults to 40
+rounds and is only a final limit after semantic loop and failure guards.
+Writes use a temporary file and replacement so an interrupted save does not
+leave a truncated configuration. On Unix, the file is written with owner-only
+permissions because model profiles may contain API keys.
 
 ### via homebrew
 
