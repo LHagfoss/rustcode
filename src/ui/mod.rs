@@ -1396,13 +1396,8 @@ fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &Ap
     let location = footer_location(state);
     let left_content = if let Some(agent) = state.selected_subagent() {
         format!("  {} · {} · {}", agent.name, state.model_name, location)
-    } else if matches!(state.status, AppStatus::Idle) {
-        format!("  {} · {}", state.model_name, location)
     } else {
-        format!(
-            "  Enter message then press enter to queue · {} · {}",
-            state.model_name, location
-        )
+        format!("  {} · {}", state.model_name, location)
     };
     let right = format!("{remaining}% context left  ");
     let left = fit_to_width(
