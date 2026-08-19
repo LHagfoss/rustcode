@@ -1789,12 +1789,13 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
 }
 
 #[test]
-fn composer_footer_shows_queue_hint_when_busy() {
+fn composer_footer_stays_compact_when_busy() {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
+    state.model_name = "streaming-model".to_string();
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     terminal
         .draw(|frame| super::render(frame, &mut state))
@@ -1807,8 +1808,8 @@ fn composer_footer_shows_queue_hint_when_busy() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(rendered.contains("Enter message then press enter to queue"));
-    assert!(!rendered.contains("tab to queue"));
+    assert!(rendered.contains("streaming-model"));
+    assert!(!rendered.contains("Enter message then press enter to queue"));
 }
 
 #[test]
