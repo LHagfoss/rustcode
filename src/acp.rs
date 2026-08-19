@@ -2,8 +2,11 @@ use agent_client_protocol::schema::v1::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, InitializeRequest,
     InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
     PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, SessionNotification, SessionUpdate, StopReason, TextContent,
-    ToolCall as AcpToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall as AcpToolCall,
+    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Stdio};
 use std::collections::HashMap;
@@ -420,6 +423,73 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
     }
 }
 
+fn build_session_config_options(state: &crate::app::AppState) -> Vec<SessionConfigOption> {
+    let current_value = state
+        .active_model_profile()
+        .map(|p| p.name)
+        .unwrap_or_else(|| state.config.default.big().to_string());
+
+    let options: Vec<SessionConfigSelectOption> = state
+        .config
+        .models
+        .iter()
+        .map(|profile| {
+            let mut opt = SessionConfigSelectOption::new(
+                profile.name.clone(),
+                profile.name.clone(),
+            );
+            if !profile.model.is_empty() {
+                opt = opt.description(profile.model.clone());
+            }
+            opt
+        })
+        .collect();
+
+    let model_option = SessionConfigOption::select(
+        "model",
+        "Model",
+        current_value,
+        options,
+    )
+    .category(SessionConfigOptionCategory::Model)
+    .description("Model profile");
+
+    vec![model_option]
+}
+
+fn handle_set_config_option(
+    state: &mut crate::app::AppState,
+    config_id: &SessionConfigId,
+    value: &SessionConfigOptionValue,
+) -> Result<Vec<SessionConfigOption>, agent_client_protocol::Error> {
+    if config_id.0.as_ref() != "model" {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data(format!("unknown config option: {}", config_id.0)));
+    }
+
+    let Some(model_value) = value.as_value_id().map(|v| v.0.as_ref()) else {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data("expected value_id for select config option"));
+    };
+
+    let matching_profile = state
+        .config
+        .models
+        .iter()
+        .find(|m| m.name == model_value)
+        .cloned();
+
+    let Some(profile) = matching_profile else {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data(format!("unknown model option value: {model_value}")));
+    };
+
+    state.api_base_url = profile.url;
+    state.model_name = profile.model;
+
+    Ok(build_session_config_options(state))
+}
+
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
     let startup_state = crate::app::AppState::new();
     crate::mcp::start_enabled_servers(&startup_state.config.mcp_servers, |name| async move {
@@ -448,6 +518,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let session_id = state.active_session_id.clone();
                     state.raw_cli_mode = false;
                     state.workspace_root = Some(request.cwd.clone());
+                    let config_options = build_session_config_options(&state);
                     sessions.lock().await.insert(
                         session_id.clone(),
                         AcpSession {
@@ -456,7 +527,35 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             turns: Arc::new(SessionTurnState::new()),
                         },
                     );
-                    responder.respond(NewSessionResponse::new(session_id))
+                    responder.respond(
+                        NewSessionResponse::new(session_id).config_options(config_options),
+                    )
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let sessions = Arc::clone(&sessions);
+                async move |request: SetSessionConfigOptionRequest, responder, _connection| {
+                    let session_id = request.session_id.to_string();
+                    let session = sessions
+                        .lock()
+                        .await
+                        .get(&session_id)
+                        .map(|session| Arc::clone(&session.state));
+                    let Some(state) = session else {
+                        return Err(agent_client_protocol::Error::invalid_params()
+                            .data(format!("unknown ACP session: {session_id}")));
+                    };
+
+                    let mut state = state.lock().await;
+                    let config_options = handle_set_config_option(
+                        &mut state,
+                        &request.config_id,
+                        &request.value,
+                    )?;
+                    responder.respond(SetSessionConfigOptionResponse::new(config_options))
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -1058,5 +1157,164 @@ mod tests {
             acp_stop_reason(false, Some("completed")),
             StopReason::EndTurn
         );
+    }
+
+    #[test]
+    fn acp_session_new_returns_model_option_with_all_profiles_and_default_big_selected() {
+        let state = crate::app::AppState::new();
+        let options = build_session_config_options(&state);
+
+        assert_eq!(options.len(), 1);
+        let model_opt = &options[0];
+        assert_eq!(model_opt.id.0.as_ref(), "model");
+        assert_eq!(model_opt.name, "Model");
+        assert_eq!(model_opt.category, Some(SessionConfigOptionCategory::Model));
+
+        match &model_opt.kind {
+            SessionConfigKind::Select(select) => {
+                assert_eq!(
+                    select.current_value.0.as_ref(),
+                    state.config.default.big(),
+                    "default.big profile must be initially selected"
+                );
+                match &select.options {
+                    SessionConfigSelectOptions::Ungrouped(opts) => {
+                        assert_eq!(opts.len(), state.config.models.len());
+                        for (opt, profile) in opts.iter().zip(state.config.models.iter()) {
+                            assert_eq!(opt.value.0.as_ref(), profile.name);
+                            assert_eq!(opt.name, profile.name);
+                            if profile.model.is_empty() {
+                                assert_eq!(opt.description, None);
+                            } else {
+                                assert_eq!(
+                                    opt.description.as_deref(),
+                                    Some(profile.model.as_str())
+                                );
+                            }
+                        }
+                    }
+                    _ => panic!("expected ungrouped select options"),
+                }
+            }
+            _ => panic!("expected select config option kind"),
+        }
+    }
+
+    #[test]
+    fn acp_new_session_response_contains_config_options() {
+        let state = crate::app::AppState::new();
+        let options = build_session_config_options(&state);
+        let resp = NewSessionResponse::new("test-session").config_options(options);
+        assert!(resp.config_options.is_some());
+        let config_opts = resp.config_options.unwrap();
+        assert_eq!(config_opts.len(), 1);
+        assert_eq!(config_opts[0].id.0.as_ref(), "model");
+    }
+
+    #[test]
+    fn acp_selecting_valid_model_updates_session_endpoint_and_model() {
+        let mut state = crate::app::AppState::new();
+        let target_profile = state
+            .config
+            .models
+            .iter()
+            .find(|m| m.name != state.config.default.big())
+            .expect("should have at least one non-default model profile")
+            .clone();
+
+        let updated_options = handle_set_config_option(
+            &mut state,
+            &SessionConfigId::new("model"),
+            &SessionConfigOptionValue::value_id(target_profile.name.clone()),
+        )
+        .expect("selecting a valid model should succeed");
+
+        assert_eq!(state.api_base_url, target_profile.url);
+        assert_eq!(state.model_name, target_profile.model);
+
+        assert_eq!(updated_options.len(), 1);
+        match &updated_options[0].kind {
+            SessionConfigKind::Select(select) => {
+                assert_eq!(select.current_value.0.as_ref(), target_profile.name);
+            }
+            _ => panic!("expected select config option kind"),
+        }
+    }
+
+    #[test]
+    fn acp_selecting_unknown_model_returns_invalid_params() {
+        let mut state = crate::app::AppState::new();
+        let initial_url = state.api_base_url.clone();
+        let initial_model = state.model_name.clone();
+
+        let err = handle_set_config_option(
+            &mut state,
+            &SessionConfigId::new("model"),
+            &SessionConfigOptionValue::value_id("non_existent_profile_12345"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, agent_client_protocol::ErrorCode::InvalidParams);
+        assert_eq!(state.api_base_url, initial_url);
+        assert_eq!(state.model_name, initial_model);
+    }
+
+    #[test]
+    fn acp_selecting_unknown_config_id_returns_invalid_params() {
+        let mut state = crate::app::AppState::new();
+        let err = handle_set_config_option(
+            &mut state,
+            &SessionConfigId::new("unsupported_config"),
+            &SessionConfigOptionValue::value_id("gemini-3.6-flash"),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, agent_client_protocol::ErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn acp_selecting_boolean_value_for_model_returns_invalid_params() {
+        let mut state = crate::app::AppState::new();
+        let err = handle_set_config_option(
+            &mut state,
+            &SessionConfigId::new("model"),
+            &SessionConfigOptionValue::boolean(true),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, agent_client_protocol::ErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn acp_two_sessions_can_select_different_models_independently() {
+        let mut state1 = crate::app::AppState::new();
+        let mut state2 = crate::app::AppState::new();
+
+        assert!(
+            state1.config.models.len() >= 2,
+            "need at least 2 profiles to test independence"
+        );
+        let profile1 = state1.config.models[0].clone();
+        let profile2 = state1.config.models[1].clone();
+
+        handle_set_config_option(
+            &mut state1,
+            &SessionConfigId::new("model"),
+            &SessionConfigOptionValue::value_id(profile1.name.clone()),
+        )
+        .expect("setting model for session 1");
+
+        handle_set_config_option(
+            &mut state2,
+            &SessionConfigId::new("model"),
+            &SessionConfigOptionValue::value_id(profile2.name.clone()),
+        )
+        .expect("setting model for session 2");
+
+        assert_eq!(state1.api_base_url, profile1.url);
+        assert_eq!(state1.model_name, profile1.model);
+
+        assert_eq!(state2.api_base_url, profile2.url);
+        assert_eq!(state2.model_name, profile2.model);
     }
 }
