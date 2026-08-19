@@ -1,3 +1,8 @@
+## [v0.29.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.6) - 2026-08-19
+
+### Fixes
+- **Harness/Loop Detection:** Record cross-turn reasoning loop evidence once per tool batch instead of per tool result, preventing multi-tool read-only batches from incorrectly triggering false-positive recovery loops ([#706](https://github.com/LHagfoss/rustcode/pull/706))
+
 ## [v0.29.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.5) - 2026-08-19
 
 ### Features
