@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,7 +23,8 @@ pub fn discover_skills() -> Vec<SkillMetadata> {
     // anymore: that is Claude Code's directory, and inheriting it dumped unrelated
     // plugin skills (Cloudflare Workers, etc.) into every prompt — which derailed
     // agents into believing this project was something it isn't. Users who really
-    // want to share those can opt in via RUSTCODE_EXTRA_SKILL_DIRS (colon-separated).
+    // want to share those can opt in via RUSTCODE_EXTRA_SKILL_DIRS (using the
+    // platform's native path-list separator).
     let local_dirs = [".rustcode/skills", ".agents/skills"];
 
     let home = match std::env::var("HOME") {
@@ -35,12 +37,10 @@ pub fn discover_skills() -> Vec<SkillMetadata> {
         home.join(".agents/skills"),
     ];
 
-    let extra_dirs: Vec<PathBuf> = std::env::var("RUSTCODE_EXTRA_SKILL_DIRS")
-        .ok()
-        .into_iter()
-        .flat_map(|v| v.split(':').map(PathBuf::from).collect::<Vec<_>>())
-        .filter(|p| !p.as_os_str().is_empty())
-        .collect();
+    let extra_dirs = std::env::var_os("RUSTCODE_EXTRA_SKILL_DIRS")
+        .as_deref()
+        .map(split_skill_dirs)
+        .unwrap_or_default();
 
     for dir in local_dirs
         .iter()
@@ -54,6 +54,12 @@ pub fn discover_skills() -> Vec<SkillMetadata> {
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills.dedup_by(|a, b| a.name == b.name);
     skills
+}
+
+fn split_skill_dirs(value: &OsStr) -> Vec<PathBuf> {
+    std::env::split_paths(value)
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect()
 }
 
 fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillMetadata>) {
@@ -123,16 +129,27 @@ fn parse_frontmatter(content: &str) -> (String, String) {
     )
 }
 
-const MAX_SKILL_CONTENT_CHARS: usize = 12_000;
+const MAX_SKILL_CONTENT_BYTES: usize = 12_000;
+const SKILL_CONTENT_TRUNCATED_NOTICE: &str = "\n\n[skill content truncated to 12k chars]";
+
+fn truncate_skill_content(content: &mut String) {
+    if content.len() <= MAX_SKILL_CONTENT_BYTES {
+        return;
+    }
+
+    let mut end = MAX_SKILL_CONTENT_BYTES;
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    content.truncate(end);
+    content.push_str(SKILL_CONTENT_TRUNCATED_NOTICE);
+}
 
 pub fn get_skill_content(name: &str) -> Option<SkillInfo> {
     let meta = discover_skills().into_iter().find(|s| s.name == name)?;
     let skill_md = meta.path.join("SKILL.md");
     let mut content = fs::read_to_string(&skill_md).ok()?;
-    if content.len() > MAX_SKILL_CONTENT_CHARS {
-        content.truncate(MAX_SKILL_CONTENT_CHARS);
-        content.push_str("\n\n[skill content truncated to 12k chars]");
-    }
+    truncate_skill_content(&mut content);
     Some(SkillInfo {
         name: meta.name,
         description: meta.description,
@@ -191,6 +208,32 @@ mod tests {
         let (name, desc) = parse_frontmatter(content);
         assert_eq!(name, "unnamed");
         assert_eq!(desc, "No description available");
+    }
+
+    #[test]
+    fn test_split_skill_dirs_uses_platform_path_separator() {
+        let paths = [PathBuf::from("first"), PathBuf::from("second")];
+        let joined = std::env::join_paths(&paths).unwrap();
+
+        assert_eq!(split_skill_dirs(&joined), paths);
+    }
+
+    #[test]
+    fn test_truncate_skill_content_preserves_utf8_boundary() {
+        let mut content = "a".repeat(MAX_SKILL_CONTENT_BYTES - 1);
+        content.push('é');
+        content.push('z');
+
+        truncate_skill_content(&mut content);
+
+        assert_eq!(
+            content,
+            format!(
+                "{}{}",
+                "a".repeat(MAX_SKILL_CONTENT_BYTES - 1),
+                SKILL_CONTENT_TRUNCATED_NOTICE
+            )
+        );
     }
 
     #[test]
