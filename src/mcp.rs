@@ -265,7 +265,8 @@ impl McpClient {
 
 pub async fn start_server_by_name(name: &str) -> Result<(), String> {
     let config = {
-        let cfg = crate::config::load_config().2;
+        let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let cfg = crate::config::load_config_for_workspace(&workspace).2;
         cfg.mcp_servers.iter().find(|s| s.name == name).cloned()
     };
 

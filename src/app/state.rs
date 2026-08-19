@@ -1270,7 +1270,9 @@ impl AppState {
     }
 
     pub fn new() -> Self {
-        let (api_base_url, model_name, mut config) = crate::config::load_config();
+        let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let (api_base_url, model_name, mut config) =
+            crate::config::load_config_for_workspace(&workspace);
         config.start_time = Some(std::time::SystemTime::now());
         let active_session_id = crate::config::start_session(&mut config);
         let agent_mode = config.agent_mode;
