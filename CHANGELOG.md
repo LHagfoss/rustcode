@@ -1,3 +1,8 @@
+## [v0.29.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.3) - 2026-08-19
+
+### Features
+- **ACP/Config:** Implement session model selection via config options, exposing configured model profiles with category `model` and updating session endpoint dynamically on change ([#700](https://github.com/LHagfoss/rustcode/pull/700))
+
 ## [v0.29.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.2) - 2026-08-19
 
 ### Fixes
