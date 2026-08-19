@@ -1,3 +1,12 @@
+## [v0.30.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.2) - 2026-08-19
+
+### Features
+- **UI/Startup:** Show the active model reasoning effort and effective context window in the welcome banner, with `/effort` and `/context` shortcuts ([#718](https://github.com/LHagfoss/rustcode/pull/718))
+
+### Fixes
+- **Windows/Terminal:** Ignore unsupported keyboard-enhancement teardown during normal terminal cleanup, avoiding a spurious error on exit ([#719](https://github.com/LHagfoss/rustcode/pull/719))
+- **Config/Sync:** Commit the local config snapshot before the first rebase pull when a newly initialized sync repository has no local `HEAD` ([#719](https://github.com/LHagfoss/rustcode/pull/719))
+
 ## [v0.30.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.1) - 2026-08-19
 
 ### Fixes
