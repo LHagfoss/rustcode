@@ -1,3 +1,10 @@
+## [v0.29.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.0) - 2026-08-19
+
+### Features
+- **Subagents/Supervisor:** Add session-scoped, semaphore-limited subagent supervisor with per-child cancellation, task ownership, asynchronous execution, and notification-backed wait ([#694](https://github.com/LHagfoss/rustcode/pull/694))
+- **ACP/Lifecycle:** Improve ACP session lifecycle with per-session prompt serialization, active prompt cancellation, permission requests for mutating tools with `--yolo` automation opt-in, and streaming updates ([#693](https://github.com/LHagfoss/rustcode/pull/693))
+- **UI/Greetings:** Redesign startup greeting banner to a compact, clean layout displaying active model, current working directory (`~` abbreviated), and permission mode (`YOLO mode` / `Interactive`) ([#692](https://github.com/LHagfoss/rustcode/pull/692))
+
 ## [v0.28.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.28.2) - 2026-08-19
 
 ### Performance
