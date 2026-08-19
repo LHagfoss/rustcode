@@ -74,8 +74,14 @@ impl TuiEventStream {
                         return Ok(Some(event));
                     }
                 }
-                Some(Err(error)) => return Err(error),
-                None => return Ok(None),
+                Some(Err(error)) => {
+                    self.stream = Some(event::EventStream::new());
+                    return Err(error);
+                }
+                None => {
+                    self.stream = Some(event::EventStream::new());
+                    return Ok(None);
+                }
             }
         }
     }
