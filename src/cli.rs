@@ -41,6 +41,9 @@ pub struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Commands {
+    /// Run as a headless Agent Client Protocol server over stdio
+    Acp,
+
     /// Sync config, skills, and sessions with remote Git repository
     Sync {
         #[command(subcommand)]
@@ -74,6 +77,11 @@ mod tests {
     fn parses_acp_flag() {
         let cli = Cli::try_parse_from(["rustcode", "--acp"]).unwrap();
         assert!(cli.acp);
+    }
+
+    #[test]
+    fn parses_acp_subcommand() {
+        assert!(Cli::try_parse_from(["rustcode", "acp"]).is_ok());
     }
 
     #[test]
