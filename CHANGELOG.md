@@ -1,3 +1,12 @@
+## [v0.28.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.28.2) - 2026-08-19
+
+### Performance
+- **Sessions/Resume:** Optimize `rustcode -r` / `rustcode --resume` session startup time from seconds down to ~2ms with lazy reverse scanning, zero-copy metadata parsing with `ChatMessageMetaRef`, and direct $O(1)$ by-id resolution ([#689](https://github.com/LHagfoss/rustcode/pull/689))
+
+### Fixes
+- **Runtime/Input:** Auto-recover `TuiEventStream` upon event stream closure or error, restoring keyboard responsiveness (including `Ctrl+C` and `Esc`) after macOS sleep/wake cycles ([#690](https://github.com/LHagfoss/rustcode/pull/690))
+- **Network/Sockets:** Configure 15-second TCP keepalive on HTTP client to fail fast and detect dropped sockets rather than hanging indefinitely across system sleep ([#690](https://github.com/LHagfoss/rustcode/pull/690))
+
 ## [v0.26.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.26.2) - 2026-08-18
 
 ### Fixes
