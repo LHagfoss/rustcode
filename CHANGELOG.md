@@ -1,3 +1,8 @@
+## [v0.29.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.5) - 2026-08-19
+
+### Features
+- **CLI/Self-Update:** Add startup update modal with interactive update/skip options, transparent terminal restoration during Homebrew execution, and unified update runner across startup, `/update`, and `--update` ([#704](https://github.com/LHagfoss/rustcode/pull/704))
+
 ## [v0.29.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.4) - 2026-08-19
 
 ### Features
