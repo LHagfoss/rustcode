@@ -38,6 +38,10 @@ pub fn read_text_from_clipboard() -> Option<String> {
     None
 }
 
+fn clipboard_copy_log_summary(byte_count: usize) -> String {
+    format!("[CLIPBOARD] Copying {byte_count} bytes to system clipboard")
+}
+
 pub fn copy_to_clipboard(text: &str) -> bool {
     use std::io::Write;
     let clean: String = text
@@ -50,11 +54,7 @@ pub fn copy_to_clipboard(text: &str) -> bool {
         return false;
     }
 
-    dbg_log!(
-        "[CLIPBOARD] Copying {} bytes to system clipboard: {:?}",
-        clean.len(),
-        clean
-    );
+    dbg_log!("{}", clipboard_copy_log_summary(clean.len()));
 
     // 1. Emit OSC 52 ANSI sequence to terminal (supported natively by iTerm2, Terminal.app, Alacritty, Kitty, WezTerm, Tmux)
     use base64::Engine;
@@ -80,4 +80,24 @@ pub fn copy_to_clipboard(text: &str) -> bool {
         dbg_log!("[CLIPBOARD] Failed to spawn pbcopy process");
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clipboard_copy_log_summary;
+
+    #[test]
+    fn clipboard_copy_log_summary_contains_only_byte_count() {
+        let clipboard_text = "secret-token-123";
+        let summary = clipboard_copy_log_summary(clipboard_text.len());
+
+        assert_eq!(
+            summary,
+            format!(
+                "[CLIPBOARD] Copying {} bytes to system clipboard",
+                clipboard_text.len()
+            )
+        );
+        assert!(!summary.contains(clipboard_text));
+    }
 }
