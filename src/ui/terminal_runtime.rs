@@ -100,11 +100,15 @@ impl TerminalRuntime {
         let area = self.terminal.area();
         let transcript_end =
             cursor_y.unwrap_or_else(|| area.y.saturating_add(area.height.saturating_sub(1)));
+        // Keyboard enhancement flags are unsupported by Crossterm's legacy
+        // Windows console API. Startup already treats enabling them as
+        // best-effort; cleanup must do the same or a normal quit reports a
+        // spurious `Unsupported` error after the app has otherwise exited.
+        let _ = execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags);
         execute!(
             self.terminal.backend_mut(),
             DisableBracketedPaste,
             DisableFocusChange,
-            PopKeyboardEnhancementFlags,
             SetCursorStyle::DefaultUserShape,
             MoveTo(0, transcript_end),
             Clear(ClearType::FromCursorDown)
