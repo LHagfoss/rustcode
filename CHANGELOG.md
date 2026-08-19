@@ -1,3 +1,9 @@
+## [v0.30.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.0) - 2026-08-19
+
+### Features
+- **Config/TOML:** Migrate configuration system to versioned human-editable `config.toml` with atomic writes, format validation, Unix file permissions, and seamless migration from legacy `config.json` / `models.json` ([#713](https://github.com/LHagfoss/rustcode/pull/713))
+- **Config/Projects:** Add project configuration precedence with `.rustcode/config.toml` directory hierarchy loading, secure git-ignored project templates via `rustcode init` / `--init`, and safe override resolution ([#714](https://github.com/LHagfoss/rustcode/pull/714))
+
 ## [v0.29.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.8) - 2026-08-19
 
 ### Fixes
