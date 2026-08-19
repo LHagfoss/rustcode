@@ -49,6 +49,73 @@ mod tests {
         writer_task.await.unwrap();
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn partial_sse_bytes_reset_idle_timeout_until_line_completes() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let read_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            let bytes = read_sse_line(&mut reader, &mut line).await?;
+            Ok::<_, String>((bytes, line))
+        });
+
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b"data:")
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(retry::STREAM_IDLE_TIMEOUT - std::time::Duration::from_secs(1)).await;
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b" still")
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(retry::STREAM_IDLE_TIMEOUT - std::time::Duration::from_secs(1)).await;
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b" alive\n")
+            .await
+            .unwrap();
+
+        let (bytes, line) = read_task.await.unwrap().unwrap();
+        assert_eq!(bytes, "data: still alive\n".len());
+        assert_eq!(line, "data: still alive\n");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn partial_sse_bytes_then_stall_returns_idle_timeout() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let read_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(reader);
+            read_sse_line(&mut reader, &mut String::new()).await
+        });
+
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b"data: partial")
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::advance(retry::STREAM_IDLE_TIMEOUT + std::time::Duration::from_millis(1))
+            .await;
+
+        let error = read_task
+            .await
+            .unwrap()
+            .expect_err("partial line must time out after a stall");
+        assert!(error.contains("idle timeout"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn sse_eof_returns_final_unterminated_line() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b"data: final")
+            .await
+            .unwrap();
+        drop(writer);
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+
+        let bytes = read_sse_line(&mut reader, &mut line).await.unwrap();
+
+        assert_eq!(bytes, "data: final".len());
+        assert_eq!(line, "data: final");
+    }
+
     #[test]
     fn parse_speculative_arguments_extracts_complete_and_partial_json() {
         // Complete JSON
@@ -90,14 +157,47 @@ async fn read_sse_line<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
     line_buf: &mut String,
 ) -> Result<usize, String> {
-    match tokio::time::timeout(retry::STREAM_IDLE_TIMEOUT, reader.read_line(line_buf)).await {
-        Ok(Ok(bytes)) => Ok(bytes),
-        Ok(Err(error)) => Err(format!("SSE stream read failed: {error}")),
-        Err(_) => Err(format!(
-            "SSE stream idle timeout after {}s without provider data",
-            retry::STREAM_IDLE_TIMEOUT.as_secs()
-        )),
+    let mut bytes = Vec::new();
+
+    loop {
+        let (chunk_len, line_complete) = {
+            let chunk =
+                match tokio::time::timeout(retry::STREAM_IDLE_TIMEOUT, reader.fill_buf()).await {
+                    Ok(Ok(chunk)) => chunk,
+                    Ok(Err(error)) => return Err(format!("SSE stream read failed: {error}")),
+                    Err(_) => {
+                        return Err(format!(
+                            "SSE stream idle timeout after {}s without provider data",
+                            retry::STREAM_IDLE_TIMEOUT.as_secs()
+                        ));
+                    }
+                };
+
+            if chunk.is_empty() {
+                if bytes.is_empty() {
+                    return Ok(0);
+                }
+                break;
+            }
+
+            let chunk_len = chunk
+                .iter()
+                .position(|&byte| byte == b'\n')
+                .map_or(chunk.len(), |newline| newline + 1);
+            bytes.extend_from_slice(&chunk[..chunk_len]);
+            (chunk_len, chunk[chunk_len - 1] == b'\n')
+        };
+        reader.consume(chunk_len);
+
+        if line_complete {
+            break;
+        }
     }
+
+    let line = std::str::from_utf8(&bytes)
+        .map_err(|error| format!("SSE stream contained invalid UTF-8: {error}"))?;
+    line_buf.push_str(line);
+    Ok(bytes.len())
 }
 
 /// Metadata-only summary of an outbound chat-completion request: round shape
