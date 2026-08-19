@@ -1,3 +1,8 @@
+## [v0.29.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.8) - 2026-08-19
+
+### Fixes
+- **CLI/Self-Update:** Validate installed Homebrew formula version after upgrade and clear stale TUI frame before running external process ([#711](https://github.com/LHagfoss/rustcode/pull/711))
+
 ## [v0.29.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.7) - 2026-08-19
 
 ### Features
