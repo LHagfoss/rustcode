@@ -2914,7 +2914,23 @@ pub(crate) fn build_claude_startup_banner(
         Span::styled(dir_fitted, Style::default().fg(text_c).bg(reset_bg)),
     ]));
 
-    // Row 3: permissions
+    // Row 3: branch
+    let branch_name = state
+        .cwd_and_branch
+        .rsplit_once(':')
+        .map(|(_, branch)| branch)
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or("unknown");
+    let branch_fitted = fit_to_width(branch_name, inner_w.saturating_sub(label_w));
+    banner.push(make_row(vec![
+        Span::styled(
+            fit_to_width("  branch:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(branch_fitted, Style::default().fg(text_c).bg(reset_bg)),
+    ]));
+
+    // Row 4: permissions
     let (perm_text, perm_style) = if state.auto_confirm {
         (
             "YOLO mode",
@@ -2939,6 +2955,19 @@ pub(crate) fn build_claude_startup_banner(
         ),
         Span::styled(perm_text, perm_style),
     ]));
+
+    // Help shortcut
+    banner.push(make_row(vec![
+        Span::styled(
+            fit_to_width("  help:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled("/help", Style::default().fg(primary).bg(reset_bg)),
+        Span::styled(" for commands", Style::default().fg(muted_c).bg(reset_bg)),
+    ]));
+
+    // Blank line before the bottom border
+    banner.push(make_row(vec![]));
 
     // Bottom border
     let bot_border = format!("╰{}╯", "─".repeat(inner_w));
