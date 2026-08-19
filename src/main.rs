@@ -216,7 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if cli_args.acp {
-        crate::acp::run_acp().await?;
+        crate::acp::run_acp(cli_args.yolo).await?;
         crate::config::flush_history();
         return Ok(());
     }
