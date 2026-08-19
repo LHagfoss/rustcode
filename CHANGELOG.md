@@ -1,3 +1,8 @@
+## [v0.29.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.2) - 2026-08-19
+
+### Fixes
+- **ACP/Streaming:** Prevent reasoning leakage in ACP protocol by making event streaming thought-aware, buffering split `<think>` tags, routing thoughts to `AgentThoughtChunk`, and emitting only prose in `AgentMessageChunk` ([#698](https://github.com/LHagfoss/rustcode/pull/698))
+
 ## [v0.29.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.1) - 2026-08-19
 
 ### Fixes
