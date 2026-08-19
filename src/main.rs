@@ -266,6 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
+        .tcp_keepalive(std::time::Duration::from_secs(15))
         .build()?;
     {
         let mut state = app_state.lock().await;
