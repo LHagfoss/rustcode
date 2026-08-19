@@ -2813,14 +2813,8 @@ pub(crate) fn build_claude_startup_banner(
     let version = env!("CARGO_PKG_VERSION");
     let model_name = model_label(state);
 
-    let box_w = total_width.saturating_sub(2).max(65);
+    let box_w = total_width.saturating_sub(2).min(66).max(45);
     let inner_w = box_w.saturating_sub(2);
-    let left_w = if inner_w >= 90 {
-        50
-    } else {
-        (inner_w * 48 / 100).max(30)
-    };
-    let right_w = inner_w.saturating_sub(left_w + 1);
 
     let border_c = COLOR_PRIMARY();
     let primary = COLOR_PRIMARY();
@@ -2837,54 +2831,104 @@ pub(crate) fn build_claude_startup_banner(
         Style::default().fg(border_c).bg(reset_bg),
     )]));
 
-    let make_row = |left_str: String,
-                    left_style: Style,
-                    right_str: String,
-                    right_style: Style|
-     -> Line<'static> {
-        let l_cell = fit_to_width(&left_str, left_w);
-        let r_cell = fit_to_width(&right_str, right_w);
-        Line::from(vec![
-            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
-            Span::styled(l_cell, left_style),
-            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
-            Span::styled(r_cell, right_style),
-            Span::styled("│", Style::default().fg(border_c).bg(reset_bg)),
-        ])
+    let make_row = |spans: Vec<Span<'static>>| -> Line<'static> {
+        let mut line_spans = Vec::new();
+        line_spans.push(Span::styled("│", Style::default().fg(border_c).bg(reset_bg)));
+
+        let mut used = 0;
+        for s in &spans {
+            used += s.content.chars().count();
+        }
+        line_spans.extend(spans);
+
+        let pad = inner_w.saturating_sub(used);
+        if pad > 0 {
+            line_spans.push(Span::styled(" ".repeat(pad), Style::default().bg(reset_bg)));
+        }
+        line_spans.push(Span::styled("│", Style::default().fg(border_c).bg(reset_bg)));
+        Line::from(line_spans)
     };
 
-    let mode_str = match state.agent_mode {
-        crate::config::AgentMode::Build => "build",
-        crate::config::AgentMode::Plan => "plan",
+    // Blank line after title
+    banner.push(make_row(vec![]));
+
+    // Row 1: model
+    let label_w = 15;
+    let mut model_spans = vec![
+        Span::styled(
+            fit_to_width("  model:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(
+            model_name.clone(),
+            Style::default()
+                .fg(text_c)
+                .bg(reset_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    let used_for_model = label_w + model_name.chars().count();
+    if inner_w >= used_for_model + 22 {
+        model_spans.push(Span::styled("    ", Style::default().bg(reset_bg)));
+        model_spans.push(Span::styled(
+            "/model",
+            Style::default().fg(primary).bg(reset_bg),
+        ));
+        model_spans.push(Span::styled(
+            " to change",
+            Style::default().fg(muted_c).bg(reset_bg),
+        ));
+    }
+    banner.push(make_row(model_spans));
+
+    // Row 2: directory
+    let dir_display = std::env::current_dir()
+        .ok()
+        .map(|path| {
+            if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+                if let Ok(rel) = path.strip_prefix(&home) {
+                    return format!("~/{}", rel.display());
+                }
+            }
+            path.display().to_string()
+        })
+        .unwrap_or_else(|| "~".to_string());
+
+    let max_dir_len = inner_w.saturating_sub(label_w + 1);
+    let dir_fitted = fit_to_width(&dir_display, max_dir_len);
+    banner.push(make_row(vec![
+        Span::styled(
+            fit_to_width("  directory:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(dir_fitted, Style::default().fg(text_c).bg(reset_bg)),
+    ]));
+
+    // Row 3: permissions
+    let (perm_text, perm_style) = if state.auto_confirm {
+        (
+            "YOLO mode",
+            Style::default()
+                .fg(Color::Rgb(255, 125, 155))
+                .bg(reset_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            "Interactive",
+            Style::default()
+                .fg(text_c)
+                .bg(reset_bg)
+                .add_modifier(Modifier::BOLD),
+        )
     };
-    let info_txt = format!("{model_name} · {mode_str}");
-
-    // Row 1: Left: Centered "Welcome back!" | Right: "  Tips for getting started"
-    let welcome_txt = "Welcome back!";
-    let welcome_pad = left_w.saturating_sub(welcome_txt.len()) / 2;
-    let left1 = format!("{}{}", " ".repeat(welcome_pad), welcome_txt);
-    banner.push(make_row(
-        left1,
-        Style::default()
-            .fg(text_c)
-            .bg(reset_bg)
-            .add_modifier(Modifier::BOLD),
-        "  Tips for getting started".to_string(),
-        Style::default()
-            .fg(primary)
-            .bg(reset_bg)
-            .add_modifier(Modifier::BOLD),
-    ));
-
-    // Row 2: Left: Centered "<model> · <mode>" | Right: "  Run /help to view all slash commands"
-    let info_pad = left_w.saturating_sub(info_txt.len()) / 2;
-    let left_info = format!("{}{}", " ".repeat(info_pad), info_txt);
-    banner.push(make_row(
-        left_info,
-        Style::default().fg(muted_c).bg(reset_bg),
-        "  Run /help to view all slash commands".to_string(),
-        Style::default().fg(text_c).bg(reset_bg),
-    ));
+    banner.push(make_row(vec![
+        Span::styled(
+            fit_to_width("  permissions:", label_w),
+            Style::default().fg(muted_c).bg(reset_bg),
+        ),
+        Span::styled(perm_text, perm_style),
+    ]));
 
     // Bottom border
     let bot_border = format!("╰{}╯", "─".repeat(inner_w));
