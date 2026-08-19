@@ -1,3 +1,8 @@
+## [v0.29.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.4) - 2026-08-19
+
+### Features
+- **UI/Context:** Add `/context` interactive modal with color-coded token block matrix visualization and percentage category breakdown across messages, tools, system prompt, and free space ([#702](https://github.com/LHagfoss/rustcode/pull/702))
+
 ## [v0.29.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.29.3) - 2026-08-19
 
 ### Features
