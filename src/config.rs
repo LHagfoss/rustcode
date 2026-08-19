@@ -14,6 +14,8 @@ pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
 
 pub const MODELS_FILE: &str = "models.json";
 pub const CONFIG_FILE: &str = "config.json";
+pub const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CONFIG_FORMAT_VERSION: u32 = 1;
 const HISTORY_FILE: &str = "history.json";
 const SESSIONS_DIR: &str = "sessions";
 #[allow(dead_code)]
@@ -424,6 +426,47 @@ struct RuntimeConfig {
     start_time: Option<std::time::SystemTime>,
 }
 
+/// Canonical, human-editable configuration file.
+///
+/// Fields are optional so users can keep a small hand-written config while
+/// the runtime still supplies defaults for everything they omit. The two
+/// JSON files remain readable as a compatibility path for older installs.
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct TomlConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<DefaultConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    models: Option<Vec<ModelProfile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vision_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_protocol: Option<ToolProtocol>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_tool_rounds: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagent_concurrency_limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_active_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp_servers: Option<Vec<McpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_mode: Option<AgentMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verbosity: Option<crate::app::state::Verbosity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    debug_verbose_network_logging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    theme: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_millis"
+    )]
+    start_time: Option<std::time::SystemTime>,
+}
+
 fn default_false() -> bool {
     false
 }
@@ -564,8 +607,17 @@ pub fn get_config_dir() -> Option<PathBuf> {
     }
     #[cfg(not(test))]
     {
-        let home = std::env::var("HOME").ok()?;
-        let config_root = PathBuf::from(home).join(".config");
+        #[cfg(windows)]
+        let config_root = std::env::var_os("APPDATA")
+            .or_else(|| std::env::var_os("LOCALAPPDATA"))
+            .map(PathBuf::from)?;
+
+        #[cfg(not(windows))]
+        let config_root = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+
         let dir = config_root.join("rustcode");
 
         if !dir.exists() {
@@ -638,51 +690,84 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
     let mut config = defaults.clone();
     let mut is_valid = true;
 
-    let models_path = dir.join(MODELS_FILE);
-    if models_path.exists() {
-        match fs::read_to_string(&models_path)
+    let toml_path = dir.join(CONFIG_TOML_FILE);
+    if toml_path.exists() {
+        match fs::read_to_string(&toml_path)
             .ok()
-            .and_then(|content| serde_json::from_str::<ModelsConfig>(&content).ok())
+            .and_then(|content| toml::from_str::<TomlConfig>(&content).ok())
         {
-            Some(models) => {
-                config.default = models.default;
-                config.models = models.models;
-                config.vision_model = models.vision_model.or(config.vision_model);
+            Some(file) => {
+                if let Some(version) = file.version
+                    && version > CONFIG_FORMAT_VERSION
+                {
+                    eprintln!(
+                        "[rustcode] WARNING: {} uses unsupported config format version {} (this version supports up to {}). Using built-in defaults.",
+                        toml_path.display(),
+                        version,
+                        CONFIG_FORMAT_VERSION
+                    );
+                    is_valid = false;
+                } else {
+                    apply_toml_config(&mut config, file);
+                }
             }
             None => {
                 eprintln!(
-                    "[rustcode] WARNING: Failed to parse {}. Using built-in model defaults.",
-                    models_path.display()
+                    "[rustcode] WARNING: Failed to parse {}. Using built-in defaults.",
+                    toml_path.display()
                 );
                 is_valid = false;
             }
         }
-    }
-
-    let runtime_path = dir.join(CONFIG_FILE);
-    if runtime_path.exists() {
-        match fs::read_to_string(&runtime_path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<RuntimeConfig>(&content).ok())
-        {
-            Some(runtime) => {
-                config.tool_protocol = runtime.tool_protocol;
-                config.max_tool_rounds = runtime.max_tool_rounds;
-                config.subagent_concurrency_limit = runtime.subagent_concurrency_limit;
-                config.last_active_session_id = runtime.last_active_session_id;
-                config.mcp_servers = runtime.mcp_servers;
-                config.agent_mode = runtime.agent_mode;
-                config.verbosity = runtime.verbosity;
-                config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
-                config.theme = runtime.theme;
-                config.start_time = runtime.start_time;
+    } else {
+        // Compatibility path for pre-0.30 installations. A successful load
+        // is migrated to config.toml on the next normal save.
+        let models_path = dir.join(MODELS_FILE);
+        if models_path.exists() {
+            match fs::read_to_string(&models_path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<ModelsConfig>(&content).ok())
+            {
+                Some(models) => {
+                    config.default = models.default;
+                    config.models = models.models;
+                    config.vision_model = models.vision_model.or(config.vision_model);
+                }
+                None => {
+                    eprintln!(
+                        "[rustcode] WARNING: Failed to parse {}. Using built-in model defaults.",
+                        models_path.display()
+                    );
+                    is_valid = false;
+                }
             }
-            None => {
-                eprintln!(
-                    "[rustcode] WARNING: Failed to parse {}. Using built-in runtime defaults.",
-                    runtime_path.display()
-                );
-                is_valid = false;
+        }
+
+        let runtime_path = dir.join(CONFIG_FILE);
+        if runtime_path.exists() {
+            match fs::read_to_string(&runtime_path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<RuntimeConfig>(&content).ok())
+            {
+                Some(runtime) => {
+                    config.tool_protocol = runtime.tool_protocol;
+                    config.max_tool_rounds = runtime.max_tool_rounds;
+                    config.subagent_concurrency_limit = runtime.subagent_concurrency_limit;
+                    config.last_active_session_id = runtime.last_active_session_id;
+                    config.mcp_servers = runtime.mcp_servers;
+                    config.agent_mode = runtime.agent_mode;
+                    config.verbosity = runtime.verbosity;
+                    config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
+                    config.theme = runtime.theme;
+                    config.start_time = runtime.start_time;
+                }
+                None => {
+                    eprintln!(
+                        "[rustcode] WARNING: Failed to parse {}. Using built-in runtime defaults.",
+                        runtime_path.display()
+                    );
+                    is_valid = false;
+                }
             }
         }
     }
@@ -717,29 +802,122 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
     if !config.is_valid {
         return;
     }
-    let _ = fs::create_dir_all(dir);
-    let models = ModelsConfig {
-        default: config.default.clone(),
-        models: config.models.clone(),
-        vision_model: config.vision_model.clone(),
-    };
-    if let Ok(json) = serde_json::to_string_pretty(&models) {
-        let _ = fs::write(dir.join(MODELS_FILE), json);
+    if let Err(error) = fs::create_dir_all(dir) {
+        eprintln!(
+            "[rustcode] WARNING: Failed to create config directory {}: {error}",
+            dir.display()
+        );
+        return;
     }
-    let runtime = RuntimeConfig {
-        tool_protocol: config.tool_protocol,
-        max_tool_rounds: config.max_tool_rounds,
-        subagent_concurrency_limit: config.subagent_concurrency_limit,
+
+    let file = TomlConfig {
+        version: Some(CONFIG_FORMAT_VERSION),
+        default: Some(config.default.clone()),
+        models: Some(config.models.clone()),
+        vision_model: config.vision_model.clone(),
+        tool_protocol: Some(config.tool_protocol),
+        max_tool_rounds: Some(config.max_tool_rounds),
+        subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
         last_active_session_id: config.last_active_session_id.clone(),
-        mcp_servers: config.mcp_servers.clone(),
-        agent_mode: config.agent_mode,
-        verbosity: config.verbosity.clone(),
-        debug_verbose_network_logging: config.debug_verbose_network_logging,
-        theme: config.theme.clone(),
+        mcp_servers: Some(config.mcp_servers.clone()),
+        agent_mode: Some(config.agent_mode),
+        verbosity: Some(config.verbosity.clone()),
+        debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
+        theme: Some(config.theme.clone()),
         start_time: config.start_time,
     };
-    if let Ok(json) = serde_json::to_string_pretty(&runtime) {
-        let _ = fs::write(dir.join(CONFIG_FILE), json);
+
+    match toml::to_string_pretty(&file) {
+        Ok(contents) => {
+            if let Err(error) = write_config_file(&dir.join(CONFIG_TOML_FILE), &contents) {
+                eprintln!("[rustcode] WARNING: Failed to save config.toml: {error}");
+            }
+        }
+        Err(error) => eprintln!("[rustcode] WARNING: Failed to serialize config.toml: {error}"),
+    }
+}
+
+fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
+    if let Some(default) = file.default {
+        config.default = default;
+    }
+    if let Some(models) = file.models {
+        config.models = models;
+    }
+    if let Some(vision_model) = file.vision_model {
+        config.vision_model = Some(vision_model);
+    }
+    if let Some(tool_protocol) = file.tool_protocol {
+        config.tool_protocol = tool_protocol;
+    }
+    if let Some(max_tool_rounds) = file.max_tool_rounds {
+        config.max_tool_rounds = max_tool_rounds;
+    }
+    if let Some(limit) = file.subagent_concurrency_limit {
+        config.subagent_concurrency_limit = limit;
+    }
+    if let Some(session_id) = file.last_active_session_id {
+        config.last_active_session_id = Some(session_id);
+    }
+    if let Some(mcp_servers) = file.mcp_servers {
+        config.mcp_servers = mcp_servers;
+    }
+    if let Some(agent_mode) = file.agent_mode {
+        config.agent_mode = agent_mode;
+    }
+    if let Some(verbosity) = file.verbosity {
+        config.verbosity = verbosity;
+    }
+    if let Some(enabled) = file.debug_verbose_network_logging {
+        config.debug_verbose_network_logging = enabled;
+    }
+    if let Some(theme) = file.theme {
+        config.theme = theme;
+    }
+    if file.start_time.is_some() {
+        config.start_time = file.start_time;
+    }
+}
+
+fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.toml");
+    let temporary = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    fs::write(&temporary, contents)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    }
+
+    match fs::rename(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(_) if cfg!(windows) => {
+            // Windows does not replace an existing file with rename. Keep the
+            // old file until the new file is ready, then replace it.
+            let backup = path.with_file_name(format!(".{file_name}.bak-{}", std::process::id()));
+            if path.exists() {
+                fs::rename(path, &backup)?;
+            }
+            match fs::rename(&temporary, path) {
+                Ok(()) => {
+                    let _ = fs::remove_file(backup);
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = fs::rename(&backup, path);
+                    let _ = fs::remove_file(&temporary);
+                    Err(error)
+                }
+            }
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
     }
 }
 
@@ -878,7 +1056,7 @@ fn write_history_file(path: &Path, history: &[ChatMessage]) {
 }
 
 /// Process-wide cache of the active session id, so history saves never have to
-/// re-read and re-parse `config.json` just to learn where to write.
+/// re-read and re-parse `config.toml` just to learn where to write.
 fn active_session_cache() -> &'static Mutex<Option<String>> {
     static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -895,7 +1073,7 @@ pub fn set_active_session_id(session_id: &str) {
     };
 }
 
-/// The active session id, read from `config.json` at most once per process.
+/// The active session id, read from `config.toml` at most once per process.
 fn active_session_id() -> Option<String> {
     let mut cache = lock(active_session_cache());
     if cache.is_none() {
@@ -2193,7 +2371,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_save_writes_split_json_without_toml() {
+    fn test_config_save_writes_versioned_toml_without_split_json() {
         let dir = TempDir::new().unwrap();
         let mut config = AppConfig::default();
         config.default = DefaultConfig::Simple("custom".to_string());
@@ -2203,13 +2381,74 @@ mod tests {
 
         save_config_to(dir.path(), &config);
 
-        assert!(dir.path().join(MODELS_FILE).exists());
-        assert!(dir.path().join(CONFIG_FILE).exists());
-        assert!(!dir.path().join("config.toml").exists());
+        let path = dir.path().join(CONFIG_TOML_FILE);
+        assert!(path.exists());
+        assert!(!dir.path().join(MODELS_FILE).exists());
+        assert!(!dir.path().join(CONFIG_FILE).exists());
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("version = 1"));
         let (_, _, loaded) = load_config_from(dir.path());
         assert_eq!(loaded.default.big(), "custom");
         assert_eq!(loaded.theme, "nord");
         assert_eq!(loaded.tool_protocol, ToolProtocol::Native);
+    }
+
+    #[test]
+    fn test_legacy_json_is_migrated_when_saved() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(MODELS_FILE),
+            r#"{
+                "default": "legacy-model",
+                "models": [{"name":"legacy-model","url":"http://legacy","model":"legacy"}]
+            }"#,
+        )
+        .unwrap();
+
+        let (_, _, config) = load_config_from(dir.path());
+        assert_eq!(config.default.big(), "legacy-model");
+        save_config_to(dir.path(), &config);
+
+        assert!(dir.path().join(CONFIG_TOML_FILE).exists());
+        assert!(dir.path().join(MODELS_FILE).exists());
+        let (_, _, migrated) = load_config_from(dir.path());
+        assert_eq!(migrated.default.big(), "legacy-model");
+    }
+
+    #[test]
+    fn test_invalid_toml_is_preserved_and_does_not_fall_back_to_legacy_json() {
+        let dir = TempDir::new().unwrap();
+        let invalid = b"[models\nnot valid";
+        fs::write(dir.path().join(CONFIG_TOML_FILE), invalid).unwrap();
+        fs::write(
+            dir.path().join(MODELS_FILE),
+            r#"{"default":"legacy","models":[]}"#,
+        )
+        .unwrap();
+
+        let (_, _, config) = load_config_from(dir.path());
+
+        assert_eq!(config.default.big(), AppConfig::default().default.big());
+        assert!(!config.is_valid);
+        assert_eq!(
+            fs::read(dir.path().join(CONFIG_TOML_FILE)).unwrap(),
+            invalid
+        );
+    }
+
+    #[test]
+    fn test_unsupported_toml_version_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(CONFIG_TOML_FILE),
+            format!("version = {}\n", CONFIG_FORMAT_VERSION + 1),
+        )
+        .unwrap();
+
+        let (_, _, config) = load_config_from(dir.path());
+
+        assert_eq!(config.default.big(), AppConfig::default().default.big());
+        assert!(!config.is_valid);
     }
 
     #[test]
