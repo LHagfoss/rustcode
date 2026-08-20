@@ -1533,7 +1533,6 @@ pub fn is_code_editing_tool(name: &str) -> bool {
 pub fn is_tool_call_start(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.contains("```tool")
-        || trimmed.contains("```json")
         || trimmed.contains("[TOOL_CALLS]")
         || trimmed.contains("<tool_call>")
         || trimmed.contains("<function_call>")
@@ -2124,6 +2123,9 @@ mod tests {
         ));
         assert!(!is_tool_call_start(
             "Here is a regular markdown code block:\n```rust\nfn main() {}\n```"
+        ));
+        assert!(!is_tool_call_start(
+            "Here is a plain json block:\n```json\n{\"seeds\": 580, \"potatoes\": 2423}\n```"
         ));
     }
 
