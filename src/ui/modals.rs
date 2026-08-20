@@ -1157,11 +1157,25 @@ pub(super) fn render_update_prompt_modal(
         modal_chunks[1],
     );
 
+    let (command_label, command_text, update_action_desc) = if crate::update::is_brew_install() {
+        (
+            "Method: ",
+            crate::update::BREW_UPGRADE_COMMAND,
+            "run Homebrew and restart rustcode",
+        )
+    } else {
+        (
+            "Method: ",
+            "GitHub Releases (in-place update)",
+            "download update and restart rustcode",
+        )
+    };
+
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("Command: ", Style::default().fg(COLOR_MUTED())),
+            Span::styled(command_label, Style::default().fg(COLOR_MUTED())),
             Span::styled(
-                crate::update::BREW_UPGRADE_COMMAND,
+                command_text,
                 Style::default().fg(COLOR_PRIMARY()),
             ),
         ]))
@@ -1170,7 +1184,7 @@ pub(super) fn render_update_prompt_modal(
     );
 
     let options = [
-        ("Update now", "run Homebrew and restart rustcode"),
+        ("Update now", update_action_desc),
         ("Skip", "do not update this time"),
         ("Skip until next version", "hide this version for this run"),
     ];

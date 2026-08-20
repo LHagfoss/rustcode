@@ -187,21 +187,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     crate::update::format_version(current),
                     crate::update::format_version(latest)
                 );
-                let upgrade_res = tokio::task::spawn_blocking(move || {
-                    crate::update::run_brew_upgrade(latest)
-                })
-                .await;
-
-                match upgrade_res {
-                    Ok(Ok(())) => {
+                match crate::update::run_update(&client, latest).await {
+                    Ok(()) => {
                         println!("🎉 Update ran successfully! Please restart rustcode.");
                     }
-                    Ok(Err(error)) => {
-                        eprintln!("Update failed: {error}");
-                        std::process::exit(1);
-                    }
                     Err(error) => {
-                        eprintln!("Update task error: {error}");
+                        eprintln!("Update failed: {error}");
                         std::process::exit(1);
                     }
                 }

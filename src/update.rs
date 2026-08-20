@@ -1,8 +1,10 @@
-//! Self-update check against the Homebrew tap `lhagfoss/tap` (formula `rustcode`).
+//! Cross-platform self-update engine for RustCode.
 //!
-//! `/update` reads the formula straight from the tap repo on GitHub, compares
-//! its version to the running binary, and — only when the tap is newer — runs
-//! `brew update` followed by `brew upgrade rustcode`.
+//! Checks for the latest release via the GitHub Releases API (falling back
+//! to the Homebrew tap if needed). On upgrade, if installed via Homebrew it
+//! runs `brew upgrade rustcode`; otherwise it downloads the matching binary archive
+//! (.tar.gz on macOS/Linux, .zip on Windows) from GitHub Releases and performs an
+//! atomic in-place binary replacement.
 
 use regex::Regex;
 use std::io::Write;
@@ -12,10 +14,11 @@ use std::sync::LazyLock;
 pub const BREW_UPDATE_COMMAND: &str = "brew update";
 pub const BREW_UPGRADE_COMMAND: &str = "brew upgrade rustcode";
 
-/// The formula lives in the tap repo `lhagfoss/homebrew-tap` at
-/// `Formula/rustcode.rb`. Read it directly from GitHub raw so the check works
-/// even before `brew tap lhagfoss/tap` has been run locally. Try `main` first,
-/// then `master`, since taps differ on their default branch name.
+const GITHUB_REPO: &str = "LHagfoss/rustcode";
+const GITHUB_API_LATEST_RELEASE: &str =
+    "https://api.github.com/repos/LHagfoss/rustcode/releases/latest";
+
+/// Fallback formula URLs in the tap repo.
 const FORMULA_URLS: [&str; 2] = [
     "https://raw.githubusercontent.com/lhagfoss/homebrew-tap/main/Formula/rustcode.rb",
     "https://raw.githubusercontent.com/lhagfoss/homebrew-tap/master/Formula/rustcode.rb",
@@ -40,27 +43,30 @@ pub enum UpdateState {
     Failed,
 }
 
+#[derive(serde::Deserialize, Debug, Clone)]
+struct GithubRelease {
+    tag_name: String,
+    #[serde(default)]
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+/// Check for updates against GitHub Releases (with fallback to the Homebrew tap).
 pub async fn check_for_update(client: &reqwest::Client) -> Result<UpdateCheck, String> {
     let current = current_version();
-    let latest = latest_tap_version(client)
+    let latest = latest_available_version(client)
         .await
-        .ok_or_else(|| "couldn't read the Homebrew tap".to_string())?;
+        .ok_or_else(|| "could not fetch the latest release information".to_string())?;
     Ok(if latest > current {
         UpdateCheck::Available { current, latest }
     } else {
         UpdateCheck::UpToDate { current, latest }
     })
-}
-
-#[allow(dead_code)]
-pub async fn upgrade_if_available(client: &reqwest::Client) -> Result<UpdateCheck, String> {
-    let check = check_for_update(client).await?;
-    if let UpdateCheck::Available { latest, .. } = check {
-        tokio::task::spawn_blocking(move || run_brew_upgrade(latest))
-            .await
-            .map_err(|e| format!("update task error: {e}"))??;
-    }
-    Ok(check)
 }
 
 /// The version this binary was built as.
@@ -72,7 +78,7 @@ pub fn format_version(v: Version) -> String {
     format!("{}.{}.{}", v.0, v.1, v.2)
 }
 
-fn parse_semver(s: &str) -> Option<Version> {
+pub fn parse_semver(s: &str) -> Option<Version> {
     let s = s.trim().trim_start_matches('v');
     let mut it = s.split('.');
     let major = it.next()?.parse().ok()?;
@@ -88,10 +94,73 @@ fn parse_semver(s: &str) -> Option<Version> {
     Some((major, minor, patch))
 }
 
-/// Extract the formula's version. Prefer an explicit `version "x.y.z"` or
-/// `tag: "vx.y.z"` declaration; otherwise fall back to the highest semver found
-/// on a url/archive line (Homebrew usually derives the version from the tag in
-/// the source URL).
+/// Detect if the current binary is installed via Homebrew.
+pub fn is_brew_install() -> bool {
+    if cfg!(target_os = "windows") {
+        return false;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let path = exe.to_string_lossy();
+        if path.contains("/Cellar/rustcode")
+            || path.contains("/opt/homebrew/")
+            || path.contains("/usr/local/Cellar/")
+            || path.contains("/home/linuxbrew/")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Expected asset name for the current platform/architecture.
+pub fn target_asset_name() -> Option<&'static str> {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    match (os, arch) {
+        ("linux", "x86_64") => Some("rustcode-linux-x86_64.tar.gz"),
+        ("macos", "aarch64") => Some("rustcode-macos-aarch64.tar.gz"),
+        ("macos", "x86_64") => Some("rustcode-macos-aarch64.tar.gz"),
+        ("windows", "x86_64") => Some("rustcode-windows-x86_64.zip"),
+        _ => None,
+    }
+}
+
+/// Fetch the latest version from GitHub Releases, falling back to Homebrew tap.
+pub async fn latest_available_version(client: &reqwest::Client) -> Option<Version> {
+    if let Some((v, _)) = fetch_github_latest(client).await {
+        return Some(v);
+    }
+    latest_tap_version(client).await
+}
+
+async fn fetch_github_latest(
+    client: &reqwest::Client,
+) -> Option<(Version, Option<String>)> {
+    let resp = client
+        .get(GITHUB_API_LATEST_RELEASE)
+        .header("User-Agent", "rustcode")
+        .header("Accept", "application/vnd.github.v3+json")
+        .send()
+        .await
+        .ok()?;
+
+    if resp.status().is_success() {
+        let release = resp.json::<GithubRelease>().await.ok()?;
+        let version = parse_semver(&release.tag_name)?;
+        let download_url = target_asset_name().and_then(|target_name| {
+            release
+                .assets
+                .into_iter()
+                .find(|a| a.name == target_name)
+                .map(|a| a.browser_download_url)
+        });
+        return Some((version, download_url));
+    }
+    None
+}
+
+/// Extract formula version from raw Ruby formula content.
 fn parse_formula_version(rb: &str) -> Option<Version> {
     static EXPLICIT: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"(?:version\s+"|tag:\s*")v?(\d+)\.(\d+)\.(\d+)"#).unwrap());
@@ -110,8 +179,7 @@ fn parse_formula_version(rb: &str) -> Option<Version> {
         .max()
 }
 
-/// Fetch the latest version published in the Homebrew tap, or `None` if the tap
-/// is unreachable or its formula couldn't be parsed.
+/// Fetch the latest version published in the Homebrew tap.
 pub async fn latest_tap_version(client: &reqwest::Client) -> Option<Version> {
     for url in FORMULA_URLS {
         let resp = client
@@ -130,9 +198,202 @@ pub async fn latest_tap_version(client: &reqwest::Client) -> Option<Version> {
     None
 }
 
-/// Refresh Homebrew and run the upgrade with inherited stdout/stderr so
-/// Homebrew can show its normal progress output. Blocking — call from
-/// `spawn_blocking` when the caller is async.
+/// Perform update — automatically chooses Homebrew if installed via brew,
+/// otherwise downloads and replaces binary in-place from GitHub Releases.
+pub async fn run_update(client: &reqwest::Client, expected: Version) -> Result<(), String> {
+    if is_brew_install() {
+        println!("Detected Homebrew installation.");
+        let brew_result = tokio::task::spawn_blocking(move || run_brew_upgrade(expected)).await;
+        match brew_result {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(brew_err)) => {
+                eprintln!("Homebrew upgrade failed ({brew_err}), falling back to direct binary update...");
+            }
+            Err(join_err) => {
+                eprintln!("Homebrew task failed ({join_err}), falling back to direct binary update...");
+            }
+        }
+    }
+
+    run_direct_upgrade(client, expected).await
+}
+
+/// Download matching archive from GitHub Releases and replace the current binary.
+pub async fn run_direct_upgrade(
+    client: &reqwest::Client,
+    expected: Version,
+) -> Result<(), String> {
+    let asset_name = target_asset_name().ok_or_else(|| {
+        format!(
+            "Unsupported platform: {}/{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    })?;
+
+    println!("Fetching release download URL for v{}...", format_version(expected));
+    let _ = std::io::stdout().flush();
+
+    let download_url = if let Some((_, Some(url))) = fetch_github_latest(client).await {
+        url
+    } else {
+        format!(
+            "https://github.com/{GITHUB_REPO}/releases/download/v{}/{asset_name}",
+            format_version(expected)
+        )
+    };
+
+    println!("Downloading {asset_name} from GitHub Releases...");
+    let _ = std::io::stdout().flush();
+
+    let resp = client
+        .get(&download_url)
+        .header("User-Agent", "rustcode")
+        .send()
+        .await
+        .map_err(|e| format!("failed to download release from {download_url}: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "download failed with HTTP {} from {download_url}",
+            resp.status()
+        ));
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("failed to read response bytes: {e}"))?;
+
+    println!("Extracting binary...");
+    let _ = std::io::stdout().flush();
+
+    let current_exe = std::env::current_exe()
+        .map_err(|e| format!("could not determine current executable path: {e}"))?;
+    let parent_dir = current_exe
+        .parent()
+        .ok_or_else(|| "could not determine binary directory".to_string())?;
+
+    // Create temporary file in same parent directory to ensure atomic same-filesystem rename
+    let temp_dest = tempfile::Builder::new()
+        .prefix(".rustcode_update_")
+        .tempfile_in(parent_dir)
+        .or_else(|_| tempfile::NamedTempFile::new())
+        .map_err(|e| format!("failed to create temp file for extraction: {e}"))?;
+
+    let temp_path = temp_dest.into_temp_path();
+
+    if asset_name.ends_with(".tar.gz") {
+        extract_from_tar_gz(&bytes, &temp_path)?;
+    } else if asset_name.ends_with(".zip") {
+        extract_from_zip(&bytes, &temp_path)?;
+    } else {
+        return Err(format!("unsupported archive format for {asset_name}"));
+    }
+
+    println!("Replacing binary at {}...", current_exe.display());
+    let _ = std::io::stdout().flush();
+
+    replace_binary(&temp_path, &current_exe)?;
+
+    Ok(())
+}
+
+fn extract_from_tar_gz(bytes: &[u8], target: &std::path::Path) -> Result<(), String> {
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+
+    let gz = GzDecoder::new(bytes);
+    let mut archive = Archive::new(gz);
+
+    for entry in archive.entries().map_err(|e| format!("invalid tar archive: {e}"))? {
+        let mut entry = entry.map_err(|e| format!("invalid tar entry: {e}"))?;
+        let path = entry.path().map_err(|e| format!("invalid entry path: {e}"))?;
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        if filename.starts_with("rustcode") && !filename.ends_with(".tar.gz") {
+            let mut outfile = std::fs::File::create(target)
+                .map_err(|e| format!("failed to write extracted file {}: {e}", target.display()))?;
+            std::io::copy(&mut entry, &mut outfile)
+                .map_err(|e| format!("failed to extract binary: {e}"))?;
+            return Ok(());
+        }
+    }
+    Err("could not find rustcode executable inside archive".to_string())
+}
+
+fn extract_from_zip(bytes: &[u8], target: &std::path::Path) -> Result<(), String> {
+    use std::io::Cursor;
+    use zip::ZipArchive;
+
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).map_err(|e| format!("invalid zip archive: {e}"))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| format!("invalid zip entry: {e}"))?;
+        let name = file.name();
+        let filename = std::path::Path::new(name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        if filename.starts_with("rustcode") && filename.ends_with(".exe") {
+            let mut outfile = std::fs::File::create(target)
+                .map_err(|e| format!("failed to write extracted file {}: {e}", target.display()))?;
+            std::io::copy(&mut file, &mut outfile)
+                .map_err(|e| format!("failed to extract binary: {e}"))?;
+            return Ok(());
+        }
+    }
+    Err("could not find rustcode.exe inside zip archive".to_string())
+}
+
+fn replace_binary(temp_path: &std::path::Path, current_exe: &std::path::Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(temp_path, std::fs::Permissions::from_mode(0o755));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let old_exe = current_exe.with_extension("exe.old");
+        let _ = std::fs::remove_file(&old_exe);
+        if let Err(e) = std::fs::rename(current_exe, &old_exe) {
+            return Err(format!(
+                "failed to move existing binary to {}: {e}",
+                old_exe.display()
+            ));
+        }
+        if let Err(e) = std::fs::rename(temp_path, current_exe) {
+            let _ = std::fs::rename(&old_exe, current_exe);
+            return Err(format!(
+                "failed to install new executable at {}: {e}",
+                current_exe.display()
+            ));
+        }
+        let _ = std::fs::remove_file(&old_exe);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Err(_err) = std::fs::rename(temp_path, current_exe) {
+            // Cross-device or filesystem boundary fallback: copy then remove
+            std::fs::copy(temp_path, current_exe)
+                .map_err(|e| format!("failed to overwrite {}: {e}", current_exe.display()))?;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(current_exe, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_file(temp_path);
+        }
+    }
+
+    Ok(())
+}
+
+/// Refresh Homebrew and run the upgrade with inherited stdout/stderr.
 pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
     println!("Refreshing Homebrew via `{BREW_UPDATE_COMMAND}`...");
     let _ = std::io::stdout().flush();
@@ -265,4 +526,10 @@ mod tests {
         );
         assert_eq!(installed_brew_version_from_output(""), None);
     }
+
+    #[test]
+    fn target_asset_detection() {
+        assert!(target_asset_name().is_some());
+    }
 }
+
