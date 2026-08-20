@@ -591,6 +591,7 @@ pub async fn stream_request(
     quiet: bool,
     allow_tools: bool,
     disable_thinking: bool,
+    schema_policy: crate::tools::ToolSchemaPolicy,
 ) -> Result<Option<String>, String> {
     let aligned_messages = align_alternating_messages(messages.to_vec());
     let message_count = aligned_messages.len();
@@ -656,8 +657,7 @@ pub async fn stream_request(
     let tool_protocol = { state.lock().await.active_tool_protocol() };
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         let (schema, mcp_selection) = if allow_tools {
-            let s = state.lock().await;
-            crate::tools::native_tools_schema_for_context(s.delegation_active, &aligned_messages)
+            crate::tools::native_tools_schema_for_context(schema_policy, &aligned_messages)
         } else {
             (Vec::new(), crate::tools::McpSchemaSelectionStats::default())
         };

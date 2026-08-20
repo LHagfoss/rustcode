@@ -689,6 +689,32 @@ const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Selects the tool schemas visible to one provider request.
+///
+/// This is intentionally request-scoped: a child request must not infer its
+/// capabilities from the parent session's mutable delegation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ToolSchemaPolicy {
+    pub(crate) include_agent_tools: bool,
+    pub(crate) include_mcp_tools: bool,
+}
+
+impl ToolSchemaPolicy {
+    pub(crate) const fn root(include_agent_tools: bool) -> Self {
+        Self {
+            include_agent_tools,
+            include_mcp_tools: true,
+        }
+    }
+
+    pub(crate) const fn subagent() -> Self {
+        Self {
+            include_agent_tools: false,
+            include_mcp_tools: false,
+        }
+    }
+}
+
 /// Derive a permissive JSON Schema object from a tool's human-readable
 /// `arguments` string (e.g. `{"path": "file path", "start_line": optional}`).
 /// Every parameter is declared as an optional `string`; the tool handlers
@@ -1072,20 +1098,25 @@ fn select_mcp_tools_for_context(
 }
 
 pub(crate) fn native_tools_schema_for_context(
-    include_agent_tools: bool,
+    policy: ToolSchemaPolicy,
     messages: &[Value],
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
-    let mut tools = builtin_native_tools_schema(include_agent_tools);
+    let mut tools = builtin_native_tools_schema(policy.include_agent_tools);
     // MCP tools are selected from the current request context. The registry is
     // a HashMap, so collection is sorted before scoring and emission to keep
     // both selection and the provider-facing payload deterministic.
-    let mcp_tools = collect_mcp_tools();
-    let (selected, stats) = select_mcp_tools_for_context(&mcp_tools, messages);
-    for index in selected {
-        let (name, desc, schema) = &mcp_tools[index];
-        tools.push(mcp_schema_value(name, desc, schema));
-    }
-    tools.extend(agent_native_tools_schema(include_agent_tools));
+    let stats = if policy.include_mcp_tools {
+        let mcp_tools = collect_mcp_tools();
+        let (selected, stats) = select_mcp_tools_for_context(&mcp_tools, messages);
+        for index in selected {
+            let (name, desc, schema) = &mcp_tools[index];
+            tools.push(mcp_schema_value(name, desc, schema));
+        }
+        stats
+    } else {
+        McpSchemaSelectionStats::default()
+    };
+    tools.extend(agent_native_tools_schema(policy.include_agent_tools));
     (tools, stats)
 }
 
@@ -1101,7 +1132,6 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     tools.extend(agent_native_tools_schema(include_agent_tools));
     tools
 }
-
 /// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
 /// definition. Unknown names fall back to an empty permissive object schema.
 fn schema_for_tool(name: &str) -> Value {
@@ -1133,8 +1163,8 @@ fn schema_for_agent_tool(name: &str) -> Value {
     }
 }
 
-pub fn tool_system_prompt(
-    include_agent_tools: bool,
+pub(crate) fn tool_system_prompt_for_policy(
+    policy: ToolSchemaPolicy,
     protocol: crate::config::ToolProtocol,
     agent_mode: crate::config::AgentMode,
 ) -> String {
@@ -1226,7 +1256,9 @@ Review its names and descriptions, then call `use_skill` with the exact matching
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
-        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
+        if t.capabilities.contains(&ToolCapability::AgentDelegation)
+            && !policy.include_agent_tools
+        {
             continue;
         }
         if agent_mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(t.name) {
@@ -1237,18 +1269,20 @@ Review its names and descriptions, then call `use_skill` with the exact matching
             t.name, t.arguments, t.description
         ));
     }
-    for (name, desc, schema) in collect_mcp_tools() {
-        if agent_mode == crate::config::AgentMode::Plan {
-            continue;
+    if policy.include_mcp_tools {
+        for (name, desc, schema) in collect_mcp_tools() {
+            if agent_mode == crate::config::AgentMode::Plan {
+                continue;
+            }
+            p.push_str(&format!(
+                "- {} | Args: {} | {}\n",
+                name,
+                serde_json::to_string(&schema).unwrap_or_default(),
+                desc
+            ));
         }
-        p.push_str(&format!(
-            "- {} | Args: {} | {}\n",
-            name,
-            serde_json::to_string(&schema).unwrap_or_default(),
-            desc
-        ));
     }
-    if include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
+    if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str(
             "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
             - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Start a follow-up for a completed subagent; running subagents reject it.\n\
@@ -1288,6 +1322,18 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
     }
 
     p
+}
+
+pub fn tool_system_prompt(
+    include_agent_tools: bool,
+    protocol: crate::config::ToolProtocol,
+    agent_mode: crate::config::AgentMode,
+) -> String {
+    tool_system_prompt_for_policy(
+        ToolSchemaPolicy::root(include_agent_tools),
+        protocol,
+        agent_mode,
+    )
 }
 
 fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
@@ -2134,6 +2180,39 @@ mod tests {
                 .iter()
                 .any(|t| t["function"]["name"] == "send_agent")
         );
+    }
+
+    #[test]
+    fn request_schema_policy_isolates_subagents_from_parent_delegation() {
+        let root = native_tools_schema_for_context(ToolSchemaPolicy::root(true), &[]).0;
+        let child = native_tools_schema_for_context(ToolSchemaPolicy::subagent(), &[]).0;
+        let root_names = root
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+        let child_names = child
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(root_names.contains(&"spawn_agent"));
+        assert!(root_names.contains(&"wait_agent"));
+        assert!(!child_names.iter().any(|name| is_agent_tool(name)));
+        assert!(!ToolSchemaPolicy::subagent().include_mcp_tools);
+        assert!(ToolSchemaPolicy::root(true).include_mcp_tools);
+    }
+
+    #[test]
+    fn subagent_text_prompt_does_not_advertise_delegation_or_mcp_tools() {
+        let prompt = tool_system_prompt_for_policy(
+            ToolSchemaPolicy::subagent(),
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        assert!(!prompt.contains("- spawn_agent |"));
+        assert!(!prompt.contains("- send_agent |"));
+        assert!(!prompt.contains("- wait_agent |"));
+        assert!(!prompt.contains("- cancel_agent |"));
     }
 
     #[test]

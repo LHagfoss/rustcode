@@ -714,13 +714,10 @@ struct PromptCacheKey {
 
 /// Pre-computed static system prompt.
 ///
-/// The prompt is otherwise rebuilt on every completion turn — including a
-/// filesystem skill scan and a full MCP schema re-serialization — even though it
-/// only changes when the tool protocol, agent mode, or MCP tool set changes. This
-/// caches it and rebuilds lazily only when [`PromptCacheKey`] moves (the MCP
-/// generation acting as the dirty flag for mid-session server changes). Native
-/// MCP schemas are selected per request because their relevance depends on the
-/// current conversation.
+/// The prompt is otherwise rebuilt on every completion turn even though it only
+/// changes when the protocol, agent mode, or MCP tool set changes. This caches
+/// it and rebuilds lazily only when [`PromptCacheKey`] moves. Native schemas are
+/// selected per request from the current conversation and explicit schema policy.
 #[derive(Default)]
 pub struct PromptCache {
     key: Option<PromptCacheKey>,
