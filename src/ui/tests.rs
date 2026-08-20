@@ -630,7 +630,8 @@ fn use_skill_renders_in_committed_history() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert!(rendered.iter().any(|line| line == "• UseSkill clockify"));
+    assert_eq!(rendered[0], "• Ran");
+    assert!(rendered.iter().any(|line| line == "  └ UseSkill clockify"));
 }
 
 #[test]
@@ -666,7 +667,37 @@ fn high_verbosity_keeps_tool_call_summaries_visible() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• UseSkill clockify"]);
+    assert_eq!(rendered, ["• Ran", "  └ UseSkill clockify"]);
+}
+
+#[test]
+fn completed_generic_tool_uses_ran_heading_and_indented_child() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: "call-1".to_owned(),
+            name: "get_time".to_owned(),
+            arguments: "{}".to_owned(),
+        }]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "get_time: Thursday, 08:30")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "get_time".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered, ["• Ran", "  └ GetTime"]);
 }
 
 #[test]
@@ -742,25 +773,24 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 3);
-    assert!(separator[0].to_string().is_empty());
+    assert_eq!(separator.len(), 2);
     assert!(
-        separator[1]
+        separator[0]
             .to_string()
             .starts_with("─ Worked for 2m 05s ─")
     );
-    assert!(separator[2].to_string().is_empty());
+    assert!(separator[1].to_string().is_empty());
 
     state.history[2].response_time_ms = Some(12_000);
     assert_eq!(
-        super::render_work_separator_before_assistant(&state, 2, 12)[1].to_string(),
+        super::render_work_separator_before_assistant(&state, 2, 12)[0].to_string(),
         "────────────"
     );
     assert!(super::render_work_separator_before_assistant(&state, 0, 80).is_empty());
 }
 
 #[test]
-fn tool_followed_by_work_separator_has_padding_gap() {
+fn work_separator_follows_tool_without_extra_leading_gap() {
     use crate::app::{ChatMessage, ToolResultRecord};
 
     let mut state = AppState::new();
@@ -777,10 +807,9 @@ fn tool_followed_by_work_separator_has_padding_gap() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 3);
-    assert_eq!(separator[0].to_string(), "");
-    assert!(separator[1].to_string().starts_with("─ Worked for 4m 14s ─"));
-    assert_eq!(separator[2].to_string(), "");
+    assert_eq!(separator.len(), 2);
+    assert!(separator[0].to_string().starts_with("─ Worked for 4m 14s ─"));
+    assert_eq!(separator[1].to_string(), "");
 }
 
 #[test]
@@ -812,10 +841,11 @@ fn high_verbosity_hides_generic_tool_details() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
+    assert_eq!(rendered[0], "• Ran");
     assert!(
         rendered
             .iter()
-            .any(|line| line.starts_with("• McpCustomTool"))
+            .any(|line| line.starts_with("  └ McpCustomTool"))
     );
     assert!(rendered.iter().any(|line| line.contains("McpCustomTool")));
     assert!(!rendered.iter().any(|line| line.contains("completed")));
