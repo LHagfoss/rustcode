@@ -867,7 +867,21 @@ fn collect_mcp_tools() -> Vec<(String, String, Value)> {
     out
 }
 
-pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
+const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct McpSchemaSelectionStats {
+    pub available: usize,
+    pub selected: usize,
+    pub relevant: usize,
+    pub previously_used: usize,
+    pub fallback: usize,
+    pub omitted: usize,
+    pub selected_names: Vec<String>,
+}
+
+fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
         if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
@@ -882,16 +896,11 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
             }
         }));
     }
-    // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
-    // a HashMap, so iterating it directly yields a hash-dependent order that can
-    // shift after a rehash and silently break the provider's prefix cache. A
-    // stable byte-for-byte layout keeps the cached prefix valid across turns.
-    for (name, desc, schema) in collect_mcp_tools() {
-        tools.push(serde_json::json!({
-            "type": "function",
-            "function": { "name": name, "description": desc, "parameters": schema }
-        }));
-    }
+    tools
+}
+
+fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    let mut tools = Vec::new();
     if include_agent_tools {
         for (name, desc, _args) in AGENT_TOOL_SPECS {
             tools.push(serde_json::json!({
@@ -904,6 +913,191 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
             }));
         }
     }
+    tools
+}
+
+fn mcp_schema_value(name: &str, desc: &str, schema: &Value) -> Value {
+    serde_json::json!({
+        "type": "function",
+        "function": { "name": name, "description": desc, "parameters": schema }
+    })
+}
+
+fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
+    const STOP_WORDS: &[&str] = &[
+        "about", "after", "again", "also", "been", "before", "being", "could", "from",
+        "have", "into", "just", "like", "more", "most", "only", "please", "should", "that",
+        "their", "there", "these", "this", "through", "using", "want", "what", "when", "where",
+        "which", "with", "would", "your",
+    ];
+    let mut terms = std::collections::HashSet::new();
+    for message in messages {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        if !matches!(role, "user" | "assistant") {
+            continue;
+        }
+        let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+        for token in content
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .map(str::to_ascii_lowercase)
+        {
+            if token.len() >= 2 && !STOP_WORDS.contains(&token.as_str()) {
+                terms.insert(token);
+            }
+        }
+    }
+    terms
+}
+
+fn tool_name_was_used(name: &str, messages: &[Value]) -> bool {
+    let needle = name.to_ascii_lowercase();
+    messages.iter().any(|message| {
+        if let Some(calls) = message.get("tool_calls").and_then(Value::as_array)
+            && calls.iter().any(|call| {
+                call.get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+                    || call
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+            })
+        {
+            return true;
+        }
+        message
+            .get("content")
+            .and_then(Value::as_str)
+            .is_some_and(|content| content.to_ascii_lowercase().contains(&needle))
+    })
+}
+
+fn mcp_tool_relevance(name: &str, description: &str, schema: &Value, terms: &std::collections::HashSet<String>) -> usize {
+    fn token_matches(candidate: &str, term: &str) -> bool {
+        candidate == term
+            || (candidate.len() > 3
+                && candidate.strip_suffix('s') == Some(term))
+            || (term.len() > 3 && term.strip_suffix('s') == Some(candidate))
+    }
+    let name_terms: Vec<String> = name
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let description_terms: Vec<String> = description
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let schema_terms: Vec<String> = serde_json::to_string(schema)
+        .unwrap_or_default()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut score = 0;
+    for term in terms {
+        if name_terms.iter().any(|candidate| token_matches(candidate, term)) {
+            score += 8;
+        } else if description_terms
+            .iter()
+            .any(|candidate| token_matches(candidate, term))
+        {
+            score += 3;
+        } else if schema_terms.iter().any(|candidate| token_matches(candidate, term)) {
+            score += 1;
+        }
+    }
+    score
+}
+
+fn select_mcp_tools_for_context(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    let terms = context_terms(messages);
+    let mut previous = Vec::new();
+    let mut relevant = Vec::new();
+    for (index, (name, description, schema)) in tools.iter().enumerate() {
+        if tool_name_was_used(name, messages) {
+            previous.push(index);
+        } else {
+            let score = mcp_tool_relevance(name, description, schema, &terms);
+            if score > 0 {
+                relevant.push((index, score));
+            }
+        }
+    }
+    previous.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
+    relevant.sort_by(|(left_index, left_score), (right_index, right_score)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
+    });
+
+    let mut selected = previous
+        .iter()
+        .copied()
+        .take(MAX_MCP_NATIVE_SCHEMAS)
+        .collect::<Vec<_>>();
+    let previously_used_count = selected.len();
+    selected.extend(
+        relevant
+            .iter()
+            .map(|(index, _)| *index)
+            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(selected.len())),
+    );
+    let relevant_count = selected.len().saturating_sub(previously_used_count);
+    let mut fallback_count = 0;
+    if selected.is_empty() {
+        fallback_count = tools.len().min(MCP_DISCOVERY_FALLBACK_COUNT);
+        selected.extend(0..fallback_count);
+    }
+    selected.sort_unstable();
+    selected.dedup();
+    debug_assert!(selected.len() <= MAX_MCP_NATIVE_SCHEMAS);
+    let selected_names = selected.iter().map(|index| tools[*index].0.clone()).collect();
+    let stats = McpSchemaSelectionStats {
+        available: tools.len(),
+        selected: selected.len(),
+        relevant: relevant_count,
+        previously_used: previously_used_count,
+        fallback: fallback_count.min(selected.len()),
+        omitted: tools.len().saturating_sub(selected.len()),
+        selected_names,
+    };
+    (selected, stats)
+}
+
+pub(crate) fn native_tools_schema_for_context(
+    include_agent_tools: bool,
+    messages: &[Value],
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    let mut tools = builtin_native_tools_schema(include_agent_tools);
+    // MCP tools are selected from the current request context. The registry is
+    // a HashMap, so collection is sorted before scoring and emission to keep
+    // both selection and the provider-facing payload deterministic.
+    let mcp_tools = collect_mcp_tools();
+    let (selected, stats) = select_mcp_tools_for_context(&mcp_tools, messages);
+    for index in selected {
+        let (name, desc, schema) = &mcp_tools[index];
+        tools.push(mcp_schema_value(name, desc, schema));
+    }
+    tools.extend(agent_native_tools_schema(include_agent_tools));
+    (tools, stats)
+}
+
+pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    let mut tools = builtin_native_tools_schema(include_agent_tools);
+    // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
+    // a HashMap, so iterating it directly yields a hash-dependent order that can
+    // shift after a rehash and silently break the provider's prefix cache. A
+    // stable byte-for-byte layout keeps the cached prefix valid across turns.
+    for (name, desc, schema) in collect_mcp_tools() {
+        tools.push(mcp_schema_value(&name, &desc, &schema));
+    }
+    tools.extend(agent_native_tools_schema(include_agent_tools));
     tools
 }
 
@@ -1858,6 +2052,64 @@ mod tests {
                 .iter()
                 .any(|t| t["function"]["name"] == "spawn_agent")
         );
+    }
+
+    #[test]
+    fn mcp_schema_selection_omits_irrelevant_tools_but_keeps_relevant_and_used() {
+        let mcp = vec![
+            (
+                "search_issues".to_string(),
+                "Search GitHub issues and pull requests".to_string(),
+                serde_json::json!({"type":"object","properties":{"query":{"type":"string"}}}),
+            ),
+            (
+                "weather_forecast".to_string(),
+                "Get a weather forecast for a city".to_string(),
+                serde_json::json!({"type":"object","properties":{"city":{"type":"string"}}}),
+            ),
+            (
+                "deploy_release".to_string(),
+                "Publish a release to production".to_string(),
+                serde_json::json!({"type":"object","properties":{"version":{"type":"string"}}}),
+            ),
+        ];
+        let messages = vec![
+            serde_json::json!({"role":"user","content":"Find the open issue about parser retries"}),
+            serde_json::json!({
+                "role":"assistant",
+                "tool_calls":[{"function":{"name":"weather_forecast"}}]
+            }),
+        ];
+
+        let (selected, stats) = select_mcp_tools_for_context(&mcp, &messages);
+        let names: Vec<&str> = selected.iter().map(|index| mcp[*index].0.as_str()).collect();
+        assert_eq!(names, vec!["search_issues", "weather_forecast"]);
+        assert!(!names.contains(&"deploy_release"));
+        assert_eq!(stats.available, 3);
+        assert_eq!(stats.selected, 2);
+        assert_eq!(stats.relevant, 1);
+        assert_eq!(stats.previously_used, 1);
+        assert_eq!(stats.omitted, 1);
+    }
+
+    #[test]
+    fn mcp_schema_selection_has_bounded_deterministic_discovery_fallback() {
+        let mcp: Vec<_> = (0..(MAX_MCP_NATIVE_SCHEMAS + 4))
+            .map(|index| {
+                (
+                    format!("tool_{index:02}"),
+                    "No matching task description".to_string(),
+                    serde_json::json!({"type":"object","properties":{}}),
+                )
+            })
+            .collect();
+        let messages = vec![serde_json::json!({"role":"user","content":"unmatched request"})];
+
+        let (selected, stats) = select_mcp_tools_for_context(&mcp, &messages);
+        assert_eq!(selected.len(), MCP_DISCOVERY_FALLBACK_COUNT);
+        assert_eq!(stats.fallback, MCP_DISCOVERY_FALLBACK_COUNT);
+        assert_eq!(stats.omitted, mcp.len() - MCP_DISCOVERY_FALLBACK_COUNT);
+        assert_eq!(stats.selected_names, vec!["tool_00", "tool_01", "tool_02", "tool_03"]);
     }
 
     #[test]
