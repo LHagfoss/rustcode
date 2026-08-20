@@ -83,6 +83,22 @@ pub fn estimate_tokens(text: &str) -> usize {
     count
 }
 
+/// Estimate the provider-visible cost of the native tool schema payload.
+///
+/// Text protocols carry their tool definitions in the system prompt, so callers
+/// must pass an empty slice for those requests. Keeping this calculation next to
+/// the message estimator gives preflight and request telemetry one accounting
+/// rule.
+pub fn estimate_tool_schema_tokens(tool_schemas: &[serde_json::Value]) -> usize {
+    if tool_schemas.is_empty() {
+        0
+    } else {
+        serde_json::to_string(tool_schemas)
+            .map(|serialized| estimate_tokens(&serialized))
+            .unwrap_or_default()
+    }
+}
+
 /// Estimate the provider-visible cost of a persisted chat message. Native
 /// tool calls are stored outside `content`, so counting only the prose would
 /// let large function arguments bypass the history budget.
@@ -141,13 +157,7 @@ pub fn calculate_preflight_budget(
     budget: &crate::config::ContextBudget,
 ) -> PreflightBudget {
     let system_tokens = estimate_tokens(system_prompt);
-    let tool_schema_tokens = if tool_schemas.is_empty() {
-        0
-    } else {
-        serde_json::to_string(tool_schemas)
-            .map(|s| estimate_tokens(&s))
-            .unwrap_or_default()
-    };
+    let tool_schema_tokens = estimate_tool_schema_tokens(tool_schemas);
     let history_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     let dynamic_tail_tokens = estimate_tokens(dynamic_context_tail);
     let provider_margin = budget.provider_overhead_margin as usize;

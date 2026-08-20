@@ -168,7 +168,11 @@ pub(crate) async fn run_subagent(
 rustcode session. Complete the task you were given, then reply in plain text \
 with NO tool call — that reply is returned to the main agent. Keep the final \
 reply compact and information-dense. {delegation_contract}\n\n{}",
-            crate::tools::tool_system_prompt(false, protocol, agent_mode),
+            crate::tools::tool_system_prompt_for_policy(
+                crate::tools::ToolSchemaPolicy::subagent(),
+                protocol,
+                agent_mode,
+            ),
             workspace_root
                 .as_deref()
                 .map(crate::context::environment_context_at)
@@ -233,6 +237,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     true,
                     true,
                     false,
+                    crate::tools::ToolSchemaPolicy::subagent(),
                 )
                 .await
                 .map_err(|e| e.to_string())?;

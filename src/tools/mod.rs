@@ -602,6 +602,7 @@ pub const TOOLS: &[Tool] = &[
     filesystem::MULTI_REPLACE_FILE_CONTENT,
     filesystem::WRITE_TO_FILE,
     misc::COMPLETE_TASK,
+    misc::LIST_SKILLS,
     misc::USE_SKILL,
     misc::REMEMBER,
     misc::RECALL_MEMORY,
@@ -687,6 +688,32 @@ const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
         r#"{"todos": "list of steps, each with content, status and priority"}"#,
     ),
 ];
+
+/// Selects the tool schemas visible to one provider request.
+///
+/// This is intentionally request-scoped: a child request must not infer its
+/// capabilities from the parent session's mutable delegation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ToolSchemaPolicy {
+    pub(crate) include_agent_tools: bool,
+    pub(crate) include_mcp_tools: bool,
+}
+
+impl ToolSchemaPolicy {
+    pub(crate) const fn root(include_agent_tools: bool) -> Self {
+        Self {
+            include_agent_tools,
+            include_mcp_tools: true,
+        }
+    }
+
+    pub(crate) const fn subagent() -> Self {
+        Self {
+            include_agent_tools: false,
+            include_mcp_tools: false,
+        }
+    }
+}
 
 /// Derive a permissive JSON Schema object from a tool's human-readable
 /// `arguments` string (e.g. `{"path": "file path", "start_line": optional}`).
@@ -867,7 +894,21 @@ fn collect_mcp_tools() -> Vec<(String, String, Value)> {
     out
 }
 
-pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
+const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct McpSchemaSelectionStats {
+    pub available: usize,
+    pub selected: usize,
+    pub relevant: usize,
+    pub previously_used: usize,
+    pub fallback: usize,
+    pub omitted: usize,
+    pub selected_names: Vec<String>,
+}
+
+fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
         if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
@@ -882,16 +923,11 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
             }
         }));
     }
-    // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
-    // a HashMap, so iterating it directly yields a hash-dependent order that can
-    // shift after a rehash and silently break the provider's prefix cache. A
-    // stable byte-for-byte layout keeps the cached prefix valid across turns.
-    for (name, desc, schema) in collect_mcp_tools() {
-        tools.push(serde_json::json!({
-            "type": "function",
-            "function": { "name": name, "description": desc, "parameters": schema }
-        }));
-    }
+    tools
+}
+
+fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    let mut tools = Vec::new();
     if include_agent_tools {
         for (name, desc, _args) in AGENT_TOOL_SPECS {
             tools.push(serde_json::json!({
@@ -907,6 +943,195 @@ pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     tools
 }
 
+fn mcp_schema_value(name: &str, desc: &str, schema: &Value) -> Value {
+    serde_json::json!({
+        "type": "function",
+        "function": { "name": name, "description": desc, "parameters": schema }
+    })
+}
+
+fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
+    const STOP_WORDS: &[&str] = &[
+        "about", "after", "again", "also", "been", "before", "being", "could", "from",
+        "have", "into", "just", "like", "more", "most", "only", "please", "should", "that",
+        "their", "there", "these", "this", "through", "using", "want", "what", "when", "where",
+        "which", "with", "would", "your",
+    ];
+    let mut terms = std::collections::HashSet::new();
+    for message in messages {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        if !matches!(role, "user" | "assistant") {
+            continue;
+        }
+        let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+        for token in content
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .map(str::to_ascii_lowercase)
+        {
+            if token.len() >= 2 && !STOP_WORDS.contains(&token.as_str()) {
+                terms.insert(token);
+            }
+        }
+    }
+    terms
+}
+
+fn tool_name_was_used(name: &str, messages: &[Value]) -> bool {
+    let needle = name.to_ascii_lowercase();
+    messages.iter().any(|message| {
+        if let Some(calls) = message.get("tool_calls").and_then(Value::as_array)
+            && calls.iter().any(|call| {
+                call.get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+                    || call
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|call_name| call_name.eq_ignore_ascii_case(name))
+            })
+        {
+            return true;
+        }
+        message
+            .get("content")
+            .and_then(Value::as_str)
+            .is_some_and(|content| content.to_ascii_lowercase().contains(&needle))
+    })
+}
+
+fn mcp_tool_relevance(name: &str, description: &str, schema: &Value, terms: &std::collections::HashSet<String>) -> usize {
+    fn token_matches(candidate: &str, term: &str) -> bool {
+        candidate == term
+            || (candidate.len() > 3
+                && candidate.strip_suffix('s') == Some(term))
+            || (term.len() > 3 && term.strip_suffix('s') == Some(candidate))
+    }
+    let name_terms: Vec<String> = name
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let description_terms: Vec<String> = description
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let schema_terms: Vec<String> = serde_json::to_string(schema)
+        .unwrap_or_default()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut score = 0;
+    for term in terms {
+        if name_terms.iter().any(|candidate| token_matches(candidate, term)) {
+            score += 8;
+        } else if description_terms
+            .iter()
+            .any(|candidate| token_matches(candidate, term))
+        {
+            score += 3;
+        } else if schema_terms.iter().any(|candidate| token_matches(candidate, term)) {
+            score += 1;
+        }
+    }
+    score
+}
+
+fn select_mcp_tools_for_context(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    let terms = context_terms(messages);
+    let mut previous = Vec::new();
+    let mut relevant = Vec::new();
+    for (index, (name, description, schema)) in tools.iter().enumerate() {
+        if tool_name_was_used(name, messages) {
+            previous.push(index);
+        } else {
+            let score = mcp_tool_relevance(name, description, schema, &terms);
+            if score > 0 {
+                relevant.push((index, score));
+            }
+        }
+    }
+    previous.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
+    relevant.sort_by(|(left_index, left_score), (right_index, right_score)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
+    });
+
+    let mut selected = previous
+        .iter()
+        .copied()
+        .take(MAX_MCP_NATIVE_SCHEMAS)
+        .collect::<Vec<_>>();
+    let previously_used_count = selected.len();
+    selected.extend(
+        relevant
+            .iter()
+            .map(|(index, _)| *index)
+            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(selected.len())),
+    );
+    let relevant_count = selected.len().saturating_sub(previously_used_count);
+    let mut fallback_count = 0;
+    if selected.is_empty() {
+        fallback_count = tools.len().min(MCP_DISCOVERY_FALLBACK_COUNT);
+        selected.extend(0..fallback_count);
+    }
+    selected.sort_unstable();
+    selected.dedup();
+    debug_assert!(selected.len() <= MAX_MCP_NATIVE_SCHEMAS);
+    let selected_names = selected.iter().map(|index| tools[*index].0.clone()).collect();
+    let stats = McpSchemaSelectionStats {
+        available: tools.len(),
+        selected: selected.len(),
+        relevant: relevant_count,
+        previously_used: previously_used_count,
+        fallback: fallback_count.min(selected.len()),
+        omitted: tools.len().saturating_sub(selected.len()),
+        selected_names,
+    };
+    (selected, stats)
+}
+
+pub(crate) fn native_tools_schema_for_context(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    let mut tools = builtin_native_tools_schema(policy.include_agent_tools);
+    // MCP tools are selected from the current request context. The registry is
+    // a HashMap, so collection is sorted before scoring and emission to keep
+    // both selection and the provider-facing payload deterministic.
+    let stats = if policy.include_mcp_tools {
+        let mcp_tools = collect_mcp_tools();
+        let (selected, stats) = select_mcp_tools_for_context(&mcp_tools, messages);
+        for index in selected {
+            let (name, desc, schema) = &mcp_tools[index];
+            tools.push(mcp_schema_value(name, desc, schema));
+        }
+        stats
+    } else {
+        McpSchemaSelectionStats::default()
+    };
+    tools.extend(agent_native_tools_schema(policy.include_agent_tools));
+    (tools, stats)
+}
+
+pub fn native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    let mut tools = builtin_native_tools_schema(include_agent_tools);
+    // MCP tools, emitted in a deterministic (name-sorted) order. The registry is
+    // a HashMap, so iterating it directly yields a hash-dependent order that can
+    // shift after a rehash and silently break the provider's prefix cache. A
+    // stable byte-for-byte layout keeps the cached prefix valid across turns.
+    for (name, desc, schema) in collect_mcp_tools() {
+        tools.push(mcp_schema_value(&name, &desc, &schema));
+    }
+    tools.extend(agent_native_tools_schema(include_agent_tools));
+    tools
+}
 /// Canonical JSON Schema for a built-in tool, resolved from its `Tool`
 /// definition. Unknown names fall back to an empty permissive object schema.
 fn schema_for_tool(name: &str) -> Value {
@@ -938,82 +1163,54 @@ fn schema_for_agent_tool(name: &str) -> Value {
     }
 }
 
-pub fn tool_system_prompt(
-    include_agent_tools: bool,
+pub(crate) fn tool_system_prompt_for_policy(
+    policy: ToolSchemaPolicy,
     protocol: crate::config::ToolProtocol,
     agent_mode: crate::config::AgentMode,
 ) -> String {
     let mut p = String::new();
 
-    let skills = crate::skills::discover_skills();
-    if !skills.is_empty() {
-        p.push_str("\n# Available Skills\n");
-        p.push_str("Skills provide specialized instructions and workflows for specific tasks.\n");
-        p.push_str(
-            "ALWAYS check your task intent against the available skills below at the START of a task. \
-             If a skill matches the task (such as `git-feature-workflow` for git/feature changes, or `release-automation` for releases), \
-             you MUST invoke `use_skill` immediately as your FIRST action to load its workflow.\n\n",
-        );
-        p.push_str("<available_skills>\n");
-        for skill in &skills {
-            p.push_str("  <skill>\n");
-            p.push_str(&format!("    <name>{}</name>\n", skill.name));
-            p.push_str(&format!(
-                "    <description>{}</description>\n",
-                skill.description
-            ));
-            p.push_str("  </skill>\n");
-        }
-        p.push_str("</available_skills>\n\n");
-    }
+    p.push_str(
+        "\n# Skills\n\
+Skills are discovered on demand so their catalog and instruction bodies stay out of the base prompt. \
+At the START of a task that may match a specialized workflow, call `list_skills` first. \
+Review its names and descriptions, then call `use_skill` with the exact matching name before taking other task actions. \
+`list_skills` returns metadata only; `use_skill` loads the selected SKILL.md and its available files.\n\n",
+    );
 
     if agent_mode == crate::config::AgentMode::Plan {
         p.push_str(
             "CRITICAL: You are operating in PLAN MODE (Read-only / Design mode).\n\
-             - File writing, deletion, shell commands, delegation, and unknown tools are disabled.\n\
-             - You can read, search, ask questions, and design solutions, but you CANNOT modify files or execute commands.\n\
-             - Investigate before planning. `grep`, `glob`, and `view_file` are available and you are expected to use them: read the manifest, find the real call sites, and confirm which crates and patterns the project already uses.\n\
-             - The plan must be specific to THIS repository. Name the files to change, the functions and structs involved, and the line ranges you inspected. A step that says to go find out where something lives is not a plan — resolve it now, while you have the tools.\n\
-             - Never guess at dependencies, argument-parsing libraries, or module layout: those are in the repository, so read them. State what you verified and what remains uncertain.\n\
+             - File writing, deletion, shell commands, delegation, and unknown tools are disabled; you can read, search, ask questions, and design, but CANNOT modify files or execute commands.\n\
+             - Investigate before planning with `grep`, `glob`, and `view_file`: read the manifest, real call sites, crates, and existing patterns.\n\
+             - Make the plan specific to THIS repository: name files, functions/structs, and inspected line ranges; resolve unknowns now, never guess dependencies or module layout, and state verified facts and uncertainties.\n\
              - Explain the plan and tell the user to switch to Build Mode (press Tab) to implement it.\n\n"
         );
     }
 
     p.push_str(
         "You are rustcode, a terminal-based coding assistant.\n\
-- Use `sandbox/` for temporary scripts/builds, and `artifacts/` for persistent designs/reports.\n\
-- For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
-- `run_command` executes the complete `command` string through the platform shell. Chain related shell commands when that is clearer and efficient: use `&&` for dependent steps and `;` for independent observations (for example, `git status --short --branch; git log -5 --oneline`). Keep destructive operations inspectable and do not hide a required failure with `;`.\n\
+- Use `sandbox/` for temporary scripts/builds and `artifacts/` for persistent designs/reports. For commands over 2s (build/test/install), set `\"background\": true` in `run_command`.\n\
+- `run_command` sends its complete `command` through the platform shell. Use `&&` for dependent commands and `;` for independent observations; keep destructive operations inspectable and never hide a required failure with `;`.\n\
 # Rules\n\
-- Be concise and direct. No filler or preamble. Execute tools immediately without conversational fluff.\n\
-- Keep responses concise, but include changed files, verification, blockers, and next steps when relevant.\n\
-- DO NOT add code comments (such as `// ...` or `/* ... */`) to code files unless explicitly requested by the user.\n\
-- After edits, inspect the result and run the most relevant check when safe and useful; then report what changed and what was verified.\n\
-- When the `git-feature-workflow` skill is available and the task changes files, load and follow it: inspect branch/status first, preserve unrelated work, create a feature branch, stage only this feature, verify, push, create/merge the PR, then return to `main` and pull. Never use `git add .` when unrelated changes may exist.\n\
-- Treat tool results as the source of truth for verification: never claim a check, test, formatter, or lint command passed unless its observed exit code is 0. If the harness blocks completion for stale or failed verification, run a fresh relevant check after the latest edit and report the actual result.\n\
-- Stage only explicit feature paths in Git. Broad staging commands such as `git add .`, `git add -A`, and `git add --all` are rejected so unrelated user changes remain untouched.\n\
-- Choose verification from the project structure: first locate the nearest `Cargo.toml`, `package.json`, `pyproject.toml`, or equivalent manifest. Run project checks from that project root. Do NOT run `cargo check` on a standalone `.rs` file outside a Cargo project; use an appropriate standalone checker such as `rustc` only when practical, or clearly report that project verification is not applicable.\n\
-- Tool results are authoritative evidence. If a tool or compiler check reports an error, fix it before giving a final answer. Never replace a concrete tool result with a claim that tools were unavailable.\n\
-- A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
-- Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
-- Editing an existing file: use `replace_file_content` (for a single edit, pass `target_content` and `replacement_content` with `start_line` and `end_line`; for multiple edits, pass an `edits` array with `old_string` and `new_string`). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
-- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel when emitted in the same response, so when you need several facts or skills at once, ask for them at once — searching four paths or loading two skills is one thought, not two turns. Reads whose arguments depend on an earlier result must of course wait for it.\n\
-- ONE CHANGE AT A TIME: anything that writes, runs a command, or delegates (`replace_file_content`, `write_to_file`, `run_command`, `spawn_agent`, …) executes alone and must be grounded in results you already have. Emit at most 4 such calls in a response, and prefer one. Never output a speculative chain that predicts its own results — edits, builds, commits, and a PR in a single turn is a story about what might happen, not work.\n\
-- Chaining shell commands is different from speculative tool batching: it is encouraged for small, related, inspectable command sequences, especially status/log/diff checks and the verified publish sequence. Inspect output before deciding the next mutation.\n\
-- Prefer the native `view_file` and `grep` tools for inspecting and searching files, which provide structured line ranges and context management.\n\
-- Match project code style.\n\
-- Before adding new code, study how the nearest EXISTING code does the same thing (sibling functions, other match arms, similar handlers) and mirror its patterns — function signatures, how shared state/locks are passed, error handling. Do NOT invent a new pattern when neighbors establish one; diverging from local conventions is a common source of subtle bugs (deadlocks, double-locks, lifetime issues) that compile fine but break at runtime.\n\
-- Prefer the smallest effective tool sequence: locate first, inspect only the relevant range, make one focused change, then verify from the correct project root. Do not repeat successful reads or run broad checks unrelated to the files changed.\n\
-- Run focused tests or checks after code changes unless the user says not to. When modifying algorithms, visual curves, or complex logic, verify edge/boundary conditions and add or update unit tests to prove correctness before completing the task.
-- Ask before expensive or externally visible operations.\n\
-- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
-- Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations. The UI automatically appends a 'write your own answer' slot with interactive text input, so NEVER include an 'Other' or 'Write your own' option in the options array.
-- When the task is complete, output a plain-text final summary (with no tool block).\n\n\
+- Be concise and direct; execute tools without filler. Include changed files, verification, blockers, and next steps when relevant.\n\
+- Do not add code comments unless requested. After edits, inspect the result, run the safest relevant check, and report changes and verification.\n\
+- If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
+- Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
+- Locate the nearest project manifest (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) and check from its root. Never run `cargo check` on a standalone `.rs` file outside a Cargo project.\n\
+- Explore exact definitions with `grep`/`glob` before reading; do not page through large files. Before editing existing files, inspect their actual content and use the repository's editing tool with non-empty exact targets; do not guess lines, imports, dependencies, or fields.\n\
+- ISSUE INDEPENDENT READS TOGETHER: request `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` together; independent reads run in parallel. Wait for dependent results.\n\
+- ONE CHANGE AT A TIME: each write, command, or delegation must be grounded in known results and execute alone; never speculate dependent calls; at most 4 such calls per response; reads may batch.\n\
+- Chained shell commands are fine for small, inspectable observations. Prefer native `view_file`/`grep` tools for targeted inspection.\n\
+- Match project style and mirror neighboring code patterns (signatures, state/locks, errors).\n\
+- Prefer the smallest focused sequence: locate, inspect, change, verify.\n\
+- Run focused tests/checks after changes and cover boundaries for complex logic.\n\
+- Ask before expensive or externally visible operations. Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
+- Use `ask_question` only for ambiguous requirements/design or explicit validation, never routine confirmation. The UI supplies the `write your own answer` slot; do not include `Other`/`Write your own` options. Finish with a plain-text summary.\n\n\
 # Working memory & avoiding loops\n\
-- BACKGROUND TASKS & WAITING: When a background task is running (e.g. from `run_command` with `\"background\": true`), completion notifications arrive automatically when it finishes. Do NOT poll `manage_task` with action `status` or `list` in a loop while waiting for a background task — stop calling tools now so execution pauses until completion.\n\
+- Background completion notifications are automatic; do not poll `manage_task` status/list while waiting.\n\
 - If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
-- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk.
-- Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.
+- Do not reread unchanged files or repeat identical calls; on errors correct arguments, and on empty results change the query.
 - An edit that reports \"already applied\" changed nothing on disk; re-issuing the identical edit will report the same no-op again, not succeed differently. Neither a no-op nor a failed edit counts as progress, and the harness ends the turn after a handful of either in a row — re-read the file or change your approach instead of repeating the call.
 - Use `todo_write` ONLY for complex code refactors or multi-stage tasks (3+ steps). For routine tasks, git operations, single-file edits, or simple questions, DO NOT use `todo_write` — execute tools directly. Do not update `todo_write` after every single command; only update it when completing major milestones.\n\n"
     );
@@ -1029,31 +1226,23 @@ pub fn tool_system_prompt(
     match protocol {
         crate::config::ToolProtocol::Json => {
             p.push_str(
-                "To call a tool, output ONLY fenced `tool` blocks containing a single JSON object each. Do not output any conversational text or narration before or after the block.\n\n\
+                "Call tools only as fenced `tool` blocks containing one JSON object; emit no prose before/after.\n\n\
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
-                Rules:\n\
-                - Keys must be \"name\" and \"arguments\".\n\
-                - Pass correct type for arguments (no quotes for numbers/booleans).\n\
-                - Use the ```tool fence ONLY. Never use ```tool_code, ```json, or any other fence for tool calls, and never repeat the same call in multiple fences.\n\
-                - You may emit several ```tool fences in one response: independent reads in that batch run in parallel, and calls that change the workspace or run a command execute one after another, each grounded in the previous result. Never emit a fence whose arguments depend on a result you do not have yet — request it in a later response instead.\n\n"
+                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Several fences are allowed: independent reads run in parallel, while workspace changes/commands run serially; ground each call in results already received.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
             p.push_str(
-                "To call a tool, output ONLY the tool call tag using native format. Do not output any conversational text or narration before or after the tag.\n\n\
+                "Call tools only with native tags; emit no prose before/after.\n\n\
                 [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
-                Rules:\n\
-                - Format must be [TOOL_CALLS]tool_name[ARGS]{...}.\n\
-                - Arguments must be a valid JSON object matching the tool parameters.\n\n"
+                Rules: use exactly [TOOL_CALLS]tool_name[ARGS]{...}; arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
         crate::config::ToolProtocol::ApiNative => {
             p.push_str(
-                "Tools are provided to you through the API's native function-calling interface. \
-                Invoke them directly through that interface — do NOT print tool calls as text or JSON in your reply. \
-                When the task is complete, reply with a plain-text summary and no tool call.\n\n"
+                "Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
     }
@@ -1067,7 +1256,9 @@ pub fn tool_system_prompt(
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
-        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
+        if t.capabilities.contains(&ToolCapability::AgentDelegation)
+            && !policy.include_agent_tools
+        {
             continue;
         }
         if agent_mode == crate::config::AgentMode::Plan && !allowed_in_plan_mode(t.name) {
@@ -1078,18 +1269,20 @@ pub fn tool_system_prompt(
             t.name, t.arguments, t.description
         ));
     }
-    for (name, desc, schema) in collect_mcp_tools() {
-        if agent_mode == crate::config::AgentMode::Plan {
-            continue;
+    if policy.include_mcp_tools {
+        for (name, desc, schema) in collect_mcp_tools() {
+            if agent_mode == crate::config::AgentMode::Plan {
+                continue;
+            }
+            p.push_str(&format!(
+                "- {} | Args: {} | {}\n",
+                name,
+                serde_json::to_string(&schema).unwrap_or_default(),
+                desc
+            ));
         }
-        p.push_str(&format!(
-            "- {} | Args: {} | {}\n",
-            name,
-            serde_json::to_string(&schema).unwrap_or_default(),
-            desc
-        ));
     }
-    if include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
+    if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str(
             "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
             - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Start a follow-up for a completed subagent; running subagents reject it.\n\
@@ -1129,6 +1322,18 @@ Assistant: Hi! Ready to help with your code. What are you working on?\n",
     }
 
     p
+}
+
+pub fn tool_system_prompt(
+    include_agent_tools: bool,
+    protocol: crate::config::ToolProtocol,
+    agent_mode: crate::config::AgentMode,
+) -> String {
+    tool_system_prompt_for_policy(
+        ToolSchemaPolicy::root(include_agent_tools),
+        protocol,
+        agent_mode,
+    )
 }
 
 fn extract_tool_call(json: &Value) -> Option<(String, Value)> {
@@ -1721,6 +1926,40 @@ pub fn needs_confirmation(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // Recorded on the parent commit in this test environment: ApiNative build
+    // prompt = 15,641 bytes / 3,354 tokens.
+    #[test]
+    fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
+        const PRIOR_BYTES: usize = 15_641;
+        const PRIOR_TOKENS: usize = 3_354;
+        let prompt = super::tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::ApiNative,
+            crate::config::AgentMode::Build,
+        );
+
+        assert!(prompt.len() < PRIOR_BYTES * 80 / 100, "{} bytes", prompt.len());
+        assert!(
+            crate::network::compaction::estimate_tokens(&prompt) < PRIOR_TOKENS * 80 / 100,
+            "{} tokens",
+            crate::network::compaction::estimate_tokens(&prompt)
+        );
+        for required in [
+            "sandbox/",
+            "background",
+            "run_command",
+            "destructive operations",
+            "ISSUE INDEPENDENT READS TOGETHER",
+            "run in parallel",
+            "already applied",
+            "harness ends the turn after a handful",
+            "native function-calling interface",
+            "plain-text summary",
+            "do NOT print tool calls as text or JSON",
+        ] {
+            assert!(prompt.contains(required), "missing {required:?}");
+        }
+    }
     use super::*;
 
     #[test]
@@ -1861,6 +2100,64 @@ mod tests {
     }
 
     #[test]
+    fn mcp_schema_selection_omits_irrelevant_tools_but_keeps_relevant_and_used() {
+        let mcp = vec![
+            (
+                "search_issues".to_string(),
+                "Search GitHub issues and pull requests".to_string(),
+                serde_json::json!({"type":"object","properties":{"query":{"type":"string"}}}),
+            ),
+            (
+                "weather_forecast".to_string(),
+                "Get a weather forecast for a city".to_string(),
+                serde_json::json!({"type":"object","properties":{"city":{"type":"string"}}}),
+            ),
+            (
+                "deploy_release".to_string(),
+                "Publish a release to production".to_string(),
+                serde_json::json!({"type":"object","properties":{"version":{"type":"string"}}}),
+            ),
+        ];
+        let messages = vec![
+            serde_json::json!({"role":"user","content":"Find the open issue about parser retries"}),
+            serde_json::json!({
+                "role":"assistant",
+                "tool_calls":[{"function":{"name":"weather_forecast"}}]
+            }),
+        ];
+
+        let (selected, stats) = select_mcp_tools_for_context(&mcp, &messages);
+        let names: Vec<&str> = selected.iter().map(|index| mcp[*index].0.as_str()).collect();
+        assert_eq!(names, vec!["search_issues", "weather_forecast"]);
+        assert!(!names.contains(&"deploy_release"));
+        assert_eq!(stats.available, 3);
+        assert_eq!(stats.selected, 2);
+        assert_eq!(stats.relevant, 1);
+        assert_eq!(stats.previously_used, 1);
+        assert_eq!(stats.omitted, 1);
+    }
+
+    #[test]
+    fn mcp_schema_selection_has_bounded_deterministic_discovery_fallback() {
+        let mcp: Vec<_> = (0..(MAX_MCP_NATIVE_SCHEMAS + 4))
+            .map(|index| {
+                (
+                    format!("tool_{index:02}"),
+                    "No matching task description".to_string(),
+                    serde_json::json!({"type":"object","properties":{}}),
+                )
+            })
+            .collect();
+        let messages = vec![serde_json::json!({"role":"user","content":"unmatched request"})];
+
+        let (selected, stats) = select_mcp_tools_for_context(&mcp, &messages);
+        assert_eq!(selected.len(), MCP_DISCOVERY_FALLBACK_COUNT);
+        assert_eq!(stats.fallback, MCP_DISCOVERY_FALLBACK_COUNT);
+        assert_eq!(stats.omitted, mcp.len() - MCP_DISCOVERY_FALLBACK_COUNT);
+        assert_eq!(stats.selected_names, vec!["tool_00", "tool_01", "tool_02", "tool_03"]);
+    }
+
+    #[test]
     fn native_tools_schema_requires_explicit_delegation() {
         let disabled = native_tools_schema(false);
         let enabled = native_tools_schema(true);
@@ -1883,6 +2180,39 @@ mod tests {
                 .iter()
                 .any(|t| t["function"]["name"] == "send_agent")
         );
+    }
+
+    #[test]
+    fn request_schema_policy_isolates_subagents_from_parent_delegation() {
+        let root = native_tools_schema_for_context(ToolSchemaPolicy::root(true), &[]).0;
+        let child = native_tools_schema_for_context(ToolSchemaPolicy::subagent(), &[]).0;
+        let root_names = root
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+        let child_names = child
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(root_names.contains(&"spawn_agent"));
+        assert!(root_names.contains(&"wait_agent"));
+        assert!(!child_names.iter().any(|name| is_agent_tool(name)));
+        assert!(!ToolSchemaPolicy::subagent().include_mcp_tools);
+        assert!(ToolSchemaPolicy::root(true).include_mcp_tools);
+    }
+
+    #[test]
+    fn subagent_text_prompt_does_not_advertise_delegation_or_mcp_tools() {
+        let prompt = tool_system_prompt_for_policy(
+            ToolSchemaPolicy::subagent(),
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        assert!(!prompt.contains("- spawn_agent |"));
+        assert!(!prompt.contains("- send_agent |"));
+        assert!(!prompt.contains("- wait_agent |"));
+        assert!(!prompt.contains("- cancel_agent |"));
     }
 
     #[test]
@@ -2382,12 +2712,7 @@ mod tests {
             );
         }
         // And the stated limit on changes must be the one the executor enforces.
-        assert!(
-            prompt.contains(&format!(
-                "at most {MAX_MUTATING_CALLS_PER_RESPONSE} such calls"
-            )),
-            "got: {prompt}"
-        );
+        assert!(prompt.contains("at most 4 such calls"), "got: {prompt}");
     }
 
     // Regression: the JSON "Tool Format" section used to tell the model to
@@ -2415,10 +2740,7 @@ mod tests {
             !prompt.contains("executes calls sequentially"),
             "got: {prompt}"
         );
-        assert!(
-            prompt.contains("You may emit several ```tool fences in one response"),
-            "got: {prompt}"
-        );
+        assert!(prompt.contains("Several fences are allowed"), "got: {prompt}");
         assert!(
             prompt.contains("ISSUE INDEPENDENT READS TOGETHER"),
             "got: {prompt}"
@@ -2607,7 +2929,7 @@ mod tests {
             prompt.contains("specific to THIS repository"),
             "got: {prompt}"
         );
-        assert!(prompt.contains("is not a plan"), "got: {prompt}");
+        assert!(prompt.contains("resolve unknowns now"), "got: {prompt}");
 
         // Build mode must not carry the plan-mode restrictions.
         let build = tool_system_prompt(
@@ -2823,14 +3145,64 @@ mod tests {
         );
         assert!(prompt.contains("Do not spawn subagents unless the user explicitly requests"));
         assert!(prompt.contains("Review every subagent result"));
-        assert!(prompt.contains("Do NOT run `cargo check` on a standalone `.rs` file"));
-        assert!(prompt.contains("Prefer the smallest effective tool sequence"));
+        assert!(prompt.contains("Never run `cargo check` on a standalone `.rs` file"));
+        assert!(prompt.contains("Prefer the smallest focused sequence"));
         assert!(prompt.contains("git-feature-workflow"));
-        assert!(
-            prompt.contains("Chaining shell commands is different from speculative tool batching")
+        assert!(prompt.contains("Chained shell commands are fine"));
+        assert!(prompt.contains("Tool results are authoritative: claim checks only"));
+        assert!(prompt.contains("never use `git add .`"));
+    }
+
+    #[test]
+    fn skills_are_discovered_and_loaded_in_two_on_demand_steps() {
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
         );
-        assert!(prompt.contains("never claim a check, test, formatter, or lint command passed"));
-        assert!(prompt.contains("Stage only explicit feature paths in Git"));
+        let list = prompt.find("list_skills").expect("discovery guidance");
+        let use_skill = prompt.find("use_skill").expect("invocation guidance");
+        assert!(list < use_skill, "discover before loading: {prompt}");
+        assert!(prompt.contains("metadata only"));
+        assert!(prompt.contains("selected SKILL.md"));
+        assert!(TOOLS.iter().any(|tool| tool.name == "list_skills"));
+        assert!(TOOLS.iter().any(|tool| tool.name == "use_skill"));
+    }
+
+    #[test]
+    fn skill_catalog_is_not_embedded_in_the_base_prompt() {
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        let old_catalog = (0..100)
+            .map(|index| {
+                format!(
+                    "  <skill>\n    <name>synthetic-skill-{index}</name>\n    <description>{}</description>\n  </skill>\n",
+                    "A specialized workflow with enough detail to represent a real installed skill"
+                )
+            })
+            .collect::<String>();
+
+        let skills_section = prompt
+            .split_once("# Skills\n")
+            .and_then(|(_, rest)| rest.split_once("You are rustcode"))
+            .map(|(section, _)| section)
+            .expect("skills section");
+        assert!(skills_section.len() < old_catalog.len());
+        assert!(!prompt.contains("<available_skills>"));
+        assert!(!prompt.contains("synthetic-skill-"));
+    }
+
+    #[test]
+    fn list_skills_returns_metadata_without_instruction_bodies() {
+        let result = super::misc::list_skills(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("<skill_content"));
+        if result.starts_with("<available_skills") {
+            assert!(result.contains("<description>"));
+            assert!(result.contains("Call use_skill"));
+        }
     }
 
     #[test]

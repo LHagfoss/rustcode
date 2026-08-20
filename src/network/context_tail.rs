@@ -8,21 +8,16 @@ pub(crate) fn build_volatile_context_block(
     context_window: u32,
 ) -> String {
     let now = chrono::Local::now();
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "(unknown)".to_string());
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "(unknown)".to_string());
 
+    // Working directory and platform are stable workspace identity and are
+    // rendered by the environment fragment. Keeping them out of this block
+    // avoids paying for the same values again on the first request while the
+    // date/time and accounting fields below remain turn-varying.
     let mut b = String::from("# Runtime Context (volatile — do not rely on this being cached)\n");
     b.push_str(&format!(
         "- Current date/time: {}\n",
         now.format("%A %Y-%m-%d %H:%M:%S %Z")
-    ));
-    b.push_str(&format!("- Working directory: {cwd}\n"));
-    b.push_str(&format!(
-        "- Platform: {} {}\n",
-        std::env::consts::OS,
-        std::env::consts::ARCH
     ));
     b.push_str(&format!("- Shell: {shell}\n"));
     b.push_str(&format!("- Context window: {context_window} tokens\n"));
@@ -186,4 +181,54 @@ pub(crate) fn build_dynamic_context_tail_with_memory(
     }
 
     history::render_context_fragments(&fragments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn usage(
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+    ) -> crate::app::TokenUsage {
+        crate::app::TokenUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cached_tokens: None,
+        }
+    }
+
+    #[test]
+    fn fresh_context_renders_stable_identity_once_and_date_once() {
+        let stable = crate::context::environment_context_at(Path::new(env!("CARGO_MANIFEST_DIR")));
+        let volatile = build_volatile_context_block(Some(&usage(10, 3, 13)), Some(91.5), 32_000);
+        let fresh = format!("{stable}\n{volatile}");
+
+        assert_eq!(fresh.matches("- Working directory:").count(), 1);
+        assert_eq!(fresh.matches("- Platform:").count(), 1);
+        assert_eq!(fresh.matches("- Current date/time:").count(), 1);
+        assert_eq!(fresh.matches("Today's date:").count(), 0);
+        assert!(!volatile.contains("- Working directory:"));
+        assert!(!volatile.contains("- Platform:"));
+    }
+
+    #[test]
+    fn later_context_keeps_volatile_accounting_fields_current() {
+        let first_usage = usage(10, 3, 13);
+        let later_usage = usage(120, 30, 150);
+        let first = build_volatile_context_block(Some(&first_usage), Some(91.5), 32_000);
+        let later = build_volatile_context_block(Some(&later_usage), Some(84.0), 28_000);
+
+        assert!(first.contains("Context window: 32000 tokens"));
+        assert!(first.contains("Last-turn token usage: prompt 10 / completion 3 / total 13"));
+        assert!(first.contains("Model quota remaining: 91.5%"));
+        assert!(later.contains("Context window: 28000 tokens"));
+        assert!(later.contains("Last-turn token usage: prompt 120 / completion 30 / total 150"));
+        assert!(later.contains("Model quota remaining: 84.0%"));
+        assert_ne!(first, later);
+        assert_eq!(later.matches("- Current date/time:").count(), 1);
+    }
 }

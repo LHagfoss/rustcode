@@ -1036,6 +1036,7 @@ pub(crate) async fn prepare_turn_request(
         volatile_window,
         mut context_section,
         system_prompt,
+        native_schema_policy,
         active_profile,
         vision_profile,
         mut image_cache,
@@ -1078,6 +1079,11 @@ pub(crate) async fn prepare_turn_request(
             .prompt_cache
             .system_prompt(delegation_active, protocol, agent_mode)
             .to_string();
+        let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
+            Some(crate::tools::ToolSchemaPolicy::root(delegation_active))
+        } else {
+            None
+        };
         // Store the snapshot if this is the first turn.
         if s.context_snapshot.is_none() {
             s.context_snapshot = Some(current_snapshot.clone());
@@ -1092,6 +1098,7 @@ pub(crate) async fn prepare_turn_request(
             volatile_window,
             context_section,
             system_prompt,
+            native_schema_policy,
             s.active_model_profile(),
             s.vision_model_profile(),
             s.image_analysis_cache.clone(),
@@ -1207,13 +1214,17 @@ pub(crate) async fn prepare_turn_request(
     // trimming so its size counts toward the budget.
     attach_request_context_tail(&mut msgs, &dynamic_context);
 
+    let native_tool_schemas = native_schema_policy
+        .map(|policy| crate::tools::native_tools_schema_for_context(policy, &msgs).0)
+        .unwrap_or_default();
+
     let context_budget = {
         let s = state.lock().await;
         s.active_context_budget()
     };
     let preflight = compaction::calculate_preflight_budget(
         &system_prompt,
-        &[],
+        &native_tool_schemas,
         &history_snapshot,
         &dynamic_context,
         0,
@@ -1228,11 +1239,13 @@ pub(crate) async fn prepare_turn_request(
     // and provider safety headroom from the active model profile. Keep this
     // final trim on the effective history budget.
     inject_system_reminder(&mut msgs);
-    let budget = if !preflight.fits_hard_limit() || !preflight.fits_soft_target() {
-        context_budget.history_tokens.min(budget_token_limit)
-    } else {
-        budget_token_limit
-    };
+    let schema_over_reserve = preflight
+        .tool_schema_tokens
+        .saturating_sub(context_budget.tool_reserve as usize);
+    let schema_adjusted_history_budget = budget_token_limit
+        .min(context_budget.history_tokens)
+        .saturating_sub(schema_over_reserve as u32);
+    let budget = schema_adjusted_history_budget;
     let dropped = trim_msgs_to_budget(&mut msgs, budget);
     if dropped > 0 {
         dbg_log!(

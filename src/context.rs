@@ -169,6 +169,12 @@ pub fn environment_context() -> String {
 
 /// Render the initial environment block for an explicit workspace root.
 /// This is the workspace-aware counterpart to [`environment_context`].
+///
+/// Workspace identity (the directory and platform) belongs here because it is
+/// stable for a session. The current date is intentionally rendered by the
+/// volatile runtime block instead, so a fresh request does not carry the same
+/// date twice and later requests can see it advance without rebuilding this
+/// stable block.
 pub fn environment_context_at(root: &Path) -> String {
     let mut out = String::new();
     out.push_str("# Environment\n\n");
@@ -181,9 +187,6 @@ pub fn environment_context_at(root: &Path) -> String {
         std::env::consts::OS,
         std::env::consts::ARCH
     ));
-
-    let now = chrono::Local::now();
-    out.push_str(&format!("- Today's date: {}\n", now.format("%A %Y-%m-%d")));
 
     if let Some(git) = git_context(&cwd) {
         out.push_str(&git);
@@ -338,7 +341,7 @@ mod tests {
         assert!(ctx.starts_with("# Environment"));
         assert!(ctx.contains("Working directory:"));
         assert!(ctx.contains("Platform:"));
-        assert!(ctx.contains("Today's date:"));
+        assert!(!ctx.contains("Today's date:"));
     }
 
     #[test]
@@ -375,5 +378,28 @@ mod tests {
             .unwrap()
             .contains("workspace-only rule"));
         assert!(environment_context_at(dir.path()).contains("workspace-only rule"));
+    }
+
+    #[test]
+    fn later_snapshot_still_reports_changed_stable_state() {
+        let previous = ContextSnapshot {
+            cwd: "/workspace/old".to_string(),
+            date: "Wednesday 2026-08-19".to_string(),
+            git_branch: Some("main".to_string()),
+            git_status_summary: Some("clean".to_string()),
+            tree_entries: vec!["src/".to_string()],
+            agent_doc: Some("rule".to_string()),
+        };
+        let current = ContextSnapshot {
+            cwd: "/workspace/new".to_string(),
+            date: "Thursday 2026-08-20".to_string(),
+            ..previous.clone()
+        };
+
+        let changes = previous
+            .diff(&current)
+            .expect("changed state must be rendered");
+        assert!(changes.contains("Working directory changed: /workspace/old -> /workspace/new"));
+        assert!(changes.contains("Date changed: Thursday 2026-08-20"));
     }
 }
