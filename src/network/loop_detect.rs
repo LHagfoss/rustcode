@@ -148,12 +148,21 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
 /// `||`/`&&`/`;`/`|`, flags dropped, arguments unquoted and de-slashed.
 /// Search tools normalize to `search:<args>` so all grep/rg variants match.
 fn normalize_command(cmd: &str) -> String {
-    // Isolate the primary command (spaces around separators avoid matching
-    // operators inside quoted patterns like 'TODO|FIXME').
-    let core = [" || ", " && ", " ; ", " | "]
-        .iter()
-        .fold(cmd, |acc, sep| acc.split(sep).next().unwrap_or(acc))
-        .trim();
+    // Isolate the primary substantive command (spaces around separators avoid
+    // matching operators inside quoted patterns like 'TODO|FIXME'). A leading
+    // `cd … &&` is setup, not the action: collapsing every workspace command
+    // to `cmd:cd:<path>` creates false loop warnings across unrelated checks.
+    let core = cmd
+        .split(" && ")
+        .flat_map(|segment| segment.split(" || "))
+        .flat_map(|segment| segment.split(" ; "))
+        .flat_map(|segment| segment.split(" | "))
+        .map(str::trim)
+        .find(|segment| {
+            let mut tokens = segment.split_whitespace();
+            !matches!(tokens.next(), Some("cd"))
+        })
+        .unwrap_or("");
 
     let tokens: Vec<&str> = core.split_whitespace().collect();
     if tokens.is_empty() {
@@ -777,6 +786,25 @@ mod tests {
         assert!(is_stable_inspection_command("git status --short"));
         assert!(is_stable_inspection_command("git diff --stat"));
         assert!(!is_stable_inspection_command("git restore -- src/lib.rs"));
+    }
+
+    #[test]
+    fn leading_cd_does_not_collapse_distinct_shell_actions() {
+        let (_, curl) = signatures(
+            "run_command",
+            &json!({"command": "cd /tmp/project && curl -s http://localhost:5199"}),
+        );
+        let (_, browser) = signatures(
+            "run_command",
+            &json!({"command": "cd /tmp/project && terminal-browser open http://localhost:5199"}),
+        );
+
+        assert_eq!(curl, "cmd:curl:http://localhost:5199");
+        assert_eq!(
+            browser,
+            "cmd:terminal-browser:open http://localhost:5199"
+        );
+        assert_ne!(curl, browser);
     }
 
     #[test]

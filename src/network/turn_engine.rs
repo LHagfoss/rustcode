@@ -1045,7 +1045,12 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         .and_then(|v| v.as_str())
                 });
                 cross_turn_tool_count += 1;
-                cross_turn_made_progress |= changed_workspace;
+                // Runtime probes, browser checks, and fresh reads can provide
+                // decisive evidence without changing a file. The progress
+                // ledger already classifies that evidence; carry its result
+                // into the cross-turn reasoning detector instead of treating
+                // "no workspace diff" as "no progress".
+                cross_turn_made_progress |= assessment.meaningful;
                 cross_turn_had_edits |= is_mutating_tool(&name);
                 if let Some(target_file) = target_file {
                     cross_turn_target_files.push(target_file.to_string());
