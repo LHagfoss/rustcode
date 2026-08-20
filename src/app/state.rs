@@ -712,18 +712,19 @@ struct PromptCacheKey {
     mcp_generation: u64,
 }
 
-/// Pre-computed static system prompt and native tool schema.
+/// Pre-computed static system prompt.
 ///
-/// Both are otherwise rebuilt on every completion turn — including a filesystem
-/// skill scan and a full MCP schema re-serialization — even though they only
-/// change when the tool protocol, agent mode, or MCP tool set changes. This
-/// caches them and rebuilds lazily only when [`PromptCacheKey`] moves (the MCP
-/// generation acting as the dirty flag for mid-session server changes).
+/// The prompt is otherwise rebuilt on every completion turn — including a
+/// filesystem skill scan and a full MCP schema re-serialization — even though it
+/// only changes when the tool protocol, agent mode, or MCP tool set changes. This
+/// caches it and rebuilds lazily only when [`PromptCacheKey`] moves (the MCP
+/// generation acting as the dirty flag for mid-session server changes). Native
+/// MCP schemas are selected per request because their relevance depends on the
+/// current conversation.
 #[derive(Default)]
 pub struct PromptCache {
     key: Option<PromptCacheKey>,
     system_prompt: String,
-    native_schema: Vec<serde_json::Value>,
 }
 
 impl PromptCache {
@@ -742,7 +743,6 @@ impl PromptCache {
         if self.key.as_ref() != Some(&key) {
             self.system_prompt =
                 crate::tools::tool_system_prompt(include_agent_tools, protocol, agent_mode);
-            self.native_schema = crate::tools::native_tools_schema(include_agent_tools);
             self.key = Some(key);
         }
     }
@@ -756,17 +756,6 @@ impl PromptCache {
     ) -> &str {
         self.ensure(include_agent_tools, protocol, agent_mode);
         &self.system_prompt
-    }
-
-    /// The cached native tool schema for these inputs, rebuilding if stale.
-    pub fn native_schema(
-        &mut self,
-        include_agent_tools: bool,
-        protocol: crate::config::ToolProtocol,
-        agent_mode: crate::config::AgentMode,
-    ) -> &[serde_json::Value] {
-        self.ensure(include_agent_tools, protocol, agent_mode);
-        &self.native_schema
     }
 }
 
