@@ -48,6 +48,7 @@ pub struct InlineTerminal<B: Backend> {
     screen_size: Size,
     last_cursor_position: Position,
     needs_clear: bool,
+    clear_from_y: Option<u16>,
 }
 
 impl<B> InlineTerminal<B>
@@ -70,6 +71,7 @@ where
             screen_size,
             last_cursor_position: cursor,
             needs_clear: false,
+            clear_from_y: None,
         })
     }
 
@@ -96,9 +98,13 @@ where
     }
 
     pub fn clear(&mut self) -> Result<(), B::Error> {
-        if !self.viewport_area.is_empty() {
+        let clear_y = self
+            .clear_from_y
+            .take()
+            .unwrap_or(self.viewport_area.y);
+        if !self.viewport_area.is_empty() || clear_y < self.screen_size.height {
             self.backend
-                .set_cursor_position(self.viewport_area.as_position())?;
+                .set_cursor_position(Position::new(0, clear_y))?;
             self.backend.clear_region(ClearType::AfterCursor)?;
         }
         self.buffers[0].reset();
@@ -115,6 +121,7 @@ where
         self.viewport_area = Rect::new(0, 0, self.screen_size.width, 0);
         self.last_cursor_position = Position::new(0, 0);
         self.needs_clear = false;
+        self.clear_from_y = None;
         self.buffers[0].reset();
         self.buffers[1].reset();
         self.backend.flush()
@@ -125,6 +132,7 @@ where
         if size != self.screen_size {
             let was_at_bottom = self.screen_size.height > 0
                 && self.viewport_area.bottom() >= self.screen_size.height;
+            let old_y = self.viewport_area.y;
             self.screen_size = size;
             self.viewport_area.width = size.width;
             if was_at_bottom {
@@ -135,6 +143,12 @@ where
                     .y
                     .min(size.height.saturating_sub(self.viewport_area.height));
             }
+            let clear_y = self
+                .clear_from_y
+                .map_or(old_y.min(self.viewport_area.y), |prev| {
+                    prev.min(old_y).min(self.viewport_area.y)
+                });
+            self.clear_from_y = Some(clear_y);
             self.needs_clear = true;
             self.resize_buffers();
             self.buffers[0].reset();
@@ -173,7 +187,12 @@ where
             let clear_at = if self.viewport_area.is_empty() {
                 area.as_position()
             } else {
-                Position::new(0, self.viewport_area.y.min(area.y))
+                let clear_y = self
+                    .clear_from_y
+                    .take()
+                    .unwrap_or(self.viewport_area.y)
+                    .min(area.y);
+                Position::new(0, clear_y)
             };
             self.backend.set_cursor_position(clear_at)?;
             self.backend.clear_region(ClearType::AfterCursor)?;
@@ -181,6 +200,7 @@ where
             self.buffers[0].reset();
             self.buffers[1].reset();
             self.needs_clear = false;
+            self.clear_from_y = None;
         }
 
         let mut frame = Frame {
@@ -274,12 +294,23 @@ where
         let count = usize::from(self.screen_size.width) * usize::from(rows);
         let (rows_to_draw, rest) = cells.split_at(count);
         let width = usize::from(self.screen_size.width);
-        self.backend.draw(
-            rows_to_draw
-                .iter()
-                .enumerate()
-                .map(|(index, cell)| ((index % width) as u16, y + (index / width) as u16, cell)),
-        )?;
+        let mut significant_cells = Vec::new();
+        for row in 0..rows {
+            let row_start = usize::from(row) * width;
+            let row_cells = &rows_to_draw[row_start..row_start + width];
+            let last_non_empty = row_cells.iter().rposition(|cell| {
+                cell.symbol() != " "
+                    || cell.bg != ratatui::style::Color::Reset
+                    || !cell.modifier.is_empty()
+            });
+            if let Some(last_idx) = last_non_empty {
+                let row_y = y + row;
+                for (x, cell) in row_cells[..=last_idx].iter().enumerate() {
+                    significant_cells.push((x as u16, row_y, cell));
+                }
+            }
+        }
+        self.backend.draw(significant_cells.into_iter())?;
         self.backend.flush()?;
         Ok(rest)
     }
@@ -418,5 +449,49 @@ mod tests {
             f.render_widget(ratatui::widgets::Paragraph::new("World"), f.area());
         }).unwrap();
         assert!(!terminal.needs_clear);
+    }
+
+    #[test]
+    fn autoresize_tracks_lowest_clear_y_across_rapid_resizes() {
+        let backend = TestBackend::new(80, 40);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal.insert_before(30, |_| {}).unwrap();
+        terminal.draw_height(10, |_| {}).unwrap();
+        // y was at 30
+        assert_eq!(terminal.area().y, 30);
+
+        // Rapid resize 1: grow height to 60 (anchored y becomes 50)
+        terminal.backend_mut().resize(80, 60);
+        terminal.autoresize().unwrap();
+        assert_eq!(terminal.clear_from_y, Some(30));
+
+        // Rapid resize 2: super wide (300 cols, height 50) -> y becomes 40
+        terminal.backend_mut().resize(300, 50);
+        terminal.autoresize().unwrap();
+        // clear_from_y must keep min(30, 50, 40) = 30
+        assert_eq!(terminal.clear_from_y, Some(30));
+
+        // Rapid resize 3: half screen (120 cols, height 70) -> y becomes 60
+        terminal.backend_mut().resize(120, 70);
+        terminal.autoresize().unwrap();
+        assert_eq!(terminal.clear_from_y, Some(30));
+
+        // After draw_height, clear_from_y is consumed and cleared
+        terminal.draw_height(10, |_| {}).unwrap();
+        assert_eq!(terminal.clear_from_y, None);
+        assert!(!terminal.needs_clear);
+    }
+
+    #[test]
+    fn insert_before_omits_trailing_empty_spaces() {
+        let backend = TestBackend::new(200, 30);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal.insert_before(1, |buf| {
+            buf.set_string(0, 0, "Hello", ratatui::style::Style::default());
+        }).unwrap();
+        // Check that the backend only received the 5 characters, not 200 spaces
+        let rendered_line = terminal.backend().buffer();
+        // Row 0 should start with "Hello" and the rest should be empty/unwritten in TestBackend
+        assert_eq!(&rendered_line.content[0..5].iter().map(|c| c.symbol()).collect::<String>(), "Hello");
     }
 }
