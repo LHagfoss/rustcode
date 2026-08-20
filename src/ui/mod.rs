@@ -2469,6 +2469,7 @@ pub(crate) fn render_work_separator_before_assistant(
         "─".repeat(width.max(1) as usize)
     };
     vec![
+        Line::from(""),
         Line::from(Span::styled(
             text,
             get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false),
@@ -2483,7 +2484,7 @@ fn push_centered_separator<'a>(
     width: u16,
     show_picker: bool,
 ) {
-    if lines.last().is_some_and(|l| !l.spans.is_empty()) {
+    if lines.last().map_or(true, |l| !l.spans.is_empty()) {
         lines.push(Line::from(""));
     }
     let label = format!(" {} ", label_text.trim());
