@@ -3578,7 +3578,7 @@ fn test_reasoning_loop_recovery_action_escalation() {
     );
     assert_eq!(
         reasoning_loop_recovery_action(1),
-        LoopRecoveryAction::Recover
+        LoopRecoveryAction::ForceFinal
     );
     assert_eq!(
         reasoning_loop_recovery_action(2),
@@ -3862,9 +3862,10 @@ fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
 fn test_adversarial_6_bounded_recovery_escalation_prevents_runaway() {
     // Scenario 6: Loop detector fires, recovery loops again -> bounded recovery prevents runaway.
     assert_eq!(reasoning_loop_recovery_action(0), LoopRecoveryAction::Recover);
-    assert_eq!(reasoning_loop_recovery_action(1), LoopRecoveryAction::Recover);
+    assert_eq!(reasoning_loop_recovery_action(1), LoopRecoveryAction::ForceFinal);
     assert_eq!(reasoning_loop_recovery_action(2), LoopRecoveryAction::ForceFinal);
     assert_eq!(reasoning_loop_recovery_action(u8::MAX), LoopRecoveryAction::ForceFinal);
+    assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("exactly one mutating tool call"));
 }
 
 #[test]

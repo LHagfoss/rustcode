@@ -12,7 +12,12 @@ use super::{ToolFenceCounter, align_alternating_messages, count_tokens, parse_ss
 fn apply_profile_generation_options(
     payload: &mut serde_json::Value,
     profile: Option<&crate::config::ModelProfile>,
+    disable_thinking: bool,
 ) {
+    if disable_thinking || profile.is_some_and(|p| p.enable_thinking == Some(false)) {
+        payload["enable_thinking"] = serde_json::json!(false);
+        return;
+    }
     if let Some(enable_thinking) = profile.and_then(|p| p.enable_thinking) {
         payload["enable_thinking"] = serde_json::json!(enable_thinking);
     }
@@ -21,6 +26,17 @@ fn apply_profile_generation_options(
     }
     if let Some(thinking_budget) = profile.and_then(|p| p.thinking_budget) {
         payload["thinking_budget"] = serde_json::json!(thinking_budget);
+    }
+}
+
+fn apply_api_native_tools(
+    payload: &mut serde_json::Value,
+    schema: Vec<serde_json::Value>,
+    allow_tools: bool,
+) {
+    if allow_tools && !schema.is_empty() {
+        payload["tools"] = serde_json::Value::Array(schema);
+        payload["tool_choice"] = serde_json::json!("auto");
     }
 }
 
@@ -227,7 +243,7 @@ mod tests {
         };
         let mut payload = serde_json::json!({});
 
-        apply_profile_generation_options(&mut payload, Some(&profile));
+        apply_profile_generation_options(&mut payload, Some(&profile), false);
 
         assert_eq!(payload["enable_thinking"], true);
         assert_eq!(payload["reasoning_effort"], "low");
@@ -241,11 +257,74 @@ mod tests {
         apply_profile_generation_options(
             &mut payload,
             Some(&crate::config::ModelProfile::default()),
+            false,
         );
 
         assert!(payload.get("enable_thinking").is_none());
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn disabled_thinking_omits_reasoning_controls() {
+        let profile = crate::config::ModelProfile {
+            enable_thinking: Some(false),
+            reasoning_effort: Some("medium".to_string()),
+            thinking_budget: Some(4096),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(&mut payload, Some(&profile), false);
+
+        assert_eq!(payload["enable_thinking"], false);
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn request_override_disables_thinking_and_omits_reasoning_controls() {
+        let profile = crate::config::ModelProfile {
+            enable_thinking: Some(true),
+            reasoning_effort: Some("high".to_string()),
+            thinking_budget: Some(8192),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(&mut payload, Some(&profile), true);
+
+        assert_eq!(payload["enable_thinking"], false);
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn disabled_tools_omit_schema_and_tool_choice() {
+        let mut payload = serde_json::json!({});
+        let schema = vec![serde_json::json!({
+            "type": "function",
+            "function": {"name": "view_file"}
+        })];
+
+        apply_api_native_tools(&mut payload, schema, false);
+
+        assert!(payload.get("tools").is_none());
+        assert!(payload.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn enabled_tools_include_schema_and_auto_choice() {
+        let mut payload = serde_json::json!({});
+        let schema = vec![serde_json::json!({
+            "type": "function",
+            "function": {"name": "view_file"}
+        })];
+
+        apply_api_native_tools(&mut payload, schema, true);
+
+        assert_eq!(payload["tools"].as_array().map(Vec::len), Some(1));
+        assert_eq!(payload["tool_choice"], "auto");
     }
 
     #[test]
@@ -510,6 +589,8 @@ pub async fn stream_request(
     messages: &[serde_json::Value],
     buffer: Arc<Mutex<StreamBuffer>>,
     quiet: bool,
+    allow_tools: bool,
+    disable_thinking: bool,
 ) -> Result<Option<String>, String> {
     let aligned_messages = align_alternating_messages(messages.to_vec());
     let message_count = aligned_messages.len();
@@ -550,7 +631,11 @@ pub async fn stream_request(
             .context_budget()
             .completion_reserve
         });
-    let thinking_budget = profile.as_ref().and_then(|p| p.thinking_budget);
+    let thinking_budget = profile.as_ref().and_then(|p| {
+        (!disable_thinking && p.enable_thinking != Some(false))
+            .then_some(p.thinking_budget)
+            .flatten()
+    });
 
     let mut payload = serde_json::json!({
         "model": model,
@@ -562,7 +647,7 @@ pub async fn stream_request(
         "max_tokens": max_tokens,
     });
 
-    apply_profile_generation_options(&mut payload, profile.as_ref());
+    apply_profile_generation_options(&mut payload, profile.as_ref(), disable_thinking);
 
     if !url.contains("generativelanguage.googleapis.com") {
         payload["frequency_penalty"] = serde_json::json!(0.3);
@@ -578,10 +663,7 @@ pub async fn stream_request(
                 .native_schema(delegation_active, tool_protocol, agent_mode)
                 .to_vec()
         };
-        if !schema.is_empty() {
-            payload["tools"] = serde_json::Value::Array(schema);
-            payload["tool_choice"] = serde_json::json!("auto");
-        }
+        apply_api_native_tools(&mut payload, schema, allow_tools);
     }
 
     let tool_count = payload

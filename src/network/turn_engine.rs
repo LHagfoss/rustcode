@@ -330,6 +330,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let request_api_url = api_base_url.clone();
     let request_model = model_name.clone();
     let request_msgs = msgs.clone();
+    let request_allow_tools = !ctx.force_final;
+    let request_disable_thinking = ctx.force_final || ctx.reasoning_recovery_attempts > 0;
     let collected_response = match runner::collect_response(move |previous| {
         let mut current_msgs = request_msgs.clone();
         if !previous.is_empty() {
@@ -361,6 +363,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 &current_msgs,
                 Arc::clone(&request_buffer),
                 false,
+                request_allow_tools,
+                request_disable_thinking,
             )
             .await
             .map_err(|e| e.to_string())?;
