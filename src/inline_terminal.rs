@@ -399,6 +399,36 @@ mod tests {
     }
 
     #[test]
+    fn resize_replay_clears_old_width_rows_and_resets_viewport() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .insert_before(2, |buffer| {
+                buffer.set_string(
+                    0,
+                    0,
+                    "old width transcript",
+                    ratatui::style::Style::default(),
+                );
+            })
+            .unwrap();
+        terminal.draw_height(4, |_| {}).unwrap();
+
+        terminal.backend_mut().resize(80, 20);
+        terminal.clear_screen().unwrap();
+
+        assert_eq!(terminal.area(), Rect::new(0, 0, 80, 0));
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .all(|cell| cell.symbol().trim().is_empty())
+        );
+    }
+
+    #[test]
     fn autoresize_updates_screen_size_and_viewport_width() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = InlineTerminal::new(backend).unwrap();
