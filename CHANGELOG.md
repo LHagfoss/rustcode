@@ -1,3 +1,9 @@
+## [v0.31.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.1) - 2026-08-20
+
+### Features & Fixes
+- **Config/Thinking:** Support `thinking_budget` in model profiles and request payloads to enforce hard reasoning token caps on supported providers ([#734](https://github.com/LHagfoss/rustcode/pull/734))
+- **Harness/Recovery:** Treat failure replans as recovery opportunities rather than terminal states, resetting the loop detector to allow alternative mutation strategies ([#734](https://github.com/LHagfoss/rustcode/pull/734))
+
 ## [v0.31.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.0) - 2026-08-20
 
 ### Features
