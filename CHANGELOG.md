@@ -1,3 +1,12 @@
+## [v0.30.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.3) - 2026-08-20
+
+### Fixes
+- **UI/Streaming:** Keep the composer footer compact while a response is streaming ([#721](https://github.com/LHagfoss/rustcode/pull/721))
+- **UI/Context:** Add the missing top padding above the `/context` token grid ([#722](https://github.com/LHagfoss/rustcode/pull/722))
+- **Network/Streaming:** Reset the SSE idle timeout whenever partial bytes arrive, preventing active streams without an immediate newline from timing out ([#723](https://github.com/LHagfoss/rustcode/pull/723))
+- **Skills:** Preserve UTF-8 boundaries when truncating large skill files and use platform-native separators for extra skill directories ([#724](https://github.com/LHagfoss/rustcode/pull/724))
+- **Privacy/Clipboard:** Stop persisting copied clipboard contents in debug logs while retaining byte-count diagnostics ([#725](https://github.com/LHagfoss/rustcode/pull/725))
+
 ## [v0.30.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.2) - 2026-08-19
 
 ### Features
