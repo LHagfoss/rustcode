@@ -6,7 +6,11 @@
 
 pub(crate) fn has_intended_tool_call(content: &str) -> bool {
     let lower = content.to_lowercase();
-    lower.contains("```tool") || lower.contains("```json") || lower.contains("[tool_calls]")
+    lower.contains("```tool")
+        || lower.contains("<tool_call>")
+        || lower.contains("<tool_call ")
+        || lower.contains("[tool_calls]")
+        || lower.contains("<function_call>")
 }
 
 pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
@@ -240,16 +244,31 @@ pub(crate) fn strip_think_blocks(content: &str) -> String {
 pub(crate) fn strip_tool_call_syntax(content: &str) -> String {
     let mut out = strip_think_blocks(content);
 
-    // Remove ```tool ... ``` / ```json ... ``` fenced blocks.
+    // Remove ```tool ... ``` / ```json ... ``` fenced blocks (for ```json, only if it's a tool call).
     for fence in ["```tool", "```json"] {
-        while let Some(start) = out.to_lowercase().find(fence) {
-            let after_tag = &out[start + fence.len()..];
+        let mut search_from = 0;
+        while let Some(relative_start) = out[search_from..].to_lowercase().find(fence) {
+            let start = search_from + relative_start;
+            let block_start = start + fence.len();
+            let after_tag = &out[block_start..];
             let (rel_end, next_rel) = crate::tools::find_closing_tool_fence(after_tag);
-            if rel_end < after_tag.len() {
-                let end = start + fence.len() + next_rel;
-                out.replace_range(start..end, "");
+            let block = &after_tag[..rel_end];
+
+            let is_tool = fence == "```tool"
+                || crate::tools::parse_tool_call(block, crate::config::ToolProtocol::Json).is_some();
+
+            if is_tool {
+                if rel_end < after_tag.len() {
+                    let end = block_start + next_rel;
+                    out.replace_range(start..end, "");
+                    search_from = start;
+                } else {
+                    out.truncate(start); // unclosed fence — drop the remainder
+                    break;
+                }
+            } else if rel_end < after_tag.len() {
+                search_from = block_start + next_rel;
             } else {
-                out.truncate(start); // unclosed fence — drop the remainder
                 break;
             }
         }
@@ -500,5 +519,30 @@ mod tests {
         let input = "<think>\nUnfinished thought...";
         let stripped = strip_think_blocks(input);
         assert_eq!(stripped.trim(), "");
+    }
+
+    #[test]
+    fn test_has_intended_tool_call_distinguishes_json_prose_from_tool_calls() {
+        assert!(has_intended_tool_call("```tool\n{\"name\": \"run_command\"}\n```"));
+        assert!(has_intended_tool_call("<tool_call>{\"name\": \"run_command\"}</tool_call>"));
+        assert!(has_intended_tool_call("[TOOL_CALLS]run_command[ARGS]{}"));
+        assert!(has_intended_tool_call("<function_call>run_command()</function_call>"));
+
+        // Regular markdown json blocks should not trigger malformed tool call handling
+        assert!(!has_intended_tool_call("Here is your decrypted savegame:\n```json\n{\"seeds\": 580, \"potatoes\": 2423}\n```"));
+        assert!(!has_intended_tool_call("```json\n{\"key\": \"value\"}\n```"));
+    }
+
+    #[test]
+    fn test_strip_tool_call_syntax_preserves_plain_json_blocks() {
+        let input = "Here is the data:\n```json\n{\"seeds\": 580, \"potatoes\": 2423}\n```\nDone.";
+        let stripped = strip_tool_call_syntax(input);
+        assert!(stripped.contains("```json\n{\"seeds\": 580, \"potatoes\": 2423}\n```"));
+        assert!(stripped.contains("Done."));
+
+        let tool_input = "Running tool:\n```json\n{\"name\": \"run_command\", \"arguments\": {\"command_line\": \"ls\"}}\n```\nDone.";
+        let stripped_tool = strip_tool_call_syntax(tool_input);
+        assert!(!stripped_tool.contains("run_command"));
+        assert_eq!(stripped_tool.trim(), "Running tool:\n\nDone.");
     }
 }
