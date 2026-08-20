@@ -1,3 +1,9 @@
+## [v0.31.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.0) - 2026-08-20
+
+### Features
+- **CLI/Self-Update:** Add native cross-platform self-update engine supporting direct GitHub release binary extraction on macOS, Linux, and Windows with Homebrew fallback ([#731](https://github.com/LHagfoss/rustcode/pull/731))
+- **Installation:** Add one-line installation scripts for macOS/Linux (`install.sh`) and Windows PowerShell (`install.ps1`) ([#731](https://github.com/LHagfoss/rustcode/pull/731))
+
 ## [v0.30.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.4) - 2026-08-20
 
 ### Fixes
