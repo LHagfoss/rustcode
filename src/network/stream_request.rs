@@ -9,6 +9,21 @@ use super::retry;
 use super::stream::StreamBuffer;
 use super::{ToolFenceCounter, align_alternating_messages, count_tokens, parse_sse_line};
 
+fn apply_profile_generation_options(
+    payload: &mut serde_json::Value,
+    profile: Option<&crate::config::ModelProfile>,
+) {
+    if let Some(enable_thinking) = profile.and_then(|p| p.enable_thinking) {
+        payload["enable_thinking"] = serde_json::json!(enable_thinking);
+    }
+    if let Some(effort) = profile.and_then(|p| p.reasoning_effort.as_ref()) {
+        payload["reasoning_effort"] = serde_json::json!(effort);
+    }
+    if let Some(thinking_budget) = profile.and_then(|p| p.thinking_budget) {
+        payload["thinking_budget"] = serde_json::json!(thinking_budget);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +165,37 @@ mod tests {
 
         let completed = "Done:\n```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```\nHere are the results:";
         assert!(parse_speculative_text_tool_call(completed).is_none(), "completed fence is not in-flight");
+    }
+
+    #[test]
+    fn profile_generation_options_include_hard_thinking_budget() {
+        let profile = crate::config::ModelProfile {
+            enable_thinking: Some(true),
+            reasoning_effort: Some("low".to_string()),
+            thinking_budget: Some(4096),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(&mut payload, Some(&profile));
+
+        assert_eq!(payload["enable_thinking"], true);
+        assert_eq!(payload["reasoning_effort"], "low");
+        assert_eq!(payload["thinking_budget"], 4096);
+    }
+
+    #[test]
+    fn absent_profile_generation_options_do_not_override_server_defaults() {
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(
+            &mut payload,
+            Some(&crate::config::ModelProfile::default()),
+        );
+
+        assert!(payload.get("enable_thinking").is_none());
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
     }
 }
 
@@ -427,6 +473,7 @@ pub async fn stream_request(
                 tool_protocol: None,
                 enable_thinking: None,
                 reasoning_effort: None,
+                thinking_budget: None,
                 max_tokens: None,
                 supports_vision: None,
                 ..Default::default()
@@ -445,12 +492,7 @@ pub async fn stream_request(
         "max_tokens": max_tokens,
     });
 
-    if let Some(enable_thinking) = profile.as_ref().and_then(|p| p.enable_thinking) {
-        payload["enable_thinking"] = serde_json::json!(enable_thinking);
-    }
-    if let Some(ref effort) = profile.as_ref().and_then(|p| p.reasoning_effort.as_ref()) {
-        payload["reasoning_effort"] = serde_json::json!(effort);
-    }
+    apply_profile_generation_options(&mut payload, profile.as_ref());
 
     if !url.contains("generativelanguage.googleapis.com") {
         payload["frequency_penalty"] = serde_json::json!(0.3);
