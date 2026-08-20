@@ -204,6 +204,7 @@ pub(crate) struct AppRuntime {
     transcript_cursor: crate::ui::scrollback::TranscriptCursor,
     transcript_state: TranscriptState,
     stream_commits: crate::ui::scrollback::StreamCommitQueue,
+    replaying_transcript: bool,
     terminal_size: Size,
     tui_events: TuiEventStream,
     frame_requester: FrameRequester,
@@ -253,6 +254,7 @@ impl AppRuntime {
             transcript_cursor: crate::ui::scrollback::TranscriptCursor::default(),
             transcript_state: TranscriptState::default(),
             stream_commits: crate::ui::scrollback::StreamCommitQueue::default(),
+            replaying_transcript: false,
             terminal_size,
             tui_events: TuiEventStream::new(),
             frame_requester,
@@ -280,6 +282,7 @@ impl AppRuntime {
             transcript_cursor: crate::ui::scrollback::TranscriptCursor::default(),
             transcript_state: TranscriptState::default(),
             stream_commits: crate::ui::scrollback::StreamCommitQueue::default(),
+            replaying_transcript: false,
             terminal_size: Size::new(80, 24),
             tui_events: TuiEventStream::paused(),
             frame_requester,
@@ -393,6 +396,7 @@ impl AppRuntime {
             transcript_cursor,
             transcript_state,
             stream_commits,
+            replaying_transcript,
             terminal_size,
             tui_events,
             frame_requester,
@@ -411,6 +415,7 @@ impl AppRuntime {
         let mut transcript_cursor = transcript_cursor;
         let mut transcript_state = transcript_state;
         let mut stream_commits = stream_commits;
+        let mut replaying_transcript = replaying_transcript;
         let mut terminal_size = terminal_size;
         let mut tui_events = tui_events;
         let mut frame_stream = frame_stream;
@@ -473,8 +478,15 @@ impl AppRuntime {
             // bounds and clear the live area so the active frame redraws cleanly.
             let observed_size = terminal_runtime.terminal().size()?;
             if observed_size != terminal_size {
-                terminal_runtime.terminal().autoresize()?;
+                execute!(terminal_runtime.terminal().backend_mut(), crossterm::style::Print("\x1b[3J"))?;
+                terminal_runtime.terminal().clear_screen()?;
                 terminal_size = observed_size;
+                let history_display_start = app_state.lock().await.history_display_start;
+                transcript_cursor.reset();
+                transcript_cursor.commit_history_through(history_display_start);
+                transcript_state.reset();
+                stream_commits.reset();
+                replaying_transcript = true;
                 needs_redraw = true;
             }
 
@@ -545,12 +557,17 @@ impl AppRuntime {
                     transcript_cursor.commit_history_through(guard.history_display_start);
                     transcript_state.reset();
                     stream_commits.reset();
+                    replaying_transcript = true;
                 }
 
                 let terminal_width = terminal_runtime.terminal().size()?.width;
                 let live_response = guard.transcript().live_response().to_owned();
                 transcript_cursor.begin_stream(&live_response);
-                let stable_source = transcript_cursor.pending_stable_source(&live_response);
+                let stable_source = if replaying_transcript {
+                    String::new()
+                } else {
+                    transcript_cursor.pending_stable_source(&live_response)
+                };
                 if !stable_source.is_empty() {
                     let is_continuation = transcript_cursor.has_committed_stream();
                     let lines = crate::ui::render_committed_assistant_chunk(
@@ -679,6 +696,32 @@ impl AppRuntime {
                 }
 
                 transcript_cursor.commit_history_through(history_range.end);
+
+                if replaying_transcript {
+                    let stable_source = transcript_cursor.pending_stable_source(&live_response);
+                    if !stable_source.is_empty() {
+                        let is_continuation = transcript_cursor.has_committed_stream();
+                        let lines = crate::ui::render_committed_assistant_chunk(
+                            &guard,
+                            &stable_source,
+                            terminal_width,
+                            is_continuation,
+                        );
+                        if !lines.is_empty() {
+                            stream_commits.push(lines);
+                        }
+                        transcript_cursor.commit_stable_stream(&stable_source);
+                    }
+                    let stable_lines = stream_commits.take_ready(true);
+                    if !stable_lines.is_empty() {
+                        crate::insert_scrollback_lines(
+                            terminal_runtime.terminal(),
+                            stable_lines,
+                            terminal_width,
+                        )?;
+                    }
+                    replaying_transcript = false;
+                }
 
                 // Update terminal title based on the same activity snapshot used by
                 // the footer, so state and animation stay synchronized.
