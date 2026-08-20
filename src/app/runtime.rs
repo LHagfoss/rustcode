@@ -96,6 +96,7 @@ fn apply_update_decision(state: &mut AppState, decision: UpdateDecision) -> bool
 
 async fn run_update_command(
     terminal_runtime: &mut TerminalRuntime,
+    client: &reqwest::Client,
     expected_version: crate::update::Version,
 ) -> Result<(), String> {
     terminal_runtime
@@ -105,9 +106,7 @@ async fn run_update_command(
     terminal_runtime
         .restore()
         .map_err(|error| format!("failed to restore the terminal before updating: {error}"))?;
-    tokio::task::spawn_blocking(move || crate::update::run_brew_upgrade(expected_version))
-        .await
-        .map_err(|error| format!("update task error: {error}"))?
+    crate::update::run_update(client, expected_version).await
 }
 
 fn apply_session_event(
@@ -450,7 +449,7 @@ impl AppRuntime {
                                 crate::update::format_version(latest)
                             ));
                         }
-                        match run_update_command(&mut terminal_runtime, latest).await {
+                        match run_update_command(&mut terminal_runtime, &client, latest).await {
                             Ok(()) => println!(
                                 "🎉 Update ran successfully! Please restart rustcode."
                             ),
@@ -767,7 +766,7 @@ impl AppRuntime {
                         latest.filter(|_| apply_update_decision(&mut state, decision))
                     };
                     if let Some(update_version) = update_version {
-                        match run_update_command(&mut terminal_runtime, update_version).await {
+                        match run_update_command(&mut terminal_runtime, &client, update_version).await {
                             Ok(()) => println!(
                                 "🎉 Update ran successfully! Please restart rustcode."
                             ),

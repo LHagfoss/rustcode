@@ -93,10 +93,25 @@ CLI overrides > nearest project config > global config > built-in defaults
 Project files are partial overrides; omitted fields continue to come from the
 lower-precedence layer.
 
-### via homebrew
+## Installation
 
-You can easily install it using Homebrew (Needs Apple Silicon).
-Just run the following command in your terminal:
+### macOS & Linux (curl)
+
+Run the one-line installer in your terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+Run the one-line installer in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.ps1 | iex
+```
+
+### macOS via Homebrew
 
 ```bash
 # 1. Tap the repository
@@ -109,13 +124,13 @@ brew trust lhagfoss/tap
 brew install rustcode
 ```
 
-## keeping it upgraded
+## Keeping it upgraded
 
-To update to the latest release in the future ,just run:
+RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows!
 
-```bash
-brew upgrade rustcode
-```
+- **In CLI:** Run `rustcode --update` (or `rustcode --upgrade`)
+- **Inside RustCode TUI:** Type `/update` (or accept the update modal on startup)
+- **Homebrew (macOS):** `brew upgrade rustcode`
 
 ## IMPORTANT
 
