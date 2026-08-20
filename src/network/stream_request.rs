@@ -24,6 +24,56 @@ fn apply_profile_generation_options(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct BoundedReasoningChunk {
+    text: String,
+    estimated_tokens: u32,
+    budget_exhausted: bool,
+}
+
+fn estimated_reasoning_tokens(text: &str) -> u32 {
+    if text.is_empty() {
+        0
+    } else {
+        ((text.len() as f64 * crate::app::TOKENS_PER_CHAR_APPROX).ceil() as u32).max(1)
+    }
+}
+
+fn bound_reasoning_chunk(
+    text: &str,
+    used_tokens: u32,
+    budget: Option<u32>,
+) -> BoundedReasoningChunk {
+    let Some(budget) = budget else {
+        return BoundedReasoningChunk {
+            text: text.to_string(),
+            estimated_tokens: estimated_reasoning_tokens(text),
+            budget_exhausted: false,
+        };
+    };
+    let remaining = budget.saturating_sub(used_tokens);
+    let full_estimate = estimated_reasoning_tokens(text);
+    if full_estimate <= remaining {
+        return BoundedReasoningChunk {
+            text: text.to_string(),
+            estimated_tokens: full_estimate,
+            budget_exhausted: false,
+        };
+    }
+
+    let max_bytes = ((remaining as f64) / crate::app::TOKENS_PER_CHAR_APPROX) as usize;
+    let mut end = max_bytes.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let bounded = &text[..end];
+    BoundedReasoningChunk {
+        text: bounded.to_string(),
+        estimated_tokens: estimated_reasoning_tokens(bounded).min(remaining),
+        budget_exhausted: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +246,25 @@ mod tests {
         assert!(payload.get("enable_thinking").is_none());
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn reasoning_chunks_stop_at_the_configured_client_budget() {
+        let first = bound_reasoning_chunk("a".repeat(12).as_str(), 0, Some(4));
+        assert_eq!(first.estimated_tokens, 3);
+        assert!(!first.budget_exhausted);
+
+        let final_chunk = bound_reasoning_chunk("b".repeat(12).as_str(), 3, Some(4));
+        assert_eq!(final_chunk.estimated_tokens, 1);
+        assert_eq!(final_chunk.text.len(), 4);
+        assert!(final_chunk.budget_exhausted);
+    }
+
+    #[test]
+    fn absent_reasoning_budget_preserves_the_whole_chunk() {
+        let chunk = bound_reasoning_chunk("reasoning", 0, None);
+        assert_eq!(chunk.text, "reasoning");
+        assert!(!chunk.budget_exhausted);
     }
 }
 
@@ -481,6 +550,7 @@ pub async fn stream_request(
             .context_budget()
             .completion_reserve
         });
+    let thinking_budget = profile.as_ref().and_then(|p| p.thinking_budget);
 
     let mut payload = serde_json::json!({
         "model": model,
@@ -791,7 +861,8 @@ pub async fn stream_request(
                                          }
 
                                          let mut chunk = String::new();
-                                         let mut reasoning_loop_cut = false;
+                                        let mut reasoning_loop_cut = false;
+                                        let mut reasoning_budget_cut = false;
                                         if let Some(r_token) = reasoning {
                                             if !in_reasoning {
                                                 in_reasoning = true;
@@ -802,9 +873,13 @@ pub async fn stream_request(
                                                 }
                                                 chunk.push_str("<think>\n");
                                             }
-                                            let thought_tokens = (r_token.len() as f64
-                                                * crate::app::TOKENS_PER_CHAR_APPROX)
-                                                as u32;
+                                            let used_tokens = buffer.lock().await.thought_tokens;
+                                            let bounded = bound_reasoning_chunk(
+                                                r_token,
+                                                used_tokens,
+                                                thinking_budget,
+                                            );
+                                            let thought_tokens = bounded.estimated_tokens;
                                             {
                                                 let mut buffer = buffer.lock().await;
                                                 buffer.thought_tokens = buffer
@@ -817,9 +892,9 @@ pub async fn stream_request(
                                                     .current_thought_tokens
                                                     .saturating_add(thought_tokens);
                                             }
-                                            chunk.push_str(r_token);
+                                            chunk.push_str(&bounded.text);
                                             if let super::loop_detect::ReasoningLoopStatus::LoopDetected(reason) =
-                                                reasoning_detector.feed_chunk(r_token)
+                                                reasoning_detector.feed_chunk(&bounded.text)
                                             {
                                                 dbg_log!(
                                                     "stream_request: reasoning loop detected ({reason}) — stopping stream cleanly"
@@ -830,6 +905,21 @@ pub async fn stream_request(
                                                 );
                                                 finish_reason = Some("reasoning_loop".to_string());
                                                 reasoning_loop_cut = true;
+                                            }
+                                            if bounded.budget_exhausted {
+                                                dbg_log!(
+                                                    "stream_request: client reasoning budget reached ({} estimated tokens) — stopping stream cleanly",
+                                                    thinking_budget.unwrap_or_default()
+                                                );
+                                                crate::logger::operational_event(
+                                                    "stream.reasoning_budget_cut",
+                                                    serde_json::json!({
+                                                        "budget": thinking_budget,
+                                                        "estimated_thought_tokens": used_tokens.saturating_add(thought_tokens),
+                                                    }),
+                                                );
+                                                finish_reason = Some("reasoning_budget".to_string());
+                                                reasoning_budget_cut = true;
                                             }
                                         } else if let Some(c_token) = content {
                                             if in_reasoning {
@@ -878,7 +968,7 @@ pub async fn stream_request(
                                                 }
                                             }
                                         }
-                                        if reasoning_loop_cut {
+                                        if reasoning_loop_cut || reasoning_budget_cut {
                                             line_buf.clear();
                                             break;
                                         }
@@ -929,6 +1019,9 @@ pub async fn stream_request(
                                                 "completion_tokens": c,
                                                 "total_tokens": t,
                                                 "cached_tokens": cached,
+                                                "requested_max_tokens": max_tokens,
+                                                "thinking_budget": thinking_budget,
+                                                "completion_limit_reached": c >= u64::from(max_tokens),
                                                 "estimated_prompt_tokens": estimated_prompt_tokens,
                                                 "estimation_delta": estimation_delta,
                                                 "elapsed_ms": request_start_time.elapsed().as_millis() as u64,
