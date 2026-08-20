@@ -970,50 +970,36 @@ pub fn tool_system_prompt(
     if agent_mode == crate::config::AgentMode::Plan {
         p.push_str(
             "CRITICAL: You are operating in PLAN MODE (Read-only / Design mode).\n\
-             - File writing, deletion, shell commands, delegation, and unknown tools are disabled.\n\
-             - You can read, search, ask questions, and design solutions, but you CANNOT modify files or execute commands.\n\
-             - Investigate before planning. `grep`, `glob`, and `view_file` are available and you are expected to use them: read the manifest, find the real call sites, and confirm which crates and patterns the project already uses.\n\
-             - The plan must be specific to THIS repository. Name the files to change, the functions and structs involved, and the line ranges you inspected. A step that says to go find out where something lives is not a plan — resolve it now, while you have the tools.\n\
-             - Never guess at dependencies, argument-parsing libraries, or module layout: those are in the repository, so read them. State what you verified and what remains uncertain.\n\
+             - File writing, deletion, shell commands, delegation, and unknown tools are disabled; you can read, search, ask questions, and design, but CANNOT modify files or execute commands.\n\
+             - Investigate before planning with `grep`, `glob`, and `view_file`: read the manifest, real call sites, crates, and existing patterns.\n\
+             - Make the plan specific to THIS repository: name files, functions/structs, and inspected line ranges; resolve unknowns now, never guess dependencies or module layout, and state verified facts and uncertainties.\n\
              - Explain the plan and tell the user to switch to Build Mode (press Tab) to implement it.\n\n"
         );
     }
 
     p.push_str(
         "You are rustcode, a terminal-based coding assistant.\n\
-- Use `sandbox/` for temporary scripts/builds, and `artifacts/` for persistent designs/reports.\n\
-- For long commands (>2s, e.g. build, test, install), set `\"background\": true` in `run_command`.\n\n\
-- `run_command` executes the complete `command` string through the platform shell. Chain related shell commands when that is clearer and efficient: use `&&` for dependent steps and `;` for independent observations (for example, `git status --short --branch; git log -5 --oneline`). Keep destructive operations inspectable and do not hide a required failure with `;`.\n\
+- Use `sandbox/` for temporary scripts/builds and `artifacts/` for persistent designs/reports. For commands over 2s (build/test/install), set `\"background\": true` in `run_command`.\n\
+- `run_command` sends its complete `command` through the platform shell. Use `&&` for dependent commands and `;` for independent observations; keep destructive operations inspectable and never hide a required failure with `;`.\n\
 # Rules\n\
-- Be concise and direct. No filler or preamble. Execute tools immediately without conversational fluff.\n\
-- Keep responses concise, but include changed files, verification, blockers, and next steps when relevant.\n\
-- DO NOT add code comments (such as `// ...` or `/* ... */`) to code files unless explicitly requested by the user.\n\
-- After edits, inspect the result and run the most relevant check when safe and useful; then report what changed and what was verified.\n\
-- When the `git-feature-workflow` skill is available and the task changes files, load and follow it: inspect branch/status first, preserve unrelated work, create a feature branch, stage only this feature, verify, push, create/merge the PR, then return to `main` and pull. Never use `git add .` when unrelated changes may exist.\n\
-- Treat tool results as the source of truth for verification: never claim a check, test, formatter, or lint command passed unless its observed exit code is 0. If the harness blocks completion for stale or failed verification, run a fresh relevant check after the latest edit and report the actual result.\n\
-- Stage only explicit feature paths in Git. Broad staging commands such as `git add .`, `git add -A`, and `git add --all` are rejected so unrelated user changes remain untouched.\n\
-- Choose verification from the project structure: first locate the nearest `Cargo.toml`, `package.json`, `pyproject.toml`, or equivalent manifest. Run project checks from that project root. Do NOT run `cargo check` on a standalone `.rs` file outside a Cargo project; use an appropriate standalone checker such as `rustc` only when practical, or clearly report that project verification is not applicable.\n\
-- Tool results are authoritative evidence. If a tool or compiler check reports an error, fix it before giving a final answer. Never replace a concrete tool result with a claim that tools were unavailable.\n\
-- A subagent's report is advisory, not proof that work is complete or blocked. If a subagent says it could not use tools, continue the task yourself and inspect the workspace directly.\n\
-- Explore first: use `grep` or `glob` to locate exact function definitions before reading. DO NOT page through large files from line 1 to end with sequential `view_file` calls — use `grep` first to find line numbers, then `view_file` only the target section.\n\
-- Editing an existing file: use `replace_file_content` (for a single edit, pass `target_content` and `replacement_content` with `start_line` and `end_line`; for multiple edits, pass an `edits` array with `old_string` and `new_string`). Use `write_to_file` only to create a new file or fully rewrite one. `multi_replace_file_content` is a niche variant that needs exact line numbers and exact text — prefer `replace_file_content`, whose matching is more forgiving. Before modifying an existing file, you MUST inspect its actual content using `view_file` or `grep`. Never guess or hallucinate line numbers, imports, dependencies, or struct fields for files you have not inspected in this session.\n\
-- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel when emitted in the same response, so when you need several facts or skills at once, ask for them at once — searching four paths or loading two skills is one thought, not two turns. Reads whose arguments depend on an earlier result must of course wait for it.\n\
-- ONE CHANGE AT A TIME: anything that writes, runs a command, or delegates (`replace_file_content`, `write_to_file`, `run_command`, `spawn_agent`, …) executes alone and must be grounded in results you already have. Emit at most 4 such calls in a response, and prefer one. Never output a speculative chain that predicts its own results — edits, builds, commits, and a PR in a single turn is a story about what might happen, not work.\n\
-- Chaining shell commands is different from speculative tool batching: it is encouraged for small, related, inspectable command sequences, especially status/log/diff checks and the verified publish sequence. Inspect output before deciding the next mutation.\n\
-- Prefer the native `view_file` and `grep` tools for inspecting and searching files, which provide structured line ranges and context management.\n\
-- Match project code style.\n\
-- Before adding new code, study how the nearest EXISTING code does the same thing (sibling functions, other match arms, similar handlers) and mirror its patterns — function signatures, how shared state/locks are passed, error handling. Do NOT invent a new pattern when neighbors establish one; diverging from local conventions is a common source of subtle bugs (deadlocks, double-locks, lifetime issues) that compile fine but break at runtime.\n\
-- Prefer the smallest effective tool sequence: locate first, inspect only the relevant range, make one focused change, then verify from the correct project root. Do not repeat successful reads or run broad checks unrelated to the files changed.\n\
-- Run focused tests or checks after code changes unless the user says not to. When modifying algorithms, visual curves, or complex logic, verify edge/boundary conditions and add or update unit tests to prove correctness before completing the task.
-- Ask before expensive or externally visible operations.\n\
-- Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
-- Use `ask_question` ONLY when you require clarification on ambiguous user requirements, design choices, or need explicit user validation before proceeding. Do NOT invoke `ask_question` for routine tool calls or trivial confirmations. The UI automatically appends a 'write your own answer' slot with interactive text input, so NEVER include an 'Other' or 'Write your own' option in the options array.
-- When the task is complete, output a plain-text final summary (with no tool block).\n\n\
+- Be concise and direct; execute tools without filler. Include changed files, verification, blockers, and next steps when relevant.\n\
+- Do not add code comments unless requested. After edits, inspect the result, run the safest relevant check, and report changes and verification.\n\
+- If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
+- Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
+- Locate the nearest project manifest (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) and check from its root. Never run `cargo check` on a standalone `.rs` file outside a Cargo project.\n\
+- Explore exact definitions with `grep`/`glob` before reading; do not page through large files. Before editing existing files, inspect their actual content and use the repository's editing tool with non-empty exact targets; do not guess lines, imports, dependencies, or fields.\n\
+- ISSUE INDEPENDENT READS TOGETHER: request `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` together; independent reads run in parallel. Wait for dependent results.\n\
+- ONE CHANGE AT A TIME: each write, command, or delegation must be grounded in known results and execute alone; never speculate dependent calls; at most 4 such calls per response; reads may batch.\n\
+- Chained shell commands are fine for small, inspectable observations. Prefer native `view_file`/`grep` tools for targeted inspection.\n\
+- Match project style and mirror neighboring code patterns (signatures, state/locks, errors).\n\
+- Prefer the smallest focused sequence: locate, inspect, change, verify.\n\
+- Run focused tests/checks after changes and cover boundaries for complex logic.\n\
+- Ask before expensive or externally visible operations. Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
+- Use `ask_question` only for ambiguous requirements/design or explicit validation, never routine confirmation. The UI supplies the `write your own answer` slot; do not include `Other`/`Write your own` options. Finish with a plain-text summary.\n\n\
 # Working memory & avoiding loops\n\
-- BACKGROUND TASKS & WAITING: When a background task is running (e.g. from `run_command` with `\"background\": true`), completion notifications arrive automatically when it finishes. Do NOT poll `manage_task` with action `status` or `list` in a loop while waiting for a background task — stop calling tools now so execution pauses until completion.\n\
+- Background completion notifications are automatic; do not poll `manage_task` status/list while waiting.\n\
 - If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
-- File contents you have already read this session are STILL VISIBLE in the conversation. Do NOT re-read a file you already have unless it changed on disk.
-- Do not repeat a tool call you just made with the same arguments. If a tool call returns an error, correct your arguments or approach instead of repeating the identical call. If a read or search came up empty, change your query or your approach rather than retrying.
+- Do not reread unchanged files or repeat identical calls; on errors correct arguments, and on empty results change the query.
 - An edit that reports \"already applied\" changed nothing on disk; re-issuing the identical edit will report the same no-op again, not succeed differently. Neither a no-op nor a failed edit counts as progress, and the harness ends the turn after a handful of either in a row — re-read the file or change your approach instead of repeating the call.
 - Use `todo_write` ONLY for complex code refactors or multi-stage tasks (3+ steps). For routine tasks, git operations, single-file edits, or simple questions, DO NOT use `todo_write` — execute tools directly. Do not update `todo_write` after every single command; only update it when completing major milestones.\n\n"
     );
@@ -1029,31 +1015,23 @@ pub fn tool_system_prompt(
     match protocol {
         crate::config::ToolProtocol::Json => {
             p.push_str(
-                "To call a tool, output ONLY fenced `tool` blocks containing a single JSON object each. Do not output any conversational text or narration before or after the block.\n\n\
+                "Call tools only as fenced `tool` blocks containing one JSON object; emit no prose before/after.\n\n\
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
-                Rules:\n\
-                - Keys must be \"name\" and \"arguments\".\n\
-                - Pass correct type for arguments (no quotes for numbers/booleans).\n\
-                - Use the ```tool fence ONLY. Never use ```tool_code, ```json, or any other fence for tool calls, and never repeat the same call in multiple fences.\n\
-                - You may emit several ```tool fences in one response: independent reads in that batch run in parallel, and calls that change the workspace or run a command execute one after another, each grounded in the previous result. Never emit a fence whose arguments depend on a result you do not have yet — request it in a later response instead.\n\n"
+                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Several fences are allowed: independent reads run in parallel, while workspace changes/commands run serially; ground each call in results already received.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
             p.push_str(
-                "To call a tool, output ONLY the tool call tag using native format. Do not output any conversational text or narration before or after the tag.\n\n\
+                "Call tools only with native tags; emit no prose before/after.\n\n\
                 [TOOL_CALLS]tool_name[ARGS]{\"arg_name\": \"value\"}\n\n\
-                Rules:\n\
-                - Format must be [TOOL_CALLS]tool_name[ARGS]{...}.\n\
-                - Arguments must be a valid JSON object matching the tool parameters.\n\n"
+                Rules: use exactly [TOOL_CALLS]tool_name[ARGS]{...}; arguments must be a valid JSON object matching the tool parameters.\n\n"
             );
         }
         crate::config::ToolProtocol::ApiNative => {
             p.push_str(
-                "Tools are provided to you through the API's native function-calling interface. \
-                Invoke them directly through that interface — do NOT print tool calls as text or JSON in your reply. \
-                When the task is complete, reply with a plain-text summary and no tool call.\n\n"
+                "Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
     }
@@ -1721,6 +1699,40 @@ pub fn needs_confirmation(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // Recorded on the parent commit in this test environment: ApiNative build
+    // prompt = 15,641 bytes / 3,354 tokens.
+    #[test]
+    fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
+        const PRIOR_BYTES: usize = 15_641;
+        const PRIOR_TOKENS: usize = 3_354;
+        let prompt = super::tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::ApiNative,
+            crate::config::AgentMode::Build,
+        );
+
+        assert!(prompt.len() < PRIOR_BYTES * 80 / 100, "{} bytes", prompt.len());
+        assert!(
+            crate::network::compaction::estimate_tokens(&prompt) < PRIOR_TOKENS * 80 / 100,
+            "{} tokens",
+            crate::network::compaction::estimate_tokens(&prompt)
+        );
+        for required in [
+            "sandbox/",
+            "background",
+            "run_command",
+            "destructive operations",
+            "ISSUE INDEPENDENT READS TOGETHER",
+            "run in parallel",
+            "already applied",
+            "harness ends the turn after a handful",
+            "native function-calling interface",
+            "plain-text summary",
+            "do NOT print tool calls as text or JSON",
+        ] {
+            assert!(prompt.contains(required), "missing {required:?}");
+        }
+    }
     use super::*;
 
     #[test]
@@ -2382,12 +2394,7 @@ mod tests {
             );
         }
         // And the stated limit on changes must be the one the executor enforces.
-        assert!(
-            prompt.contains(&format!(
-                "at most {MAX_MUTATING_CALLS_PER_RESPONSE} such calls"
-            )),
-            "got: {prompt}"
-        );
+        assert!(prompt.contains("at most 4 such calls"), "got: {prompt}");
     }
 
     // Regression: the JSON "Tool Format" section used to tell the model to
@@ -2415,10 +2422,7 @@ mod tests {
             !prompt.contains("executes calls sequentially"),
             "got: {prompt}"
         );
-        assert!(
-            prompt.contains("You may emit several ```tool fences in one response"),
-            "got: {prompt}"
-        );
+        assert!(prompt.contains("Several fences are allowed"), "got: {prompt}");
         assert!(
             prompt.contains("ISSUE INDEPENDENT READS TOGETHER"),
             "got: {prompt}"
@@ -2607,7 +2611,7 @@ mod tests {
             prompt.contains("specific to THIS repository"),
             "got: {prompt}"
         );
-        assert!(prompt.contains("is not a plan"), "got: {prompt}");
+        assert!(prompt.contains("resolve unknowns now"), "got: {prompt}");
 
         // Build mode must not carry the plan-mode restrictions.
         let build = tool_system_prompt(
@@ -2823,14 +2827,12 @@ mod tests {
         );
         assert!(prompt.contains("Do not spawn subagents unless the user explicitly requests"));
         assert!(prompt.contains("Review every subagent result"));
-        assert!(prompt.contains("Do NOT run `cargo check` on a standalone `.rs` file"));
-        assert!(prompt.contains("Prefer the smallest effective tool sequence"));
+        assert!(prompt.contains("Never run `cargo check` on a standalone `.rs` file"));
+        assert!(prompt.contains("Prefer the smallest focused sequence"));
         assert!(prompt.contains("git-feature-workflow"));
-        assert!(
-            prompt.contains("Chaining shell commands is different from speculative tool batching")
-        );
-        assert!(prompt.contains("never claim a check, test, formatter, or lint command passed"));
-        assert!(prompt.contains("Stage only explicit feature paths in Git"));
+        assert!(prompt.contains("Chained shell commands are fine"));
+        assert!(prompt.contains("Tool results are authoritative: claim checks only"));
+        assert!(prompt.contains("never use `git add .`"));
     }
 
     #[test]
