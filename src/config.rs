@@ -52,6 +52,11 @@ pub struct ModelProfile {
     /// Reasoning effort level (e.g. "low", "medium", "high") sent in OpenAI-compatible payloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Hard provider-side cap for reasoning tokens when the OpenAI-compatible
+    /// endpoint supports the `thinking_budget` extension. Unlike
+    /// `reasoning_effort`, this is an explicit token limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
     /// Per-profile completion token cap sent as `max_tokens`. `None` falls
     /// back to the shared default, overriding whatever a Modelfile's
     /// `PARAMETER num_predict` says.
