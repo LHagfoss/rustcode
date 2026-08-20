@@ -809,6 +809,7 @@ pub struct LiveToolCall {
     pub tool_name: String,
     pub action: String,
     pub target: String,
+    pub execution_started: bool,
     pub output: std::collections::VecDeque<LiveToolOutputChunk>,
     pub omitted_output_bytes: usize,
     pub started_at: std::time::Instant,
@@ -830,6 +831,7 @@ impl LiveToolCall {
             tool_name: tool_name.into(),
             action: action.into(),
             target: target.into(),
+            execution_started: true,
             output: std::collections::VecDeque::new(),
             omitted_output_bytes: 0,
             started_at: std::time::Instant::now(),
@@ -1131,13 +1133,29 @@ impl AppState {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> String {
+        let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
+        if let Some(call) = self.live_tool_calls.iter_mut().find(|call| {
+            !call.execution_started
+                && match provider_call_id {
+                    Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
+                    None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                }
+        }) {
+            call.action = action;
+            call.target = target;
+            call.execution_started = true;
+            call.started_at = std::time::Instant::now();
+            let key = call.key.clone();
+            self.request_redraw();
+            return key;
+        }
+
         let sequence = self.live_tool_call_sequence;
         self.live_tool_call_sequence = self.live_tool_call_sequence.saturating_add(1);
         let key = match provider_call_id {
             Some(call_id) => format!("provider:{call_id}:{sequence}"),
             None => format!("local:{sequence}"),
         };
-        let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
         self.live_tool_calls.push(LiveToolCall::new(
             key.clone(),
             provider_call_id.map(str::to_owned),
@@ -1162,9 +1180,12 @@ impl AppState {
         }
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
 
-        if let Some(call) = self.live_tool_calls.iter_mut().find(|c| {
-            provider_call_id.is_some() && c.provider_call_id.as_deref() == provider_call_id
-                || c.tool_name == tool_name
+        if let Some(call) = self.live_tool_calls.iter_mut().find(|call| {
+            !call.execution_started
+                && match provider_call_id {
+                    Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
+                    None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                }
         }) {
             call.action = action;
             call.target = target;
@@ -1178,13 +1199,15 @@ impl AppState {
             Some(call_id) => format!("provider:{call_id}:{sequence}"),
             None => format!("local:{sequence}"),
         };
-        self.live_tool_calls.push(LiveToolCall::new(
+        let mut call = LiveToolCall::new(
             key,
             provider_call_id.map(str::to_owned),
             tool_name,
             action,
             target,
-        ));
+        );
+        call.execution_started = false;
+        self.live_tool_calls.push(call);
         self.request_redraw();
     }
 
@@ -2227,6 +2250,27 @@ mod live_tool_tests {
         // 3. Clear live tool calls at end of turn cleans speculative projections
         state.clear_live_tool_calls();
         assert!(state.live_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn execution_adopts_the_speculative_live_tool_projection() {
+        let mut state = AppState::new();
+        state.update_speculative_live_tool_call(
+            Some("call-99"),
+            "get_time",
+            &serde_json::json!({}),
+        );
+        let speculative_key = state.live_tool_calls[0].key.clone();
+
+        let execution_key = state.begin_live_tool_call(
+            Some("call-99"),
+            "get_time",
+            &serde_json::json!({}),
+        );
+
+        assert_eq!(execution_key, speculative_key);
+        assert_eq!(state.live_tool_calls.len(), 1);
+        assert!(state.live_tool_calls[0].execution_started);
     }
 
     #[test]
