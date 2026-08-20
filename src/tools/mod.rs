@@ -602,6 +602,7 @@ pub const TOOLS: &[Tool] = &[
     filesystem::MULTI_REPLACE_FILE_CONTENT,
     filesystem::WRITE_TO_FILE,
     misc::COMPLETE_TASK,
+    misc::LIST_SKILLS,
     misc::USE_SKILL,
     misc::REMEMBER,
     misc::RECALL_MEMORY,
@@ -945,27 +946,13 @@ pub fn tool_system_prompt(
 ) -> String {
     let mut p = String::new();
 
-    let skills = crate::skills::discover_skills();
-    if !skills.is_empty() {
-        p.push_str("\n# Available Skills\n");
-        p.push_str("Skills provide specialized instructions and workflows for specific tasks.\n");
-        p.push_str(
-            "ALWAYS check your task intent against the available skills below at the START of a task. \
-             If a skill matches the task (such as `git-feature-workflow` for git/feature changes, or `release-automation` for releases), \
-             you MUST invoke `use_skill` immediately as your FIRST action to load its workflow.\n\n",
-        );
-        p.push_str("<available_skills>\n");
-        for skill in &skills {
-            p.push_str("  <skill>\n");
-            p.push_str(&format!("    <name>{}</name>\n", skill.name));
-            p.push_str(&format!(
-                "    <description>{}</description>\n",
-                skill.description
-            ));
-            p.push_str("  </skill>\n");
-        }
-        p.push_str("</available_skills>\n\n");
-    }
+    p.push_str(
+        "\n# Skills\n\
+Skills are discovered on demand so their catalog and instruction bodies stay out of the base prompt. \
+At the START of a task that may match a specialized workflow, call `list_skills` first. \
+Review its names and descriptions, then call `use_skill` with the exact matching name before taking other task actions. \
+`list_skills` returns metadata only; `use_skill` loads the selected SKILL.md and its available files.\n\n",
+    );
 
     if agent_mode == crate::config::AgentMode::Plan {
         p.push_str(
@@ -2833,6 +2820,58 @@ mod tests {
         assert!(prompt.contains("Chained shell commands are fine"));
         assert!(prompt.contains("Tool results are authoritative: claim checks only"));
         assert!(prompt.contains("never use `git add .`"));
+    }
+
+    #[test]
+    fn skills_are_discovered_and_loaded_in_two_on_demand_steps() {
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        let list = prompt.find("list_skills").expect("discovery guidance");
+        let use_skill = prompt.find("use_skill").expect("invocation guidance");
+        assert!(list < use_skill, "discover before loading: {prompt}");
+        assert!(prompt.contains("metadata only"));
+        assert!(prompt.contains("selected SKILL.md"));
+        assert!(TOOLS.iter().any(|tool| tool.name == "list_skills"));
+        assert!(TOOLS.iter().any(|tool| tool.name == "use_skill"));
+    }
+
+    #[test]
+    fn skill_catalog_is_not_embedded_in_the_base_prompt() {
+        let prompt = tool_system_prompt(
+            false,
+            crate::config::ToolProtocol::Json,
+            crate::config::AgentMode::Build,
+        );
+        let old_catalog = (0..100)
+            .map(|index| {
+                format!(
+                    "  <skill>\n    <name>synthetic-skill-{index}</name>\n    <description>{}</description>\n  </skill>\n",
+                    "A specialized workflow with enough detail to represent a real installed skill"
+                )
+            })
+            .collect::<String>();
+
+        let skills_section = prompt
+            .split_once("# Skills\n")
+            .and_then(|(_, rest)| rest.split_once("You are rustcode"))
+            .map(|(section, _)| section)
+            .expect("skills section");
+        assert!(skills_section.len() < old_catalog.len());
+        assert!(!prompt.contains("<available_skills>"));
+        assert!(!prompt.contains("synthetic-skill-"));
+    }
+
+    #[test]
+    fn list_skills_returns_metadata_without_instruction_bodies() {
+        let result = super::misc::list_skills(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("<skill_content"));
+        if result.starts_with("<available_skills") {
+            assert!(result.contains("<description>"));
+            assert!(result.contains("Call use_skill"));
+        }
     }
 
     #[test]

@@ -198,6 +198,25 @@ fn use_skill_schema() -> Value {
     })
 }
 
+fn list_skills_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    })
+}
+
+pub const LIST_SKILLS: Tool = Tool {
+    name: "list_skills",
+    description: "Discover available skills and their short descriptions without loading their instruction bodies.",
+    arguments: r#"{}"#,
+    handler: list_skills,
+    requires_confirmation: false,
+    schema: list_skills_schema,
+    capabilities: &[ToolCapability::ReadWorkspace],
+    safety: ToolSafety::ReadOnly,
+};
+
 pub const USE_SKILL: Tool = Tool {
     name: "use_skill",
     description: "Load a skill by name to get its instructions and available files. Read-only call: can be issued in parallel with other read operations or multiple skills.",
@@ -208,6 +227,29 @@ pub const USE_SKILL: Tool = Tool {
     capabilities: &[ToolCapability::SessionState],
     safety: ToolSafety::ReadOnly,
 };
+
+pub fn list_skills(args: &Value) -> Result<String, String> {
+    if !args.is_object() {
+        return Err("arguments must be a JSON object".to_string());
+    }
+
+    let skills = crate::skills::discover_skills();
+    if skills.is_empty() {
+        return Ok("No skills discovered. Place SKILL.md files in .rustcode/skills/ or ~/.config/rustcode/skills/.".to_string());
+    }
+
+    let mut out = format!("<available_skills count=\"{}\">\n", skills.len());
+    for skill in skills {
+        out.push_str(&format!(
+            "  <skill><name>{}</name><description>{}</description></skill>\n",
+            skill.name, skill.description
+        ));
+    }
+    out.push_str(
+        "</available_skills>\nCall use_skill with the exact name of a matching skill to load its instructions.",
+    );
+    Ok(out)
+}
 
 pub fn ask_question(args: &Value) -> Result<String, String> {
     let question = args
@@ -458,7 +500,7 @@ pub fn use_skill(args: &Value) -> Result<String, String> {
 
     let skill = crate::skills::get_skill_content(name).ok_or_else(|| {
         format!(
-            "Skill '{}' not found. Use the skills catalog to see available skills.",
+            "Skill '{}' not found. Call list_skills to discover available skills.",
             name
         )
     })?;
