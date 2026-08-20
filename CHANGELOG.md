@@ -1,3 +1,9 @@
+## [v0.30.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.4) - 2026-08-20
+
+### Fixes
+- **UI/Transcript:** Deduplicate speculative live tool projections upon execution, group completed generic tools under a `Ran` heading with indented children, and clean up trailing blank lines ([#727](https://github.com/LHagfoss/rustcode/pull/727))
+- **Harness/Tool Calls:** Avoid false-positive malformed tool call detection on standard `json` markdown code blocks in assistant responses ([#729](https://github.com/LHagfoss/rustcode/pull/729))
+
 ## [v0.30.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.30.3) - 2026-08-20
 
 ### Fixes
