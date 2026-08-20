@@ -265,6 +265,34 @@ mod tests {
         assert!(payload.get("thinking_budget").is_none());
     }
 
+    #[tokio::test]
+    async fn native_schema_tokens_are_in_prompt_and_total_usage_estimates() {
+        let messages = vec![serde_json::json!({
+            "role": "system",
+            "content": "You are RustCode."
+        })];
+        let schema = vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "inspect_workspace",
+                "description": "Inspect files in the workspace",
+                "parameters": {"type": "object"}
+            }
+        })];
+
+        let without_schema = estimate_token_usage(&messages, "reply").await.unwrap();
+        let with_schema = estimate_token_usage_with_tool_schemas(&messages, "reply", &schema)
+            .await
+            .unwrap();
+        let schema_tokens =
+            crate::network::compaction::estimate_tool_schema_tokens(&schema) as u32;
+
+        assert!(schema_tokens > 0);
+        assert_eq!(with_schema.prompt_tokens, without_schema.prompt_tokens + schema_tokens);
+        assert_eq!(with_schema.total_tokens, without_schema.total_tokens + schema_tokens);
+        assert_eq!(with_schema.completion_tokens, without_schema.completion_tokens);
+    }
+
     #[test]
     fn disabled_thinking_omits_reasoning_controls() {
         let profile = crate::config::ModelProfile {
@@ -539,6 +567,14 @@ pub(crate) async fn estimate_token_usage(
     messages: &[serde_json::Value],
     reply: &str,
 ) -> Option<TokenUsage> {
+    estimate_token_usage_with_tool_schemas(messages, reply, &[]).await
+}
+
+pub(crate) async fn estimate_token_usage_with_tool_schemas(
+    messages: &[serde_json::Value],
+    reply: &str,
+    tool_schemas: &[serde_json::Value],
+) -> Option<TokenUsage> {
     let mut prompt_text = String::new();
     for msg in messages {
         if let Some(content) = msg.get("content") {
@@ -568,9 +604,10 @@ pub(crate) async fn estimate_token_usage(
             prompt_text.push('\n');
         }
     }
-    let prompt = count_tokens(&prompt_text);
+    let schema_tokens = crate::network::compaction::estimate_tool_schema_tokens(tool_schemas);
+    let prompt = count_tokens(&prompt_text).saturating_add(schema_tokens as u32);
     let full = prompt_text + reply + "\n";
-    let total = count_tokens(&full);
+    let total = count_tokens(&full).saturating_add(schema_tokens as u32);
     Some(TokenUsage {
         prompt_tokens: prompt,
         completion_tokens: total.saturating_sub(prompt),
@@ -654,16 +691,20 @@ pub async fn stream_request(
     }
 
     let tool_protocol = { state.lock().await.active_tool_protocol() };
+    let mut native_tool_schemas = Vec::new();
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         let delegation_active = { state.lock().await.delegation_active };
-        let schema = {
+        native_tool_schemas = {
             let mut s = state.lock().await;
             let agent_mode = s.agent_mode;
             s.prompt_cache
                 .native_schema(delegation_active, tool_protocol, agent_mode)
                 .to_vec()
         };
-        apply_api_native_tools(&mut payload, schema, allow_tools);
+        apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
+    }
+    if !allow_tools {
+        native_tool_schemas.clear();
     }
 
     let tool_count = payload
@@ -683,10 +724,16 @@ pub async fn stream_request(
     );
 
     let request_start_time = std::time::Instant::now();
-    let estimated_prompt_tokens = estimate_token_usage(&aligned_messages, "")
+    let estimated_prompt_tokens = estimate_token_usage_with_tool_schemas(
+        &aligned_messages,
+        "",
+        &native_tool_schemas,
+    )
         .await
         .map(|u| u.prompt_tokens)
         .unwrap_or(0);
+    let tool_schema_tokens =
+        crate::network::compaction::estimate_tool_schema_tokens(&native_tool_schemas);
 
     crate::logger::operational_event(
         "context.request_composition",
@@ -695,7 +742,9 @@ pub async fn stream_request(
             "messages": message_count,
             "tools": tool_count,
             "payload_bytes": payload_bytes,
+            "tool_schema_tokens": tool_schema_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
+            "total_estimated_prompt_tokens": estimated_prompt_tokens,
             "max_tokens": max_tokens,
             "soft_context_target": profile.as_ref().map(|p| p.context_budget().soft_context_target),
             "hard_effective_limit": profile.as_ref().map(|p| p.context_budget().hard_effective_limit),
@@ -710,6 +759,9 @@ pub async fn stream_request(
             "messages": message_count,
             "tools": tool_count,
             "payload_bytes": payload_bytes,
+            "tool_schema_tokens": tool_schema_tokens,
+            "estimated_prompt_tokens": estimated_prompt_tokens,
+            "total_estimated_prompt_tokens": estimated_prompt_tokens,
         }),
     );
 
@@ -1105,6 +1157,8 @@ pub async fn stream_request(
                                                 "thinking_budget": thinking_budget,
                                                 "completion_limit_reached": c >= u64::from(max_tokens),
                                                 "estimated_prompt_tokens": estimated_prompt_tokens,
+                                                "tool_schema_tokens": tool_schema_tokens,
+                                                "total_estimated_prompt_tokens": estimated_prompt_tokens,
                                                 "estimation_delta": estimation_delta,
                                                 "elapsed_ms": request_start_time.elapsed().as_millis() as u64,
                                             }),

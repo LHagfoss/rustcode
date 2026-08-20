@@ -3547,6 +3547,90 @@ fn test_preflight_budget_calculation_and_limits() {
 }
 
 #[test]
+fn test_preflight_budget_accounts_for_native_tool_schemas_once() {
+    use super::compaction::{calculate_preflight_budget, estimate_tool_schema_tokens};
+    use crate::config::ModelProfile;
+
+    let budget = ModelProfile {
+        context_window: Some(32768),
+        ..ModelProfile::default()
+    }
+    .context_budget();
+    let history = vec![ChatMessage::new("user", "Use the available tool.")];
+    let schema = vec![serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "inspect_workspace",
+            "description": "Inspect files in the workspace",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+        }
+    })];
+
+    let without_schema = calculate_preflight_budget(
+        "You are RustCode.",
+        &[],
+        &history,
+        "# Runtime Context\n",
+        0,
+        &budget,
+    );
+    let with_schema = calculate_preflight_budget(
+        "You are RustCode.",
+        &schema,
+        &history,
+        "# Runtime Context\n",
+        0,
+        &budget,
+    );
+
+    assert_eq!(without_schema.tool_schema_tokens, 0);
+    assert_eq!(with_schema.tool_schema_tokens, estimate_tool_schema_tokens(&schema));
+    assert!(with_schema.tool_schema_tokens > 0);
+    assert_eq!(
+        with_schema.total_estimated_prompt - without_schema.total_estimated_prompt,
+        with_schema.tool_schema_tokens
+    );
+}
+
+#[test]
+fn test_text_protocol_preflight_does_not_double_count_tool_definitions() {
+    use super::compaction::calculate_preflight_budget;
+    use crate::config::ModelProfile;
+
+    let budget = ModelProfile {
+        context_window: Some(32768),
+        ..ModelProfile::default()
+    }
+    .context_budget();
+    let schema = vec![serde_json::json!({
+        "type": "function",
+        "function": {"name": "inspect_workspace", "parameters": {"type": "object"}}
+    })];
+    let history = vec![ChatMessage::new("user", "Use the available tool.")];
+    let text_prompt = "You are RustCode.\nTool: inspect_workspace (text protocol)";
+
+    let preflight = calculate_preflight_budget(
+        text_prompt,
+        &[],
+        &history,
+        "",
+        0,
+        &budget,
+    );
+    let incorrectly_double_counted = calculate_preflight_budget(
+        text_prompt,
+        &schema,
+        &history,
+        "",
+        0,
+        &budget,
+    );
+
+    assert_eq!(preflight.tool_schema_tokens, 0);
+    assert!(incorrectly_double_counted.total_estimated_prompt > preflight.total_estimated_prompt);
+}
+
+#[test]
 fn test_local_model_profile_completion_reserve_defaults() {
     use crate::config::ModelProfile;
 
