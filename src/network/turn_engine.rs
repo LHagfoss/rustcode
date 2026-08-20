@@ -332,6 +332,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     let request_msgs = msgs.clone();
     let request_allow_tools = !ctx.force_final;
     let request_disable_thinking = ctx.force_final || ctx.reasoning_recovery_attempts > 0;
+    let request_schema_policy = {
+        let s = state.lock().await;
+        crate::tools::ToolSchemaPolicy::root(s.delegation_active)
+    };
     let collected_response = match runner::collect_response(move |previous| {
         let mut current_msgs = request_msgs.clone();
         if !previous.is_empty() {
@@ -365,6 +369,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 false,
                 request_allow_tools,
                 request_disable_thinking,
+                request_schema_policy,
             )
             .await
             .map_err(|e| e.to_string())?;
