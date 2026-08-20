@@ -1,3 +1,9 @@
+## [v0.31.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.2) - 2026-08-20
+
+### Fixes
+- **UI/Scrollback & Resizing:** Prevent scrollback reflow corruption on wide viewports by omitting trailing empty cells, and ensure accurate coordinate clearing during rapid terminal resize events ([#736](https://github.com/LHagfoss/rustcode/pull/736))
+- **Harness/Loop Detection & Budgeting:** Enforce client-side reasoning token budgets on split thought streams, distinguish substantive commands after leading directory changes, and treat runtime, browser, and read evidence as progress ([#737](https://github.com/LHagfoss/rustcode/pull/737))
+
 ## [v0.31.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.1) - 2026-08-20
 
 ### Features & Fixes
