@@ -231,6 +231,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     &current_msgs,
                     Arc::clone(&request_buffer),
                     true,
+                    true,
+                    false,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
