@@ -773,24 +773,25 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 2);
+    assert_eq!(separator.len(), 3);
+    assert!(separator[0].to_string().is_empty());
     assert!(
-        separator[0]
+        separator[1]
             .to_string()
             .starts_with("─ Worked for 2m 05s ─")
     );
-    assert!(separator[1].to_string().is_empty());
+    assert!(separator[2].to_string().is_empty());
 
     state.history[2].response_time_ms = Some(12_000);
     assert_eq!(
-        super::render_work_separator_before_assistant(&state, 2, 12)[0].to_string(),
+        super::render_work_separator_before_assistant(&state, 2, 12)[1].to_string(),
         "────────────"
     );
     assert!(super::render_work_separator_before_assistant(&state, 0, 80).is_empty());
 }
 
 #[test]
-fn work_separator_follows_tool_without_extra_leading_gap() {
+fn work_separator_follows_tool_with_padding_gap() {
     use crate::app::{ChatMessage, ToolResultRecord};
 
     let mut state = AppState::new();
@@ -807,9 +808,10 @@ fn work_separator_follows_tool_without_extra_leading_gap() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 2);
-    assert!(separator[0].to_string().starts_with("─ Worked for 4m 14s ─"));
-    assert_eq!(separator[1].to_string(), "");
+    assert_eq!(separator.len(), 3);
+    assert_eq!(separator[0].to_string(), "");
+    assert!(separator[1].to_string().starts_with("─ Worked for 4m 14s ─"));
+    assert_eq!(separator[2].to_string(), "");
 }
 
 #[test]
@@ -1628,13 +1630,14 @@ fn new_chat_separator_spans_width_and_centers_label() {
     let mut lines = Vec::new();
     push_new_chat_separator(&mut lines, 40, false);
 
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0].width(), 40);
-    assert_eq!(lines[0].spans[1].content, " ✨ NEW CHAT ");
-    assert_eq!(lines[1].width(), 0);
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0].width(), 0);
+    assert_eq!(lines[1].width(), 40);
+    assert_eq!(lines[1].spans[1].content, " ✨ NEW CHAT ");
+    assert_eq!(lines[2].width(), 0);
 
-    let left = lines[0].spans[0].content.width();
-    let right = lines[0].spans[2].content.width();
+    let left = lines[1].spans[0].content.width();
+    let right = lines[1].spans[2].content.width();
     assert!((left as isize - right as isize).abs() <= 1);
 }
 
@@ -1645,13 +1648,29 @@ fn resumed_session_separator_spans_width_and_centers_label() {
     let mut lines = Vec::new();
     super::render_status_panel("Resumed session \"My Test Session\"", 60, false, &mut lines);
 
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].width(), 60);
-    assert_eq!(lines[0].spans[1].content, " Resumed Session ");
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].width(), 0);
+    assert_eq!(lines[1].width(), 60);
+    assert_eq!(lines[1].spans[1].content, " Resumed Session ");
 
-    let left = lines[0].spans[0].content.width();
-    let right = lines[0].spans[2].content.width();
+    let left = lines[1].spans[0].content.width();
+    let right = lines[1].spans[2].content.width();
     assert!((left as isize - right as isize).abs() <= 1);
+}
+
+#[test]
+fn resumed_session_committed_block_has_top_and_bottom_padding() {
+    let mut state = AppState::new();
+    state.history.push(crate::app::ChatMessage::new(
+        "system",
+        "Resumed session \"My Test Session\"",
+    ));
+
+    let block = super::render_committed_history_block(&state, 0, 60);
+    assert_eq!(block.len(), 3);
+    assert!(block[0].to_string().is_empty());
+    assert!(block[1].to_string().contains("Resumed Session"));
+    assert!(block[2].to_string().is_empty());
 }
 
 // Regression: a short transcript used to receive the entire remaining frame,
