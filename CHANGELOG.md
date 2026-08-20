@@ -234,6 +234,128 @@
 - **Agent:** Resume after background task completion and coalesce duplicate wakeups ([#620](https://github.com/LHagfoss/rustcode/pull/620), [#622](https://github.com/LHagfoss/rustcode/pull/622) / [`e790852`](https://github.com/LHagfoss/rustcode/commit/e790852), [`84e0b5a`](https://github.com/LHagfoss/rustcode/commit/84e0b5a))
 - **UI:** Finalize cancelled turns exactly once ([#635](https://github.com/LHagfoss/rustcode/pull/635) / [`4748a91`](https://github.com/LHagfoss/rustcode/commit/4748a91))
 
+## [v0.18.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.1) - 2026-08-14
+- **UI:** Resume after background task completion ([`e790852`](https://github.com/LHagfoss/rustcode/commit/e790852))
+- **UI:** Pad worked-for separator and space composer footer with active model display ([`0cb2d52`](https://github.com/LHagfoss/rustcode/commit/0cb2d52), [`d44d31f`](https://github.com/LHagfoss/rustcode/commit/d44d31f))
+- **UI:** Align transcript and panel surfaces with Codex design ([`248214b`](https://github.com/LHagfoss/rustcode/commit/248214b))
+- **UI:** Make high verbosity tool output compact ([`ae8b934`](https://github.com/LHagfoss/rustcode/commit/ae8b934))
+- **UI:** Restore chat surface backgrounds and help shortcut ([`e6cd99f`](https://github.com/LHagfoss/rustcode/commit/e6cd99f))
+- **UI:** Restore panel backgrounds and approval selection ([`b972cc9`](https://github.com/LHagfoss/rustcode/commit/b972cc9))
+
+## [v0.18.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.0) - 2026-08-14
+
+### Features
+- **UI:** Full redesign to Claude Code / Copilot CLI style with rounded boxed input and native terminal background ([#526](https://github.com/LHagfoss/rustcode/pull/526) / [`348c282`](https://github.com/LHagfoss/rustcode/commit/348c282))
+- **UI:** Unified chat layout, remove welcome screen logic, and remove all remaining solid background fills ([#528](https://github.com/LHagfoss/rustcode/pull/528) / [`b36585f`](https://github.com/LHagfoss/rustcode/commit/b36585f))
+- **UI:** Attach modal pickers inline to chat bar and remove solid panel background fills ([#527](https://github.com/LHagfoss/rustcode/pull/527) / [`8c8a188`](https://github.com/LHagfoss/rustcode/commit/8c8a188))
+- **UI:** Add startup banner with full-width RustCode ASCII logo ([#530](https://github.com/LHagfoss/rustcode/pull/530) / [`eff7f4f`](https://github.com/LHagfoss/rustcode/commit/eff7f4f))
+- **UI:** Format system info/help/status command output inside rounded card boxes with >_ RustCode header ([#534](https://github.com/LHagfoss/rustcode/pull/534) / [`76a6e2b`](https://github.com/LHagfoss/rustcode/commit/76a6e2b))
+- **UI:** Modernize user prompt rendering with sleek ❯ prompt glyph ([#535](https://github.com/LHagfoss/rustcode/pull/535) / [`48b3da2`](https://github.com/LHagfoss/rustcode/commit/48b3da2))
+- **UI:** Switch to full native inline mode with terminal scrollback, removing alternate screen buffer and mouse capture ([#536](https://github.com/LHagfoss/rustcode/pull/536) / [`8a5939f`](https://github.com/LHagfoss/rustcode/commit/8a5939f))
+- **UI:** Clear terminal screen and move cursor to top-left on startup ([#537](https://github.com/LHagfoss/rustcode/pull/537) / [`7401e99`](https://github.com/LHagfoss/rustcode/commit/7401e99))
+- **UI:** Set card borders to signature primary orange accent color ([#540](https://github.com/LHagfoss/rustcode/pull/540) / [`ba12b9b`](https://github.com/LHagfoss/rustcode/commit/ba12b9b))
+- **UI:** Render animated shimmer Working indicator inside chat stream ([#579](https://github.com/LHagfoss/rustcode/pull/579) / [`03d7d7b`](https://github.com/LHagfoss/rustcode/commit/03d7d7b))
+- **UI:** Compact queued prompts and improve chat transcript hierarchy ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`310eb16`](https://github.com/LHagfoss/rustcode/commit/310eb16))
+- **UI:** Display UseSkill and agent tool calls in transcript ([#576](https://github.com/LHagfoss/rustcode/pull/576) / [`e2d8d20`](https://github.com/LHagfoss/rustcode/commit/e2d8d20))
+- **UI:** Adopt Codex-style transcript rendering and conversation experience ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`2da6a2d`](https://github.com/LHagfoss/rustcode/commit/2da6a2d))
+- **UI:** Improve streamed markdown and composer suggestions ([#608](https://github.com/LHagfoss/rustcode/pull/608) / [`2b9e322`](https://github.com/LHagfoss/rustcode/commit/2b9e322))
+- **UI:** Align streaming transcript with Codex ([#611](https://github.com/LHagfoss/rustcode/pull/611) / [`dcc8eb2`](https://github.com/LHagfoss/rustcode/commit/dcc8eb2))
+- **UI:** Match Codex conversation experience ([#612](https://github.com/LHagfoss/rustcode/pull/612) / [`5addb11`](https://github.com/LHagfoss/rustcode/commit/5addb11))
+- **Agent:** Improve coding loop context tools and memory ([#605](https://github.com/LHagfoss/rustcode/pull/605) / [`c61255e`](https://github.com/LHagfoss/rustcode/commit/c61255e))
+- **Activity:** Add expressive activity status words and terminal title display ([#546](https://github.com/LHagfoss/rustcode/pull/546) / [`d474dec`](https://github.com/LHagfoss/rustcode/commit/d474dec))
+- **Activity:** Compact input status bar with activity footer ([#547](https://github.com/LHagfoss/rustcode/pull/547) / [`3e10a13`](https://github.com/LHagfoss/rustcode/commit/3e10a13))
+- **Terminal:** Commit chat history to native terminal scrollback ([#573](https://github.com/LHagfoss/rustcode/pull/573) / [`7db5c08`](https://github.com/LHagfoss/rustcode/commit/7db5c08))
+- **Footer:** Add depth to activity trail ([#545](https://github.com/LHagfoss/rustcode/pull/545) / [`153d819`](https://github.com/LHagfoss/rustcode/commit/153d819))
+- **Config:** Add z.ai and bigmodel.cn function calling hosts ([#488](https://github.com/LHagfoss/rustcode/pull/488) / [`dc815b8`](https://github.com/LHagfoss/rustcode/commit/dc815b8))
+
+### Fixes
+- **UI:** Restore chat surface backgrounds and help shortcut ([#614](https://github.com/LHagfoss/rustcode/pull/614) / [`e6cd99f`](https://github.com/LHagfoss/rustcode/commit/e6cd99f))
+- **UI:** Restore panel backgrounds and approval selection ([#613](https://github.com/LHagfoss/rustcode/pull/613) / [`b972cc9`](https://github.com/LHagfoss/rustcode/commit/b972cc9))
+- **UI:** Make high verbosity tool output compact ([#615](https://github.com/LHagfoss/rustcode/pull/615) / [`ae8b934`](https://github.com/LHagfoss/rustcode/commit/ae8b934))
+- **UI:** Replay inline transcript after terminal resize ([#601](https://github.com/LHagfoss/rustcode/pull/601) / [`212b88d`](https://github.com/LHagfoss/rustcode/commit/212b88d))
+- **UI:** Align parallel approvals and follow-up spacing ([#599](https://github.com/LHagfoss/rustcode/pull/599) / [`ae01d86`](https://github.com/LHagfoss/rustcode/commit/ae01d86))
+- **UI:** Show tool summaries at high verbosity ([#598](https://github.com/LHagfoss/rustcode/pull/598) / [`1560064`](https://github.com/LHagfoss/rustcode/commit/1560064))
+- **UI:** Polish markdown headings and table separators ([#597](https://github.com/LHagfoss/rustcode/pull/597) / [`44c69da`](https://github.com/LHagfoss/rustcode/commit/44c69da))
+- **UI:** Use full viewport height when pickers or popups are active ([#596](https://github.com/LHagfoss/rustcode/pull/596) / [`486389c`](https://github.com/LHagfoss/rustcode/commit/486389c))
+- **UI:** Render stream chunks without trailing blank lines ([#595](https://github.com/LHagfoss/rustcode/pull/595) / [`2df942e`](https://github.com/LHagfoss/rustcode/commit/2df942e))
+- **UI:** Collapse blank lines between list items and avoid duplicate empty lines ([#594](https://github.com/LHagfoss/rustcode/pull/594) / [`216ea61`](https://github.com/LHagfoss/rustcode/commit/216ea61))
+- **UI:** Sanitize loose bullet lists and normalize bullet characters ([#593](https://github.com/LHagfoss/rustcode/pull/593) / [`f8c3832`](https://github.com/LHagfoss/rustcode/commit/f8c3832))
+- **UI:** Sanitize loose markdown tables and position composer compactly ([#592](https://github.com/LHagfoss/rustcode/pull/592) / [`dc530a0`](https://github.com/LHagfoss/rustcode/commit/dc530a0))
+- **UI:** Tighten list item gaps, add gap below Working, and pin chat bar to bottom ([#591](https://github.com/LHagfoss/rustcode/pull/591) / [`0de42b4`](https://github.com/LHagfoss/rustcode/commit/0de42b4))
+- **UI:** Tighten markdown list spacing, pad user message, and place composer compactly ([#590](https://github.com/LHagfoss/rustcode/pull/590) / [`b3430ee`](https://github.com/LHagfoss/rustcode/commit/b3430ee))
+- **UI:** Remove bullet prefix from assistant text and omit streaming blank line ([#589](https://github.com/LHagfoss/rustcode/pull/589) / [`617c3fc`](https://github.com/LHagfoss/rustcode/commit/617c3fc))
+- **UI:** Tighten markdown table spacing ([#588](https://github.com/LHagfoss/rustcode/pull/588) / [`411365d`](https://github.com/LHagfoss/rustcode/commit/411365d))
+- **UI:** Replace resumed session toast with full-width centered rule ([#584](https://github.com/LHagfoss/rustcode/pull/584) / [`358d03c`](https://github.com/LHagfoss/rustcode/commit/358d03c))
+- **UI:** Request redraw after clearing working_status_pending ([#583](https://github.com/LHagfoss/rustcode/pull/583) / [`fc60bca`](https://github.com/LHagfoss/rustcode/commit/fc60bca))
+- **UI:** Remove extra blank lines under working status and over composer ([#582](https://github.com/LHagfoss/rustcode/pull/582) / [`220f61d`](https://github.com/LHagfoss/rustcode/commit/220f61d))
+- **UI:** Restore single-line bulleted tool call items ([#581](https://github.com/LHagfoss/rustcode/pull/581) / [`3d6a1a5`](https://github.com/LHagfoss/rustcode/commit/3d6a1a5))
+- **UI:** Space consecutive thinking blocks, add working padding, and pin chat composer ([#580](https://github.com/LHagfoss/rustcode/pull/580) / [`1089c53`](https://github.com/LHagfoss/rustcode/commit/1089c53))
+- **UI:** Keep working through final frame ([#579](https://github.com/LHagfoss/rustcode/pull/579) / [`10e8085`](https://github.com/LHagfoss/rustcode/commit/10e8085))
+- **UI:** Cover compact modal boundary ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`d763994`](https://github.com/LHagfoss/rustcode/commit/d763994))
+- **UI:** Preserve compact modal scope ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`f12b0e6`](https://github.com/LHagfoss/rustcode/commit/f12b0e6))
+- **UI:** Keep short modal actions visible ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`55180aa`](https://github.com/LHagfoss/rustcode/commit/55180aa))
+- **UI:** Guard short confirmation modals ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`b1df637`](https://github.com/LHagfoss/rustcode/commit/b1df637))
+- **UI:** Use compact welcome box and clean thought block preambles ([#577](https://github.com/LHagfoss/rustcode/pull/577) / [`764fe6b`](https://github.com/LHagfoss/rustcode/commit/764fe6b))
+- **UI:** Keep bare thoughts compact ([#577](https://github.com/LHagfoss/rustcode/pull/577) / [`d4edb7a`](https://github.com/LHagfoss/rustcode/commit/d4edb7a))
+- **UI:** Restore progressive streaming ([#576](https://github.com/LHagfoss/rustcode/pull/576) / [`928c351`](https://github.com/LHagfoss/rustcode/commit/928c351))
+- **UI:** Tighten transcript thought spacing ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`41afe41`](https://github.com/LHagfoss/rustcode/commit/41afe41))
+- **UI:** Restore welcome and thought flow ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`bb235d5`](https://github.com/LHagfoss/rustcode/commit/bb235d5))
+- **UI:** Align wrapped markdown blocks ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`bc8992a`](https://github.com/LHagfoss/rustcode/commit/bc8992a))
+- **UI:** Adapt narrow markdown tables ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`f8c934a`](https://github.com/LHagfoss/rustcode/commit/f8c934a))
+- **UI:** Clarify tool results ([#574](https://github.com/LHagfoss/rustcode/pull/574) / [`30bc1a2`](https://github.com/LHagfoss/rustcode/commit/30bc1a2))
+- **UI:** Improve chat transcript hierarchy ([#574](https://github.com/LHagfoss/rustcode/pull/574) / [`354a92d`](https://github.com/LHagfoss/rustcode/commit/354a92d))
+- **App/UI:** Clear session history on /new and handle missing open think tags ([#568](https://github.com/LHagfoss/rustcode/pull/568) / [`b8e819e`](https://github.com/LHagfoss/rustcode/commit/b8e819e))
+- **UI/Tools:** Hide oversized response notices and support multi-tool skills ([#567](https://github.com/LHagfoss/rustcode/pull/567) / [`28c3d66`](https://github.com/LHagfoss/rustcode/commit/28c3d66))
+- **UI:** Expand inline picker choices ([#566](https://github.com/LHagfoss/rustcode/pull/566) / [`923dc1b`](https://github.com/LHagfoss/rustcode/commit/923dc1b))
+- **UI:** Retain incomplete stream in live tail ([#565](https://github.com/LHagfoss/rustcode/pull/565) / [`e2a4f80`](https://github.com/LHagfoss/rustcode/commit/e2a4f80))
+- **UI:** Compact short chat layout ([#564](https://github.com/LHagfoss/rustcode/pull/564) / [`cf67a30`](https://github.com/LHagfoss/rustcode/commit/cf67a30))
+- **UI:** Tighten tool confirmation layout ([#563](https://github.com/LHagfoss/rustcode/pull/563) / [`ada224b`](https://github.com/LHagfoss/rustcode/commit/ada224b))
+- **Images:** Preserve resume analysis ([#562](https://github.com/LHagfoss/rustcode/pull/562) / [`c8492ce`](https://github.com/LHagfoss/rustcode/commit/c8492ce))
+- **UI:** Restore inline tui chat ([#561](https://github.com/LHagfoss/rustcode/pull/561) / [`c8492ce`](https://github.com/LHagfoss/rustcode/commit/c8492ce))
+- **Terminal:** Remove raw mode calls ([#560](https://github.com/LHagfoss/rustcode/pull/560) / [`ee48ea4`](https://github.com/LHagfoss/rustcode/commit/ee48ea4))
+- **Terminal:** Use native interactive scrollback ([#560](https://github.com/LHagfoss/rustcode/pull/560) / [`ca072cd`](https://github.com/LHagfoss/rustcode/commit/ca072cd))
+- **Terminal:** Render tui inline with terminal output ([#559](https://github.com/LHagfoss/rustcode/pull/559) / [`d29453d`](https://github.com/LHagfoss/rustcode/commit/d29453d))
+- **Terminal:** Keep cargo output outside tui screen ([#559](https://github.com/LHagfoss/rustcode/pull/559) / [`679fbce`](https://github.com/LHagfoss/rustcode/commit/679fbce))
+- **UI:** Show full-width new chat boundary ([#558](https://github.com/LHagfoss/rustcode/pull/558) / [`c32399e`](https://github.com/LHagfoss/rustcode/commit/c32399e))
+- **UI:** Preserve complete tool output ([#557](https://github.com/LHagfoss/rustcode/pull/557) / [`e19725c`](https://github.com/LHagfoss/rustcode/commit/e19725c))
+- **UI:** Align confirmations and mark new chats ([#557](https://github.com/LHagfoss/rustcode/pull/557) / [`ba34e8b`](https://github.com/LHagfoss/rustcode/commit/ba34e8b))
+- **Security:** Gate unknown shell commands ([#556](https://github.com/LHagfoss/rustcode/pull/556) / [`c460b4a`](https://github.com/LHagfoss/rustcode/commit/c460b4a))
+- **UI:** Preserve transcript history ([#555](https://github.com/LHagfoss/rustcode/pull/555) / [`44201df`](https://github.com/LHagfoss/rustcode/commit/44201df))
+- **UI:** Tighten thought timing from answer timing ([#554](https://github.com/LHagfoss/rustcode/pull/554) / [`54d81a9`](https://github.com/LHagfoss/rustcode/commit/54d81a9))
+- **Agent:** Harden agent context and tool state review ([#606](https://github.com/LHagfoss/rustcode/pull/606) / [`2c6aefd`](https://github.com/LHagfoss/rustcode/commit/2c6aefd))
+- **Network:** Support thought and thinking delta keys for reasoning extraction ([#604](https://github.com/LHagfoss/rustcode/pull/604) / [`1f57285`](https://github.com/LHagfoss/rustcode/commit/1f57285))
+- **Hardening:** Harden live tool identity and streamed fences ([#607](https://github.com/LHagfoss/rustcode/pull/607) / [`515faea`](https://github.com/LHagfoss/rustcode/commit/515faea))
+- **Network:** Bound silent provider streams ([#517](https://github.com/LHagfoss/rustcode/pull/517) / [`ad91cf1`](https://github.com/LHagfoss/rustcode/commit/ad91cf1))
+- **Tools:** Bound malformed call recovery ([#516](https://github.com/LHagfoss/rustcode/pull/516) / [`ea3b64a`](https://github.com/LHagfoss/rustcode/commit/ea3b64a))
+- **MCP:** Bound enabled server startup ([#515](https://github.com/LHagfoss/rustcode/pull/515) / [`98b5cde`](https://github.com/LHagfoss/rustcode/commit/98b5cde))
+- **ACP:** Run prompt turns outside event loop ([#514](https://github.com/LHagfoss/rustcode/pull/514) / [`e87fa0e`](https://github.com/LHagfoss/rustcode/commit/e87fa0e))
+- **Agent:** Escalate repeated failed mutations ([#506](https://github.com/LHagfoss/rustcode/pull/506) / [`64d2824`](https://github.com/LHagfoss/rustcode/commit/64d2824))
+- **Security:** Confirm destructive git commands ([#505](https://github.com/LHagfoss/rustcode/pull/505) / [`f366a52`](https://github.com/LHagfoss/rustcode/commit/f366a52))
+- **Context:** Surface stale files and compiler snippets ([#504](https://github.com/LHagfoss/rustcode/pull/504) / [`f6a86e1`](https://github.com/LHagfoss/rustcode/commit/f6a86e1))
+- **Agent:** Stop repeated compiler diagnostics ([#503](https://github.com/LHagfoss/rustcode/pull/503) / [`09982d0`](https://github.com/LHagfoss/rustcode/commit/09982d0))
+- **Tools:** Improve malformed call recovery ([#502](https://github.com/LHagfoss/rustcode/pull/502) / [`ca179ab`](https://github.com/LHagfoss/rustcode/commit/ca179ab))
+- **Agent:** Restore tool round backstop ([#501](https://github.com/LHagfoss/rustcode/pull/501) / [`67c8e9e`](https://github.com/LHagfoss/rustcode/commit/67c8e9e))
+- **UI:** Attach per-turn thought duration/tokens and eliminate line gaps ([#489](https://github.com/LHagfoss/rustcode/pull/489) / [`410d8b5`](https://github.com/LHagfoss/rustcode/commit/410d8b5))
+
+### Refactor
+- **Network:** Extract turn engine into src/network/turn_engine.rs ([#517](https://github.com/LHagfoss/rustcode/pull/517) / [`8c1be43`](https://github.com/LHagfoss/rustcode/commit/8c1be43))
+- **Network:** Extract tool execution into src/network/tool_exec.rs ([#516](https://github.com/LHagfoss/rustcode/pull/516) / [`b33e4b5`](https://github.com/LHagfoss/rustcode/commit/b33e4b5))
+- **Network:** Extract stream_request into src/network/stream_request.rs ([#515](https://github.com/LHagfoss/rustcode/pull/515) / [`d4764a7`](https://github.com/LHagfoss/rustcode/commit/d4764a7))
+- **Network:** Extract title generation and context tail building ([#514](https://github.com/LHagfoss/rustcode/pull/514) / [`5eaf708`](https://github.com/LHagfoss/rustcode/commit/5eaf708))
+- **Network:** Extract subagent execution and tool handling to src/network/subagents.rs ([#513](https://github.com/LHagfoss/rustcode/pull/513) / [`2105b80`](https://github.com/LHagfoss/rustcode/commit/2105b80))
+- **Network:** Extract compiler check & diagnostic logic into src/network/compiler.rs ([#512](https://github.com/LHagfoss/rustcode/pull/512) / [`214823a`](https://github.com/LHagfoss/rustcode/commit/214823a))
+- **Network:** Extract model quota and multimodal payload logic to src/network/payload.rs ([#511](https://github.com/LHagfoss/rustcode/pull/511) / [`d5ea72f`](https://github.com/LHagfoss/rustcode/commit/d5ea72f))
+- **Tests:** Extract UI tests into src/ui/tests.rs ([#510](https://github.com/LHagfoss/rustcode/pull/510) / [`71a9b09`](https://github.com/LHagfoss/rustcode/commit/71a9b09))
+- **Tests:** Extract filesystem tool tests into src/tools/filesystem/tests.rs ([#509](https://github.com/LHagfoss/rustcode/pull/509) / [`7040da0`](https://github.com/LHagfoss/rustcode/commit/7040da0))
+- **Tests:** Extract network tests into src/network/tests.rs ([#508](https://github.com/LHagfoss/rustcode/pull/508) / [`0614e53`](https://github.com/LHagfoss/rustcode/commit/0614e53))
+- **Refactor:** Centralize turn lifecycle ([#507](https://github.com/LHagfoss/rustcode/pull/507) / [`40a0e68`](https://github.com/LHagfoss/rustcode/commit/40a0e68))
+- **Refactor:** Isolate native tool responses ([#506](https://github.com/LHagfoss/rustcode/pull/506) / [`2b5e472`](https://github.com/LHagfoss/rustcode/commit/2b5e472))
+- **UI:** Use native terminal scrollback ([#566](https://github.com/LHagfoss/rustcode/pull/566) / [`d89d8c0`](https://github.com/LHagfoss/rustcode/commit/d89d8c0))
+
+### Chores
+- Remove optional docs benchmarks and tests ([#602](https://github.com/LHagfoss/rustcode/pull/602) / [`659aab4`](https://github.com/LHagfoss/rustcode/commit/659aab4))
+- Resolve compiler and dead code warnings ([#507](https://github.com/LHagfoss/rustcode/pull/507) / [`0be1a7c`](https://github.com/LHagfoss/rustcode/commit/0be1a7c))
+
 ## [v0.17.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.17.0) - 2026-08-11
 
 ### Features
@@ -462,7 +584,6 @@
 
 ### Chore
 
-
 ## [v0.7.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.7.2) - 2026-07-31
 ### Features
 - Check for updates on launch and via --upgrade ([#232](https://github.com/LHagfoss/rustcode/pull/232) / [`b428952`](https://github.com/LHagfoss/rustcode/commit/b428952))
@@ -478,6 +599,21 @@
 - Cap ordinary tool output and preserve diffs ([#229](https://github.com/LHagfoss/rustcode/pull/229) / [`6c7c0ac`](https://github.com/LHagfoss/rustcode/commit/6c7c0ac))
 - Hide successful exit status ([#228](https://github.com/LHagfoss/rustcode/pull/228) / [`f2a3c13`](https://github.com/LHagfoss/rustcode/commit/f2a3c13))
 - Render generic tool results quietly ([#227](https://github.com/LHagfoss/rustcode/pull/227) / [`dcebd8c`](https://github.com/LHagfoss/rustcode/commit/dcebd8c))
+
+## [v0.7.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.7.0) - 2026-07-31
+### Features
+- Refactor the agent orchestration, typed turn lifecycle, continuation policy, context handling, and subagent workspace boundaries ([`d7d7229`](https://github.com/LHagfoss/rustcode/commit/d7d7229), [`4310340`](https://github.com/LHagfoss/rustcode/commit/4310340), [`3e549f7`](https://github.com/LHagfoss/rustcode/commit/3e549f7))
+- Add structured tool-result metadata, safer tool validation, explicit delegation contracts, and project-aware verification ([`14637e9`](https://github.com/LHagfoss/rustcode/commit/14637e9), [`1083dd6`](https://github.com/LHagfoss/rustcode/commit/1083dd6), [`1cc96b1`](https://github.com/LHagfoss/rustcode/commit/1cc96b1), [`e1b79ee`](https://github.com/LHagfoss/rustcode/commit/e1b79ee))
+- Add structured, syntax-highlighted tool output and improved assistant code/diff rendering ([`3c923a8`](https://github.com/LHagfoss/rustcode/commit/3c923a8), [`b9f227a`](https://github.com/LHagfoss/rustcode/commit/b9f227a), [`cb61915`](https://github.com/LHagfoss/rustcode/commit/cb61915), [`bb47b05`](https://github.com/LHagfoss/rustcode/commit/bb47b05))
+
+### Fixes
+- Prevent harmless repeated Git inspection commands from disabling agent tools ([#223](https://github.com/LHagfoss/rustcode/pull/223))
+- Repair project-root discovery so automatic Cargo verification receives a real absolute working directory ([#221](https://github.com/LHagfoss/rustcode/pull/221))
+- Improve code panels, Edit/Delete diffs, tool output spacing, line gutters, and assistant transcript readability ([#218](https://github.com/LHagfoss/rustcode/pull/218), [#219](https://github.com/LHagfoss/rustcode/pull/219), [#220](https://github.com/LHagfoss/rustcode/pull/220))
+- Bound loop detection, soften legitimate read recovery, and remove the obsolete continuation round cap ([`676e3d2`](https://github.com/LHagfoss/rustcode/commit/676e3d2), [`29f0ced`](https://github.com/LHagfoss/rustcode/commit/29f0ced))
+
+### Documentation
+- Strengthen the Git feature workflow and shell command-chaining guidance for agentic coding ([#222](https://github.com/LHagfoss/rustcode/pull/222))
 
 ## [v0.6.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.6.0) - 2026-07-29
 ### Features
@@ -520,8 +656,6 @@
 
 ### Chore
 - Remove clewdr proxy files and ignore them ([#77](https://github.com/LHagfoss/rustcode/pull/77) / [`e480761`](https://github.com/LHagfoss/rustcode/commit/e480761))
-
-
 
 ## [v0.3.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.3.1) - 2026-07-28
 ### Features
@@ -693,140 +827,5 @@
 ### Chores
 - Cleanup unused variables in network.rs and tools/mod.rs
 
-## [v0.1.12]
--e 
-## [v0.7.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.7.0) - 2026-07-31
-### Features
-- Refactor the agent orchestration, typed turn lifecycle, continuation policy, context handling, and subagent workspace boundaries ([`d7d7229`](https://github.com/LHagfoss/rustcode/commit/d7d7229), [`4310340`](https://github.com/LHagfoss/rustcode/commit/4310340), [`3e549f7`](https://github.com/LHagfoss/rustcode/commit/3e549f7))
-- Add structured tool-result metadata, safer tool validation, explicit delegation contracts, and project-aware verification ([`14637e9`](https://github.com/LHagfoss/rustcode/commit/14637e9), [`1083dd6`](https://github.com/LHagfoss/rustcode/commit/1083dd6), [`1cc96b1`](https://github.com/LHagfoss/rustcode/commit/1cc96b1), [`e1b79ee`](https://github.com/LHagfoss/rustcode/commit/e1b79ee))
-- Add structured, syntax-highlighted tool output and improved assistant code/diff rendering ([`3c923a8`](https://github.com/LHagfoss/rustcode/commit/3c923a8), [`b9f227a`](https://github.com/LHagfoss/rustcode/commit/b9f227a), [`cb61915`](https://github.com/LHagfoss/rustcode/commit/cb61915), [`bb47b05`](https://github.com/LHagfoss/rustcode/commit/bb47b05))
-
-### Fixes
-- Prevent harmless repeated Git inspection commands from disabling agent tools ([#223](https://github.com/LHagfoss/rustcode/pull/223))
-- Repair project-root discovery so automatic Cargo verification receives a real absolute working directory ([#221](https://github.com/LHagfoss/rustcode/pull/221))
-- Improve code panels, Edit/Delete diffs, tool output spacing, line gutters, and assistant transcript readability ([#218](https://github.com/LHagfoss/rustcode/pull/218), [#219](https://github.com/LHagfoss/rustcode/pull/219), [#220](https://github.com/LHagfoss/rustcode/pull/220))
-- Bound loop detection, soften legitimate read recovery, and remove the obsolete continuation round cap ([`676e3d2`](https://github.com/LHagfoss/rustcode/commit/676e3d2), [`29f0ced`](https://github.com/LHagfoss/rustcode/commit/29f0ced))
-
-### Documentation
-- Strengthen the Git feature workflow and shell command-chaining guidance for agentic coding ([#222](https://github.com/LHagfoss/rustcode/pull/222))
-## [v0.18.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.0) - 2026-08-14
-
-### Features
-- **UI:** Full redesign to Claude Code / Copilot CLI style with rounded boxed input and native terminal background ([#526](https://github.com/LHagfoss/rustcode/pull/526) / [`348c282`](https://github.com/LHagfoss/rustcode/commit/348c282))
-- **UI:** Unified chat layout, remove welcome screen logic, and remove all remaining solid background fills ([#528](https://github.com/LHagfoss/rustcode/pull/528) / [`b36585f`](https://github.com/LHagfoss/rustcode/commit/b36585f))
-- **UI:** Attach modal pickers inline to chat bar and remove solid panel background fills ([#527](https://github.com/LHagfoss/rustcode/pull/527) / [`8c8a188`](https://github.com/LHagfoss/rustcode/commit/8c8a188))
-- **UI:** Add startup banner with full-width RustCode ASCII logo ([#530](https://github.com/LHagfoss/rustcode/pull/530) / [`eff7f4f`](https://github.com/LHagfoss/rustcode/commit/eff7f4f))
-- **UI:** Format system info/help/status command output inside rounded card boxes with >_ RustCode header ([#534](https://github.com/LHagfoss/rustcode/pull/534) / [`76a6e2b`](https://github.com/LHagfoss/rustcode/commit/76a6e2b))
-- **UI:** Modernize user prompt rendering with sleek ❯ prompt glyph ([#535](https://github.com/LHagfoss/rustcode/pull/535) / [`48b3da2`](https://github.com/LHagfoss/rustcode/commit/48b3da2))
-- **UI:** Switch to full native inline mode with terminal scrollback, removing alternate screen buffer and mouse capture ([#536](https://github.com/LHagfoss/rustcode/pull/536) / [`8a5939f`](https://github.com/LHagfoss/rustcode/commit/8a5939f))
-- **UI:** Clear terminal screen and move cursor to top-left on startup ([#537](https://github.com/LHagfoss/rustcode/pull/537) / [`7401e99`](https://github.com/LHagfoss/rustcode/commit/7401e99))
-- **UI:** Set card borders to signature primary orange accent color ([#540](https://github.com/LHagfoss/rustcode/pull/540) / [`ba12b9b`](https://github.com/LHagfoss/rustcode/commit/ba12b9b))
-- **UI:** Render animated shimmer Working indicator inside chat stream ([#579](https://github.com/LHagfoss/rustcode/pull/579) / [`03d7d7b`](https://github.com/LHagfoss/rustcode/commit/03d7d7b))
-- **UI:** Compact queued prompts and improve chat transcript hierarchy ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`310eb16`](https://github.com/LHagfoss/rustcode/commit/310eb16))
-- **UI:** Display UseSkill and agent tool calls in transcript ([#576](https://github.com/LHagfoss/rustcode/pull/576) / [`e2d8d20`](https://github.com/LHagfoss/rustcode/commit/e2d8d20))
-- **UI:** Adopt Codex-style transcript rendering and conversation experience ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`2da6a2d`](https://github.com/LHagfoss/rustcode/commit/2da6a2d))
-- **UI:** Improve streamed markdown and composer suggestions ([#608](https://github.com/LHagfoss/rustcode/pull/608) / [`2b9e322`](https://github.com/LHagfoss/rustcode/commit/2b9e322))
-- **UI:** Align streaming transcript with Codex ([#611](https://github.com/LHagfoss/rustcode/pull/611) / [`dcc8eb2`](https://github.com/LHagfoss/rustcode/commit/dcc8eb2))
-- **UI:** Match Codex conversation experience ([#612](https://github.com/LHagfoss/rustcode/pull/612) / [`5addb11`](https://github.com/LHagfoss/rustcode/commit/5addb11))
-- **Agent:** Improve coding loop context tools and memory ([#605](https://github.com/LHagfoss/rustcode/pull/605) / [`c61255e`](https://github.com/LHagfoss/rustcode/commit/c61255e))
-- **Activity:** Add expressive activity status words and terminal title display ([#546](https://github.com/LHagfoss/rustcode/pull/546) / [`d474dec`](https://github.com/LHagfoss/rustcode/commit/d474dec))
-- **Activity:** Compact input status bar with activity footer ([#547](https://github.com/LHagfoss/rustcode/pull/547) / [`3e10a13`](https://github.com/LHagfoss/rustcode/commit/3e10a13))
-- **Terminal:** Commit chat history to native terminal scrollback ([#573](https://github.com/LHagfoss/rustcode/pull/573) / [`7db5c08`](https://github.com/LHagfoss/rustcode/commit/7db5c08))
-- **Footer:** Add depth to activity trail ([#545](https://github.com/LHagfoss/rustcode/pull/545) / [`153d819`](https://github.com/LHagfoss/rustcode/commit/153d819))
-- **Config:** Add z.ai and bigmodel.cn function calling hosts ([#488](https://github.com/LHagfoss/rustcode/pull/488) / [`dc815b8`](https://github.com/LHagfoss/rustcode/commit/dc815b8))
-
-### Fixes
-- **UI:** Restore chat surface backgrounds and help shortcut ([#614](https://github.com/LHagfoss/rustcode/pull/614) / [`e6cd99f`](https://github.com/LHagfoss/rustcode/commit/e6cd99f))
-- **UI:** Restore panel backgrounds and approval selection ([#613](https://github.com/LHagfoss/rustcode/pull/613) / [`b972cc9`](https://github.com/LHagfoss/rustcode/commit/b972cc9))
-- **UI:** Make high verbosity tool output compact ([#615](https://github.com/LHagfoss/rustcode/pull/615) / [`ae8b934`](https://github.com/LHagfoss/rustcode/commit/ae8b934))
-- **UI:** Replay inline transcript after terminal resize ([#601](https://github.com/LHagfoss/rustcode/pull/601) / [`212b88d`](https://github.com/LHagfoss/rustcode/commit/212b88d))
-- **UI:** Align parallel approvals and follow-up spacing ([#599](https://github.com/LHagfoss/rustcode/pull/599) / [`ae01d86`](https://github.com/LHagfoss/rustcode/commit/ae01d86))
-- **UI:** Show tool summaries at high verbosity ([#598](https://github.com/LHagfoss/rustcode/pull/598) / [`1560064`](https://github.com/LHagfoss/rustcode/commit/1560064))
-- **UI:** Polish markdown headings and table separators ([#597](https://github.com/LHagfoss/rustcode/pull/597) / [`44c69da`](https://github.com/LHagfoss/rustcode/commit/44c69da))
-- **UI:** Use full viewport height when pickers or popups are active ([#596](https://github.com/LHagfoss/rustcode/pull/596) / [`486389c`](https://github.com/LHagfoss/rustcode/commit/486389c))
-- **UI:** Render stream chunks without trailing blank lines ([#595](https://github.com/LHagfoss/rustcode/pull/595) / [`2df942e`](https://github.com/LHagfoss/rustcode/commit/2df942e))
-- **UI:** Collapse blank lines between list items and avoid duplicate empty lines ([#594](https://github.com/LHagfoss/rustcode/pull/594) / [`216ea61`](https://github.com/LHagfoss/rustcode/commit/216ea61))
-- **UI:** Sanitize loose bullet lists and normalize bullet characters ([#593](https://github.com/LHagfoss/rustcode/pull/593) / [`f8c3832`](https://github.com/LHagfoss/rustcode/commit/f8c3832))
-- **UI:** Sanitize loose markdown tables and position composer compactly ([#592](https://github.com/LHagfoss/rustcode/pull/592) / [`dc530a0`](https://github.com/LHagfoss/rustcode/commit/dc530a0))
-- **UI:** Tighten list item gaps, add gap below Working, and pin chat bar to bottom ([#591](https://github.com/LHagfoss/rustcode/pull/591) / [`0de42b4`](https://github.com/LHagfoss/rustcode/commit/0de42b4))
-- **UI:** Tighten markdown list spacing, pad user message, and place composer compactly ([#590](https://github.com/LHagfoss/rustcode/pull/590) / [`b3430ee`](https://github.com/LHagfoss/rustcode/commit/b3430ee))
-- **UI:** Remove bullet prefix from assistant text and omit streaming blank line ([#589](https://github.com/LHagfoss/rustcode/pull/589) / [`617c3fc`](https://github.com/LHagfoss/rustcode/commit/617c3fc))
-- **UI:** Tighten markdown table spacing ([#588](https://github.com/LHagfoss/rustcode/pull/588) / [`411365d`](https://github.com/LHagfoss/rustcode/commit/411365d))
-- **UI:** Replace resumed session toast with full-width centered rule ([#584](https://github.com/LHagfoss/rustcode/pull/584) / [`358d03c`](https://github.com/LHagfoss/rustcode/commit/358d03c))
-- **UI:** Request redraw after clearing working_status_pending ([#583](https://github.com/LHagfoss/rustcode/pull/583) / [`fc60bca`](https://github.com/LHagfoss/rustcode/commit/fc60bca))
-- **UI:** Remove extra blank lines under working status and over composer ([#582](https://github.com/LHagfoss/rustcode/pull/582) / [`220f61d`](https://github.com/LHagfoss/rustcode/commit/220f61d))
-- **UI:** Restore single-line bulleted tool call items ([#581](https://github.com/LHagfoss/rustcode/pull/581) / [`3d6a1a5`](https://github.com/LHagfoss/rustcode/commit/3d6a1a5))
-- **UI:** Space consecutive thinking blocks, add working padding, and pin chat composer ([#580](https://github.com/LHagfoss/rustcode/pull/580) / [`1089c53`](https://github.com/LHagfoss/rustcode/commit/1089c53))
-- **UI:** Keep working through final frame ([#579](https://github.com/LHagfoss/rustcode/pull/579) / [`10e8085`](https://github.com/LHagfoss/rustcode/commit/10e8085))
-- **UI:** Cover compact modal boundary ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`d763994`](https://github.com/LHagfoss/rustcode/commit/d763994))
-- **UI:** Preserve compact modal scope ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`f12b0e6`](https://github.com/LHagfoss/rustcode/commit/f12b0e6))
-- **UI:** Keep short modal actions visible ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`55180aa`](https://github.com/LHagfoss/rustcode/commit/55180aa))
-- **UI:** Guard short confirmation modals ([#578](https://github.com/LHagfoss/rustcode/pull/578) / [`b1df637`](https://github.com/LHagfoss/rustcode/commit/b1df637))
-- **UI:** Use compact welcome box and clean thought block preambles ([#577](https://github.com/LHagfoss/rustcode/pull/577) / [`764fe6b`](https://github.com/LHagfoss/rustcode/commit/764fe6b))
-- **UI:** Keep bare thoughts compact ([#577](https://github.com/LHagfoss/rustcode/pull/577) / [`d4edb7a`](https://github.com/LHagfoss/rustcode/commit/d4edb7a))
-- **UI:** Restore progressive streaming ([#576](https://github.com/LHagfoss/rustcode/pull/576) / [`928c351`](https://github.com/LHagfoss/rustcode/commit/928c351))
-- **UI:** Tighten transcript thought spacing ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`41afe41`](https://github.com/LHagfoss/rustcode/commit/41afe41))
-- **UI:** Restore welcome and thought flow ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`bb235d5`](https://github.com/LHagfoss/rustcode/commit/bb235d5))
-- **UI:** Align wrapped markdown blocks ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`bc8992a`](https://github.com/LHagfoss/rustcode/commit/bc8992a))
-- **UI:** Adapt narrow markdown tables ([#575](https://github.com/LHagfoss/rustcode/pull/575) / [`f8c934a`](https://github.com/LHagfoss/rustcode/commit/f8c934a))
-- **UI:** Clarify tool results ([#574](https://github.com/LHagfoss/rustcode/pull/574) / [`30bc1a2`](https://github.com/LHagfoss/rustcode/commit/30bc1a2))
-- **UI:** Improve chat transcript hierarchy ([#574](https://github.com/LHagfoss/rustcode/pull/574) / [`354a92d`](https://github.com/LHagfoss/rustcode/commit/354a92d))
-- **App/UI:** Clear session history on /new and handle missing open think tags ([#568](https://github.com/LHagfoss/rustcode/pull/568) / [`b8e819e`](https://github.com/LHagfoss/rustcode/commit/b8e819e))
-- **UI/Tools:** Hide oversized response notices and support multi-tool skills ([#567](https://github.com/LHagfoss/rustcode/pull/567) / [`28c3d66`](https://github.com/LHagfoss/rustcode/commit/28c3d66))
-- **UI:** Expand inline picker choices ([#566](https://github.com/LHagfoss/rustcode/pull/566) / [`923dc1b`](https://github.com/LHagfoss/rustcode/commit/923dc1b))
-- **UI:** Retain incomplete stream in live tail ([#565](https://github.com/LHagfoss/rustcode/pull/565) / [`e2a4f80`](https://github.com/LHagfoss/rustcode/commit/e2a4f80))
-- **UI:** Compact short chat layout ([#564](https://github.com/LHagfoss/rustcode/pull/564) / [`cf67a30`](https://github.com/LHagfoss/rustcode/commit/cf67a30))
-- **UI:** Tighten tool confirmation layout ([#563](https://github.com/LHagfoss/rustcode/pull/563) / [`ada224b`](https://github.com/LHagfoss/rustcode/commit/ada224b))
-- **Images:** Preserve resume analysis ([#562](https://github.com/LHagfoss/rustcode/pull/562) / [`c8492ce`](https://github.com/LHagfoss/rustcode/commit/c8492ce))
-- **UI:** Restore inline tui chat ([#561](https://github.com/LHagfoss/rustcode/pull/561) / [`c8492ce`](https://github.com/LHagfoss/rustcode/commit/c8492ce))
-- **Terminal:** Remove raw mode calls ([#560](https://github.com/LHagfoss/rustcode/pull/560) / [`ee48ea4`](https://github.com/LHagfoss/rustcode/commit/ee48ea4))
-- **Terminal:** Use native interactive scrollback ([#560](https://github.com/LHagfoss/rustcode/pull/560) / [`ca072cd`](https://github.com/LHagfoss/rustcode/commit/ca072cd))
-- **Terminal:** Render tui inline with terminal output ([#559](https://github.com/LHagfoss/rustcode/pull/559) / [`d29453d`](https://github.com/LHagfoss/rustcode/commit/d29453d))
-- **Terminal:** Keep cargo output outside tui screen ([#559](https://github.com/LHagfoss/rustcode/pull/559) / [`679fbce`](https://github.com/LHagfoss/rustcode/commit/679fbce))
-- **UI:** Show full-width new chat boundary ([#558](https://github.com/LHagfoss/rustcode/pull/558) / [`c32399e`](https://github.com/LHagfoss/rustcode/commit/c32399e))
-- **UI:** Preserve complete tool output ([#557](https://github.com/LHagfoss/rustcode/pull/557) / [`e19725c`](https://github.com/LHagfoss/rustcode/commit/e19725c))
-- **UI:** Align confirmations and mark new chats ([#557](https://github.com/LHagfoss/rustcode/pull/557) / [`ba34e8b`](https://github.com/LHagfoss/rustcode/commit/ba34e8b))
-- **Security:** Gate unknown shell commands ([#556](https://github.com/LHagfoss/rustcode/pull/556) / [`c460b4a`](https://github.com/LHagfoss/rustcode/commit/c460b4a))
-- **UI:** Preserve transcript history ([#555](https://github.com/LHagfoss/rustcode/pull/555) / [`44201df`](https://github.com/LHagfoss/rustcode/commit/44201df))
-- **UI:** Tighten thought timing from answer timing ([#554](https://github.com/LHagfoss/rustcode/pull/554) / [`54d81a9`](https://github.com/LHagfoss/rustcode/commit/54d81a9))
-- **Agent:** Harden agent context and tool state review ([#606](https://github.com/LHagfoss/rustcode/pull/606) / [`2c6aefd`](https://github.com/LHagfoss/rustcode/commit/2c6aefd))
-- **Network:** Support thought and thinking delta keys for reasoning extraction ([#604](https://github.com/LHagfoss/rustcode/pull/604) / [`1f57285`](https://github.com/LHagfoss/rustcode/commit/1f57285))
-- **Hardening:** Harden live tool identity and streamed fences ([#607](https://github.com/LHagfoss/rustcode/pull/607) / [`515faea`](https://github.com/LHagfoss/rustcode/commit/515faea))
-- **Network:** Bound silent provider streams ([#517](https://github.com/LHagfoss/rustcode/pull/517) / [`ad91cf1`](https://github.com/LHagfoss/rustcode/commit/ad91cf1))
-- **Tools:** Bound malformed call recovery ([#516](https://github.com/LHagfoss/rustcode/pull/516) / [`ea3b64a`](https://github.com/LHagfoss/rustcode/commit/ea3b64a))
-- **MCP:** Bound enabled server startup ([#515](https://github.com/LHagfoss/rustcode/pull/515) / [`98b5cde`](https://github.com/LHagfoss/rustcode/commit/98b5cde))
-- **ACP:** Run prompt turns outside event loop ([#514](https://github.com/LHagfoss/rustcode/pull/514) / [`e87fa0e`](https://github.com/LHagfoss/rustcode/commit/e87fa0e))
-- **Agent:** Escalate repeated failed mutations ([#506](https://github.com/LHagfoss/rustcode/pull/506) / [`64d2824`](https://github.com/LHagfoss/rustcode/commit/64d2824))
-- **Security:** Confirm destructive git commands ([#505](https://github.com/LHagfoss/rustcode/pull/505) / [`f366a52`](https://github.com/LHagfoss/rustcode/commit/f366a52))
-- **Context:** Surface stale files and compiler snippets ([#504](https://github.com/LHagfoss/rustcode/pull/504) / [`f6a86e1`](https://github.com/LHagfoss/rustcode/commit/f6a86e1))
-- **Agent:** Stop repeated compiler diagnostics ([#503](https://github.com/LHagfoss/rustcode/pull/503) / [`09982d0`](https://github.com/LHagfoss/rustcode/commit/09982d0))
-- **Tools:** Improve malformed call recovery ([#502](https://github.com/LHagfoss/rustcode/pull/502) / [`ca179ab`](https://github.com/LHagfoss/rustcode/commit/ca179ab))
-- **Agent:** Restore tool round backstop ([#501](https://github.com/LHagfoss/rustcode/pull/501) / [`67c8e9e`](https://github.com/LHagfoss/rustcode/commit/67c8e9e))
-- **UI:** Attach per-turn thought duration/tokens and eliminate line gaps ([#489](https://github.com/LHagfoss/rustcode/pull/489) / [`410d8b5`](https://github.com/LHagfoss/rustcode/commit/410d8b5))
-
-### Refactor
-- **Network:** Extract turn engine into src/network/turn_engine.rs ([#517](https://github.com/LHagfoss/rustcode/pull/517) / [`8c1be43`](https://github.com/LHagfoss/rustcode/commit/8c1be43))
-- **Network:** Extract tool execution into src/network/tool_exec.rs ([#516](https://github.com/LHagfoss/rustcode/pull/516) / [`b33e4b5`](https://github.com/LHagfoss/rustcode/commit/b33e4b5))
-- **Network:** Extract stream_request into src/network/stream_request.rs ([#515](https://github.com/LHagfoss/rustcode/pull/515) / [`d4764a7`](https://github.com/LHagfoss/rustcode/commit/d4764a7))
-- **Network:** Extract title generation and context tail building ([#514](https://github.com/LHagfoss/rustcode/pull/514) / [`5eaf708`](https://github.com/LHagfoss/rustcode/commit/5eaf708))
-- **Network:** Extract subagent execution and tool handling to src/network/subagents.rs ([#513](https://github.com/LHagfoss/rustcode/pull/513) / [`2105b80`](https://github.com/LHagfoss/rustcode/commit/2105b80))
-- **Network:** Extract compiler check & diagnostic logic into src/network/compiler.rs ([#512](https://github.com/LHagfoss/rustcode/pull/512) / [`214823a`](https://github.com/LHagfoss/rustcode/commit/214823a))
-- **Network:** Extract model quota and multimodal payload logic to src/network/payload.rs ([#511](https://github.com/LHagfoss/rustcode/pull/511) / [`d5ea72f`](https://github.com/LHagfoss/rustcode/commit/d5ea72f))
-- **Tests:** Extract UI tests into src/ui/tests.rs ([#510](https://github.com/LHagfoss/rustcode/pull/510) / [`71a9b09`](https://github.com/LHagfoss/rustcode/commit/71a9b09))
-- **Tests:** Extract filesystem tool tests into src/tools/filesystem/tests.rs ([#509](https://github.com/LHagfoss/rustcode/pull/509) / [`7040da0`](https://github.com/LHagfoss/rustcode/commit/7040da0))
-- **Tests:** Extract network tests into src/network/tests.rs ([#508](https://github.com/LHagfoss/rustcode/pull/508) / [`0614e53`](https://github.com/LHagfoss/rustcode/commit/0614e53))
-- **Refactor:** Centralize turn lifecycle ([#507](https://github.com/LHagfoss/rustcode/pull/507) / [`40a0e68`](https://github.com/LHagfoss/rustcode/commit/40a0e68))
-- **Refactor:** Isolate native tool responses ([#506](https://github.com/LHagfoss/rustcode/pull/506) / [`2b5e472`](https://github.com/LHagfoss/rustcode/commit/2b5e472))
-- **UI:** Use native terminal scrollback ([#566](https://github.com/LHagfoss/rustcode/pull/566) / [`d89d8c0`](https://github.com/LHagfoss/rustcode/commit/d89d8c0))
-
-### Chores
-- Remove optional docs benchmarks and tests ([#602](https://github.com/LHagfoss/rustcode/pull/602) / [`659aab4`](https://github.com/LHagfoss/rustcode/commit/659aab4))
-- Resolve compiler and dead code warnings ([#507](https://github.com/LHagfoss/rustcode/pull/507) / [`0be1a7c`](https://github.com/LHagfoss/rustcode/commit/0be1a7c))
-
-## [v0.18.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.18.1) - 2026-08-14
-- **UI:** Resume after background task completion ([`e790852`](https://github.com/LHagfoss/rustcode/commit/e790852))
-- **UI:** Pad worked-for separator and space composer footer with active model display ([`0cb2d52`](https://github.com/LHagfoss/rustcode/commit/0cb2d52), [`d44d31f`](https://github.com/LHagfoss/rustcode/commit/d44d31f))
-- **UI:** Align transcript and panel surfaces with Codex design ([`248214b`](https://github.com/LHagfoss/rustcode/commit/248214b))
-- **UI:** Make high verbosity tool output compact ([`ae8b934`](https://github.com/LHagfoss/rustcode/commit/ae8b934))
-- **UI:** Restore chat surface backgrounds and help shortcut ([`e6cd99f`](https://github.com/LHagfoss/rustcode/commit/e6cd99f))
-- **UI:** Restore panel backgrounds and approval selection ([`b972cc9`](https://github.com/LHagfoss/rustcode/commit/b972cc9))
+## [v0.1.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.1.12) - 2026-07-16
+- Initial release
