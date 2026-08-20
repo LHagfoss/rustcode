@@ -655,15 +655,27 @@ pub async fn stream_request(
 
     let tool_protocol = { state.lock().await.active_tool_protocol() };
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        let delegation_active = { state.lock().await.delegation_active };
-        let schema = {
-            let mut s = state.lock().await;
-            let agent_mode = s.agent_mode;
-            s.prompt_cache
-                .native_schema(delegation_active, tool_protocol, agent_mode)
-                .to_vec()
+        let (schema, mcp_selection) = if allow_tools {
+            let s = state.lock().await;
+            crate::tools::native_tools_schema_for_context(s.delegation_active, &aligned_messages)
+        } else {
+            (Vec::new(), crate::tools::McpSchemaSelectionStats::default())
         };
         apply_api_native_tools(&mut payload, schema, allow_tools);
+        crate::logger::operational_event(
+            "mcp.native_schema_selection",
+            serde_json::json!({
+                "available": mcp_selection.available,
+                "selected": mcp_selection.selected,
+                "relevant": mcp_selection.relevant,
+                "previously_used": mcp_selection.previously_used,
+                "fallback": mcp_selection.fallback,
+                "omitted": mcp_selection.omitted,
+                "selected_names": mcp_selection.selected_names,
+                "max": crate::tools::MAX_MCP_NATIVE_SCHEMAS,
+                "allow_tools": allow_tools,
+            }),
+        );
     }
 
     let tool_count = payload
