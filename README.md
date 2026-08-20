@@ -10,33 +10,55 @@
 Originally made for testing Apple's on-device Foundation Models. Turned into a way deeper project.
 Now supports ollama or openai compatible APIs.
 
-## running it
+## Installation
 
-Needs [homebrew](https://brew.sh/) or [rust toolchain](https://rust-lang.org/tools/install/) installed.
+### macOS & Linux (curl)
 
-### installation (cargo)
-
-1. Clone repo:
+Run the one-line installer in your terminal:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+Run the one-line installer in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.ps1 | iex
+```
+
+### macOS via Homebrew
+
+```bash
+# 1. Tap the repository
+brew tap lhagfoss/tap
+
+# 2. Trust the tap (required by Homebrew for new/custom taps)
+brew trust lhagfoss/tap
+
+# 3. Install the harness
+brew install rustcode
+```
+
+### From Source (Rust / Cargo)
+
+```bash
+# Clone and build
 git clone https://github.com/lhagfoss/rustcode.git
+cd rustcode
+cargo install --path .
 ```
 
-2. Build and run:
+## Keeping it upgraded
 
-```bash
- cargo build --release
- cargo run --release
-```
+RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows!
 
-OR you can install it via `cargo install` and run it from anywhere:
+- **In CLI:** Run `rustcode --update` (or `rustcode --upgrade`)
+- **Inside RustCode TUI:** Type `/update` (or accept the update modal on startup)
+- **Homebrew (macOS):** `brew upgrade rustcode`
 
-```bash
- cargo install --path .
- rustcode
-```
-
-### ACP runtime
+## ACP runtime
 
 For editors and agent orchestrators that support the Agent Client Protocol, run
 rustcode headlessly over stdio:
@@ -61,6 +83,8 @@ fields use compiled defaults. Malformed or newer unsupported TOML is preserved
 and reported instead of being overwritten.
 Configured MCP servers are started by Rustcode before ACP prompts are handled;
 ACP's optional MCP-over-ACP transport is not required.
+
+## Configuration
 
 ### Configuration files
 
@@ -93,45 +117,6 @@ CLI overrides > nearest project config > global config > built-in defaults
 Project files are partial overrides; omitted fields continue to come from the
 lower-precedence layer.
 
-## Installation
-
-### macOS & Linux (curl)
-
-Run the one-line installer in your terminal:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.sh | bash
-```
-
-### Windows (PowerShell)
-
-Run the one-line installer in PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/LHagfoss/rustcode/main/install.ps1 | iex
-```
-
-### macOS via Homebrew
-
-```bash
-# 1. Tap the repository
-brew tap lhagfoss/tap
-
-# 2. Trust the tap (required by Homebrew for new/custom taps)
-brew trust lhagfoss/tap
-
-# 3. Install the harness
-brew install rustcode
-```
-
-## Keeping it upgraded
-
-RustCode comes with a built-in cross-platform self-updater for macOS, Linux, and Windows!
-
-- **In CLI:** Run `rustcode --update` (or `rustcode --upgrade`)
-- **Inside RustCode TUI:** Type `/update` (or accept the update modal on startup)
-- **Homebrew (macOS):** `brew upgrade rustcode`
-
 ## IMPORTANT
 
 If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have XCode v27](https://developer.apple.com/videos/play/wwdc2026/334/) for this to work. As this was introduced in the Beta version of MacOS 27.
@@ -139,3 +124,4 @@ If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have 
 Also not recmomended to use FM system model. as it only have like 2k context window...
 
 Made with [rust](https://www.rust-lang.org/) by goat (me) and models inside [rustcode](README) harness
+
