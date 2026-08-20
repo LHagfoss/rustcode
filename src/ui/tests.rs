@@ -1920,7 +1920,7 @@ fn live_command_cell_shows_bounded_stdout_stderr_and_omission() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered[0], "• Running cargo test");
+    assert_eq!(rendered[0], "• cargo test");
     assert!(rendered.iter().any(|line| line.contains("compiler error")));
     assert!(rendered.iter().any(|line| line.contains("lines")));
     assert!(
@@ -1953,7 +1953,7 @@ fn high_verbosity_live_command_cell_shows_only_the_invocation() {
     .map(|line| line.to_string())
     .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• Running cargo test"]);
+    assert_eq!(rendered, ["• cargo test"]);
     assert!(
         !rendered
             .iter()
