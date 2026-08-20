@@ -1209,12 +1209,20 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 
             if let Some(replan) = failure_replan {
                 ctx.failure_replans += 1;
-                ctx.stop_reason = Some(lifecycle::StopReason::RecoveryFailed);
+                // A replan is a recovery opportunity, not a terminal state.
+                // The old path set `force_final` immediately, so the next
+                // response's tool call was discarded and a recoverable pair
+                // of edit mismatches ended the entire task. Reset the
+                // equivalence detector and let the model inspect or choose a
+                // different mutation method. The consecutive-failure budget
+                // remains intact as the hard backstop.
+                ctx.loop_detector.reset();
                 s.history.push(ChatMessage::new("system", replan));
                 crate::config::save_history(&s.history);
                 s.current_response.clear();
+                s.status = AppStatus::Streaming;
+                s.stream_tracker = Some(StreamTracker::new());
                 drop(s);
-                ctx.force_final = true;
                 ctx.turn_machine.finish_tools_if_executing();
                 return true;
             }

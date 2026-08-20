@@ -341,7 +341,7 @@ pub(crate) fn mutation_made_progress(success: bool, content: &str) -> bool {
 
 pub(crate) fn failure_replan_message(tool: &str, category: &str, repeats: usize) -> String {
     format!(
-        "[Replan required: {repeats} equivalent mutation attempts for '{tool}' ({category}) failed. These failed attempts changed no files. Do not retry the same edit. Inspect the current workspace, give a concise status, and ask the user for a decision if the requested change still cannot be applied safely.]"
+        "[Replan required: {repeats} equivalent mutation attempts for '{tool}' ({category}) failed. These failed attempts changed no files. Do not retry the same edit. Inspect the current workspace and use a materially different safe approach. If inspection shows the change still cannot be applied safely, explain the exact blocker to the user.]"
     )
 }
 

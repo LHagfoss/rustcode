@@ -1051,12 +1051,13 @@ fn mutation_made_progress_false_for_already_applied_noop() {
 }
 
 #[test]
-fn failure_replan_message_preserves_workspace_safety_and_requests_decision() {
+fn failure_replan_message_preserves_workspace_safety_and_requests_different_approach() {
     let message = failure_replan_message("replace_file_content", "edit:src/GameScene.ts", 2);
     assert!(message.contains("2 equivalent mutation attempts"));
     assert!(message.contains("changed no files"));
     assert!(message.contains("Do not retry the same edit"));
-    assert!(message.contains("ask the user for a decision"));
+    assert!(message.contains("materially different safe approach"));
+    assert!(message.contains("explain the exact blocker"));
 }
 
 #[test]
@@ -3189,10 +3190,12 @@ fn model_profile_reasoning_effort() {
         url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
         model: "Qwen3.8-27B-MTPLX-4bit".to_string(),
         reasoning_effort: Some("low".to_string()),
+        thinking_budget: Some(4096),
         ..ModelProfile::default()
     };
 
     assert_eq!(profile.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(profile.thinking_budget, Some(4096));
     let budget = profile.context_budget();
     assert!(budget.thinking_reserve > 0);
 }
