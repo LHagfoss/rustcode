@@ -1,3 +1,9 @@
+## [v0.31.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.4) - 2026-08-20
+
+### Fixes
+- **Agent/Reasoning Recovery:** Omit reasoning effort and thinking budget when thinking is disabled, disable thinking during reasoning-loop recovery attempts, and omit native tool schemas on forced-final requests ([#741](https://github.com/LHagfoss/rustcode/pull/741))
+- **UI/Dividers:** Ensure proper blank line top-padding above turn work and resumed session dividers to avoid clipping into preceding tool output ([#742](https://github.com/LHagfoss/rustcode/pull/742))
+
 ## [v0.31.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.3) - 2026-08-20
 
 ### Fixes
