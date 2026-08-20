@@ -591,6 +591,7 @@ pub async fn stream_request(
     quiet: bool,
     allow_tools: bool,
     disable_thinking: bool,
+    schema_policy: crate::tools::ToolSchemaPolicy,
 ) -> Result<Option<String>, String> {
     let aligned_messages = align_alternating_messages(messages.to_vec());
     let message_count = aligned_messages.len();
@@ -655,13 +656,8 @@ pub async fn stream_request(
 
     let tool_protocol = { state.lock().await.active_tool_protocol() };
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        let delegation_active = { state.lock().await.delegation_active };
         let schema = {
-            let mut s = state.lock().await;
-            let agent_mode = s.agent_mode;
-            s.prompt_cache
-                .native_schema(delegation_active, tool_protocol, agent_mode)
-                .to_vec()
+            crate::tools::native_tools_schema_for_policy(schema_policy)
         };
         apply_api_native_tools(&mut payload, schema, allow_tools);
     }
