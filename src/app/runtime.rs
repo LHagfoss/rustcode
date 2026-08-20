@@ -474,9 +474,6 @@ impl AppRuntime {
             let observed_size = terminal_runtime.terminal().size()?;
             if observed_size != terminal_size {
                 terminal_runtime.terminal().autoresize()?;
-                if observed_size.width != terminal_size.width {
-                    terminal_runtime.terminal().clear()?;
-                }
                 terminal_size = observed_size;
                 needs_redraw = true;
             }
