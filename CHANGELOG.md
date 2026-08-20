@@ -1,3 +1,8 @@
+## [v0.31.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.3) - 2026-08-20
+
+### Fixes
+- **Docs/Changelog:** Correct release ordering and remove duplicated legacy headings so release history renders consistently ([#739](https://github.com/LHagfoss/rustcode/pull/739))
+
 ## [v0.31.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.2) - 2026-08-20
 
 ### Fixes
