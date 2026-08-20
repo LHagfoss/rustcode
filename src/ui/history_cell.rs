@@ -333,12 +333,6 @@ pub(super) fn render_live_tool_cell_with_verbosity(
 
     if calls.len() == 1 && calls[0].tool_name == "run_command" {
         let call = &calls[0];
-        let title_style = get_themed_style(
-            COLOR_TEXT(),
-            COLOR_BG(),
-            Modifier::BOLD,
-            show_picker,
-        );
         let command = truncate_to_width(&call.target, (width as usize).saturating_sub(10).max(1));
         let command_spans = highlight_shell_command(&command, COLOR_BG(), show_picker)
             .into_iter()
@@ -355,7 +349,6 @@ pub(super) fn render_live_tool_cell_with_verbosity(
                     show_picker,
                 ),
             ),
-            Span::styled("Running ", title_style),
         ];
         header.extend(command_spans);
         let mut lines = vec![Line::from(header)];
