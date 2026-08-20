@@ -1656,6 +1656,8 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
         &messages,
         Arc::clone(&stream_buffer),
         true, // quiet: don't stream into the main chat view; we post the result
+        false,
+        false,
     )
     .await;
 
