@@ -2367,40 +2367,12 @@ pub(crate) fn render_committed_tool_result_group(
                 ));
             }
         } else {
-            if kind == ToolTranscriptKind::Tool && group.len() == 1 {
-                let entry = &group[0];
-                let title = if entry.target.is_empty() || entry.target == "?" {
-                    entry.action.clone()
-                } else {
-                    format!("{} {}", entry.action, entry.target)
-                };
-                let is_expanded = state.expanded_thoughts.contains(&entry.message_index);
-                let mut header = tool_group_header(&title, success, show_picker);
-                if !entry.body.is_empty()
-                    && !is_expanded
-                    && matches!(state.verbosity, crate::app::Verbosity::Low)
-                {
-                    header.spans.push(Span::styled(
-                        " (ctrl+o to expand)",
-                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
-                    ));
-                }
-                lines.push(header);
-                if is_expanded && matches!(state.verbosity, crate::app::Verbosity::Low) {
-                    lines.extend(indent_generic_tool_body(
-                        entry.body.clone(),
-                        &state.verbosity,
-                        width,
-                        show_picker,
-                    ));
-                }
-                index = group_end;
-                continue;
-            }
             let title = if kind == ToolTranscriptKind::Explored {
                 "Explored"
             } else if kind == ToolTranscriptKind::Edit {
                 "Edited"
+            } else if kind == ToolTranscriptKind::Tool {
+                "Ran"
             } else {
                 "Called"
             };
@@ -2497,7 +2469,6 @@ pub(crate) fn render_work_separator_before_assistant(
         "─".repeat(width.max(1) as usize)
     };
     vec![
-        Line::from(""),
         Line::from(Span::styled(
             text,
             get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false),
