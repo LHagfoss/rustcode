@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub struct SkillInfo {
@@ -77,9 +78,9 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillMetadata>) {
         if path.is_dir() {
             let skill_md = path.join("SKILL.md");
             if skill_md.exists()
-                && let Ok(content) = fs::read_to_string(&skill_md)
+                && let Ok(frontmatter) = read_frontmatter(&skill_md)
             {
-                let (name, description) = parse_frontmatter(&content);
+                let (name, description) = parse_frontmatter(&frontmatter);
                 skills.push(SkillMetadata {
                     name,
                     description,
@@ -88,6 +89,30 @@ fn scan_skill_dir(dir: &Path, skills: &mut Vec<SkillMetadata>) {
             }
         }
     }
+}
+
+fn read_frontmatter(path: &Path) -> std::io::Result<String> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut frontmatter = String::new();
+    let mut line = String::new();
+    let mut found_opening = false;
+
+    while reader.read_line(&mut line)? > 0 {
+        if !found_opening {
+            if line.trim() != "---" {
+                break;
+            }
+            found_opening = true;
+        } else if line.trim() == "---" {
+            frontmatter.push_str(&line);
+            break;
+        }
+        frontmatter.push_str(&line);
+        line.clear();
+    }
+
+    Ok(frontmatter)
 }
 
 fn parse_frontmatter(content: &str) -> (String, String) {
@@ -253,6 +278,30 @@ mod tests {
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "test-skill");
         assert_eq!(skills[0].description, "Test skill");
+    }
+
+    #[test]
+    fn test_discovery_reads_frontmatter_without_loading_skill_body() {
+        let base = temp_dir("frontmatter_only");
+        let skill_dir = base.join("large-skill");
+        let _ = fs::create_dir_all(&skill_dir);
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: large-skill\ndescription: Metadata only\n---\n{}",
+                "body\n".repeat(100_000)
+            ),
+        )
+        .unwrap();
+
+        let mut skills = Vec::new();
+        scan_skill_dir(&base, &mut skills);
+        assert_eq!(skills[0].name, "large-skill");
+        assert_eq!(skills[0].description, "Metadata only");
+        assert!(read_frontmatter(&skill_dir.join("SKILL.md"))
+            .unwrap()
+            .len()
+            < 1000);
     }
 
     #[test]
