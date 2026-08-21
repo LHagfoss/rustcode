@@ -75,6 +75,8 @@ pub fn is_editing_tool(tool_name: &str) -> bool {
             | "movefile"
             | "copy_file"
             | "copyfile"
+            | "generate_sound_effect"
+            | "generate_music"
     )
 }
 
@@ -148,7 +150,7 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
         }
         "get_project_map" | "getprojectmap" => ("Read", "project map".to_string()),
         _ => {
-            let target = value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath", "target", "query", "name", "command"], "");
+            let target = value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath", "target", "query", "name", "command", "output_path"], "");
             return (to_pascal_action(name), compact_target(&target));
         }
     };
