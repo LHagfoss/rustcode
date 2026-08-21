@@ -1,3 +1,9 @@
+## [v0.33.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.0) - 2026-08-21
+
+### Features
+- **Audio/Generation:** Add native local audio generation tools `generate_sound_effect`, `generate_music`, and `inspect_audio` powered by cancellable local MLX backends on Apple Silicon ([#750](https://github.com/LHagfoss/rustcode/pull/750))
+- **Audio/Environment:** Propagate deterministic audio backend search PATH to child generation processes and ensure isolated venv compatibility ([#751](https://github.com/LHagfoss/rustcode/pull/751))
+
 ## [v0.32.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.32.1) - 2026-08-21
 
 ### Fixes & UI
