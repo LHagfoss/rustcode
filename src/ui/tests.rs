@@ -944,6 +944,56 @@ fn completed_edits_have_a_distinct_transcript_heading() {
 }
 
 #[test]
+fn committed_batched_edits_with_casing_aliases_group_under_edited() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
+
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "replace_file_content".to_owned(),
+                arguments: r#"{"TargetFile":"src/game/engine.ts"}"#.to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "WriteFile".to_owned(),
+                arguments: r#"{"path":"src/App.tsx"}"#.to_owned(),
+            },
+        ]),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "replace_file_content: ok")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "replace_file_content".to_owned(),
+                success: true,
+                changed_paths: vec!["src/game/engine.ts".to_owned()],
+                ..Default::default()
+            }),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "WriteFile: ok")
+            .answering(Some("call-2".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "WriteFile".to_owned(),
+                success: true,
+                changed_paths: vec!["src/App.tsx".to_owned()],
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Edited");
+    assert_eq!(rendered[1], "  └ src/game/engine.ts");
+    assert_eq!(rendered[2], "    src/App.tsx");
+}
+
+#[test]
 fn exploration_results_group_and_deduplicate_child_rows() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
 
@@ -1929,6 +1979,64 @@ fn live_editing_tool_cell_shows_editing_heading_and_target_child() {
         .collect::<Vec<_>>();
 
     assert_eq!(rendered, ["• Editing", "  └ src/game/engine.ts"]);
+}
+
+#[test]
+fn live_batched_edits_with_casing_aliases_group_under_editing_without_actions() {
+    let calls = vec![
+        crate::app::LiveToolCall::new(
+            "local:1",
+            None,
+            "replace_file_content",
+            "Edit",
+            "src/game/engine.ts",
+        ),
+        crate::app::LiveToolCall::new(
+            "local:2",
+            None,
+            "WriteFile",
+            "Write",
+            "src/App.tsx",
+        ),
+    ];
+    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rendered,
+        ["• Editing", "  └ src/game/engine.ts", "    src/App.tsx"]
+    );
+}
+
+#[test]
+fn live_multiple_generic_tools_show_running_heading() {
+    let calls = vec![
+        crate::app::LiveToolCall::new(
+            "local:1",
+            None,
+            "clockify_timer",
+            "ClockifyTimer",
+            "start",
+        ),
+        crate::app::LiveToolCall::new(
+            "local:2",
+            None,
+            "notify_user",
+            "NotifyUser",
+            "done",
+        ),
+    ];
+    let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rendered,
+        ["• Running", "  └ ClockifyTimer start", "    NotifyUser done"]
+    );
 }
 
 #[test]
