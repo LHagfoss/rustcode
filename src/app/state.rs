@@ -1833,17 +1833,24 @@ impl AppState {
     /// function calling gets the structured protocol, because a call returned
     /// as data cannot be confused with prose about a call. Everything else
     /// falls back to the configured text protocol, which is what servers
-    /// without function calling need.
+    /// without function calling need. A rejected probe cannot fall back to an
+    /// API-native global default, so that case uses the JSON text protocol.
     pub fn tool_protocol_for(&self, url: &str) -> crate::config::ToolProtocol {
         if let Some(profile) = self.config.models.iter().find(|profile| profile.url == url)
             && let Some(protocol) = profile.tool_protocol
         {
             return protocol;
         }
+        let detected_support = self.function_calling_support.get(url).copied();
         if crate::config::provider_supports_function_calling(url)
-            || self.function_calling_support.get(url).copied() == Some(true)
+            || detected_support == Some(true)
         {
             return crate::config::ToolProtocol::ApiNative;
+        }
+        if detected_support == Some(false)
+            && self.config.tool_protocol == crate::config::ToolProtocol::ApiNative
+        {
+            return crate::config::ToolProtocol::Json;
         }
         self.config.tool_protocol
     }
@@ -2024,6 +2031,17 @@ mod protocol_tests {
         s.record_function_calling_support(gateway, true);
         assert!(!s.function_calling_unknown(gateway));
         assert_eq!(s.tool_protocol_for(gateway), ToolProtocol::ApiNative);
+    }
+
+    #[test]
+    fn rejected_probe_falls_back_from_api_native_to_json() {
+        let mut s = AppState::new();
+        s.config.tool_protocol = ToolProtocol::ApiNative;
+        let gateway = "http://localhost:3000/v1/chat/completions";
+
+        s.record_function_calling_support(gateway, false);
+
+        assert_eq!(s.tool_protocol_for(gateway), ToolProtocol::Json);
     }
 
     #[test]
