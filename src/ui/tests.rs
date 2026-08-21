@@ -1211,6 +1211,30 @@ fn collapses_image_markers_to_chips() {
 }
 
 #[test]
+fn pasted_image_and_text_chips_use_accent_text() {
+    let mut state = AppState::new();
+    state.history.push(ChatMessage::new(
+        "user",
+        "see ![image](file:///tmp/a.png) and <!--PASTE:12:pasted text-->",
+    ));
+
+    let block = super::render_committed_history_block(&state, 0, 100);
+    let marker_text = block[0]
+        .spans
+        .iter()
+        .filter(|span| span.style.fg == Some(super::COLOR_PRIMARY()))
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(marker_text.contains("[Image #1]"));
+    assert!(marker_text.contains("[Pasted Text #1 (12 chars)]"));
+    assert!(block[0].spans.iter().filter(|span| {
+        span.style.fg == Some(super::COLOR_PRIMARY())
+            && span.style.add_modifier.contains(Modifier::BOLD)
+    }).count() > 1);
+}
+
+#[test]
 fn code_blocks_render_as_lightweight_transcript_rows() {
     use super::{AssistantRenderOptions, render_assistant_message};
     let content = "```text\nWhy Rust Outshines C#\n\nA short line\n```";
