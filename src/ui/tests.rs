@@ -2006,6 +2006,16 @@ fn single_live_generic_tool_shows_its_action_without_using_heading() {
 }
 
 #[test]
+fn speculative_tool_without_target_is_not_rendered() {
+    let mut call = crate::app::LiveToolCall::new("local:1", None, "list", "List", "");
+    call.execution_started = false;
+
+    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false);
+
+    assert!(rendered.is_empty());
+}
+
+#[test]
 fn live_editing_tool_cell_shows_editing_heading_and_target_child() {
     let call = crate::app::LiveToolCall::new(
         "local:1",
