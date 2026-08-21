@@ -13,7 +13,7 @@ mod transcript;
 pub(crate) use composer::{Composer, ComposerAction};
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
-use history_cell::HistoryCell;
+use history_cell::{HistoryCell, is_live_tool_call_visible};
 pub(crate) use history_cell::TranscriptState;
 pub(crate) use transcript::TranscriptModel;
 pub(crate) mod scrollback;
@@ -3129,8 +3129,14 @@ pub(crate) fn render_live_tail_with_transcript(
 
     let mut has_visible_active_cell = false;
     let mut model_live_text = "";
-    if !state.live_tool_calls.is_empty() {
-        transcript.set_tools_with_verbosity(&state.live_tool_calls, &state.verbosity);
+    let visible_live_tool_calls = state
+        .live_tool_calls
+        .iter()
+        .filter(|call| is_live_tool_call_visible(call))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !visible_live_tool_calls.is_empty() {
+        transcript.set_tools_with_verbosity(&visible_live_tool_calls, &state.verbosity);
         has_visible_active_cell = true;
     } else if !tail.is_empty() {
         let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());
