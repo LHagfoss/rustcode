@@ -2614,7 +2614,7 @@ fn render_status_panel<'a>(
         return;
     }
     if lower.contains("new chat started") {
-        push_centered_separator(lines, "✨ New Chat Started", width, show_picker);
+        push_centered_separator(lines, "New Chat Started", width, show_picker);
         return;
     }
 
