@@ -54,6 +54,10 @@ jobs:
 
             - name: Build release
               shell: bash
+              env:
+                  # ThinLTO makes the Windows MSVC release link disproportionately slow.
+                  # Keep the optimized release profile, but skip LTO for this platform.
+                  CARGO_PROFILE_RELEASE_LTO: ${{ runner.os == 'Windows' && 'off' || 'thin' }}
               run: cargo build --release --target ${{ matrix.target }}
 
             - name: Package Linux / macOS binary
