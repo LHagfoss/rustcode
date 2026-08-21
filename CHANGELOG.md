@@ -1,3 +1,9 @@
+## [v0.32.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.32.1) - 2026-08-21
+
+### Fixes & UI
+- **UI/Tool Calls:** Omit redundant 'Edit' action words under file editing headers, expand case-insensitive editing tool aliases, and standardize live generic tool headers to `Running` ([#747](https://github.com/LHagfoss/rustcode/pull/747), [#748](https://github.com/LHagfoss/rustcode/pull/748))
+- **UI/Layout & Dividers:** Align live transcript left margin at column 0 with committed scrollback, and normalize turn divider vertical padding strictly to 1 blank line ([#747](https://github.com/LHagfoss/rustcode/pull/747), [#748](https://github.com/LHagfoss/rustcode/pull/748))
+
 ## [v0.32.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.32.0) - 2026-08-21
 
 ### Features & Performance
