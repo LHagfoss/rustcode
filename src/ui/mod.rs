@@ -1446,44 +1446,87 @@ fn contract_home_path(path: &str) -> String {
 }
 
 fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, String) {
-    let action_label = match name {
-        "view_file" => "Read".to_string(),
-        "replace_file_content" | "multi_replace_file_content" => "Edit".to_string(),
-        "write_to_file" => "Write".to_string(),
-        "delete_file" => "Delete".to_string(),
-        "move_file" => "Move".to_string(),
-        "copy_file" => "Copy".to_string(),
-        "list_directory" | "list_dir" | "glob" => "ListDir".to_string(),
-        "grep" | "grep_search" => "Search".to_string(),
-        "find_symbol" | "codebase_symbol" => "Symbol".to_string(),
-        "run_command" => "Bash".to_string(),
-        "search_web" | "codebase_search" => "Search".to_string(),
-        "get_project_map" => "ProjectMap".to_string(),
-        "manage_task" => "ManageTask".to_string(),
-        "background_task" => "TaskDone".to_string(),
+    let name_lower = name.to_ascii_lowercase();
+    let action_label = match name_lower.as_str() {
+        "view_file" | "viewfile" | "read_file" | "readfile" => "Read".to_string(),
+        "replace_file_content"
+        | "replacefilecontent"
+        | "multi_replace_file_content"
+        | "multireplacefilecontent"
+        | "edit_file"
+        | "editfile"
+        | "patch_file"
+        | "patchfile" => "Edit".to_string(),
+        "write_to_file"
+        | "writetofile"
+        | "write_file"
+        | "writefile"
+        | "create_file"
+        | "createfile" => "Write".to_string(),
+        "delete_file" | "deletefile" => "Delete".to_string(),
+        "move_file" | "movefile" => "Move".to_string(),
+        "copy_file" | "copyfile" => "Copy".to_string(),
+        "list_directory" | "list_dir" | "listdir" | "glob" => "ListDir".to_string(),
+        "grep" | "grep_search" | "grepsearch" => "Search".to_string(),
+        "find_symbol" | "findsymbol" | "codebase_symbol" | "codebasesymbol" => "Symbol".to_string(),
+        "run_command" | "runcommand" | "execute_command" | "bash" => "Bash".to_string(),
+        "search_web" | "searchweb" | "codebase_search" | "codebasesearch" => "Search".to_string(),
+        "get_project_map" | "getprojectmap" => "ProjectMap".to_string(),
+        "manage_task" | "managetask" => "ManageTask".to_string(),
+        "background_task" | "backgroundtask" => "TaskDone".to_string(),
         "remember" => "Remember".to_string(),
-        "recall_memory" => "Recall".to_string(),
-        "forget_memory" => "Forget".to_string(),
-        other => to_pascal_case(other),
+        "recall_memory" | "recallmemory" => "Recall".to_string(),
+        "forget_memory" | "forgetmemory" => "Forget".to_string(),
+        _ => to_pascal_case(name),
     };
 
-    let target_arg = match name {
+    let target_arg = match name_lower.as_str() {
         "view_file"
+        | "viewfile"
+        | "read_file"
+        | "readfile"
         | "replace_file_content"
+        | "replacefilecontent"
         | "multi_replace_file_content"
+        | "multireplacefilecontent"
         | "write_to_file"
-        | "delete_file" => {
+        | "writetofile"
+        | "write_file"
+        | "writefile"
+        | "edit_file"
+        | "editfile"
+        | "create_file"
+        | "createfile"
+        | "patch_file"
+        | "patchfile"
+        | "delete_file"
+        | "deletefile" => {
             let path = args
                 .get("TargetFile")
+                .or_else(|| args.get("target_file"))
                 .or_else(|| args.get("AbsolutePath"))
+                .or_else(|| args.get("absolute_path"))
                 .or_else(|| args.get("path"))
+                .or_else(|| args.get("file"))
+                .or_else(|| args.get("filePath"))
+                .or_else(|| args.get("filepath"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             contract_home_path(path)
         }
-        "move_file" | "copy_file" => {
-            let src = args.get("src").and_then(|v| v.as_str()).unwrap_or("?");
-            let dest = args.get("dest").and_then(|v| v.as_str()).unwrap_or("?");
+        "move_file" | "movefile" | "copy_file" | "copyfile" => {
+            let src = args
+                .get("src")
+                .or_else(|| args.get("source"))
+                .or_else(|| args.get("from"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let dest = args
+                .get("dest")
+                .or_else(|| args.get("destination"))
+                .or_else(|| args.get("to"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("{} -> {}", src, dest)
         }
         "list_directory" | "list_dir" | "glob" => {
@@ -1904,17 +1947,9 @@ enum ToolTranscriptKind {
 fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
     if crate::app::activity::is_exploration_tool(tool_name) {
         ToolTranscriptKind::Explored
-    } else if tool_name == "run_command" {
+    } else if tool_name == "run_command" || tool_name.eq_ignore_ascii_case("bash") {
         ToolTranscriptKind::Command
-    } else if matches!(
-        tool_name,
-        "replace_file_content"
-            | "multi_replace_file_content"
-            | "write_to_file"
-            | "delete_file"
-            | "move_file"
-            | "copy_file"
-    ) {
+    } else if crate::app::activity::is_editing_tool(tool_name) {
         ToolTranscriptKind::Edit
     } else {
         ToolTranscriptKind::Tool
@@ -3336,15 +3371,11 @@ fn render_committed_assistant_text_with_metrics(
 }
 
 fn render_live_conversation(f: &mut Frame, area: ratatui::layout::Rect, lines: Vec<Line<'static>>) {
-    let inner_area = area.inner(Margin {
-        vertical: 0,
-        horizontal: 1,
-    });
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(COLOR_BG())),
-        inner_area,
+        area,
     );
 }
 
@@ -3422,10 +3453,10 @@ pub(crate) fn desired_height(
         !at_files.is_empty(),
     ));
 
-    let live_lines = render_live_tail_with_transcript(state, inner_width, available, transcript);
+    let live_lines = render_live_tail_with_transcript(state, width, available, transcript);
     let mut chat_height = Paragraph::new(live_lines)
         .wrap(Wrap { trim: false })
-        .line_count(inner_width) as u16;
+        .line_count(width) as u16;
     if state.history.is_empty() {
         chat_height = chat_height.max(15);
     }
@@ -3466,6 +3497,7 @@ pub fn render_with_transcript(
     };
 
     let inner_width = f.area().width.saturating_sub(2).max(1);
+    let chat_width = f.area().width.max(1);
     let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize);
     let input_lines = raw_input_lines.min(8);
     let approval_active = state.status == AppStatus::AwaitingToolConfirmation;
@@ -3526,10 +3558,10 @@ pub fn render_with_transcript(
         .saturating_sub(popup_height);
     let layout_area = inset_vertical(f.area(), top_padding, bottom_padding);
 
-    let lines = render_live_tail_with_transcript(state, inner_width, max_chat_height, transcript);
+    let lines = render_live_tail_with_transcript(state, chat_width, max_chat_height, transcript);
     state.conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
-        .line_count(inner_width) as u16;
+        .line_count(chat_width) as u16;
 
     let min_welcome_height = if state.history.is_empty() { 15 } else { 0 };
     let mut chat_height =
