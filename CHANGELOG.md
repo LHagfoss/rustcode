@@ -1,3 +1,8 @@
+## [v0.33.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.1) - 2026-08-21
+
+### Fixes
+- **Providers/Gemini:** Probe Gemini gateway function-calling capability dynamically and normalize native tool schemas by stripping unsupported JSON Schema metadata and converting exclusive minimum bounds ([#753](https://github.com/LHagfoss/rustcode/pull/753))
+
 ## [v0.33.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.0) - 2026-08-21
 
 ### Features
