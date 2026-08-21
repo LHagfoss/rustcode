@@ -1219,19 +1219,26 @@ fn pasted_image_and_text_chips_use_accent_text() {
     ));
 
     let block = super::render_committed_history_block(&state, 0, 100);
-    let marker_text = block[0]
-        .spans
+    let marker_text = block
         .iter()
+        .flat_map(|line| line.spans.iter())
         .filter(|span| span.style.fg == Some(super::COLOR_PRIMARY()))
         .map(|span| span.content.as_ref())
         .collect::<String>();
 
     assert!(marker_text.contains("[Image #1]"));
     assert!(marker_text.contains("[Pasted Text #1 (12 chars)]"));
-    assert!(block[0].spans.iter().filter(|span| {
-        span.style.fg == Some(super::COLOR_PRIMARY())
-            && span.style.add_modifier.contains(Modifier::BOLD)
-    }).count() > 1);
+    assert!(
+        block
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|span| {
+                span.style.fg == Some(super::COLOR_PRIMARY())
+                    && span.style.add_modifier.contains(Modifier::BOLD)
+            })
+            .count()
+            > 1
+    );
 }
 
 #[test]
@@ -2548,11 +2555,13 @@ fn committed_user_messages_keep_regular_body_text() {
 
     let block = super::render_committed_history_block(&state, 0, 80);
 
-    assert_eq!(block[0].spans[0].content, "› ");
-    assert_eq!(block[0].width(), 80);
+    assert_eq!(block[1].spans[0].content, "› ");
+    assert_eq!(block[1].width(), 80);
     assert!(block[0].spans.iter().all(|span| span.style.bg == Some(super::COLOR_PANEL())));
+    assert!(block[1].spans.iter().all(|span| span.style.bg == Some(super::COLOR_PANEL())));
+    assert!(block[2].spans.iter().all(|span| span.style.bg == Some(super::COLOR_PANEL())));
     assert!(
-        !block[0].spans[1]
+        !block[1].spans[1]
             .style
             .add_modifier
             .contains(Modifier::BOLD)
@@ -2568,7 +2577,9 @@ fn committed_user_message_has_trailing_blank_line() {
 
     let block = super::render_committed_history_block(&state, 0, 80);
 
-    assert_eq!(block.len(), 2);
+    assert_eq!(block.len(), 4);
+    assert_eq!(block[0].width(), 80);
+    assert_eq!(block[2].width(), 80);
     assert_eq!(
         block[0]
             .spans
@@ -2576,9 +2587,18 @@ fn committed_user_message_has_trailing_blank_line() {
             .skip(1)
             .map(|span| span.content.as_ref())
             .collect::<String>(),
+        ""
+    );
+    assert_eq!(
+        block[1]
+            .spans
+            .iter()
+            .skip(1)
+            .map(|span| span.content.as_ref())
+            .collect::<String>(),
         format!("{:<78}", "check latest 10 commits")
     );
-    assert!(block[1].spans.is_empty());
+    assert!(block[3].spans.is_empty());
 }
 
 #[test]

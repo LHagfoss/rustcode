@@ -3324,7 +3324,15 @@ pub(crate) fn render_committed_history_block(
                     ));
                 }
             }
+            let panel_padding = || {
+                Line::from(Span::styled(
+                    " ".repeat(width as usize),
+                    Style::default().bg(COLOR_PANEL()),
+                ))
+            };
+            lines.push(panel_padding());
             lines.extend(user_lines);
+            lines.push(panel_padding());
             lines.push(Line::from(""));
         }
         "assistant" => {
