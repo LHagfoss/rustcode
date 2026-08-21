@@ -145,7 +145,8 @@ pip install mlx-speech
 RustCode discovers the venv's `bin` directory automatically, including when
 launched from the macOS Dock.
 
-For music (Python 3.10+), install the `musicgen-mlx` project:
+For music (Python 3.10+), keep the audio venv active and install the
+`musicgen-mlx` project:
 
 ```bash
 git clone https://github.com/andrade0/musicgen-mlx.git
