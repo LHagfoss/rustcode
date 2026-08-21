@@ -2515,6 +2515,8 @@ fn committed_user_messages_keep_regular_body_text() {
     let block = super::render_committed_history_block(&state, 0, 80);
 
     assert_eq!(block[0].spans[0].content, "› ");
+    assert_eq!(block[0].width(), 80);
+    assert!(block[0].spans.iter().all(|span| span.style.bg == Some(super::COLOR_PANEL())));
     assert!(
         !block[0].spans[1]
             .style
@@ -2540,7 +2542,7 @@ fn committed_user_message_has_trailing_blank_line() {
             .skip(1)
             .map(|span| span.content.as_ref())
             .collect::<String>(),
-        "check latest 10 commits"
+        format!("{:<78}", "check latest 10 commits")
     );
     assert!(block[1].spans.is_empty());
 }
