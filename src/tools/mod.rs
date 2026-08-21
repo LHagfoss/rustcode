@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
 mod envelope;
+mod audio;
 mod exec;
 mod filesystem;
 mod misc;
@@ -607,6 +608,9 @@ pub const TOOLS: &[Tool] = &[
     misc::REMEMBER,
     misc::RECALL_MEMORY,
     misc::FORGET_MEMORY,
+    audio::GENERATE_SOUND_EFFECT,
+    audio::GENERATE_MUSIC,
+    audio::INSPECT_AUDIO,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {
@@ -1769,6 +1773,33 @@ fn as_error_message(message: &str) -> String {
 }
 
 pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOutput {
+    execute_with_metadata_cancellable(name, args, None)
+}
+
+pub(crate) fn execute_with_metadata_cancellable(
+    name: &str,
+    args: &Value,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+) -> ToolExecutionOutput {
+    if let Some(kind) = match name {
+        "generate_sound_effect" => Some(audio::GenerationKind::Sfx),
+        "generate_music" => Some(audio::GenerationKind::Music),
+        _ => None,
+    } {
+        return match audio::generate_with_cancel(kind, args, cancel_token) {
+            Ok(output) => ToolExecutionOutput::success(output),
+            Err(error) => ToolExecutionOutput::failure_with_kind(
+                as_error_message(&error.message),
+                audio::map_error_kind(error.kind),
+                matches!(
+                    error.kind,
+                    audio::AudioErrorKind::GenerationFailed
+                        | audio::AudioErrorKind::ModelUnavailable
+                        | audio::AudioErrorKind::Cancelled
+                ),
+            ),
+        };
+    }
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
         let mut clients = reg.values().cloned().collect::<Vec<_>>();
         clients.sort_by(|a, b| a.name.cmp(&b.name));

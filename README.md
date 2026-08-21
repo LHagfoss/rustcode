@@ -117,6 +117,56 @@ CLI overrides > nearest project config > global config > built-in defaults
 Project files are partial overrides; omitted fields continue to come from the
 lower-precedence layer.
 
+### Optional local audio generation (Apple Silicon)
+
+RustCode can generate project-local WAV effects and instrumental music through
+external MLX backends. Audio tools are enabled by default and discover the
+backends automatically; override them in `config.toml` when needed:
+
+```toml
+[audio]
+enabled = true
+sfx_backend = "auto"
+music_backend = "auto"
+```
+
+The explicit backend values are `"mlx-speech"` for sound effects and
+`"musicgen-mlx"` for music.
+
+For sound effects, create an Apple Silicon Python environment and install the
+`mlx-speech` package (Python 3.13+):
+
+```bash
+python3 -m venv ~/.local/share/rustcode/audio-venv
+source ~/.local/share/rustcode/audio-venv/bin/activate
+pip install mlx-speech
+```
+
+RustCode discovers the venv's `bin` directory automatically, including when
+launched from the macOS Dock.
+
+For music (Python 3.10+), install the `musicgen-mlx` project:
+
+```bash
+git clone https://github.com/andrade0/musicgen-mlx.git
+cd musicgen-mlx
+make install
+```
+
+`make install` installs `musicgen-mlx` under `~/.local/bin`; RustCode also
+discovers that directory automatically.
+The sound-effect command is `mlx-speech`; RustCode invokes its sound-effect
+model through the backend interface. See the upstream
+[mlx-speech documentation](https://github.com/appautomaton/mlx-speech) and
+[musicgen-mlx documentation](https://github.com/andrade0/musicgen-mlx) for
+current Apple Silicon and Python requirements. The first generation downloads
+the model lazily, so the first call can take substantially longer. The initial
+music model is about 1.2 GB, while the sound-effect model and larger music
+variants can require several GB. RustCode never permanently loads these models
+into its own process. The initial native path intentionally accepts and
+inspects WAV output only; music longer than 30 seconds and additional audio
+formats are deferred.
+
 ## IMPORTANT
 
 If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have XCode v27](https://developer.apple.com/videos/play/wwdc2026/334/) for this to work. As this was introduced in the Beta version of MacOS 27.
@@ -124,4 +174,3 @@ If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have 
 Also not recmomended to use FM system model. as it only have like 2k context window...
 
 Made with [rust](https://www.rust-lang.org/) by goat (me) and models inside [rustcode](README) harness
-

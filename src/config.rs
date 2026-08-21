@@ -296,6 +296,32 @@ pub struct McpServerConfig {
     pub enabled: bool,
 }
 
+/// Local audio generation preferences. Backends are external processes and
+/// are discovered lazily when an audio tool is called.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AudioConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_audio_backend")]
+    pub sfx_backend: String,
+    #[serde(default = "default_audio_backend")]
+    pub music_backend: String,
+}
+
+fn default_audio_backend() -> String {
+    "auto".to_string()
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sfx_backend: default_audio_backend(),
+            music_backend: default_audio_backend(),
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -406,6 +432,8 @@ pub struct AppConfig {
     pub last_active_session_id: Option<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub audio: AudioConfig,
 
     #[serde(default)]
     pub agent_mode: AgentMode,
@@ -448,6 +476,8 @@ struct RuntimeConfig {
     #[serde(default)]
     mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
+    audio: AudioConfig,
+    #[serde(default)]
     agent_mode: AgentMode,
     #[serde(default)]
     verbosity: crate::app::state::Verbosity,
@@ -485,6 +515,8 @@ struct TomlConfig {
     last_active_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mcp_servers: Option<Vec<McpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audio: Option<AudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_mode: Option<AgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -614,6 +646,7 @@ impl Default for AppConfig {
                 env: std::collections::HashMap::new(),
                 enabled: true,
             }],
+            audio: AudioConfig::default(),
 
             agent_mode: AgentMode::default(),
             verbosity: crate::app::state::Verbosity::default(),
@@ -820,6 +853,7 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
                     config.debug_verbose_network_logging = runtime.debug_verbose_network_logging;
                     config.theme = runtime.theme;
                     config.start_time = runtime.start_time;
+                    config.audio = runtime.audio;
                 }
                 None => {
                     eprintln!(
@@ -889,6 +923,7 @@ fn save_config_to(dir: &Path, config: &AppConfig) {
         subagent_concurrency_limit: Some(config.subagent_concurrency_limit),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
+        audio: Some(config.audio.clone()),
         agent_mode: Some(config.agent_mode),
         verbosity: Some(config.verbosity.clone()),
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
@@ -948,6 +983,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     }
     if let Some(mcp_servers) = file.mcp_servers {
         config.mcp_servers = mcp_servers;
+    }
+    if let Some(audio) = file.audio {
+        config.audio = audio;
     }
     if let Some(agent_mode) = file.agent_mode {
         config.agent_mode = agent_mode;
@@ -1014,6 +1052,9 @@ fn preserve_project_overrides(
     if file.mcp_servers.is_some() {
         persisted.mcp_servers = global.mcp_servers.clone();
     }
+    if file.audio.is_some() {
+        persisted.audio = global.audio.clone();
+    }
     if file.agent_mode.is_some() {
         persisted.agent_mode = global.agent_mode;
     }
@@ -1051,6 +1092,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         subagent_concurrency_limit: None,
         last_active_session_id: None,
         mcp_servers: None,
+        audio: None,
         agent_mode: None,
         verbosity: None,
         debug_verbose_network_logging: None,

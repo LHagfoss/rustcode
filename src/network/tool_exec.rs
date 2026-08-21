@@ -451,6 +451,7 @@ pub(crate) async fn confirm_and_execute(
         let session_id = { state.lock().await.active_session_id.clone() };
         let workspace_root_for_task = workspace_root.clone();
         let live_key_owned = live_key.map(str::to_owned);
+        let cancel_token_for_task = cancel_token.clone();
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let run_fut = tokio::task::spawn_blocking(move || {
             crate::tools::set_active_session_id(Some(session_id));
@@ -468,13 +469,21 @@ pub(crate) async fn confirm_and_execute(
                         )
                     })
             } else {
-                crate::tools::execute_with_metadata(&name_owned, &args_owned)
+                crate::tools::execute_with_metadata_cancellable(
+                    &name_owned,
+                    &args_owned,
+                    Some(cancel_token_for_task),
+                )
             };
             crate::tools::set_active_workspace_root(None);
             crate::tools::set_active_session_id(None);
             result
         });
         tokio::pin!(run_fut);
+        let is_audio_generation = matches!(
+            name,
+            "generate_sound_effect" | "generate_music"
+        );
         let mut progress_open = true;
         loop {
             tokio::select! {
@@ -492,7 +501,7 @@ pub(crate) async fn confirm_and_execute(
                         progress_open = false;
                     }
                 }
-                _ = cancel_token.cancelled() => {
+                _ = cancel_token.cancelled(), if !is_audio_generation => {
                     dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
                     break crate::tools::ToolExecutionOutput::failure_with_kind(
                         "error: tool execution cancelled by user".to_string(),
@@ -504,7 +513,11 @@ pub(crate) async fn confirm_and_execute(
         }
     } else {
         dbg_log!("Tool '{}' requires confirmation", name);
-        let path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
+        let path = if let Some(p) = args
+            .get("path")
+            .or_else(|| args.get("output_path"))
+            .and_then(|p| p.as_str())
+        {
             p.to_string()
         } else if let Some(cmd) = args.get("command").and_then(|c| c.as_str()) {
             cmd.to_string()
@@ -574,14 +587,23 @@ pub(crate) async fn confirm_and_execute(
                 let args_owned = args.clone();
                 let session_id = { state.lock().await.active_session_id.clone() };
                 let workspace_root_for_task = workspace_root.clone();
+                let cancel_token_for_task = cancel_token.clone();
                 let run_fut = tokio::task::spawn_blocking(move || {
                     crate::tools::set_active_session_id(Some(session_id));
                     crate::tools::set_active_workspace_root(workspace_root_for_task);
-                    let result = crate::tools::execute_with_metadata(&name_owned, &args_owned);
+                    let result = crate::tools::execute_with_metadata_cancellable(
+                        &name_owned,
+                        &args_owned,
+                        Some(cancel_token_for_task),
+                    );
                     crate::tools::set_active_workspace_root(None);
                     crate::tools::set_active_session_id(None);
                     result
                 });
+                let is_audio_generation = matches!(
+                    name,
+                    "generate_sound_effect" | "generate_music"
+                );
 
                 tokio::select! {
                     res = run_fut => {
@@ -589,7 +611,7 @@ pub(crate) async fn confirm_and_execute(
                             crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
                         })
                     }
-                    _ = cancel_token.cancelled() => {
+                    _ = cancel_token.cancelled(), if !is_audio_generation => {
                         dbg_log!("Tool execution cancelled during spawn_blocking await");
                         crate::tools::ToolExecutionOutput::failure_with_kind(
                             "error: tool execution cancelled by user".to_string(),
@@ -666,6 +688,7 @@ pub(crate) fn tool_result_from_execution(
 ) -> ToolResult {
     let changed_paths = if is_mutating_tool(tool_name) {
         args.get("path")
+            .or_else(|| args.get("output_path"))
             .and_then(|value| value.as_str())
             .map(|path| vec![path.to_string()])
             .unwrap_or_default()
