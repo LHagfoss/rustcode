@@ -290,6 +290,10 @@ fn is_editing_tool(name: &str) -> bool {
     crate::app::activity::is_editing_tool(name)
 }
 
+pub(super) fn is_live_tool_call_visible(call: &LiveToolCall) -> bool {
+    call.execution_started || (!call.target.is_empty() && call.target != "?")
+}
+
 fn truncate_to_width(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
@@ -331,6 +335,10 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     verbosity: &Verbosity,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
+    let calls = calls
+        .iter()
+        .filter(|call| is_live_tool_call_visible(call))
+        .collect::<Vec<_>>();
     if calls.is_empty() || width == 0 {
         return Vec::new();
     }
