@@ -281,35 +281,6 @@ pub(super) fn push_wrapped_with_continuation(
     }
 }
 
-pub(super) fn wrap_prefixed_plain_text(
-    content: &str,
-    width: usize,
-    initial_prefix: Span<'static>,
-    subsequent_prefix: Span<'static>,
-    text_style: ratatui::style::Style,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let content = content.trim_end_matches(['\r', '\n']);
-    for (index, raw_line) in content.split('\n').enumerate() {
-        let prefix = if index == 0 {
-            initial_prefix.clone()
-        } else {
-            subsequent_prefix.clone()
-        };
-        if raw_line.is_empty() {
-            lines.push(Line::from(prefix));
-            continue;
-        }
-        push_wrapped_with_continuation(
-            &mut lines,
-            vec![prefix, Span::styled(raw_line.to_owned(), text_style)],
-            width,
-            Some(subsequent_prefix.clone()),
-        );
-    }
-    lines
-}
-
 /// Render CommonMark into ratatui lines. Fenced code blocks are returned as
 /// ordinary tagged lines so the existing code-panel/highlighter path remains
 /// the single owner of code block rendering.

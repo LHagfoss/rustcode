@@ -26,7 +26,7 @@ use highlight::{
 };
 use markdown::{
     push_wrapped_with_continuation, render_markdown, unwrap_markdown_table_fences,
-    wrap_prefixed_plain_text, wrap_styled_spans,
+    wrap_styled_spans,
 };
 pub use modals::{PALETTE_ITEMS, PaletteItem};
 pub mod theme;
@@ -167,10 +167,10 @@ fn get_themed_style(fg: Color, bg: Color, modifier: Modifier, _show_picker: bool
     Style::default().fg(fg).bg(bg).add_modifier(modifier)
 }
 
-/// Collapse pasted image markers (`![image](file://…)`) into compact
-/// `[Image #N]` chips for display. The raw markers stay in the underlying
-/// buffer / history so `parse_multimodal_content` can still attach the images
-/// when the message is sent — this only affects what the user sees.
+/// Collapse pasted image and long-text markers into compact display chips.
+/// The raw markers stay in the underlying buffer / history so
+/// `parse_multimodal_content` can still attach the content when the message is
+/// sent — this only affects what the user sees.
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 
@@ -178,10 +178,68 @@ thread_local! {
     static MARKER_CACHE: RefCell<(u64, String)> = const { RefCell::new((0, String::new())) };
 }
 
-fn collapse_image_markers(text: &str) -> String {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollapsedMarker {
+    Image,
+    PastedText,
+}
+
+fn collapsed_marker_segments(text: &str) -> Vec<(String, Option<CollapsedMarker>)> {
     const MARK_IMG: &str = "![image](file://";
     const MARK_PASTE: &str = "<!--PASTE:";
-    if !text.contains(MARK_IMG) && !text.contains(MARK_PASTE) {
+    let mut segments = Vec::new();
+    let mut rest = text;
+    let mut img_n = 0;
+    let mut paste_n = 0;
+
+    while !rest.is_empty() {
+        let next_img = rest.find(MARK_IMG);
+        let next_paste = rest.find(MARK_PASTE);
+        let (idx, is_image) = match (next_img, next_paste) {
+            (None, None) => {
+                segments.push((rest.to_owned(), None));
+                break;
+            }
+            (Some(idx), None) => (idx, true),
+            (None, Some(idx)) => (idx, false),
+            (Some(img_idx), Some(paste_idx)) => (img_idx, img_idx < paste_idx),
+        };
+        if idx > 0 {
+            segments.push((rest[..idx].to_owned(), None));
+        }
+
+        if is_image {
+            let after = &rest[idx + MARK_IMG.len()..];
+            let Some(close) = after.find(')') else {
+                segments.push((rest[idx..].to_owned(), None));
+                break;
+            };
+            img_n += 1;
+            segments.push((format!("[Image #{img_n}]"), Some(CollapsedMarker::Image)));
+            rest = &after[close + 1..];
+        } else {
+            let after = &rest[idx + MARK_PASTE.len()..];
+            let Some(end) = after.find("-->") else {
+                segments.push((rest[idx..].to_owned(), None));
+                break;
+            };
+            let payload = &after[..end];
+            paste_n += 1;
+            let label = if let Some((len_str, body)) = payload.split_once(':') {
+                let len_num: usize = len_str.parse().unwrap_or(body.len());
+                format!("[Pasted Text #{paste_n} ({len_num} chars)]")
+            } else {
+                format!("[Pasted Text #{paste_n}]")
+            };
+            segments.push((label, Some(CollapsedMarker::PastedText)));
+            rest = &after[end + 3..];
+        }
+    }
+    segments
+}
+
+fn collapse_image_markers(text: &str) -> String {
+    if !text.contains("![image](file://") && !text.contains("<!--PASTE:") {
         return text.to_string();
     }
 
@@ -194,87 +252,39 @@ fn collapse_image_markers(text: &str) -> String {
         if cache.0 == hash {
             return cache.1.clone();
         }
-        let mut out = String::new();
-        let mut rest = text;
-        let mut img_n = 0;
-        let mut paste_n = 0;
-        while !rest.is_empty() {
-            let next_img = rest.find(MARK_IMG);
-            let next_paste = rest.find(MARK_PASTE);
-
-            match (next_img, next_paste) {
-                (None, None) => {
-                    out.push_str(rest);
-                    break;
-                }
-                (Some(idx), None) => {
-                    out.push_str(&rest[..idx]);
-                    let after = &rest[idx + MARK_IMG.len()..];
-                    if let Some(close) = after.find(')') {
-                        img_n += 1;
-                        out.push_str(&format!("[Image #{img_n}]"));
-                        rest = &after[close + 1..];
-                    } else {
-                        out.push_str(&rest[idx..]);
-                        break;
-                    }
-                }
-                (None, Some(idx)) => {
-                    out.push_str(&rest[..idx]);
-                    let after = &rest[idx + MARK_PASTE.len()..];
-                    if let Some(end) = after.find("-->") {
-                        let payload = &after[..end];
-                        paste_n += 1;
-                        if let Some((len_str, body)) = payload.split_once(':') {
-                            let len_num: usize = len_str.parse().unwrap_or(body.len());
-                            out.push_str(&format!("[Pasted Text #{paste_n} ({len_num} chars)]"));
-                        } else {
-                            out.push_str(&format!("[Pasted Text #{paste_n}]"));
-                        }
-                        rest = &after[end + 3..];
-                    } else {
-                        out.push_str(&rest[idx..]);
-                        break;
-                    }
-                }
-                (Some(img_idx), Some(paste_idx)) => {
-                    if img_idx < paste_idx {
-                        out.push_str(&rest[..img_idx]);
-                        let after = &rest[img_idx + MARK_IMG.len()..];
-                        if let Some(close) = after.find(')') {
-                            img_n += 1;
-                            out.push_str(&format!("[Image #{img_n}]"));
-                            rest = &after[close + 1..];
-                        } else {
-                            out.push_str(&rest[img_idx..]);
-                            break;
-                        }
-                    } else {
-                        out.push_str(&rest[..paste_idx]);
-                        let after = &rest[paste_idx + MARK_PASTE.len()..];
-                        if let Some(end) = after.find("-->") {
-                            let payload = &after[..end];
-                            paste_n += 1;
-                            if let Some((len_str, body)) = payload.split_once(':') {
-                                let len_num: usize = len_str.parse().unwrap_or(body.len());
-                                out.push_str(&format!(
-                                    "[Pasted Text #{paste_n} ({len_num} chars)]"
-                                ));
-                            } else {
-                                out.push_str(&format!("[Pasted Text #{paste_n}]"));
-                            }
-                            rest = &after[end + 3..];
-                        } else {
-                            out.push_str(&rest[paste_idx..]);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        *cache = (hash, out.clone());
-        out
+        let collapsed = collapsed_marker_segments(text)
+            .into_iter()
+            .map(|(segment, _)| segment)
+            .collect::<String>();
+        *cache = (hash, collapsed.clone());
+        collapsed
     })
+}
+
+fn collapsed_marker_lines(
+    text: &str,
+) -> Vec<Vec<(String, Option<CollapsedMarker>)>> {
+    let mut lines = vec![Vec::new()];
+    for (segment, marker) in collapsed_marker_segments(text) {
+        let mut rest = segment.as_str();
+        while let Some(newline) = rest.find('\n') {
+            if newline > 0 {
+                lines
+                    .last_mut()
+                    .expect("marker line exists")
+                    .push((rest[..newline].to_owned(), marker));
+            }
+            lines.push(Vec::new());
+            rest = &rest[newline + 1..];
+        }
+        if !rest.is_empty() {
+            lines
+                .last_mut()
+                .expect("marker line exists")
+                .push((rest.to_owned(), marker));
+        }
+    }
+    lines
 }
 
 fn model_label(state: &AppState) -> String {
@@ -1257,9 +1267,17 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     let mut cursor_dy = 0u16;
 
     if inner_width > 0 {
-        let display_buffer = collapse_image_markers(&state.input_buffer);
-        let mut styled_chars: Vec<(char, Style)> =
-            display_buffer.chars().map(|c| (c, text_style)).collect();
+        let marker_style =
+            get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
+        let mut styled_chars = Vec::new();
+        for (segment, marker) in collapsed_marker_segments(&state.input_buffer) {
+            let style = if marker.is_some() {
+                marker_style
+            } else {
+                text_style
+            };
+            styled_chars.extend(segment.chars().map(|c| (c, style)));
+        }
 
         if state.input_buffer.is_empty() && state.get_command_suggestion().is_none() {
             let placeholder_style =
@@ -3255,16 +3273,39 @@ pub(crate) fn render_committed_history_block(
 
     match message.role.as_str() {
         "user" => {
-            let content = collapse_image_markers(&message.content);
             let prefix_style =
                 get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
-            let mut user_lines = wrap_prefixed_plain_text(
-                &content,
-                width as usize,
-                Span::styled("› ", prefix_style),
-                Span::styled("  ", prefix_style),
-                get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
-            );
+            let marker_style =
+                get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
+            let text_style =
+                get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker);
+            let continuation = Span::styled("  ", prefix_style);
+            let mut user_lines = Vec::new();
+            for (index, segments) in collapsed_marker_lines(
+                message.content.trim_end_matches(['\r', '\n']),
+            )
+            .into_iter()
+            .enumerate()
+            {
+                let prefix = if index == 0 {
+                    Span::styled("› ", prefix_style)
+                } else {
+                    continuation.clone()
+                };
+                let mut spans = vec![prefix];
+                for (segment, marker) in segments {
+                    spans.push(Span::styled(
+                        segment,
+                        if marker.is_some() { marker_style } else { text_style },
+                    ));
+                }
+                push_wrapped_with_continuation(
+                    &mut user_lines,
+                    spans,
+                    width as usize,
+                    Some(continuation.clone()),
+                );
+            }
             for line in &mut user_lines {
                 for span in &mut line.spans {
                     span.style = span.style.bg(COLOR_PANEL());
