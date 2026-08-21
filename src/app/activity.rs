@@ -41,6 +41,18 @@ pub fn is_exploration_tool(tool_name: &str) -> bool {
     )
 }
 
+pub fn is_editing_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
+    )
+}
+
 fn compact_target(raw: &str) -> String {
     let compacted = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut target = compacted.chars().take(120).collect::<String>();

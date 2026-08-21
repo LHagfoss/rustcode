@@ -773,18 +773,17 @@ fn worked_separator_only_labels_concrete_work_over_one_minute() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 3);
-    assert!(separator[0].to_string().is_empty());
+    assert_eq!(separator.len(), 2);
     assert!(
-        separator[1]
+        separator[0]
             .to_string()
             .starts_with("─ Worked for 2m 05s ─")
     );
-    assert!(separator[2].to_string().is_empty());
+    assert!(separator[1].to_string().is_empty());
 
     state.history[2].response_time_ms = Some(12_000);
     assert_eq!(
-        super::render_work_separator_before_assistant(&state, 2, 12)[1].to_string(),
+        super::render_work_separator_before_assistant(&state, 2, 12)[0].to_string(),
         "────────────"
     );
     assert!(super::render_work_separator_before_assistant(&state, 0, 80).is_empty());
@@ -808,10 +807,9 @@ fn work_separator_follows_tool_with_padding_gap() {
     state.history.push(assistant);
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
-    assert_eq!(separator.len(), 3);
-    assert_eq!(separator[0].to_string(), "");
-    assert!(separator[1].to_string().starts_with("─ Worked for 4m 14s ─"));
-    assert_eq!(separator[2].to_string(), "");
+    assert_eq!(separator.len(), 2);
+    assert!(separator[0].to_string().starts_with("─ Worked for 4m 14s ─"));
+    assert_eq!(separator[1].to_string(), "");
 }
 
 #[test]
@@ -942,11 +940,7 @@ fn completed_edits_have_a_distinct_transcript_heading() {
         .collect::<Vec<_>>();
 
     assert_eq!(rendered[0], "• Edited");
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("Edit src/main.rs"))
-    );
+    assert_eq!(rendered[1], "  └ src/main.rs");
 }
 
 #[test]
@@ -1918,6 +1912,23 @@ fn single_live_generic_tool_shows_its_action_without_using_heading() {
         .collect::<Vec<_>>();
 
     assert_eq!(rendered, ["• UseSkill release-automation"]);
+}
+
+#[test]
+fn live_editing_tool_cell_shows_editing_heading_and_target_child() {
+    let call = crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "replace_file_content",
+        "Edit",
+        "src/game/engine.ts",
+    );
+    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered, ["• Editing", "  └ src/game/engine.ts"]);
 }
 
 #[test]

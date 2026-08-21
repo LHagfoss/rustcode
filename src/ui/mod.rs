@@ -2118,12 +2118,29 @@ fn tool_child_line(
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    let mut spans = vec![
-        Span::styled(
-            if first { "  └ " } else { "    " },
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ),
-        Span::styled(
+    let mut spans = vec![Span::styled(
+        if first { "  └ " } else { "    " },
+        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+    )];
+    if entry.kind == ToolTranscriptKind::Edit {
+        if !entry.target.is_empty() && entry.target != "?" {
+            spans.push(Span::styled(
+                entry.target.clone(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        } else {
+            spans.push(Span::styled(
+                entry.action.clone(),
+                get_themed_style(
+                    COLOR_TEXT(),
+                    COLOR_BG(),
+                    Modifier::BOLD,
+                    show_picker,
+                ),
+            ));
+        }
+    } else {
+        spans.push(Span::styled(
             entry.action.clone(),
             get_themed_style(
                 COLOR_TEXT(),
@@ -2131,14 +2148,14 @@ fn tool_child_line(
                 Modifier::BOLD,
                 show_picker,
             ),
-        ),
-    ];
-    if !entry.target.is_empty() && entry.target != "?" {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            entry.target.clone(),
-            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
+        if !entry.target.is_empty() && entry.target != "?" {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                entry.target.clone(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
     }
     if show_hint {
         spans.push(Span::styled(
@@ -2469,7 +2486,6 @@ pub(crate) fn render_work_separator_before_assistant(
         "─".repeat(width.max(1) as usize)
     };
     vec![
-        Line::from(""),
         Line::from(Span::styled(
             text,
             get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false),
@@ -3258,7 +3274,7 @@ pub(crate) fn render_committed_history_block(
                     .active_history()
                     .get(message_index + 1)
                     .is_some_and(|m| m.role == "tool");
-                if !next_is_tool && !tool_result_needs_assistant_gap(history, message_index) {
+                if !next_is_tool {
                     lines.push(Line::from(""));
                 }
             }
