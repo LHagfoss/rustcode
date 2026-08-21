@@ -1,3 +1,13 @@
+## [v0.32.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.32.0) - 2026-08-21
+
+### Features & Performance
+- **Skills/On-Demand:** Replace static embedded skill catalog with on-demand skill discovery to minimize initial context footprint ([#744](https://github.com/LHagfoss/rustcode/pull/744))
+- **Agent/Context Optimization:** Compress core system prompt, gate irrelevant MCP tool schemas with fallback, isolate subagent schemas, and deduplicate stable runtime context fields ([#744](https://github.com/LHagfoss/rustcode/pull/744))
+- **Token Budgeting:** Account for native tool schemas directly in token budgeting, context trimming, and usage telemetry ([#744](https://github.com/LHagfoss/rustcode/pull/744))
+
+### Fixes
+- **UI/Terminal Resizing:** Purge scrollback and replay committed transcript history cleanly upon terminal resize events to preserve layout and viewport geometry ([#745](https://github.com/LHagfoss/rustcode/pull/745))
+
 ## [v0.31.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.31.4) - 2026-08-20
 
 ### Fixes
