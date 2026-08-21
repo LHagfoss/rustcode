@@ -1999,6 +1999,33 @@ fn live_editing_tool_cell_shows_editing_heading_and_target_child() {
 }
 
 #[test]
+fn live_audio_generation_cell_shows_editing_heading_and_output_path() {
+    let arguments = serde_json::json!({
+        "prompt": "a short balloon pop",
+        "duration_seconds": 0.4,
+        "output_path": "assets/audio/balloon-pop.wav"
+    });
+    let (action, target) = crate::app::activity::summarize_tool_call(
+        "generate_sound_effect",
+        &arguments,
+    );
+    let call = crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "generate_sound_effect",
+        action,
+        target,
+    );
+
+    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered, ["• Editing", "  └ assets/audio/balloon-pop.wav"]);
+}
+
+#[test]
 fn live_batched_edits_with_casing_aliases_group_under_editing_without_actions() {
     let calls = vec![
         crate::app::LiveToolCall::new(
