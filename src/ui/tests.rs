@@ -3200,6 +3200,38 @@ fn count_input_lines_accounts_for_prompt_indent() {
 }
 
 #[test]
+fn input_wraps_at_word_boundaries_before_splitting_long_words() {
+    let styled_chars = "alpha beta toggling speed"
+        .chars()
+        .map(|character| (character, ratatui::style::Style::default()))
+        .collect::<Vec<_>>();
+    let (lines, cursor_x, cursor_y) =
+        super::wrap_input_chars(&styled_chars, 18, styled_chars.len(), ratatui::style::Style::default());
+    let rendered = lines
+        .iter()
+        .map(ratatui::text::Line::to_string)
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered.len(), 2);
+    assert!(!rendered[0].contains("toggling"), "word was split: {rendered:?}");
+    assert!(rendered[1].contains("toggling speed"), "rendered: {rendered:?}");
+    assert_eq!((cursor_x, cursor_y), (16, 1));
+
+    let long_word = "abcdefghijklmnop";
+    let long_word_chars = long_word
+        .chars()
+        .map(|character| (character, ratatui::style::Style::default()))
+        .collect::<Vec<_>>();
+    let (long_lines, _, _) = super::wrap_input_chars(
+        &long_word_chars,
+        10,
+        long_word_chars.len(),
+        ratatui::style::Style::default(),
+    );
+    assert_eq!(long_lines.len(), 2, "long words still need hard wrapping");
+}
+
+#[test]
 fn live_streaming_thinking_block_uses_thought_duration_not_total_generation_time() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
