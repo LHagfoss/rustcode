@@ -1703,6 +1703,23 @@ fn resumed_session_separator_spans_width_and_centers_label() {
 }
 
 #[test]
+fn new_chat_started_separator_spans_width_without_emoji() {
+    use unicode_width::UnicodeWidthStr;
+
+    let mut lines = Vec::new();
+    super::render_status_panel("New chat started", 60, false, &mut lines);
+
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].width(), 0);
+    assert_eq!(lines[1].width(), 60);
+    assert_eq!(lines[1].spans[1].content, " New Chat Started ");
+
+    let left = lines[1].spans[0].content.width();
+    let right = lines[1].spans[2].content.width();
+    assert!((left as isize - right as isize).abs() <= 1);
+}
+
+#[test]
 fn resumed_session_committed_block_has_top_and_bottom_padding() {
     let mut state = AppState::new();
     state.history.push(crate::app::ChatMessage::new(
