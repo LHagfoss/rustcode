@@ -286,6 +286,10 @@ fn is_exploration_tool(name: &str) -> bool {
     crate::app::activity::is_exploration_tool(name)
 }
 
+fn is_editing_tool(name: &str) -> bool {
+    crate::app::activity::is_editing_tool(name)
+}
+
 fn truncate_to_width(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
@@ -426,8 +430,9 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     }
 
     let all_exploration = calls.iter().all(|call| is_exploration_tool(&call.tool_name));
+    let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
     let has_command = calls.iter().any(|call| call.tool_name == "run_command");
-    if !all_exploration && !has_command && calls.len() == 1 {
+    if !all_exploration && !all_editing && !has_command && calls.len() == 1 {
         let call = &calls[0];
         let target = if call.target.is_empty() || call.target == "?" {
             String::new()
@@ -451,6 +456,8 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     }
     let label = if all_exploration {
         "Exploring"
+    } else if all_editing {
+        "Editing"
     } else if has_command {
         "Running"
     } else {
@@ -470,34 +477,46 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     let child_width = (width as usize).saturating_sub(6).max(1);
     for (index, call) in calls.iter().take(MAX_LIVE_CHILDREN).enumerate() {
         let prefix = if index == 0 { "  └ " } else { "    " };
-        let mut spans = vec![
-            Span::styled(
-                prefix,
-                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-            ),
-            Span::styled(
-                call.action.clone(),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
-            ),
-        ];
-        if !call.target.is_empty() && call.target != "?" {
-            if call.action == "Bash" {
+        let mut spans = vec![Span::styled(
+            prefix,
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        )];
+        if all_editing {
+            if !call.target.is_empty() && call.target != "?" {
                 spans.push(Span::styled(
-                    " $ ",
+                    truncate_to_width(&call.target, child_width),
                     get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                 ));
-                let command =
-                    truncate_to_width(&call.target, child_width.saturating_sub(2));
-                if let Some(command_line) =
-                    highlight_shell_command(&command, COLOR_BG(), show_picker).into_iter().next()
-                {
-                    spans.extend(command_line.spans);
-                }
             } else {
                 spans.push(Span::styled(
-                    format!(" {}", truncate_to_width(&call.target, child_width)),
-                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                    call.action.clone(),
+                    get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ));
+            }
+        } else {
+            spans.push(Span::styled(
+                call.action.clone(),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ));
+            if !call.target.is_empty() && call.target != "?" {
+                if call.action == "Bash" {
+                    spans.push(Span::styled(
+                        " $ ",
+                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ));
+                    let command =
+                        truncate_to_width(&call.target, child_width.saturating_sub(2));
+                    if let Some(command_line) =
+                        highlight_shell_command(&command, COLOR_BG(), show_picker).into_iter().next()
+                    {
+                        spans.extend(command_line.spans);
+                    }
+                } else {
+                    spans.push(Span::styled(
+                        format!(" {}", truncate_to_width(&call.target, child_width)),
+                        get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+                    ));
+                }
             }
         }
         lines.push(Line::from(spans));
