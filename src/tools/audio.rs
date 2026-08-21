@@ -213,7 +213,8 @@ impl ProcessRunner for SystemProcessRunner {
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .env("PATH", backend_search_path());
         let mut child = command.spawn().map_err(|error| {
             AudioError::new(AudioErrorKind::MissingBackend, format!("could not start audio backend '{}': {error}. Install the backend and ensure it is on PATH.", program.display()))
         })?;
@@ -262,11 +263,7 @@ impl ProcessRunner for SystemProcessRunner {
     }
 }
 
-fn available_executable(name: &str) -> Option<PathBuf> {
-    let path = Path::new(name);
-    if path.components().count() > 1 {
-        return path.is_file().then(|| path.to_path_buf());
-    }
+fn backend_search_path() -> OsString {
     let mut search_dirs = Vec::new();
     if let Ok(home) = std::env::var("HOME") {
         // Keep the documented RustCode venv and musicgen installation ahead
@@ -275,7 +272,16 @@ fn available_executable(name: &str) -> Option<PathBuf> {
         search_dirs.push(PathBuf::from(&home).join(".local/bin"));
     }
     search_dirs.extend(std::env::split_paths(&crate::network::augmented_path()));
-    search_dirs
+    std::env::join_paths(search_dirs)
+        .unwrap_or_else(|_| OsString::from(crate::network::augmented_path()))
+}
+
+fn available_executable(name: &str) -> Option<PathBuf> {
+    let path = Path::new(name);
+    if path.components().count() > 1 {
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    std::env::split_paths(&backend_search_path())
         .into_iter()
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_file())
