@@ -824,14 +824,6 @@ pub async fn probe_function_calling(
     url: &str,
     model: &str,
 ) -> bool {
-    if model.to_lowercase().contains("gemini") {
-        dbg_log!(
-            "probe_function_calling: model {} contains 'gemini', defaulting to Json tool protocol for thought_signature compatibility",
-            model
-        );
-        return false;
-    }
-
     let resolved_url = {
         let trimmed = url.trim_end_matches('/');
         if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/chats/completion") {
