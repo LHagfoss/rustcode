@@ -1,3 +1,11 @@
+## [v0.33.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.2) - 2026-08-21
+
+### UI & Polish
+- **UI/User Messages:** Render committed user messages with composer panel background styling and full transcript width padding ([#757](https://github.com/LHagfoss/rustcode/pull/757))
+- **UI/Pasted Chips:** Style pasted image and long-text chips with the theme accent color while preserving inline boundaries ([#758](https://github.com/LHagfoss/rustcode/pull/758))
+- **UI/Audio Tools:** Group live audio generation tool calls with the editing tools style and display destination file paths ([#756](https://github.com/LHagfoss/rustcode/pull/756))
+- **UI/Separators:** Remove emoji from the new chat separator banner for consistent clean typography ([#755](https://github.com/LHagfoss/rustcode/pull/755))
+
 ## [v0.33.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.1) - 2026-08-21
 
 ### Fixes
