@@ -3257,14 +3257,27 @@ pub(crate) fn render_committed_history_block(
         "user" => {
             let content = collapse_image_markers(&message.content);
             let prefix_style =
-                get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
-            lines.extend(wrap_prefixed_plain_text(
+                get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
+            let mut user_lines = wrap_prefixed_plain_text(
                 &content,
                 width as usize,
                 Span::styled("› ", prefix_style),
                 Span::styled("  ", prefix_style),
-                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
-            ));
+                get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker),
+            );
+            for line in &mut user_lines {
+                for span in &mut line.spans {
+                    span.style = span.style.bg(COLOR_PANEL());
+                }
+                let padding = (width as usize).saturating_sub(line.width());
+                if padding > 0 {
+                    line.spans.push(Span::styled(
+                        " ".repeat(padding),
+                        Style::default().bg(COLOR_PANEL()),
+                    ));
+                }
+            }
+            lines.extend(user_lines);
             lines.push(Line::from(""));
         }
         "assistant" => {
