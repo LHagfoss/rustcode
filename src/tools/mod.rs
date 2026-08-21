@@ -923,7 +923,7 @@ fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
             "function": {
                 "name": t.name,
                 "description": t.description,
-                "parameters": schema_for_tool(t.name),
+                "parameters": provider_compatible_schema(schema_for_tool(t.name)),
             }
         }));
     }
@@ -939,7 +939,7 @@ fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
                 "function": {
                     "name": name,
                     "description": desc,
-                    "parameters": schema_for_agent_tool(name),
+                    "parameters": provider_compatible_schema(schema_for_agent_tool(name)),
                 }
             }));
         }
@@ -950,8 +950,37 @@ fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
 fn mcp_schema_value(name: &str, desc: &str, schema: &Value) -> Value {
     serde_json::json!({
         "type": "function",
-        "function": { "name": name, "description": desc, "parameters": schema }
+        "function": {
+            "name": name,
+            "description": desc,
+            "parameters": provider_compatible_schema(schema.clone())
+        }
     })
+}
+
+/// Return a provider-facing copy using the common subset of JSON Schema
+/// accepted by OpenAI-compatible function-calling endpoints. Canonical tool
+/// schemas remain unchanged for RustCode's stricter runtime validation.
+fn provider_compatible_schema(mut schema: Value) -> Value {
+    match &mut schema {
+        Value::Object(object) => {
+            object.remove("$schema");
+            object.remove("$id");
+            if let Some(bound) = object.remove("exclusiveMinimum") {
+                object.entry("minimum").or_insert(bound);
+            }
+            for value in object.values_mut() {
+                *value = provider_compatible_schema(value.take());
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                *value = provider_compatible_schema(value.take());
+            }
+        }
+        _ => {}
+    }
+    schema
 }
 
 fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
@@ -2118,6 +2147,17 @@ mod tests {
         assert!(names.contains(&"grep"));
         assert!(names.contains(&"view_file"));
         assert!(names.contains(&"complete_task"));
+        let sound_schema = &tools
+            .iter()
+            .find(|tool| tool["function"]["name"] == "generate_sound_effect")
+            .expect("sound generation tool is advertised")["function"]["parameters"];
+        assert_eq!(
+            sound_schema["properties"]["duration_seconds"]["minimum"],
+            0
+        );
+        assert!(sound_schema["properties"]["duration_seconds"]
+            .get("exclusiveMinimum")
+            .is_none());
         // Agent tools are included when requested.
         assert!(names.contains(&"spawn_agent"));
         assert!(names.contains(&"todo_write"));
@@ -2128,6 +2168,35 @@ mod tests {
                 .iter()
                 .any(|t| t["function"]["name"] == "spawn_agent")
         );
+    }
+
+    #[test]
+    fn provider_schema_removes_unsupported_json_schema_metadata_and_bounds() {
+        let canonical = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$id": "example",
+            "type": "object",
+            "properties": {
+                "duration": {"type": "number", "exclusiveMinimum": 0},
+                "nested": {
+                    "type": "array",
+                    "items": {"$schema": "nested", "type": "string"}
+                }
+            }
+        });
+
+        let compatible = provider_compatible_schema(canonical.clone());
+
+        assert_eq!(canonical["properties"]["duration"]["exclusiveMinimum"], 0);
+        assert_eq!(compatible["properties"]["duration"]["minimum"], 0);
+        assert!(compatible.get("$schema").is_none());
+        assert!(compatible.get("$id").is_none());
+        assert!(compatible["properties"]["duration"]
+            .get("exclusiveMinimum")
+            .is_none());
+        assert!(compatible["properties"]["nested"]["items"]
+            .get("$schema")
+            .is_none());
     }
 
     #[test]

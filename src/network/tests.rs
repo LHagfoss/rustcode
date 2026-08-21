@@ -166,23 +166,6 @@ async fn cancelled_tool_batch_removes_its_live_projection() {
     assert!(state.lock().await.live_tool_calls.is_empty());
 }
 
-#[tokio::test]
-async fn gemini_models_probe_false_for_json_protocol_fallback() {
-    let client = reqwest::Client::new();
-    let state = Arc::new(Mutex::new(AppState::new()));
-    let res = probe_function_calling(
-        &client,
-        &state,
-        "http://localhost:3000/v1",
-        "gemini-3.1-flash-lite",
-    )
-    .await;
-    assert!(
-        !res,
-        "gemini models must probe false to use Json protocol and prevent thought_signature 400 errors"
-    );
-}
-
 async fn gated_json_server(
     body: serde_json::Value,
 ) -> (
@@ -242,6 +225,29 @@ async fn gated_json_server(
     });
 
     (format!("http://{address}"), accepted_rx, release_tx)
+}
+
+#[tokio::test]
+async fn gemini_gateway_uses_capability_probe() {
+    let (url, request_accepted, release_response) =
+        gated_json_server(serde_json::json!({})).await;
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let probe_state = Arc::clone(&state);
+    let task = tokio::spawn(async move {
+        probe_function_calling(
+            &reqwest::Client::new(),
+            &probe_state,
+            &url,
+            "gemini-3.7-flash",
+        )
+        .await
+    });
+
+    request_accepted
+        .await
+        .expect("Gemini gateway must receive the capability probe");
+    release_response.send(()).expect("release probe response");
+    assert!(task.await.expect("probe task must finish"));
 }
 
 #[tokio::test]
