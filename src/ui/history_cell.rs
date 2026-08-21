@@ -458,10 +458,8 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         "Exploring"
     } else if all_editing {
         "Editing"
-    } else if has_command {
-        "Running"
     } else {
-        "Calling"
+        "Running"
     };
     let title_style = get_themed_style(
         COLOR_PRIMARY(),

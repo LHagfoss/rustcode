@@ -26,30 +26,55 @@ pub enum AnimationCell {
 }
 
 pub fn is_exploration_tool(tool_name: &str) -> bool {
+    let lower = tool_name.to_ascii_lowercase();
     matches!(
-        tool_name,
+        lower.as_str(),
         "view_file"
+            | "viewfile"
+            | "read_file"
+            | "readfile"
             | "list_directory"
             | "list_dir"
+            | "listdir"
             | "glob"
             | "grep"
             | "grep_search"
+            | "grepsearch"
             | "find_symbol"
+            | "findsymbol"
             | "codebase_search"
+            | "codebasesearch"
             | "codebase_symbol"
+            | "codebasesymbol"
             | "get_project_map"
+            | "getprojectmap"
     )
 }
 
 pub fn is_editing_tool(tool_name: &str) -> bool {
+    let lower = tool_name.to_ascii_lowercase();
     matches!(
-        tool_name,
+        lower.as_str(),
         "replace_file_content"
+            | "replacefilecontent"
             | "multi_replace_file_content"
+            | "multireplacefilecontent"
             | "write_to_file"
+            | "writetofile"
+            | "write_file"
+            | "writefile"
+            | "edit_file"
+            | "editfile"
+            | "create_file"
+            | "createfile"
+            | "patch_file"
+            | "patchfile"
             | "delete_file"
+            | "deletefile"
             | "move_file"
+            | "movefile"
             | "copy_file"
+            | "copyfile"
     )
 }
 
@@ -71,16 +96,20 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
             .unwrap_or(fallback)
             .to_string()
     };
-    let (action, target) = match name {
-        "view_file" => ("Read", value(&["TargetFile", "AbsolutePath", "path"], "?")),
-        "list_directory" | "list_dir" | "glob" => (
+    let name_lower = name.to_ascii_lowercase();
+    let (action, target) = match name_lower.as_str() {
+        "view_file" | "viewfile" | "read_file" | "readfile" => {
+            ("Read", value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"))
+        }
+        "list_directory" | "list_dir" | "listdir" | "glob" => (
             "List",
-            value(&["DirectoryPath", "SearchPath", "path", "pattern"], "."),
+            value(&["DirectoryPath", "directory_path", "SearchPath", "search_path", "path", "pattern"], "."),
         ),
-        "grep" | "grep_search" => {
+        "grep" | "grep_search" | "grepsearch" => {
             let query = value(&["Query", "query", "pattern"], "?");
             let path = args
                 .get("SearchPath")
+                .or_else(|| args.get("search_path"))
                 .or_else(|| args.get("path"))
                 .and_then(|value| value.as_str())
                 .filter(|path| !path.is_empty() && *path != ".");
@@ -93,29 +122,33 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
                 ),
             );
         }
-        "find_symbol" | "codebase_search" | "codebase_symbol" | "search_web" => {
+        "find_symbol" | "findsymbol" | "codebase_search" | "codebasesearch" | "codebase_symbol" | "codebasesymbol" | "search_web" | "searchweb" => {
             ("Search", value(&["query", "Query"], "?"))
         }
-        "run_command" => ("Bash", value(&["CommandLine", "command"], "?")),
-        "replace_file_content" | "multi_replace_file_content" => {
-            ("Edit", value(&["TargetFile", "AbsolutePath", "path"], "?"))
+        "run_command" | "runcommand" | "execute_command" | "bash" => {
+            ("Bash", value(&["CommandLine", "command_line", "command"], "?"))
         }
-        "write_to_file" => ("Write", value(&["TargetFile", "AbsolutePath", "path"], "?")),
-        "delete_file" => (
+        "replace_file_content" | "replacefilecontent" | "multi_replace_file_content" | "multireplacefilecontent" | "edit_file" | "editfile" | "patch_file" | "patchfile" => {
+            ("Edit", value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"))
+        }
+        "write_to_file" | "writetofile" | "write_file" | "writefile" | "create_file" | "createfile" => {
+            ("Write", value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"))
+        }
+        "delete_file" | "deletefile" => (
             "Delete",
-            value(&["TargetFile", "AbsolutePath", "path"], "?"),
+            value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"),
         ),
-        "move_file" | "copy_file" => {
-            let src = value(&["src"], "?");
-            let dest = value(&["dest"], "?");
+        "move_file" | "movefile" | "copy_file" | "copyfile" => {
+            let src = value(&["src", "source", "from"], "?");
+            let dest = value(&["dest", "destination", "to"], "?");
             return (
                 to_pascal_action(name),
                 compact_target(&format!("{src} → {dest}")),
             );
         }
-        "get_project_map" => ("Read", "project map".to_string()),
+        "get_project_map" | "getprojectmap" => ("Read", "project map".to_string()),
         _ => {
-            let target = value(&["path", "target", "query", "name", "command"], "");
+            let target = value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath", "target", "query", "name", "command"], "");
             return (to_pascal_action(name), compact_target(&target));
         }
     };
