@@ -853,29 +853,108 @@ fn render_assistant_message<'a>(
     }
 }
 
+fn wrap_input_chars(
+    styled_chars: &[(char, Style)],
+    inner_width: usize,
+    cursor_char_index: usize,
+    prompt_style: Style,
+) -> (Vec<Line<'static>>, u16, u16) {
+    if inner_width == 0 {
+        return (vec![Line::default()], 0, 0);
+    }
+
+    type InputChar = (usize, char, Style);
+    type InputLine = (Vec<InputChar>, usize);
+
+    let indent = 2.min(inner_width);
+    let mut wrapped: Vec<InputLine> = Vec::new();
+    let mut current: Vec<InputChar> = Vec::new();
+    let mut current_start = 0;
+    let mut current_width = indent;
+
+    for (index, &(character, style)) in styled_chars.iter().enumerate() {
+        if character == '\n' {
+            wrapped.push((std::mem::take(&mut current), current_start));
+            current_start = index + 1;
+            current_width = indent;
+            continue;
+        }
+
+        let character_width = character.width().unwrap_or(1);
+        if current_width + character_width > inner_width && !current.is_empty() {
+            let split_at = current
+                .iter()
+                .rposition(|(_, character, _)| character.is_whitespace())
+                .filter(|&index| index + 1 < current.len());
+            let remainder = split_at.map(|index| current.split_off(index + 1));
+
+            wrapped.push((std::mem::take(&mut current), current_start));
+            current = remainder.unwrap_or_default();
+            current_start = current.first().map(|(index, _, _)| *index).unwrap_or(index);
+            current_width = indent
+                + current
+                    .iter()
+                    .map(|(_, character, _)| character.width().unwrap_or(1))
+                    .sum::<usize>();
+        }
+
+        current.push((index, character, style));
+        current_width += character_width;
+    }
+    wrapped.push((current, current_start));
+
+    let mut cursor_positions = vec![None; styled_chars.len() + 1];
+    let mut lines = Vec::with_capacity(wrapped.len());
+    for (row, (characters, start)) in wrapped.into_iter().enumerate() {
+        let mut spans = vec![Span::styled(
+            if row == 0 { "› " } else { "  " },
+            prompt_style,
+        )];
+        let mut current_run: Option<(Style, String)> = None;
+        let mut column = indent;
+        cursor_positions[start] = Some((column as u16, row as u16));
+
+        for (index, character, style) in characters {
+            cursor_positions[index] = Some((column as u16, row as u16));
+            match current_run.as_mut() {
+                Some((run_style, text)) if *run_style == style => text.push(character),
+                _ => {
+                    if let Some((run_style, text)) = current_run.take() {
+                        spans.push(Span::styled(text, run_style));
+                    }
+                    current_run = Some((style, character.to_string()));
+                }
+            }
+            column += character.width().unwrap_or(1);
+            cursor_positions[index + 1] = Some((column as u16, row as u16));
+        }
+        if let Some((run_style, text)) = current_run {
+            spans.push(Span::styled(text, run_style));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let cursor = cursor_positions
+        .get(cursor_char_index.min(styled_chars.len()))
+        .copied()
+        .flatten()
+        .unwrap_or((indent as u16, 0));
+    (lines, cursor.0, cursor.1)
+}
+
 fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
     if inner_width == 0 {
         return 1;
     }
 
-    let indent = 2.min(inner_width);
-    let mut lines_count = 1;
-    let mut col = indent;
-
-    for c in input_buffer.chars() {
-        if c == '\n' {
-            lines_count += 1;
-            col = indent;
-        } else {
-            let char_width = c.width().unwrap_or(1);
-            if col + char_width > inner_width && col > indent {
-                lines_count += 1;
-                col = indent;
-            }
-            col += char_width;
-        }
-    }
-    lines_count
+    let collapsed = collapse_image_markers(input_buffer);
+    let styled_chars = collapsed
+        .chars()
+        .map(|character| (character, Style::default()))
+        .collect::<Vec<_>>();
+    wrap_input_chars(&styled_chars, inner_width, 0, Style::default())
+        .0
+        .len() as u16
 }
 
 fn current_tps(state: &AppState) -> f64 {
@@ -1307,66 +1386,8 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
 
         let prompt_style =
             get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
-        let prompt_span = Span::styled("› ", prompt_style);
-        let continuation_span = Span::styled("  ", prompt_style);
-        let mut current_line_spans = vec![prompt_span];
-        let mut current_run: Option<(Style, String)> = None;
-
-        let indent = 2.min(inner_width);
-        let mut col = indent;
-        let mut row = 0;
-
-        let total_chars = styled_chars.len();
-        for (i, &(c, style)) in styled_chars.iter().enumerate() {
-            if i == cursor_char_index {
-                cursor_dx = col as u16;
-                cursor_dy = row as u16;
-            }
-
-            if c == '\n' {
-                if let Some((st, s)) = current_run.take() {
-                    current_line_spans.push(Span::styled(s, st));
-                }
-                lines.push(Line::from(current_line_spans.clone()));
-                current_line_spans = vec![continuation_span.clone()];
-                row += 1;
-                col = indent;
-            } else {
-                let char_width = c.width().unwrap_or(1);
-                if col + char_width > inner_width && col > indent {
-                    if let Some((st, s)) = current_run.take() {
-                        current_line_spans.push(Span::styled(s, st));
-                    }
-                    lines.push(Line::from(current_line_spans.clone()));
-                    current_line_spans = vec![continuation_span.clone()];
-                    row += 1;
-                    col = indent;
-                }
-
-                match current_run.as_mut() {
-                    Some((st, s)) if *st == style => {
-                        s.push(c);
-                    }
-                    _ => {
-                        if let Some((st, s)) = current_run.take() {
-                            current_line_spans.push(Span::styled(s, st));
-                        }
-                        current_run = Some((style, c.to_string()));
-                    }
-                }
-                col += char_width;
-            }
-        }
-
-        if cursor_char_index == total_chars {
-            cursor_dx = col as u16;
-            cursor_dy = row as u16;
-        }
-
-        if let Some((st, s)) = current_run {
-            current_line_spans.push(Span::styled(s, st));
-        }
-        lines.push(Line::from(current_line_spans));
+        (lines, cursor_dx, cursor_dy) =
+            wrap_input_chars(&styled_chars, inner_width, cursor_char_index, prompt_style);
     }
 
     let text_area_height = input_inner.height;
