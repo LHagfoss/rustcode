@@ -94,13 +94,23 @@ fn replace_file_content_schema() -> Value {
             "replacement_content": { "type": "string", "description": "Alias for new_string" },
             "target": { "type": "string", "description": "Alias for old_string" },
             "replacement": { "type": "string", "description": "Alias for new_string" },
+            "old_text": { "type": "string", "description": "Alias for old_string" },
+            "new_text": { "type": "string", "description": "Alias for new_string" },
+            "oldString": { "type": "string", "description": "Alias for old_string" },
+            "newString": { "type": "string", "description": "Alias for new_string" },
+            "oldText": { "type": "string", "description": "Alias for old_string" },
+            "newText": { "type": "string", "description": "Alias for new_string" },
             "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-indexed start line to anchor the edit" },
             "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-indexed end line to anchor the edit" },
             "edits": { "type": "array", "items": { "type": "object", "properties": {
                 "old_string": { "type": "string" }, "new_string": { "type": "string" },
                 "target_content": { "type": "string" }, "replacement_content": { "type": "string" },
+                "target": { "type": "string" }, "replacement": { "type": "string" },
+                "old_text": { "type": "string" }, "new_text": { "type": "string" },
+                "oldString": { "type": "string" }, "newString": { "type": "string" },
+                "oldText": { "type": "string" }, "newText": { "type": "string" },
                 "start_line": { "type": "integer" }, "end_line": { "type": "integer" }
-            }, "required": ["old_string", "new_string"] } }
+            } } }
         }, "required": ["path"]
     })
 }

@@ -1167,6 +1167,40 @@ fn replace_file_content_schema_has_root_old_and_new_string() {
 }
 
 #[test]
+fn replace_file_content_schema_declares_every_handler_alias() {
+    // The handler accepts every key in EDIT_TARGET_ALIASES /
+    // EDIT_REPLACEMENT_ALIASES at root and inside edits[] items; with
+    // additionalProperties: false the schema must declare all of them or
+    // strict validators reject calls the handler would accept.
+    let schema = replace_file_content_schema();
+    let root = &schema["properties"];
+    let items = &schema["properties"]["edits"]["items"]["properties"];
+    for alias in [
+        "target_content",
+        "target",
+        "old_string",
+        "old_text",
+        "oldString",
+        "oldText",
+        "replacement_content",
+        "replacement",
+        "new_string",
+        "new_text",
+        "newString",
+        "newText",
+    ] {
+        assert!(root.get(alias).is_some(), "schema missing root alias {alias}");
+        assert!(
+            items.get(alias).is_some(),
+            "schema missing edits[] item alias {alias}"
+        );
+    }
+    // edits[] items must not require old_string/new_string specifically: any
+    // alias pair is valid for the handler.
+    assert!(schema["properties"]["edits"]["items"].get("required").is_none());
+}
+
+#[test]
 fn unrelated_missing_target_is_not_falsely_reported_as_already_applied() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("code.rs");
