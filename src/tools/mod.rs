@@ -2963,7 +2963,7 @@ mod tests {
             .expect("tool exists");
 
         assert!(
-            spec.description.contains("250-line hard cap"),
+            spec.description.contains("800-line hard cap"),
             "got: {}",
             spec.description
         );
@@ -2973,7 +2973,7 @@ mod tests {
             spec.description
         );
         assert!(
-            spec.arguments.contains("250 lines"),
+            spec.arguments.contains("800 lines"),
             "got: {}",
             spec.arguments
         );
@@ -2991,7 +2991,7 @@ mod tests {
         let schema = schema_for_tool("view_file");
         assert_eq!(
             schema["properties"]["end_line"]["description"],
-            "Inclusive end line; each call is capped at 250 lines. Request targeted follow-up ranges for more content."
+            "Inclusive end line; each call is capped at 800 lines. Request targeted follow-up ranges for more content."
         );
     }
 

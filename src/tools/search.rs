@@ -104,7 +104,7 @@ const MAX_GREP_LINES: usize = 200;
 const MAX_GREP_FILES: usize = 50;
 const MAX_GLOB_RESULTS: usize = 200;
 const MAX_LIST_ENTRIES: usize = 10_000;
-const MAX_LINE_CHARS: usize = 160;
+const MAX_LINE_CHARS: usize = 1000;
 
 fn build_include_matcher(include: Option<&str>) -> Result<Option<globset::GlobSet>, String> {
     let Some(glob_str) = include else {
