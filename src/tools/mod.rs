@@ -178,7 +178,12 @@ pub fn validate_tool_calls(calls: &[ToolCall]) -> Result<(), String> {
             ));
         };
 
-        if let Err(reason) = validate_value_against_schema(&call.arguments, &schema, "$") {
+        // Only built-in handlers coerce string-encoded integers
+        // (parse_json_number); MCP servers receive arguments verbatim.
+        let string_integers = TOOLS.iter().any(|tool| tool.name == call.name);
+        if let Err(reason) =
+            validate_value_against_schema(&call.arguments, &schema, "$", string_integers)
+        {
             let guidance = tool_argument_guidance(&call.name).unwrap_or_default();
             return Err(format!(
                 "invalid arguments for '{}'. Schema path: {reason}.{guidance}",
@@ -253,7 +258,12 @@ fn tool_argument_guidance(name: &str) -> Option<String> {
     ))
 }
 
-fn validate_value_against_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+fn validate_value_against_schema(
+    value: &Value,
+    schema: &Value,
+    path: &str,
+    string_integers: bool,
+) -> Result<(), String> {
     let expected = schema
         .get("type")
         .and_then(Value::as_str)
@@ -263,15 +273,17 @@ fn validate_value_against_schema(value: &Value, schema: &Value, path: &str) -> R
         "array" => value.is_array(),
         "string" => value.is_string(),
         "boolean" => value.is_boolean(),
-        // Handlers read line numbers through parse_json_number, which also
-        // accepts string-encoded integers from lenient providers; validate
-        // the same shape so schema, validator, and handler agree.
+        // Built-in handlers read line numbers through parse_json_number, which
+        // also accepts string-encoded integers from lenient providers. MCP
+        // tools receive arguments verbatim with no such coercion, so the
+        // leniency is scoped to built-ins only.
         "integer" => {
             value.as_i64().is_some()
                 || value.as_u64().is_some()
-                || value
-                    .as_str()
-                    .is_some_and(|s| s.parse::<u64>().is_ok())
+                || (string_integers
+                    && value
+                        .as_str()
+                        .is_some_and(|s| s.parse::<u64>().is_ok()))
         }
         "number" => value.is_number(),
         _ => true,
@@ -298,13 +310,13 @@ fn validate_value_against_schema(value: &Value, schema: &Value, path: &str) -> R
             && let Some(obj) = value.as_object()
         {
             for (key, val) in obj {
-                validate_value_against_schema(val, ap_schema, &format!("{path}.{key}"))?;
+                validate_value_against_schema(val, ap_schema, &format!("{path}.{key}"), string_integers)?;
             }
         }
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
             for (key, child) in properties {
                 if let Some(actual) = object.get(key) {
-                    validate_value_against_schema(actual, child, &format!("{path}.{key}"))?;
+                    validate_value_against_schema(actual, child, &format!("{path}.{key}"), string_integers)?;
                 }
             }
         }
@@ -313,7 +325,7 @@ fn validate_value_against_schema(value: &Value, schema: &Value, path: &str) -> R
         && let Some(array) = value.as_array()
     {
         for (index, item) in array.iter().enumerate() {
-            validate_value_against_schema(item, items, &format!("{path}[{index}]"))?;
+            validate_value_against_schema(item, items, &format!("{path}[{index}]"), string_integers)?;
         }
     }
     Ok(())
@@ -3141,6 +3153,25 @@ mod tests {
             }])
             .is_err()
         );
+    }
+
+    #[test]
+    fn validation_scopes_string_integer_leniency_to_builtin_tools() {
+        // MCP servers receive arguments verbatim with no parse_json_number
+        // coercion, so string-encoded integers must be rejected for them.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "limit": { "type": "integer" } }
+        });
+        let stringy = serde_json::json!({ "limit": "10" });
+        let numeric = serde_json::json!({ "limit": 10 });
+
+        assert!(
+            validate_value_against_schema(&stringy, &schema, "$", false).is_err(),
+            "non-builtin (MCP-style) validation must reject string integers"
+        );
+        assert!(validate_value_against_schema(&numeric, &schema, "$", false).is_ok());
+        assert!(validate_value_against_schema(&stringy, &schema, "$", true).is_ok());
     }
 
     #[test]
