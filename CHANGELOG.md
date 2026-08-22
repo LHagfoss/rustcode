@@ -1,3 +1,11 @@
+## [v0.33.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.3) - 2026-08-22
+
+### UI & Fixes
+- **UI/Composer:** Wrap composer input at natural word boundaries while keeping long uninterrupted tokens hard-wrapped and maintaining precise cursor alignment ([#763](https://github.com/LHagfoss/rustcode/pull/763))
+- **UI/User Messages:** Add vertical padding rows to committed user message cards for balanced visual alignment ([#762](https://github.com/LHagfoss/rustcode/pull/762))
+- **UI/Tool Calls:** Hide speculative tool placeholders until meaningful arguments or execution starts to avoid empty tool lines ([#761](https://github.com/LHagfoss/rustcode/pull/761))
+- **CI/Builds:** Optimize Windows release build profile to speed up CI turnaround ([#760](https://github.com/LHagfoss/rustcode/pull/760))
+
 ## [v0.33.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.2) - 2026-08-21
 
 ### UI & Polish
