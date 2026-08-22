@@ -1,3 +1,19 @@
+## [v0.34.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.0) - 2026-08-22
+
+### Features
+- **UI/Terminal Progress:** Add native terminal task progress bar reporting via OSC 9;4 for supported terminal emulators ([#780](https://github.com/LHagfoss/rustcode/pull/780))
+- **UI/Mode Selection:** Convert `/yolo` command to an interactive mode picker modal ([#765](https://github.com/LHagfoss/rustcode/pull/765))
+- **Verification/Skip Non-Code:** Allow task completion without full compiler verification when changes are strictly non-code files (docs, assets, markdown) ([#769](https://github.com/LHagfoss/rustcode/pull/769), [#771](https://github.com/LHagfoss/rustcode/pull/771), [#775](https://github.com/LHagfoss/rustcode/pull/775))
+
+### Tools & Search
+- **Tools/View File:** Expand standard `view_file` read window to 800 lines ([#766](https://github.com/LHagfoss/rustcode/pull/766))
+- **Tools/Search:** Enforce 32KB output limit on `grep_search` with truncation notifications, and return permitted lines at the file limit cap ([#766](https://github.com/LHagfoss/rustcode/pull/766), [#772](https://github.com/LHagfoss/rustcode/pull/772), [#776](https://github.com/LHagfoss/rustcode/pull/776))
+- **Tools/Replace File Content:** Declare all handler-accepted parameter aliases in native tool schema, align with root `old_string`/`new_string`, and require strong prefix proofs for idempotency guards ([#767](https://github.com/LHagfoss/rustcode/pull/767), [#770](https://github.com/LHagfoss/rustcode/pull/770), [#773](https://github.com/LHagfoss/rustcode/pull/773), [#777](https://github.com/LHagfoss/rustcode/pull/777))
+- **Tools/Validation:** Accept string-encoded integers leniently for built-in tool arguments ([#778](https://github.com/LHagfoss/rustcode/pull/778), [#779](https://github.com/LHagfoss/rustcode/pull/779))
+
+### Loop Detection & Safety
+- **Harness/Loop Detection:** Bucket edit category signatures by `start_line` parsing string formats cleanly, and set `manage_task` authorization safety level to `ProcessControl` ([#768](https://github.com/LHagfoss/rustcode/pull/768), [#774](https://github.com/LHagfoss/rustcode/pull/774))
+
 ## [v0.33.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.33.3) - 2026-08-22
 
 ### UI & Fixes
