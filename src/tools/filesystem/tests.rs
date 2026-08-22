@@ -1246,3 +1246,30 @@ fn missing_target_with_surrounding_context_and_matching_inner_block_errors() {
         "got: {err}"
     );
 }
+
+#[test]
+fn unrelated_same_prefix_single_line_is_not_reported_as_already_applied() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("state.rs");
+    std::fs::write(&file, "let bar = 2;\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    // The file already contains the replacement `let bar = 2;`, and the
+    // target shares indentation and the first token (`let`) with it — but
+    // `let foo = 1;` may never have existed. Same statement prefix alone is
+    // not proof of a prior application; this must error with target not found.
+    let err = replace_file_content_tool(&serde_json::json!({
+        "path": path,
+        "old_string": "let foo = 1;",
+        "new_string": "let bar = 2;",
+    }))
+    .expect_err("unrelated same-prefix statement must error");
+
+    assert!(
+        err.contains("target_content not found") || err.contains("not found in"),
+        "got: {err}"
+    );
+
+    let content = std::fs::read_to_string(&file).expect("read");
+    assert_eq!(content, "let bar = 2;\n", "file must be untouched");
+}

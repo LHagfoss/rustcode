@@ -505,7 +505,10 @@ fn already_applied(content: &str, target: &str, replacement: &str) -> bool {
 
     // If target is absent: require strong proof that this exact edit was already performed.
     // Specifically, for single-line statements (e.g., `let status = Idle;` -> `let status = Active;`),
-    // check that target and replacement share identical indentation and statement prefix.
+    // check that target and replacement share identical indentation, statement prefix, AND a
+    // long common prefix — at least half of the shorter line. A shared first token alone is not
+    // enough: `let foo = 1;` -> `let bar = 2;` also shares the `let` prefix, yet the target may
+    // never have existed and the edit must error instead of reporting a false no-op.
     // If target has surrounding context lines or multiple lines that never existed in content,
     // we must not guess based on substring/word overlap.
     let target_lines: Vec<&str> = target.lines().collect();
@@ -517,10 +520,16 @@ fn already_applied(content: &str, target: &str, replacement: &str) -> bool {
         let r_indent = r.len() - r.trim_start().len();
         let t_trimmed = t.trim();
         let r_trimmed = r.trim();
+        let common_prefix = t_trimmed
+            .bytes()
+            .zip(r_trimmed.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
         if t_indent == r_indent
             && !t_trimmed.is_empty()
             && !r_trimmed.is_empty()
             && t_trimmed.split_whitespace().next() == r_trimmed.split_whitespace().next()
+            && common_prefix * 2 >= t_trimmed.len().min(r_trimmed.len())
         {
             return true;
         }
