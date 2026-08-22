@@ -137,7 +137,28 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
             .or_else(|| args.get("TargetFile"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        format!("edit:{path}")
+        let start = args
+            .get("start_line")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                args.get("edits")
+                    .and_then(|arr| arr.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|item| item.get("start_line"))
+                    .and_then(|v| v.as_u64())
+            })
+            .or_else(|| {
+                args.get("replacements")
+                    .and_then(|arr| arr.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|item| item.get("start_line"))
+                    .and_then(|v| v.as_u64())
+            });
+        if let Some(st) = start {
+            format!("edit:{path}#{}", st / 200)
+        } else {
+            format!("edit:{path}")
+        }
     } else {
         exact.clone()
     };
@@ -651,6 +672,20 @@ mod tests {
         );
         assert_ne!(exact, cat);
         assert_eq!(cat, "edit:src/ui/mod.rs");
+    }
+
+    #[test]
+    fn edit_tool_buckets_category_by_start_line() {
+        let (_, cat1) = signatures(
+            "replace_file_content",
+            &json!({"path": "src/ui/mod.rs", "old_string": "a", "new_string": "b", "start_line": 50}),
+        );
+        let (_, cat2) = signatures(
+            "replace_file_content",
+            &json!({"path": "src/ui/mod.rs", "old_string": "x", "new_string": "y", "start_line": 500}),
+        );
+        assert_eq!(cat1, "edit:src/ui/mod.rs#0");
+        assert_eq!(cat2, "edit:src/ui/mod.rs#2");
     }
 
     #[test]

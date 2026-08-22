@@ -2068,9 +2068,8 @@ mod tests {
         assert_eq!(tool_safety("use_skill"), ToolSafety::ReadOnly);
         assert!(!needs_confirmation("use_skill"));
 
-        // manage_task deliberately stays Unknown (confirmation via authorize_tool).
         assert_eq!(tool_capabilities("manage_task"), &[ExecuteCommands]);
-        assert_eq!(tool_safety("manage_task"), ToolSafety::Unknown);
+        assert_eq!(tool_safety("manage_task"), ToolSafety::ProcessControl);
         assert!(!needs_confirmation("manage_task"));
 
         // Agent tools live outside TOOLS and keep their fallback arms.
