@@ -640,19 +640,89 @@ fn apply_single_edit_to_content(
     let had_crlf = content.contains("\r\n");
     let content_norm = content.replace("\r\n", "\n");
     let has_mixed_line_endings = had_crlf && content.replace("\r\n", "").contains('\n');
-    let content_for_edit = if has_mixed_line_endings {
-        content
-    } else {
-        &content_norm
+    let normalized_edit = SingleEdit {
+        target: edit.target.replace("\r\n", "\n"),
+        replacement: edit.replacement.replace("\r\n", "\n"),
+        start_line: edit.start_line,
+        end_line: edit.end_line,
     };
-    let result = apply_single_edit_to_content_inner(content_for_edit, path, edit)?;
+    let result = apply_single_edit_to_content_inner(&content_norm, path, &normalized_edit)?;
     match result {
         EditOutcome::Unchanged => Ok(EditOutcome::Unchanged),
         EditOutcome::Changed(new_content) if had_crlf && !has_mixed_line_endings => {
             Ok(EditOutcome::Changed(new_content.replace("\n", "\r\n")))
         }
+        EditOutcome::Changed(new_content) if had_crlf => Ok(EditOutcome::Changed(
+            preserve_mixed_line_endings(content, &content_norm, &new_content),
+        )),
         EditOutcome::Changed(new_content) => Ok(EditOutcome::Changed(new_content)),
     }
+}
+
+fn preserve_mixed_line_endings(
+    original: &str,
+    normalized_original: &str,
+    normalized_edited: &str,
+) -> String {
+    if normalized_original == normalized_edited {
+        return original.to_string();
+    }
+
+    let prefix_len = normalized_original
+        .chars()
+        .zip(normalized_edited.chars())
+        .take_while(|(left, right)| left == right)
+        .map(|(left, _)| left.len_utf8())
+        .sum();
+    let max_suffix_len = normalized_original
+        .len()
+        .saturating_sub(prefix_len)
+        .min(normalized_edited.len().saturating_sub(prefix_len));
+    let mut suffix_len = 0;
+    for (left, right) in normalized_original.chars().rev().zip(normalized_edited.chars().rev()) {
+        let width = left.len_utf8();
+        if left != right || suffix_len + width > max_suffix_len {
+            break;
+        }
+        suffix_len += width;
+    }
+
+    let original_start = original_offset_for_normalized(original, prefix_len);
+    let original_end = original_offset_for_normalized(
+        original,
+        normalized_original.len().saturating_sub(suffix_len),
+    );
+    let replacement_end = normalized_edited.len().saturating_sub(suffix_len);
+
+    let mut result = String::with_capacity(
+        original_start
+            + replacement_end.saturating_sub(prefix_len)
+            + original.len().saturating_sub(original_end),
+    );
+    result.push_str(&original[..original_start]);
+    result.push_str(&normalized_edited[prefix_len..replacement_end]);
+    result.push_str(&original[original_end..]);
+    result
+}
+
+fn original_offset_for_normalized(original: &str, normalized_offset: usize) -> usize {
+    let mut original_offset = 0;
+    let mut normalized_count = 0;
+    while normalized_count < normalized_offset {
+        if original[original_offset..].starts_with("\r\n") {
+            original_offset += 2;
+            normalized_count += 1;
+        } else {
+            let character = original[original_offset..]
+                .chars()
+                .next()
+                .expect("normalized offset must be within original content");
+            let width = character.len_utf8();
+            original_offset += width;
+            normalized_count += width;
+        }
+    }
+    original_offset
 }
 
 fn apply_single_edit_to_content_inner(
