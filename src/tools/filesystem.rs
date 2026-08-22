@@ -464,19 +464,6 @@ enum EditOutcome {
     Unchanged,
 }
 
-fn edit_similarity(target: &str, replacement: &str) -> f32 {
-    let target_words: Vec<&str> = target.split_whitespace().collect();
-    let replacement_words: Vec<&str> = replacement.split_whitespace().collect();
-    if target_words.is_empty() || replacement_words.is_empty() {
-        return 0.0;
-    }
-    let shared = target_words
-        .iter()
-        .filter(|w| replacement_words.contains(w))
-        .count();
-    shared as f32 / target_words.len().max(replacement_words.len()) as f32
-}
-
 /// True when `content` already reflects the result of replacing `target` with
 /// `replacement` — i.e. re-applying this exact edit would be a no-op or,
 /// worse, would duplicate content that a prior identical call already
@@ -486,32 +473,50 @@ fn already_applied(content: &str, target: &str, replacement: &str) -> bool {
     if replacement.is_empty() || !content.contains(replacement) {
         return false;
     }
-    if !content.contains(target) {
-        // The replacement is present and the original anchor is gone:
-        // verify that this is the result of a previous application of this edit
-        // (either replacement embeds target, or target shares similarity with replacement).
-        if replacement.contains(target) {
+    if replacement.contains(target) {
+        if !content.contains(target) {
             return true;
         }
-        return edit_similarity(target, replacement) >= 0.3;
+        let repl_ranges: Vec<(usize, usize)> = content
+            .match_indices(replacement)
+            .map(|(i, _)| (i, i + replacement.len()))
+            .collect();
+        return content.match_indices(target).all(|(i, _)| {
+            let end = i + target.len();
+            repl_ranges.iter().any(|&(rs, re)| rs <= i && end <= re)
+        });
     }
-    if !replacement.contains(target) {
-        // Target still present and replacement doesn't subsume it — this
-        // isn't the insert-shaped case, so don't guess; let normal matching
-        // decide (it may be a genuine remaining occurrence to edit).
+
+    // When replacement does NOT contain target:
+    // If target is still in content, the transformation has not occurred.
+    if content.contains(target) {
         return false;
     }
-    // Every remaining occurrence of `target` must fall entirely inside an
-    // occurrence of `replacement` for this to count as already applied —
-    // otherwise there is a genuine, separate site still needing the edit.
-    let repl_ranges: Vec<(usize, usize)> = content
-        .match_indices(replacement)
-        .map(|(i, _)| (i, i + replacement.len()))
-        .collect();
-    content.match_indices(target).all(|(i, _)| {
-        let end = i + target.len();
-        repl_ranges.iter().any(|&(rs, re)| rs <= i && end <= re)
-    })
+
+    // If target is absent: require strong proof that this exact edit was already performed.
+    // Specifically, for single-line statements (e.g., `let status = Idle;` -> `let status = Active;`),
+    // check that target and replacement share identical indentation and statement prefix.
+    // If target has surrounding context lines or multiple lines that never existed in content,
+    // we must not guess based on substring/word overlap.
+    let target_lines: Vec<&str> = target.lines().collect();
+    let replacement_lines: Vec<&str> = replacement.lines().collect();
+    if target_lines.len() == 1 && replacement_lines.len() == 1 {
+        let t = target_lines[0];
+        let r = replacement_lines[0];
+        let t_indent = t.len() - t.trim_start().len();
+        let r_indent = r.len() - r.trim_start().len();
+        let t_trimmed = t.trim();
+        let r_trimmed = r.trim();
+        if t_indent == r_indent
+            && !t_trimmed.is_empty()
+            && !r_trimmed.is_empty()
+            && t_trimmed.split_whitespace().next() == r_trimmed.split_whitespace().next()
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Every key an edit tool call may use for its old/new text, in priority
