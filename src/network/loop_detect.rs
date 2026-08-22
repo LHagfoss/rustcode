@@ -139,20 +139,20 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
             .unwrap_or("");
         let start = args
             .get("start_line")
-            .and_then(|v| v.as_u64())
+            .and_then(crate::tools::parse_json_number)
             .or_else(|| {
                 args.get("edits")
                     .and_then(|arr| arr.as_array())
                     .and_then(|arr| arr.first())
                     .and_then(|item| item.get("start_line"))
-                    .and_then(|v| v.as_u64())
+                    .and_then(crate::tools::parse_json_number)
             })
             .or_else(|| {
                 args.get("replacements")
                     .and_then(|arr| arr.as_array())
                     .and_then(|arr| arr.first())
                     .and_then(|item| item.get("start_line"))
-                    .and_then(|v| v.as_u64())
+                    .and_then(crate::tools::parse_json_number)
             });
         if let Some(st) = start {
             format!("edit:{path}#{}", st / 200)
@@ -686,6 +686,17 @@ mod tests {
         );
         assert_eq!(cat1, "edit:src/ui/mod.rs#0");
         assert_eq!(cat2, "edit:src/ui/mod.rs#2");
+    }
+
+    #[test]
+    fn edit_tool_buckets_string_start_line_like_the_handler() {
+        // The edit handler parses string line numbers via parse_json_number;
+        // the category signature must bucket them identically.
+        let (_, cat) = signatures(
+            "replace_file_content",
+            &json!({"path": "src/ui/mod.rs", "old_string": "a", "new_string": "b", "start_line": "500"}),
+        );
+        assert_eq!(cat, "edit:src/ui/mod.rs#2");
     }
 
     #[test]
