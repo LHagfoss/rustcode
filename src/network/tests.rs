@@ -325,7 +325,7 @@ fn small_reads_are_worth_repeating_verbatim() {
 
     // A whole file stays behind the notice: repeating it every turn would
     // cost more than the loop it prevents.
-    let whole_file = "x".repeat(15_567);
+    let whole_file = "x".repeat(50_000);
     assert!(whole_file.len() > REPLAYABLE_READ_LIMIT);
 }
 
@@ -2527,7 +2527,7 @@ async fn nonzero_run_command_cannot_spoof_success_with_its_display() {
 async fn view_file_reports_structured_truncation_only_when_content_is_omitted() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("large.txt");
-    let content: String = (1..=300).map(|line| format!("line {line}\n")).collect();
+    let content: String = (1..=1000).map(|line| format!("line {line}\n")).collect();
     std::fs::write(&file, content).expect("write");
     let path = file.to_string_lossy().to_string();
 
@@ -2587,7 +2587,7 @@ async fn repeated_truncated_read_preserves_structured_truncation() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("large.txt");
-    let content: String = (1..=300).map(|line| format!("line {line}\n")).collect();
+    let content: String = (1..=850).map(|line| format!("{line}\n")).collect();
     std::fs::write(&file, content).expect("write");
     let path = file.to_string_lossy().to_string();
     let call = test_tool_call("view_file", serde_json::json!({"path": path}));
@@ -2631,7 +2631,7 @@ async fn repeated_over_limit_truncated_read_preserves_metadata_and_recovery_arti
     let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("large.txt");
-    let content: String = (1..=300)
+    let content: String = (1..=850)
         .map(|line| format!("line {line}: {}\n", "x".repeat(256)))
         .collect();
     std::fs::write(&file, content).expect("write");

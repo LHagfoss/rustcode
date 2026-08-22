@@ -1331,8 +1331,9 @@ pub(crate) fn is_model_directed_note(message: &ChatMessage) -> bool {
 
 /// Largest read output kept for replay to an identical repeat call. Small reads
 /// are cheaper to repeat than to argue about; large ones stay behind a notice so
-/// a loop cannot re-send a whole file every turn.
-pub(crate) const REPLAYABLE_READ_LIMIT: usize = 4096;
+/// a loop cannot re-send a whole file every turn. Sized to hold up to an 800-line
+/// view_file window.
+pub(crate) const REPLAYABLE_READ_LIMIT: usize = 24_576;
 
 /// How many times the completion gate argues before letting a claim through.
 const MAX_COMPLETION_BLOCKS: u8 = 2;
