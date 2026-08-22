@@ -1185,3 +1185,30 @@ fn unrelated_missing_target_is_not_falsely_reported_as_already_applied() {
 
     assert!(err.contains("target_content not found") || err.contains("not found in"), "got: {err}");
 }
+
+#[test]
+fn missing_target_with_surrounding_context_and_matching_inner_block_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("service.rs");
+    std::fs::write(
+        &file,
+        "fn calculate_total() {\n    let count = 42;\n    save_to_db(count);\n}\n",
+    )
+    .expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    // Target contains surrounding context for a different function that does not exist,
+    // while replacement matches an inner block present in the file (`let count = 42;`).
+    // This must NOT be classified as "already applied"; it must error with target not found.
+    let err = replace_file_content_tool(&serde_json::json!({
+        "path": path,
+        "old_string": "fn missing_outer_fn() {\n    let count = 42;\n    notify_admin();\n}",
+        "new_string": "    let count = 42;",
+    }))
+    .expect_err("missing target with surrounding context must error");
+
+    assert!(
+        err.contains("target_content not found") || err.contains("not found in"),
+        "got: {err}"
+    );
+}
