@@ -103,7 +103,7 @@ pub(crate) fn is_verification_command(command: &str) -> bool {
     classify_command(command).is_some()
 }
 
-pub(crate) fn has_code_edits(changed_paths: &std::collections::BTreeSet<String>) -> bool {
+pub(crate) fn requires_verification(changed_paths: &std::collections::BTreeSet<String>) -> bool {
     if changed_paths.is_empty() {
         return true;
     }
@@ -201,7 +201,7 @@ fn is_documentation_or_asset(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{VerificationLedger, has_code_edits};
+    use super::{VerificationLedger, requires_verification};
 
     #[test]
     fn verification_becomes_stale_after_a_later_edit() {
@@ -228,20 +228,20 @@ mod tests {
     }
 
     #[test]
-    fn has_code_edits_identifies_code_vs_doc_edits() {
+    fn requires_verification_identifies_code_vs_doc_edits() {
         let mut non_code = std::collections::BTreeSet::new();
         non_code.insert("README.md".to_string());
         non_code.insert("docs/architecture.txt".to_string());
         non_code.insert("assets/logo.png".to_string());
-        assert!(!has_code_edits(&non_code));
+        assert!(!requires_verification(&non_code));
 
         let mut with_code = non_code.clone();
         with_code.insert("src/main.rs".to_string());
-        assert!(has_code_edits(&with_code));
+        assert!(requires_verification(&with_code));
     }
 
     #[test]
-    fn has_code_edits_requires_verification_for_manifests_and_extensionless_build_files() {
+    fn requires_verification_for_manifests_and_extensionless_build_files() {
         // Manifest files must require verification
         for manifest in [
             "Cargo.toml",
@@ -256,7 +256,7 @@ mod tests {
             let mut set = std::collections::BTreeSet::new();
             set.insert(manifest.to_string());
             assert!(
-                has_code_edits(&set),
+                requires_verification(&set),
                 "manifest '{manifest}' must require verification"
             );
         }
@@ -266,7 +266,7 @@ mod tests {
             let mut set = std::collections::BTreeSet::new();
             set.insert(build_file.to_string());
             assert!(
-                has_code_edits(&set),
+                requires_verification(&set),
                 "build file '{build_file}' must require verification"
             );
         }
