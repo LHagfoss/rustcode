@@ -38,6 +38,7 @@ pub(crate) enum Overlay {
     Thinking,
     Effort,
     Protocol,
+    Yolo,
     ToolConfirmation,
     Question,
     Subagents,

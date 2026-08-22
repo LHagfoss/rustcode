@@ -93,6 +93,7 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
         | AppStatus::ThinkingPicker
         | AppStatus::EffortPicker
         | AppStatus::ProtocolPicker
+        | AppStatus::YoloPicker
     ) {
         s.status = AppStatus::Idle;
         return CtrlCAction::Handled;
@@ -418,7 +419,29 @@ pub async fn handle_enter(
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
             "/yolo" => {
-                toggle_auto_confirm(&mut s);
+                match tokens.get(1) {
+                    None => {
+                        s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
+                        s.status = AppStatus::YoloPicker;
+                    }
+                    Some(&"on") | Some(&"enable") | Some(&"enabled") | Some(&"true") => {
+                        s.auto_confirm = true;
+                        s.set_notice("YOLO mode enabled");
+                    }
+                    Some(&"off") | Some(&"disable") | Some(&"disabled") | Some(&"false") => {
+                        s.auto_confirm = false;
+                        s.set_notice("YOLO mode disabled");
+                    }
+                    Some(&"toggle") => {
+                        toggle_auto_confirm(&mut s);
+                    }
+                    _ => {
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            "Invalid option. Use 'on', 'off', 'enable', 'disable', or 'toggle'.",
+                        ));
+                    }
+                }
             }
             "/verbosity" => {
                 use crate::app::state::Verbosity;
@@ -1755,7 +1778,7 @@ pub fn build_help_text() -> String {
             &[
                 ("/goal", "Run a task in continuous autoloop mode"),
                 ("/delegate", "Allow subagents for next task only"),
-                ("/yolo", "Toggle automatic tool confirmation"),
+                ("/yolo", "Show or set tool confirmation mode"),
                 ("/skills", "Discover and list custom skills"),
                 ("/sync", "Sync config, skills, and themes with Git"),
                 ("/copy", "Copy last assistant reply to clipboard"),
@@ -2442,7 +2465,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn yolo_command_toggles_auto_confirmation() {
+    async fn yolo_command_opens_picker_and_accepts_arguments() {
+        use crate::app::AppStatus;
         use std::sync::Arc;
         use tokio::sync::Mutex;
         use tokio_util::sync::CancellationToken;
@@ -2455,18 +2479,32 @@ mod tests {
         assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
         {
             let s = state.lock().await;
+            assert_eq!(s.status, AppStatus::YoloPicker);
+            assert_eq!(s.modal_picker_index, 1);
+        }
+
+        state.lock().await.input_buffer = "/yolo on".to_owned();
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        {
+            let s = state.lock().await;
             assert!(s.auto_confirm);
-            assert_eq!(s.history.last().unwrap().role, "system");
             assert_eq!(s.history.last().unwrap().content, "YOLO mode enabled");
         }
 
-        state.lock().await.input_buffer = "/yolo".to_owned();
+        state.lock().await.input_buffer = "/yolo off".to_owned();
         assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
         {
             let s = state.lock().await;
             assert!(!s.auto_confirm);
-            assert_eq!(s.history.last().unwrap().role, "system");
             assert_eq!(s.history.last().unwrap().content, "YOLO mode disabled");
+        }
+
+        state.lock().await.input_buffer = "/yolo toggle".to_owned();
+        assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
+        {
+            let s = state.lock().await;
+            assert!(s.auto_confirm);
+            assert_eq!(s.history.last().unwrap().content, "YOLO mode enabled");
         }
     }
 

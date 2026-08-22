@@ -12,6 +12,7 @@ pub enum AppStatus {
     ThinkingPicker,
     EffortPicker,
     ProtocolPicker,
+    YoloPicker,
 }
 
 #[derive(Debug, Clone)]
@@ -1423,6 +1424,7 @@ impl AppState {
             || self.status == AppStatus::ThinkingPicker
             || self.status == AppStatus::EffortPicker
             || self.status == AppStatus::ProtocolPicker
+            || self.status == AppStatus::YoloPicker
     }
 
     /// Returns the auto-confirm status label for the UI footer.

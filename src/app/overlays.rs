@@ -56,6 +56,7 @@ impl<'a> OverlayState<'a> {
                     | AppStatus::ThinkingPicker
                     | AppStatus::EffortPicker
                     | AppStatus::ProtocolPicker
+                    | AppStatus::YoloPicker
             )
     }
 
@@ -75,6 +76,7 @@ impl<'a> OverlayState<'a> {
                 | AppStatus::ThinkingPicker
                 | AppStatus::EffortPicker
                 | AppStatus::ProtocolPicker
+                | AppStatus::YoloPicker
         ) {
             *self.status = AppStatus::Idle;
         }
@@ -93,6 +95,7 @@ impl<'a> OverlayState<'a> {
             Overlay::Thinking => *self.status = AppStatus::ThinkingPicker,
             Overlay::Effort => *self.status = AppStatus::EffortPicker,
             Overlay::Protocol => *self.status = AppStatus::ProtocolPicker,
+            Overlay::Yolo => *self.status = AppStatus::YoloPicker,
             Overlay::ToolConfirmation => {
                 if self.pending_tool_confirmation.is_some() {
                     *self.status = AppStatus::AwaitingToolConfirmation;
