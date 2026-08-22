@@ -102,6 +102,7 @@ pub const GET_PROJECT_MAP: Tool = Tool {
 
 const MAX_GREP_LINES: usize = 200;
 const MAX_GREP_FILES: usize = 50;
+const MAX_GREP_BYTES: usize = 32_768;
 const MAX_GLOB_RESULTS: usize = 200;
 const MAX_LIST_ENTRIES: usize = 10_000;
 const MAX_LINE_CHARS: usize = 1000;
@@ -200,15 +201,21 @@ fn try_ripgrep(
                     current_file_has_header = true;
                     files_hit += 1;
                 }
-                out.push_str(&format!("  {}: {}\n", num, truncate_line(text)));
-                total_lines += 1;
-                if total_lines >= MAX_GREP_LINES {
+                let line_formatted = format!("  {}: {}\n", num, truncate_line(text));
+                if total_lines >= MAX_GREP_LINES || out.len() + line_formatted.len() >= MAX_GREP_BYTES {
+                    let cap_desc = if total_lines >= MAX_GREP_LINES {
+                        format!("{MAX_GREP_LINES} lines")
+                    } else {
+                        format!("{} KB", MAX_GREP_BYTES / 1024)
+                    };
                     out.push_str(&format!(
-                        "\n(truncated — {} matching lines across {} files, stopping at cap of {MAX_GREP_LINES} lines / {MAX_GREP_FILES} files; narrow 'pattern' or 'include')\n",
+                        "\n(truncated — {} matching lines across {} files, stopping at cap of {cap_desc} / {MAX_GREP_FILES} files; narrow 'pattern' or 'include')\n",
                         total_lines, files_hit
                     ));
                     break;
                 }
+                out.push_str(&line_formatted);
+                total_lines += 1;
                 continue;
             }
         }
@@ -311,16 +318,22 @@ pub fn grep(args: &Value) -> Result<String, String> {
                     out.push_str(&format!("\n{}:\n", path.display()));
                     wrote_header = true;
                 }
-                out.push_str(&format!("  {}: {}\n", i + 1, truncate_line(line)));
-                file_lines += 1;
-                total_lines += 1;
-                if total_lines >= MAX_GREP_LINES {
+                let line_formatted = format!("  {}: {}\n", i + 1, truncate_line(line));
+                if total_lines >= MAX_GREP_LINES || out.len() + line_formatted.len() >= MAX_GREP_BYTES {
+                    let cap_desc = if total_lines >= MAX_GREP_LINES {
+                        format!("{MAX_GREP_LINES} lines")
+                    } else {
+                        format!("{} KB", MAX_GREP_BYTES / 1024)
+                    };
                     out.push_str(&format!(
-                        "\n(truncated — {} matching lines across {} files, stopping at cap of {MAX_GREP_LINES} lines / {MAX_GREP_FILES} files; narrow 'pattern' or 'include')\n",
+                        "\n(truncated — {} matching lines across {} files, stopping at cap of {cap_desc} / {MAX_GREP_FILES} files; narrow 'pattern' or 'include')\n",
                         total_lines, files_hit
                     ));
                     return Ok(out.trim_end().to_string());
                 }
+                out.push_str(&line_formatted);
+                file_lines += 1;
+                total_lines += 1;
             }
         }
         let _ = file_lines;
@@ -353,11 +366,17 @@ fn grep_one_file(
             if hits == 1 {
                 out.push_str(&format!("{path_str}:\n"));
             }
-            out.push_str(&format!("  {}: {}\n", i + 1, truncate_line(line)));
-            if hits >= max_lines {
-                out.push_str(&format!("(truncated at {max_lines} matching lines)\n"));
+            let line_formatted = format!("  {}: {}\n", i + 1, truncate_line(line));
+            if hits >= max_lines || out.len() + line_formatted.len() >= MAX_GREP_BYTES {
+                let cap_desc = if hits >= max_lines {
+                    format!("{max_lines} matching lines")
+                } else {
+                    format!("{} KB", MAX_GREP_BYTES / 1024)
+                };
+                out.push_str(&format!("(truncated at {cap_desc})\n"));
                 break;
             }
+            out.push_str(&line_formatted);
         }
     }
     if hits == 0 {
@@ -528,5 +547,27 @@ mod tests {
             no_matches_message("foo", ".", None),
             "no matches for 'foo' under '.'"
         );
+    }
+
+    #[test]
+    fn grep_stops_at_byte_cap_for_large_matching_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("long_matches.txt");
+        // Create 100 lines each of 800 characters = ~80KB, which exceeds MAX_GREP_BYTES (32KB) before MAX_GREP_LINES (200)
+        let long_line = format!("MATCH {}", "a".repeat(800));
+        let mut content = String::new();
+        for _ in 0..100 {
+            content.push_str(&long_line);
+            content.push('\n');
+        }
+        std::fs::write(&file, content).expect("write");
+
+        let res = grep(&serde_json::json!({
+            "path": file.to_string_lossy().to_string(),
+            "pattern": "MATCH",
+        }))
+        .expect("grep should succeed");
+
+        assert!(res.contains("truncated") && res.contains("32 KB"), "got: {res}");
     }
 }
