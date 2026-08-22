@@ -367,13 +367,12 @@ fn grep_one_file(
                 out.push_str(&format!("{path_str}:\n"));
             }
             let line_formatted = format!("  {}: {}\n", i + 1, truncate_line(line));
-            if hits >= max_lines || out.len() + line_formatted.len() >= MAX_GREP_BYTES {
-                let cap_desc = if hits >= max_lines {
-                    format!("{max_lines} matching lines")
-                } else {
-                    format!("{} KB", MAX_GREP_BYTES / 1024)
-                };
-                out.push_str(&format!("(truncated at {cap_desc})\n"));
+            if hits > max_lines {
+                out.push_str(&format!("(truncated at {max_lines} matching lines)\n"));
+                break;
+            }
+            if out.len() + line_formatted.len() >= MAX_GREP_BYTES {
+                out.push_str(&format!("(truncated at {} KB)\n", MAX_GREP_BYTES / 1024));
                 break;
             }
             out.push_str(&line_formatted);
@@ -569,5 +568,26 @@ mod tests {
         .expect("grep should succeed");
 
         assert!(res.contains("truncated") && res.contains("32 KB"), "got: {res}");
+    }
+
+    #[test]
+    fn grep_one_file_returns_the_line_at_the_line_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("matches.txt");
+        std::fs::write(&file, "alpha\nbeta MATCH one\ngamma MATCH two\n").expect("write");
+        let re = Regex::new("MATCH").unwrap();
+        let path_str = file.to_string_lossy().to_string();
+
+        // With max_lines == 1 the single permitted match must still be
+        // returned; only the hit beyond the cap triggers truncation.
+        let res = grep_one_file(&path_str, &file, &re, 1).expect("grep should succeed");
+        assert!(res.contains("MATCH one"), "got: {res}");
+        assert!(res.contains("truncated at 1 matching lines"), "got: {res}");
+        assert!(!res.contains("MATCH two"), "got: {res}");
+
+        // Exactly at the cap there is no truncation notice at all.
+        let res = grep_one_file(&path_str, &file, &re, 2).expect("grep should succeed");
+        assert!(res.contains("MATCH one") && res.contains("MATCH two"), "got: {res}");
+        assert!(!res.contains("truncated"), "got: {res}");
     }
 }
