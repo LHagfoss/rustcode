@@ -234,14 +234,10 @@ pub async fn run_direct_upgrade(
     println!("Fetching release download URL for v{}...", format_version(expected));
     let _ = std::io::stdout().flush();
 
-    let download_url = if let Some((_, Some(url))) = fetch_github_latest(client).await {
-        url
-    } else {
-        format!(
-            "https://github.com/{GITHUB_REPO}/releases/download/v{}/{asset_name}",
-            format_version(expected)
-        )
-    };
+    let download_url = format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/v{}/{asset_name}",
+        format_version(expected)
+    );
 
     println!("Downloading {asset_name} from GitHub Releases...");
     let _ = std::io::stdout().flush();
