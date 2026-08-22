@@ -53,10 +53,7 @@ pub const MANAGE_TASK: Tool = Tool {
     requires_confirmation: false,
     schema: manage_task_schema,
     capabilities: &[ToolCapability::ExecuteCommands],
-    // NOTE: `Unknown` looks unintended (this is a process-control tool), but it
-    // preserves the pre-refactor behavior: `authorize_tool` requires
-    // confirmation for `Unknown` tools despite `requires_confirmation: false`.
-    safety: ToolSafety::Unknown,
+    safety: ToolSafety::ProcessControl,
 };
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
