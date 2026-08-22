@@ -87,10 +87,18 @@ pub const VIEW_FILE: Tool = Tool {
 fn replace_file_content_schema() -> Value {
     serde_json::json!({
         "type": "object", "additionalProperties": false, "properties": {
-            "path": { "type": "string" }, "target_content": { "type": "string" },
-            "replacement_content": { "type": "string" },
+            "path": { "type": "string", "description": "Absolute or relative path to file" },
+            "old_string": { "type": "string", "description": "Precise block of code to edit (or target_content)" },
+            "new_string": { "type": "string", "description": "Complete replacement text (or replacement_content)" },
+            "target_content": { "type": "string", "description": "Alias for old_string" },
+            "replacement_content": { "type": "string", "description": "Alias for new_string" },
+            "target": { "type": "string", "description": "Alias for old_string" },
+            "replacement": { "type": "string", "description": "Alias for new_string" },
+            "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-indexed start line to anchor the edit" },
+            "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-indexed end line to anchor the edit" },
             "edits": { "type": "array", "items": { "type": "object", "properties": {
                 "old_string": { "type": "string" }, "new_string": { "type": "string" },
+                "target_content": { "type": "string" }, "replacement_content": { "type": "string" },
                 "start_line": { "type": "integer" }, "end_line": { "type": "integer" }
             }, "required": ["old_string", "new_string"] } }
         }, "required": ["path"]
@@ -456,6 +464,19 @@ enum EditOutcome {
     Unchanged,
 }
 
+fn edit_similarity(target: &str, replacement: &str) -> f32 {
+    let target_words: Vec<&str> = target.split_whitespace().collect();
+    let replacement_words: Vec<&str> = replacement.split_whitespace().collect();
+    if target_words.is_empty() || replacement_words.is_empty() {
+        return 0.0;
+    }
+    let shared = target_words
+        .iter()
+        .filter(|w| replacement_words.contains(w))
+        .count();
+    shared as f32 / target_words.len().max(replacement_words.len()) as f32
+}
+
 /// True when `content` already reflects the result of replacing `target` with
 /// `replacement` — i.e. re-applying this exact edit would be a no-op or,
 /// worse, would duplicate content that a prior identical call already
@@ -466,9 +487,13 @@ fn already_applied(content: &str, target: &str, replacement: &str) -> bool {
         return false;
     }
     if !content.contains(target) {
-        // The replacement is present and the original anchor is gone: this
-        // transformation already happened.
-        return true;
+        // The replacement is present and the original anchor is gone:
+        // verify that this is the result of a previous application of this edit
+        // (either replacement embeds target, or target shares similarity with replacement).
+        if replacement.contains(target) {
+            return true;
+        }
+        return edit_similarity(target, replacement) >= 0.3;
     }
     if !replacement.contains(target) {
         // Target still present and replacement doesn't subsume it — this

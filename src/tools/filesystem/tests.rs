@@ -1154,3 +1154,34 @@ fn write_to_file_defaults_to_overwrite_true() {
     .expect_err("write_to_file with overwrite: false on existing file must error");
     assert!(err.contains("already exists"), "got: {err}");
 }
+
+#[test]
+fn replace_file_content_schema_has_root_old_and_new_string() {
+    let schema = replace_file_content_schema();
+    assert!(schema["properties"].get("old_string").is_some());
+    assert!(schema["properties"].get("new_string").is_some());
+    assert!(schema["properties"].get("target_content").is_some());
+    assert!(schema["properties"].get("replacement_content").is_some());
+    assert!(schema["properties"].get("start_line").is_some());
+    assert!(schema["properties"].get("end_line").is_some());
+}
+
+#[test]
+fn unrelated_missing_target_is_not_falsely_reported_as_already_applied() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("code.rs");
+    std::fs::write(&file, "use std::path::Path;\n\nfn run() {}\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    // The replacement "use std::path::Path;" exists in the file, but the target
+    // "fn complex_unrelated_missing_symbol()" does not exist and has zero similarity.
+    // This must error with target not found, NOT report "already applied".
+    let err = replace_file_content_tool(&serde_json::json!({
+        "path": path,
+        "old_string": "fn complex_unrelated_missing_symbol()",
+        "new_string": "use std::path::Path;",
+    }))
+    .expect_err("unrelated missing target must error");
+
+    assert!(err.contains("target_content not found") || err.contains("not found in"), "got: {err}");
+}
