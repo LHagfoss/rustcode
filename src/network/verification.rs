@@ -103,9 +103,24 @@ pub(crate) fn is_verification_command(command: &str) -> bool {
     classify_command(command).is_some()
 }
 
+pub(crate) fn has_code_edits(changed_paths: &std::collections::BTreeSet<String>) -> bool {
+    if changed_paths.is_empty() {
+        return true;
+    }
+    changed_paths.iter().any(|path| {
+        let p = std::path::Path::new(path);
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "cpp" | "h" | "hpp"
+                | "java" | "kt" | "swift" | "rb" | "php" | "cs" | "sh" | "bash" | "zsh"
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::VerificationLedger;
+    use super::{VerificationLedger, has_code_edits};
 
     #[test]
     fn verification_becomes_stale_after_a_later_edit() {
@@ -129,5 +144,18 @@ mod tests {
             ledger.last_failure().map(|e| e.command.as_str()),
             Some("cargo fmt --check")
         );
+    }
+
+    #[test]
+    fn has_code_edits_identifies_code_vs_doc_edits() {
+        let mut non_code = std::collections::BTreeSet::new();
+        non_code.insert("README.md".to_string());
+        non_code.insert("config.json".to_string());
+        non_code.insert("docs/plan.txt".to_string());
+        assert!(!has_code_edits(&non_code));
+
+        let mut with_code = non_code.clone();
+        with_code.insert("src/main.rs".to_string());
+        assert!(has_code_edits(&with_code));
     }
 }
