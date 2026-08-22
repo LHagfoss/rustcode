@@ -100,10 +100,6 @@ async fn run_update_command(
     expected_version: crate::update::Version,
 ) -> Result<(), String> {
     terminal_runtime
-        .terminal()
-        .clear_screen()
-        .map_err(|error| format!("failed to clear the terminal before updating: {error}"))?;
-    terminal_runtime
         .restore()
         .map_err(|error| format!("failed to restore the terminal before updating: {error}"))?;
     crate::update::run_update(client, expected_version).await
@@ -424,53 +420,54 @@ impl AppRuntime {
         let mut update_exit = false;
         let composer = ui::Composer::new();
         loop {
-            let update_requested = {
+            let update_version = {
                 let mut state = app_state.lock().await;
-                let requested = state.update_requested;
-                state.update_requested = false;
-                requested
-            };
-            if update_requested {
-                let check = crate::update::check_for_update(&client).await;
-                match check {
-                    Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
-                        let mut state = app_state.lock().await;
-                        state.update_check = crate::update::UpdateState::UpToDate(latest);
-                        state.set_notice(format!(
-                            "✨ RustCode v{} is up to date (latest: v{}).",
-                            crate::update::format_version(current),
-                            crate::update::format_version(latest)
-                        ));
-                        needs_redraw = true;
-                        continue;
+                if state.update_requested {
+                    state.update_requested = false;
+                    match state.update_check {
+                        crate::update::UpdateState::Available(latest) => Some(Some(latest)),
+                        _ => Some(None),
                     }
-                    Ok(crate::update::UpdateCheck::Available { current, latest }) => {
-                        {
+                } else {
+                    None
+                }
+            };
+            if let Some(target) = update_version {
+                let target_version = match target {
+                    Some(v) => Some(v),
+                    None => match crate::update::check_for_update(&client).await {
+                        Ok(crate::update::UpdateCheck::Available { latest, .. }) => Some(latest),
+                        Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
                             let mut state = app_state.lock().await;
-                            state.update_check = crate::update::UpdateState::Available(latest);
+                            state.update_check = crate::update::UpdateState::UpToDate(latest);
                             state.set_notice(format!(
-                                "Found new release: v{} → v{}",
+                                "✨ RustCode v{} is up to date (latest: v{}).",
                                 crate::update::format_version(current),
                                 crate::update::format_version(latest)
                             ));
+                            needs_redraw = true;
+                            None
                         }
-                        match run_update_command(&mut terminal_runtime, &client, latest).await {
-                            Ok(()) => println!(
-                                "🎉 Update ran successfully! Please restart rustcode."
-                            ),
-                            Err(error) => eprintln!("Update failed: {error}"),
+                        Err(error) => {
+                            let mut state = app_state.lock().await;
+                            state.update_check = crate::update::UpdateState::Failed;
+                            state.set_warning_notice(format!("Update check failed: {error}"));
+                            needs_redraw = true;
+                            None
                         }
-                        update_exit = true;
-                        break;
+                    },
+                };
+                if let Some(latest) = target_version {
+                    match run_update_command(&mut terminal_runtime, &client, latest).await {
+                        Ok(()) => println!(
+                            "🎉 Update ran successfully! Please restart rustcode."
+                        ),
+                        Err(error) => eprintln!("Update failed: {error}"),
                     }
-                    Err(error) => {
-                        let mut state = app_state.lock().await;
-                        state.update_check = crate::update::UpdateState::Failed;
-                        state.set_warning_notice(format!("Update check failed: {error}"));
-                        needs_redraw = true;
-                        continue;
-                    }
+                    update_exit = true;
+                    break;
                 }
+                continue;
             }
 
             // Ratatui's inline viewport grows/shrinks by appending and clearing
@@ -1967,10 +1964,12 @@ impl AppRuntime {
                                                 );
                                             }
                                             "/update" => {
-                                                s.update_requested = true;
                                                 s.update_check =
                                                     crate::update::UpdateState::Checking;
                                                 s.set_notice("🔍 Checking for a RustCode update...");
+                                                crate::app::actions::trigger_update(
+                                                    &app_state, &client,
+                                                );
                                             }
                                             "/copy" => {
                                                 crate::app::copy_last_reply(&mut s);

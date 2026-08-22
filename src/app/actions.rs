@@ -361,9 +361,11 @@ pub async fn handle_enter(
             "/update" | "/upgrade" => {
                 s.input_buffer.clear();
                 s.cursor_position = 0;
-                s.update_requested = true;
                 s.update_check = crate::update::UpdateState::Checking;
                 s.set_notice("🔍 Checking for a RustCode update...");
+                s.request_redraw();
+                drop(s);
+                trigger_update(state, client);
                 return false;
             }
             "/new" => {
@@ -1892,6 +1894,39 @@ pub fn trigger_sync(state: &Arc<Mutex<AppState>>, subcommand: Option<String>, ar
     });
 }
 
+pub fn trigger_update(state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
+    let state_clone = Arc::clone(state);
+    let client_clone = client.clone();
+    tokio::spawn(async move {
+        let check = crate::update::check_for_update(&client_clone).await;
+        let mut s = state_clone.lock().await;
+        match check {
+            Ok(crate::update::UpdateCheck::UpToDate { current, latest }) => {
+                s.update_check = crate::update::UpdateState::UpToDate(latest);
+                s.set_notice(format!(
+                    "✨ RustCode v{} is up to date (latest: v{}).",
+                    crate::update::format_version(current),
+                    crate::update::format_version(latest)
+                ));
+            }
+            Ok(crate::update::UpdateCheck::Available { current, latest }) => {
+                s.update_check = crate::update::UpdateState::Available(latest);
+                s.set_notice(format!(
+                    "Found new release: v{} → v{}, updating...",
+                    crate::update::format_version(current),
+                    crate::update::format_version(latest)
+                ));
+                s.update_requested = true;
+            }
+            Err(error) => {
+                s.update_check = crate::update::UpdateState::Failed;
+                s.set_warning_notice(format!("Update check failed: {error}"));
+            }
+        }
+        s.request_redraw();
+    });
+}
+
 pub fn trigger_quota_fetch(s: &AppState, state: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
     let (url, key_opt) = {
         let active_url = s.api_base_url.clone();
@@ -2614,6 +2649,37 @@ mod tests {
             let default_name = s.config.default.big().to_string();
             let profile = s.config.models.iter().find(|m| m.name == default_name);
             assert_eq!(profile.and_then(|p| p.context_window), Some(262144));
+        }
+    }
+
+    #[tokio::test]
+    async fn update_command_initiates_check_and_sets_notice() {
+        use crate::app::state::AppState;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let client = reqwest::Client::new();
+        let mut cancel_token = tokio_util::sync::CancellationToken::new();
+
+        {
+            let mut s = state.lock().await;
+            s.input_buffer = "/update".to_string();
+        }
+        let trigger = super::handle_enter(&state, &client, &mut cancel_token).await;
+        assert!(!trigger);
+        {
+            let s = state.lock().await;
+            assert!(s.input_buffer.is_empty());
+            assert_eq!(s.cursor_position, 0);
+            assert_eq!(s.update_check, crate::update::UpdateState::Checking);
+            assert!(
+                s.history
+                    .last()
+                    .unwrap()
+                    .content
+                    .contains("Checking for a RustCode update")
+            );
         }
     }
 }
