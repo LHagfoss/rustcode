@@ -2,6 +2,9 @@ use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::Value;
+use std::io::Read;
+use std::process::Stdio;
+use std::thread;
 
 // Re-exports needed by search tools
 pub(crate) use super::parse_json_bool;
@@ -107,6 +110,22 @@ const MAX_GLOB_RESULTS: usize = 200;
 const MAX_LIST_ENTRIES: usize = 10_000;
 const MAX_LINE_CHARS: usize = 1000;
 
+fn read_capped<R: Read>(mut reader: R, cap: usize) -> Vec<u8> {
+    let mut output = Vec::with_capacity(cap);
+    let mut chunk = [0u8; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let remaining = cap.saturating_sub(output.len());
+                let take = remaining.min(read);
+                output.extend_from_slice(&chunk[..take]);
+            }
+        }
+    }
+    output
+}
+
 fn build_include_matcher(include: Option<&str>) -> Result<Option<globset::GlobSet>, String> {
     let Some(glob_str) = include else {
         return Ok(None);
@@ -171,16 +190,27 @@ fn try_ripgrep(
 
     cmd.arg(pattern).arg(root);
 
-    let output = match cmd.output() {
-        Ok(out) => out,
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
         Err(_) => return None,
     };
+    let stdout = child.stdout.take()?;
+    let stderr = child.stderr.take()?;
+    let stdout_handle = thread::spawn(move || read_capped(stdout, MAX_GREP_BYTES));
+    let stderr_handle = thread::spawn(move || read_capped(stderr, 4096));
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(_) => return None,
+    };
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let _stderr = stderr_handle.join().unwrap_or_default();
 
-    if !output.status.success() && output.status.code() != Some(1) {
+    if !status.success() && status.code() != Some(1) {
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout);
     if stdout.trim().is_empty() {
         return Some(Ok(no_matches_message(pattern, root, include)));
     }
@@ -546,6 +576,14 @@ mod tests {
             no_matches_message("foo", ".", None),
             "no matches for 'foo' under '.'"
         );
+    }
+
+    #[test]
+    fn ripgrep_reader_is_bounded_before_processing_matches() {
+        let input = std::io::Cursor::new(vec![b'x'; MAX_GREP_BYTES * 2]);
+        let captured = read_capped(input, MAX_GREP_BYTES);
+
+        assert_eq!(captured.len(), MAX_GREP_BYTES);
     }
 
     #[test]
