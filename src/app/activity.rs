@@ -228,6 +228,7 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
             | AppStatus::ThinkingPicker
             | AppStatus::EffortPicker
             | AppStatus::ProtocolPicker
+            | AppStatus::YoloPicker
     );
 
     if action_required {
@@ -286,7 +287,8 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
         | AppStatus::VerbosityPicker
         | AppStatus::ThinkingPicker
         | AppStatus::EffortPicker
-        | AppStatus::ProtocolPicker => unreachable!("handled above"),
+        | AppStatus::ProtocolPicker
+        | AppStatus::YoloPicker => unreachable!("handled above"),
     }
 }
 

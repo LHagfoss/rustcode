@@ -1380,6 +1380,36 @@ impl AppRuntime {
                                 }
                                 continue;
                             }
+
+                            if s.status == AppStatus::YoloPicker {
+                                drop(s);
+                                match key.code {
+                                    KeyCode::Up => {
+                                        let mut s = app_state.lock().await;
+                                        s.modal_picker_index =
+                                            s.modal_picker_index.saturating_sub(1);
+                                    }
+                                    KeyCode::Down => {
+                                        let mut s = app_state.lock().await;
+                                        s.modal_picker_index =
+                                            s.modal_picker_index.saturating_add(1).min(1); // 0 on, 1 off
+                                    }
+                                    KeyCode::Enter => {
+                                        let mut s = app_state.lock().await;
+                                        let enable = s.modal_picker_index == 0;
+                                        s.auto_confirm = enable;
+                                        let status = if enable { "enabled" } else { "disabled" };
+                                        s.set_notice(format!("YOLO mode {status}"));
+                                        s.status = AppStatus::Idle;
+                                    }
+                                    KeyCode::Esc => {
+                                        let mut s = app_state.lock().await;
+                                        s.status = AppStatus::Idle;
+                                    }
+                                    _ => {}
+                                }
+                                continue;
+                            }
                         }
 
                         let mut s = app_state.lock().await;
@@ -1986,7 +2016,9 @@ impl AppRuntime {
                                                     tokio_util::sync::CancellationToken::new();
                                             }
                                             "/yolo" => {
-                                                crate::app::actions::toggle_auto_confirm(&mut s);
+                                                 s.modal_picker_index =
+                                                     if s.auto_confirm { 0 } else { 1 };
+                                                 s.status = crate::app::AppStatus::YoloPicker;
                                             }
                                             "/stats" | "/usage" | "/status" => {
                                                 s.history.push(ChatMessage::new(

@@ -41,7 +41,7 @@ use modals::{
     render_protocol_picker_modal, render_question_modal, render_subagent_picker_modal,
     render_theme_picker_modal, render_thinking_picker_modal, render_update_prompt_modal,
     render_tool_confirmation_modal, render_verbosity_picker_modal,
-    tool_confirmation_height,
+    render_yolo_picker_modal, tool_confirmation_height,
 };
 use tool_result::render_tool_result;
 
@@ -3763,6 +3763,10 @@ pub fn render_with_transcript(
 
     if state.status == AppStatus::ProtocolPicker {
         render_protocol_picker_modal(f, state, input_box_area);
+    }
+
+    if state.status == AppStatus::YoloPicker {
+        render_yolo_picker_modal(f, state, input_box_area);
     }
 }
 

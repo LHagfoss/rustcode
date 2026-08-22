@@ -162,7 +162,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/yolo",
-        desc: "Toggle automatic tool confirmation",
+        desc: "Show or set automatic tool confirmation (on|off|toggle)",
     },
     CommandInfo {
         name: "/effort",
