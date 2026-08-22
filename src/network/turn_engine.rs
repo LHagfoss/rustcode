@@ -1271,7 +1271,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             const MAX_VERIFICATION_BLOCKS: u8 = 2;
             if completed {
                 ctx.stop_reason = Some(lifecycle::StopReason::Completed);
-                if ctx.made_edits
+                let requires_verification = ctx.made_edits
+                    && (verification::has_code_edits(&ctx.changed_paths)
+                        || ctx.verification.last_failure().is_some());
+                if requires_verification
                     && !ctx.verification.has_fresh_successful_verification()
                     && ctx.verification_blocks < MAX_VERIFICATION_BLOCKS
                 {
@@ -1300,12 +1303,12 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     ctx.turn_machine.finish_tools_if_executing();
                     return true;
                 }
-                let mut build_status = if ctx.made_edits {
+                let mut build_status = if ctx.made_edits && verification::has_code_edits(&ctx.changed_paths) {
                     "pending"
                 } else {
-                    "not run (no workspace edits detected)"
+                    "not run (no workspace code edits detected)"
                 };
-                if ctx.made_edits {
+                if ctx.made_edits && verification::has_code_edits(&ctx.changed_paths) {
                     {
                         let mut s = state.lock().await;
                         s.status = AppStatus::Streaming;
