@@ -322,7 +322,11 @@ fn load_agent_doc(cwd: &str) -> Option<String> {
         if let Ok(content) = std::fs::read_to_string(&c) {
             let mut s = content;
             if s.len() > MAX_AGENTS_BYTES {
-                s.truncate(MAX_AGENTS_BYTES);
+                let boundary = (0..=MAX_AGENTS_BYTES)
+                    .rev()
+                    .find(|&index| s.is_char_boundary(index))
+                    .unwrap_or(0);
+                s.truncate(boundary);
                 s.push_str("\n... (truncated)");
             }
             return Some(s);
@@ -378,6 +382,18 @@ mod tests {
             .unwrap()
             .contains("workspace-only rule"));
         assert!(environment_context_at(dir.path()).contains("workspace-only rule"));
+    }
+
+    #[test]
+    fn agent_instructions_truncate_without_splitting_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!("{}é", "a".repeat(MAX_AGENTS_BYTES - 1));
+        std::fs::write(dir.path().join("AGENTS.md"), content).unwrap();
+
+        let loaded = load_agent_doc(dir.path().to_str().unwrap()).expect("instructions");
+
+        assert!(loaded.ends_with("\n... (truncated)"));
+        assert!(loaded.is_char_boundary(loaded.len()));
     }
 
     #[test]

@@ -639,14 +639,19 @@ fn apply_single_edit_to_content(
 ) -> Result<EditOutcome, String> {
     let had_crlf = content.contains("\r\n");
     let content_norm = content.replace("\r\n", "\n");
-    let result = apply_single_edit_to_content_inner(&content_norm, path, edit)?;
+    let has_mixed_line_endings = had_crlf && content.replace("\r\n", "").contains('\n');
+    let content_for_edit = if has_mixed_line_endings {
+        content
+    } else {
+        &content_norm
+    };
+    let result = apply_single_edit_to_content_inner(content_for_edit, path, edit)?;
     match result {
         EditOutcome::Unchanged => Ok(EditOutcome::Unchanged),
-        EditOutcome::Changed(new_content) => Ok(EditOutcome::Changed(if had_crlf {
-            new_content.replace("\n", "\r\n")
-        } else {
-            new_content
-        })),
+        EditOutcome::Changed(new_content) if had_crlf && !has_mixed_line_endings => {
+            Ok(EditOutcome::Changed(new_content.replace("\n", "\r\n")))
+        }
+        EditOutcome::Changed(new_content) => Ok(EditOutcome::Changed(new_content)),
     }
 }
 
