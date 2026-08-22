@@ -263,7 +263,16 @@ fn validate_value_against_schema(value: &Value, schema: &Value, path: &str) -> R
         "array" => value.is_array(),
         "string" => value.is_string(),
         "boolean" => value.is_boolean(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        // Handlers read line numbers through parse_json_number, which also
+        // accepts string-encoded integers from lenient providers; validate
+        // the same shape so schema, validator, and handler agree.
+        "integer" => {
+            value.as_i64().is_some()
+                || value.as_u64().is_some()
+                || value
+                    .as_str()
+                    .is_some_and(|s| s.parse::<u64>().is_ok())
+        }
         "number" => value.is_number(),
         _ => true,
     };
@@ -3099,6 +3108,39 @@ mod tests {
         ]);
         assert_eq!(kept.len(), 4);
         assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn validation_accepts_string_encoded_integers_like_the_handlers() {
+        // Handlers read line numbers via parse_json_number, which tolerates
+        // providers that send integers as strings; validation must accept the
+        // same shape end to end.
+        assert!(
+            validate_tool_calls(&[ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/store.ts",
+                    "old_string": "old",
+                    "new_string": "new",
+                    "start_line": "500"
+                }),
+                call_id: None,
+            }])
+            .is_ok()
+        );
+        assert!(
+            validate_tool_calls(&[ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/store.ts",
+                    "old_string": "old",
+                    "new_string": "new",
+                    "start_line": "not-a-number"
+                }),
+                call_id: None,
+            }])
+            .is_err()
+        );
     }
 
     #[test]
