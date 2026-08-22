@@ -1,3 +1,9 @@
+## [v0.34.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.2) - 2026-08-22
+
+### Fixes & UI
+- **Commands/Update:** Run `/update` in a dedicated background task to prevent blocking the UI loop and ensure smooth live status feedback ([#784](https://github.com/LHagfoss/rustcode/pull/784))
+- **UI/Modals:** Preserve and restore active streaming/working status when modal overlays close, keeping native terminal progress indicators active while processing responses ([#785](https://github.com/LHagfoss/rustcode/pull/785))
+
 ## [v0.34.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.1) - 2026-08-22
 
 ### Fixes
