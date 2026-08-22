@@ -107,15 +107,96 @@ pub(crate) fn has_code_edits(changed_paths: &std::collections::BTreeSet<String>)
     if changed_paths.is_empty() {
         return true;
     }
-    changed_paths.iter().any(|path| {
-        let p = std::path::Path::new(path);
-        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-        matches!(
-            ext.to_ascii_lowercase().as_str(),
-            "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "c" | "cpp" | "h" | "hpp"
-                | "java" | "kt" | "swift" | "rb" | "php" | "cs" | "sh" | "bash" | "zsh"
-        )
-    })
+    // Conservative default-to-verify: any file that is not explicitly confirmed
+    // to be documentation or a non-code asset requires verification.
+    changed_paths.iter().any(|path| !is_documentation_or_asset(path))
+}
+
+fn is_documentation_or_asset(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    let file_name = p
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    // Never skip verification for known build manifests, dependency locks, or build scripts
+    if matches!(
+        file_name.as_str(),
+        "cargo.toml"
+            | "cargo.lock"
+            | "package.json"
+            | "package-lock.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "tsconfig.json"
+            | "makefile"
+            | "gnumakefile"
+            | "dockerfile"
+            | "containerfile"
+            | "justfile"
+            | "procfile"
+            | "rakefile"
+            | "gemfile"
+            | "gemfile.lock"
+            | "cmakelists.txt"
+            | "pyproject.toml"
+            | "requirements.txt"
+            | "pipfile"
+            | "pipfile.lock"
+            | "go.mod"
+            | "go.sum"
+            | "build.gradle"
+            | "settings.gradle"
+            | "pom.xml"
+    ) {
+        return false;
+    }
+
+    if matches!(
+        file_name.as_str(),
+        "readme"
+            | "readme.md"
+            | "changelog"
+            | "changelog.md"
+            | "license"
+            | "license.md"
+            | "contributing.md"
+            | "agents.md"
+            | "claude.md"
+            | ".gitignore"
+            | ".gitattributes"
+            | ".editorconfig"
+    ) {
+        return true;
+    }
+
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    matches!(
+        ext.as_str(),
+        "md" | "markdown"
+            | "txt"
+            | "rst"
+            | "adoc"
+            | "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "svg"
+            | "ico"
+            | "webp"
+            | "bmp"
+            | "mp3"
+            | "wav"
+            | "ogg"
+            | "csv"
+            | "tsv"
+    )
 }
 
 #[cfg(test)]
@@ -150,12 +231,44 @@ mod tests {
     fn has_code_edits_identifies_code_vs_doc_edits() {
         let mut non_code = std::collections::BTreeSet::new();
         non_code.insert("README.md".to_string());
-        non_code.insert("config.json".to_string());
-        non_code.insert("docs/plan.txt".to_string());
+        non_code.insert("docs/architecture.txt".to_string());
+        non_code.insert("assets/logo.png".to_string());
         assert!(!has_code_edits(&non_code));
 
         let mut with_code = non_code.clone();
         with_code.insert("src/main.rs".to_string());
         assert!(has_code_edits(&with_code));
+    }
+
+    #[test]
+    fn has_code_edits_requires_verification_for_manifests_and_extensionless_build_files() {
+        // Manifest files must require verification
+        for manifest in [
+            "Cargo.toml",
+            "Cargo.lock",
+            "package.json",
+            "tsconfig.json",
+            "pyproject.toml",
+            "go.mod",
+            "CMakeLists.txt",
+            "requirements.txt",
+        ] {
+            let mut set = std::collections::BTreeSet::new();
+            set.insert(manifest.to_string());
+            assert!(
+                has_code_edits(&set),
+                "manifest '{manifest}' must require verification"
+            );
+        }
+
+        // Extensionless build files must require verification
+        for build_file in ["Makefile", "Dockerfile", "Containerfile", "Justfile"] {
+            let mut set = std::collections::BTreeSet::new();
+            set.insert(build_file.to_string());
+            assert!(
+                has_code_edits(&set),
+                "build file '{build_file}' must require verification"
+            );
+        }
     }
 }
