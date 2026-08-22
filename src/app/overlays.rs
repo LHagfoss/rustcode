@@ -16,6 +16,8 @@ pub(crate) struct OverlayState<'a> {
     tool_confirmation_selected: &'a mut usize,
     auto_confirm: &'a mut bool,
     pending_question: &'a mut Option<crate::app::state::PendingQuestion>,
+    orchestrator_running: bool,
+    pending_queue_empty: bool,
 }
 
 impl<'a> OverlayState<'a> {
@@ -35,6 +37,8 @@ impl<'a> OverlayState<'a> {
             tool_confirmation_selected: &mut state.tool_confirmation_selected,
             auto_confirm: &mut state.auto_confirm,
             pending_question: &mut state.pending_question,
+            orchestrator_running: state.orchestrator_running,
+            pending_queue_empty: state.pending_queue.is_empty(),
         }
     }
 
@@ -78,7 +82,13 @@ impl<'a> OverlayState<'a> {
                 | AppStatus::ProtocolPicker
                 | AppStatus::YoloPicker
         ) {
-            *self.status = AppStatus::Idle;
+            *self.status = if self.orchestrator_running {
+                AppStatus::Streaming
+            } else if !self.pending_queue_empty {
+                AppStatus::Queued
+            } else {
+                AppStatus::Idle
+            };
         }
     }
 
@@ -165,5 +175,19 @@ mod tests {
 
         assert_eq!(state.status, AppStatus::AwaitingToolConfirmation);
         assert!(state.auto_confirm);
+    }
+
+    #[test]
+    fn overlay_close_preserves_streaming_status_when_orchestrator_running() {
+        let mut state = AppState::new();
+        state.orchestrator_running = true;
+        state.status = AppStatus::YoloPicker;
+
+        {
+            let mut overlays = OverlayState::new(&mut state);
+            overlays.close_all();
+        }
+
+        assert_eq!(state.status, AppStatus::Streaming);
     }
 }

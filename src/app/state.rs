@@ -1437,6 +1437,17 @@ impl AppState {
             || self.status == AppStatus::YoloPicker
     }
 
+    /// Restores status when closing a modal or picker, preserving running turns if active.
+    pub fn close_modal_status(&mut self) {
+        self.status = if self.orchestrator_running {
+            AppStatus::Streaming
+        } else if !self.pending_queue.is_empty() {
+            AppStatus::Queued
+        } else {
+            AppStatus::Idle
+        };
+    }
+
     /// Returns the auto-confirm status label for the UI footer.
     pub fn auto_confirm_status_text(&self) -> &'static str {
         if self.auto_confirm { "ON" } else { "OFF" }

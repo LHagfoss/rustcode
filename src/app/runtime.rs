@@ -418,6 +418,7 @@ impl AppRuntime {
         let mut app_event_receiver = app_event_receiver;
         let mut agent_ui_event_receiver = agent_ui_event_receiver;
         let mut update_exit = false;
+        let mut last_progress_sent = std::time::Instant::now();
         let composer = ui::Composer::new();
         loop {
             let update_version = {
@@ -752,13 +753,17 @@ impl AppRuntime {
                 }
 
                 let progress = crate::app::activity::terminal_progress_for_activity(activity.kind);
-                if guard.current_terminal_progress != Some(progress) {
+                let should_send_progress = guard.current_terminal_progress != Some(progress)
+                    || (progress != crate::app::activity::TerminalProgress::Hidden
+                        && last_progress_sent.elapsed() >= std::time::Duration::from_secs(3));
+                if should_send_progress {
                     use crossterm::style::Print;
                     let _ = execute!(
                         terminal_runtime.terminal().backend_mut(),
                         Print(progress.osc_sequence())
                     );
                     guard.current_terminal_progress = Some(progress);
+                    last_progress_sent = std::time::Instant::now();
                 }
 
                 let terminal_height = terminal_runtime.terminal().size()?.height;
@@ -1240,11 +1245,11 @@ impl AppRuntime {
                                         s.verbosity = new_verbosity.clone();
                                         s.config.verbosity = new_verbosity;
                                         crate::config::save_entire_config(&s.config);
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     KeyCode::Esc => {
                                         let mut s = app_state.lock().await;
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     _ => {}
                                 }
@@ -1278,11 +1283,11 @@ impl AppRuntime {
                                             profile.enable_thinking = value;
                                         }
                                         crate::config::save_entire_config(&s.config);
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     KeyCode::Esc => {
                                         let mut s = app_state.lock().await;
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     _ => {}
                                 }
@@ -1317,11 +1322,11 @@ impl AppRuntime {
                                             profile.reasoning_effort = value;
                                         }
                                         crate::config::save_entire_config(&s.config);
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     KeyCode::Esc => {
                                         let mut s = app_state.lock().await;
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     _ => {}
                                 }
@@ -1377,11 +1382,11 @@ impl AppRuntime {
                                                 label, active_model
                                             ),
                                         ));
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     KeyCode::Esc => {
                                         let mut s = app_state.lock().await;
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     _ => {}
                                 }
@@ -1407,11 +1412,11 @@ impl AppRuntime {
                                         s.auto_confirm = enable;
                                         let status = if enable { "enabled" } else { "disabled" };
                                         s.set_notice(format!("YOLO mode {status}"));
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     KeyCode::Esc => {
                                         let mut s = app_state.lock().await;
-                                        s.status = AppStatus::Idle;
+                                        s.close_modal_status();
                                     }
                                     _ => {}
                                 }

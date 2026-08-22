@@ -95,7 +95,7 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
         | AppStatus::ProtocolPicker
         | AppStatus::YoloPicker
     ) {
-        s.status = AppStatus::Idle;
+        s.close_modal_status();
         return CtrlCAction::Handled;
     }
 
