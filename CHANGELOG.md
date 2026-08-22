@@ -1,3 +1,8 @@
+## [v0.34.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.1) - 2026-08-22
+
+### Fixes
+- **MCP/Startup Warnings:** Log background MCP server warnings and errors cleanly to debug logs and defer user-facing summary to application exit instead of interrupting active terminal rendering ([#782](https://github.com/LHagfoss/rustcode/pull/782))
+
 ## [v0.34.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.0) - 2026-08-22
 
 ### Features
