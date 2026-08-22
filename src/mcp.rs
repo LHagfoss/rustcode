@@ -41,38 +41,48 @@ pub fn bump_mcp_generation() {
 }
 
 /// Start each enabled MCP server, keeping one server's failure from blocking
-/// the remaining configured servers.
-pub async fn start_enabled_servers<F, Fut>(servers: &[crate::config::McpServerConfig], launcher: F)
+/// the remaining configured servers. Returns any warning messages collected.
+pub async fn start_enabled_servers<F, Fut>(
+    servers: &[crate::config::McpServerConfig],
+    launcher: F,
+) -> Vec<String>
 where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
-    start_enabled_servers_with_timeout(servers, Duration::from_secs(10), launcher).await;
+    start_enabled_servers_with_timeout(servers, Duration::from_secs(10), launcher).await
 }
 
 async fn start_enabled_servers_with_timeout<F, Fut>(
     servers: &[crate::config::McpServerConfig],
     startup_timeout: Duration,
     mut launcher: F,
-) where
+) -> Vec<String>
+where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
+    let mut warnings = Vec::new();
     for server in servers.iter().filter(|server| server.enabled) {
         let name = server.name.clone();
         match tokio::time::timeout(startup_timeout, launcher(name.clone())).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                eprintln!("[mcp] failed to start server {name}: {error}");
+                let msg = format!("[mcp] failed to start server {name}: {error}");
+                crate::dbg_log!("{msg}");
+                warnings.push(msg);
             }
             Err(_) => {
-                eprintln!(
+                let msg = format!(
                     "[mcp] timed out starting server {name} after {:.1}s; continuing",
                     startup_timeout.as_secs_f64()
                 );
+                crate::dbg_log!("{msg}");
+                warnings.push(msg);
             }
         }
     }
+    warnings
 }
 
 impl McpClient {
@@ -127,7 +137,7 @@ impl McpClient {
                         }
                     }
                 } else {
-                    eprintln!(
+                    crate::dbg_log!(
                         "[mcp] ignoring non-JSON line from server: {}",
                         if line.len() > 100 {
                             &line[..100]
@@ -332,7 +342,7 @@ mod tests {
         let started = Arc::new(StdMutex::new(Vec::new()));
         let observed = Arc::clone(&started);
 
-        start_enabled_servers(&servers, move |name| {
+        let warnings = start_enabled_servers(&servers, move |name| {
             let observed = Arc::clone(&observed);
             async move {
                 observed.lock().unwrap().push(name.clone());
@@ -349,6 +359,8 @@ mod tests {
             started.lock().unwrap().as_slice(),
             ["enabled-one", "enabled-two"]
         );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("enabled-one"));
     }
 
     #[tokio::test]
@@ -389,7 +401,10 @@ mod tests {
         .await;
 
         assert!(completed.is_ok(), "startup must be bounded per server");
+        let warnings = completed.unwrap();
         assert_eq!(started.lock().unwrap().as_slice(), ["hanging", "reachable"]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("hanging"));
     }
 
     #[tokio::test]

@@ -1024,6 +1024,9 @@ pub struct AppState {
     pub prompt_cache: PromptCache,
     pub verbosity: Verbosity,
     pub expanded_thoughts: std::collections::HashSet<usize>,
+    /// Warning or informational notices collected from background operations (e.g. MCP startup timeouts)
+    /// to be displayed cleanly upon application exit instead of interrupting active terminal rendering.
+    pub exit_warnings: Vec<String>,
 }
 
 fn get_cwd_and_branch() -> String {
@@ -1405,8 +1408,13 @@ impl AppState {
             continuous_mode: false,
             context_snapshot: None,
             prompt_cache: PromptCache::default(),
+            exit_warnings: Vec::new(),
         };
         app
+    }
+
+    pub fn record_warning(&mut self, warning: impl Into<String>) {
+        self.exit_warnings.push(warning.into());
     }
 
     /// True when any modal overlay is open (pickers or tool confirmation);

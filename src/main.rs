@@ -311,11 +311,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn startup initialization of enabled MCP servers.
     let mcp_servers = app_state.lock().await.config.mcp_servers.clone();
+    let mcp_state = Arc::clone(&app_state);
     tokio::spawn(async move {
-        crate::mcp::start_enabled_servers(&mcp_servers, |name| async move {
+        let warnings = crate::mcp::start_enabled_servers(&mcp_servers, |name| async move {
             crate::mcp::start_server_by_name(&name).await
         })
         .await;
+        if !warnings.is_empty() {
+            let mut state = mcp_state.lock().await;
+            state.exit_warnings.extend(warnings);
+        }
     });
 
     crate::app::spawn_context_window_detection(Arc::clone(&app_state), client.clone());
@@ -345,6 +350,7 @@ pub(crate) struct ExitSummary {
     pub(crate) session_id: String,
     pub(crate) composer_y: Option<u16>,
     pub(crate) print_handoff: bool,
+    pub(crate) warnings: Vec<String>,
 }
 
 impl ExitSummary {
@@ -357,6 +363,7 @@ impl ExitSummary {
             session_id: state.active_session_id.clone(),
             composer_y: state.input_text_area.map(|area| area.y),
             print_handoff: true,
+            warnings: state.exit_warnings.clone(),
         };
 
         for message in &state.history {
@@ -425,6 +432,13 @@ fn print_exit_summary(summary: &ExitSummary) {
     if !summary.session_id.is_empty() {
         let _ = writeln!(out, "To continue this session, run rustcode --resume");
     }
+    if !summary.warnings.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "Warnings:");
+        for warning in &summary.warnings {
+            let _ = writeln!(out, "  - {warning}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -444,6 +458,7 @@ mod draw_loop_tests {
             session_id: "session-id".to_string(),
             composer_y: Some(12),
             print_handoff: true,
+            warnings: Vec::new(),
         };
         assert_eq!(
             summary.usage_line().as_deref(),
@@ -453,6 +468,17 @@ mod draw_loop_tests {
         );
         assert_eq!(format_number(999), "999");
         assert_eq!(format_number(1_000), "1,000");
+    }
+
+    #[test]
+    fn exit_summary_inherits_state_warnings() {
+        let mut state = crate::app::AppState::new();
+        state.record_warning("[mcp] timed out starting server test after 10.0s; continuing");
+        let summary = ExitSummary::from_state(&state);
+        assert_eq!(
+            summary.warnings.as_slice(),
+            ["[mcp] timed out starting server test after 10.0s; continuing"]
+        );
     }
 
     #[test]
