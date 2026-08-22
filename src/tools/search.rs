@@ -2,6 +2,10 @@ use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::Value;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
+use std::process::Stdio;
+use std::thread;
 
 // Re-exports needed by search tools
 pub(crate) use super::parse_json_bool;
@@ -103,9 +107,104 @@ pub const GET_PROJECT_MAP: Tool = Tool {
 const MAX_GREP_LINES: usize = 200;
 const MAX_GREP_FILES: usize = 50;
 const MAX_GREP_BYTES: usize = 32_768;
+const MAX_SCAN_LINE_BYTES: usize = 32_768;
 const MAX_GLOB_RESULTS: usize = 200;
 const MAX_LIST_ENTRIES: usize = 10_000;
 const MAX_LINE_CHARS: usize = 1000;
+
+struct CappedRead {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn read_capped<R: Read>(mut reader: R, cap: usize) -> CappedRead {
+    let mut output = Vec::with_capacity(cap);
+    let mut truncated = false;
+    let mut chunk = [0u8; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let remaining = cap.saturating_sub(output.len());
+                let take = remaining.min(read);
+                output.extend_from_slice(&chunk[..take]);
+                truncated |= take < read;
+            }
+        }
+    }
+    CappedRead {
+        bytes: output,
+        truncated,
+    }
+}
+
+#[derive(Default)]
+struct ScanReport {
+    truncated_line: bool,
+}
+
+fn scan_file_lines<R: BufRead, F: FnMut(usize, &str) -> bool>(
+    mut reader: R,
+    mut visit: F,
+) -> std::io::Result<ScanReport> {
+    let mut line = Vec::new();
+    let mut line_number = 0;
+    let mut report = ScanReport::default();
+    loop {
+        line.clear();
+        let mut read_any = false;
+        let mut line_truncated = false;
+        loop {
+            let buffer = reader.fill_buf()?;
+            if buffer.is_empty() {
+                break;
+            }
+            read_any = true;
+            let newline = buffer.iter().position(|byte| *byte == b'\n');
+            let chunk_len = newline.map(|index| index + 1).unwrap_or(buffer.len());
+            let remaining = MAX_SCAN_LINE_BYTES.saturating_sub(line.len());
+            let take = remaining.min(chunk_len);
+            line.extend_from_slice(&buffer[..take]);
+            line_truncated |= take < chunk_len;
+            reader.consume(chunk_len);
+            if newline.is_some() {
+                break;
+            }
+        }
+        if !read_any {
+            break;
+        }
+        if line_truncated {
+            report.truncated_line = true;
+        }
+        line_number += 1;
+        let line = if line.last() == Some(&b'\n') {
+            &line[..line.len() - 1]
+        } else {
+            &line
+        };
+        let line = if line.last() == Some(&b'\r') {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        let line = match std::str::from_utf8(line) {
+            Ok(line) => line,
+            Err(error) if error.error_len().is_none() => {
+                report.truncated_line = true;
+                std::str::from_utf8(&line[..error.valid_up_to()])
+                    .expect("UTF-8 prefix must be valid")
+            }
+            Err(error) => {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+            }
+        };
+        if !visit(line_number, line) {
+            break;
+        }
+    }
+    Ok(report)
+}
 
 fn build_include_matcher(include: Option<&str>) -> Result<Option<globset::GlobSet>, String> {
     let Some(glob_str) = include else {
@@ -171,17 +270,38 @@ fn try_ripgrep(
 
     cmd.arg(pattern).arg(root);
 
-    let output = match cmd.output() {
-        Ok(out) => out,
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
         Err(_) => return None,
     };
+    let stdout = child.stdout.take()?;
+    let stderr = child.stderr.take()?;
+    let stdout_handle = thread::spawn(move || read_capped(stdout, MAX_GREP_BYTES));
+    let stderr_handle = thread::spawn(move || read_capped(stderr, 4096));
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(_) => return None,
+    };
+    let stdout_capture = stdout_handle.join().unwrap_or(CappedRead {
+        bytes: Vec::new(),
+        truncated: false,
+    });
+    let _ = stderr_handle.join();
 
-    if !output.status.success() && output.status.code() != Some(1) {
+    if !status.success() && status.code() != Some(1) {
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout_truncated = stdout_capture.truncated;
+    let stdout = String::from_utf8_lossy(&stdout_capture.bytes);
     if stdout.trim().is_empty() {
+        if stdout_truncated {
+            return Some(Ok(format!(
+                "ripgrep output exceeded the {} KB capture limit; matches may be incomplete. Narrow 'pattern' or 'include'.",
+                MAX_GREP_BYTES / 1024
+            )));
+        }
         return Some(Ok(no_matches_message(pattern, root, include)));
     }
 
@@ -231,6 +351,13 @@ fn try_ripgrep(
         };
         out.push_str(&format!("\n{file_header}\n"));
         current_file_has_header = true;
+    }
+
+    if stdout_truncated && !out.contains("matches may be incomplete") {
+        out.push_str(&format!(
+            "\n(ripgrep output exceeded the {} KB capture limit; matches may be incomplete — narrow 'pattern' or 'include')\n",
+            MAX_GREP_BYTES / 1024
+        ));
     }
 
     let root_path = std::path::Path::new(root);
@@ -288,6 +415,7 @@ pub fn grep(args: &Value) -> Result<String, String> {
     let mut out = String::new();
     let mut total_lines = 0usize;
     let mut files_hit = 0usize;
+    let mut incomplete = false;
 
     for entry in walker {
         let Ok(entry) = entry else { continue };
@@ -303,22 +431,29 @@ pub fn grep(args: &Value) -> Result<String, String> {
             }
         }
 
-        let Ok(content) = std::fs::read_to_string(path) else {
+        let Ok(file) = File::open(path) else {
+            incomplete = true;
             continue;
         };
         let mut file_lines = 0usize;
         let mut wrote_header = false;
-        for (i, line) in content.lines().enumerate() {
+        let mut stop_search = false;
+        match scan_file_lines(BufReader::new(file), |line_number, line| {
             if re.is_match(line) {
                 if !wrote_header {
                     files_hit += 1;
                     if files_hit > MAX_GREP_FILES {
-                        break;
+                        stop_search = true;
+                        return false;
                     }
                     out.push_str(&format!("\n{}:\n", path.display()));
                     wrote_header = true;
                 }
-                let line_formatted = format!("  {}: {}\n", i + 1, truncate_line(line));
+                let line_formatted = format!(
+                    "  {}: {}\n",
+                    line_number,
+                    truncate_line(line)
+                );
                 if total_lines >= MAX_GREP_LINES || out.len() + line_formatted.len() >= MAX_GREP_BYTES {
                     let cap_desc = if total_lines >= MAX_GREP_LINES {
                         format!("{MAX_GREP_LINES} lines")
@@ -329,19 +464,37 @@ pub fn grep(args: &Value) -> Result<String, String> {
                         "\n(truncated — {} matching lines across {} files, stopping at cap of {cap_desc} / {MAX_GREP_FILES} files; narrow 'pattern' or 'include')\n",
                         total_lines, files_hit
                     ));
-                    return Ok(out.trim_end().to_string());
+                    stop_search = true;
+                    return false;
                 }
                 out.push_str(&line_formatted);
                 file_lines += 1;
                 total_lines += 1;
             }
+            true
+        }) {
+            Ok(report) => incomplete |= report.truncated_line,
+            Err(_) => incomplete = true,
+        }
+        if stop_search {
+            break;
         }
         let _ = file_lines;
     }
 
     if out.is_empty() {
+        if incomplete {
+            return Ok(format!(
+                "fallback search may be incomplete; some input exceeded the per-line limit or could not be read while searching for '{pattern}' under '{root}'"
+            ));
+        }
         Ok(no_matches_message(pattern, root, include))
     } else {
+        if incomplete {
+            out.push_str(
+                "\n(fallback search may be incomplete; some input exceeded the per-line limit or could not be read)\n",
+            );
+        }
         Ok(format!(
             "matches for '{pattern}' under '{root}' ({} file(s)):\n{}",
             files_hit,
@@ -356,27 +509,33 @@ fn grep_one_file(
     re: &Regex,
     max_lines: usize,
 ) -> Result<String, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path_str}': {e}"))?;
+    let file = File::open(path).map_err(|e| format!("cannot read '{path_str}': {e}"))?;
     let mut out = String::new();
     let mut hits = 0usize;
-    for (i, line) in content.lines().enumerate() {
+    let report = scan_file_lines(BufReader::new(file), |line_number, line| {
         if re.is_match(line) {
             hits += 1;
             if hits == 1 {
                 out.push_str(&format!("{path_str}:\n"));
             }
-            let line_formatted = format!("  {}: {}\n", i + 1, truncate_line(line));
+            let line_formatted = format!("  {}: {}\n", line_number, truncate_line(line));
             if hits > max_lines {
                 out.push_str(&format!("(truncated at {max_lines} matching lines)\n"));
-                break;
+                return false;
             }
             if out.len() + line_formatted.len() >= MAX_GREP_BYTES {
                 out.push_str(&format!("(truncated at {} KB)\n", MAX_GREP_BYTES / 1024));
-                break;
+                return false;
             }
             out.push_str(&line_formatted);
         }
+        true
+    })
+    .map_err(|e| format!("cannot read '{path_str}': {e}"))?;
+    if report.truncated_line {
+        out.push_str(
+            "\n(fallback search may be incomplete; an input line exceeded the per-line limit)\n",
+        );
     }
     if hits == 0 {
         Ok(format!("no matches for '{}' in '{path_str}'", re.as_str()))
@@ -549,6 +708,41 @@ mod tests {
     }
 
     #[test]
+    fn ripgrep_reader_is_bounded_before_processing_matches() {
+        let input = std::io::Cursor::new(vec![b'x'; MAX_GREP_BYTES * 2]);
+        let captured = read_capped(input, MAX_GREP_BYTES);
+
+        assert_eq!(captured.bytes.len(), MAX_GREP_BYTES);
+        assert!(captured.truncated);
+    }
+
+    #[test]
+    fn fallback_search_scans_input_line_by_line() {
+        let mut lines = Vec::new();
+        scan_file_lines(std::io::Cursor::new("first\nsecond\n"), |number, line| {
+            lines.push((number, line.to_string()));
+            true
+        })
+        .expect("scan");
+
+        assert_eq!(lines, [(1, "first".to_string()), (2, "second".to_string())]);
+    }
+
+    #[test]
+    fn fallback_search_bounds_newline_free_lines() {
+        let input = format!("{}\n", "x".repeat(MAX_SCAN_LINE_BYTES * 2));
+        let mut observed_len = 0;
+        let report = scan_file_lines(std::io::Cursor::new(input), |_, line| {
+            observed_len = line.len();
+            true
+        })
+        .expect("scan");
+
+        assert_eq!(observed_len, MAX_SCAN_LINE_BYTES);
+        assert!(report.truncated_line);
+    }
+
+    #[test]
     fn grep_stops_at_byte_cap_for_large_matching_lines() {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("long_matches.txt");
@@ -568,6 +762,7 @@ mod tests {
         .expect("grep should succeed");
 
         assert!(res.contains("truncated") && res.contains("32 KB"), "got: {res}");
+        assert!(res.contains("matches may be incomplete"), "got: {res}");
     }
 
     #[test]

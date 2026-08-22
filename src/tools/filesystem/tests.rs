@@ -30,6 +30,60 @@ fn a_read_that_ends_where_asked_is_not_reported_as_truncated() {
     assert!(!whole.contains("continues"), "got: {whole}");
 }
 
+#[test]
+fn replacement_preserves_mixed_line_endings() {
+    let content = "first\r\nold\nlast\r\n";
+    let edit = SingleEdit {
+        target: "old".to_string(),
+        replacement: "new\ninserted".to_string(),
+        start_line: None,
+        end_line: None,
+    };
+
+    let outcome = apply_single_edit_to_content(content, "mixed.txt", &edit).expect("edit");
+
+    let EditOutcome::Changed(result) = outcome else {
+        panic!("edit unexpectedly unchanged");
+    };
+    assert_eq!(result, "first\r\nnew\ninserted\nlast\r\n");
+}
+
+#[test]
+fn replacement_preserves_uniform_crlf_line_endings() {
+    let content = "first\r\nold\r\nlast\r\n";
+    let edit = SingleEdit {
+        target: "old".to_string(),
+        replacement: "new\ninserted".to_string(),
+        start_line: None,
+        end_line: None,
+    };
+
+    let outcome = apply_single_edit_to_content(content, "crlf.txt", &edit).expect("edit");
+
+    let EditOutcome::Changed(result) = outcome else {
+        panic!("edit unexpectedly unchanged");
+    };
+    assert_eq!(result, "first\r\nnew\r\ninserted\r\nlast\r\n");
+}
+
+#[test]
+fn multiline_mixed_eol_edit_preserves_unmodified_line_endings() {
+    let content = "first\r\nold one\nold two\r\nlast\n";
+    let edit = SingleEdit {
+        target: "old one\nold two".to_string(),
+        replacement: "new one\nnew two".to_string(),
+        start_line: Some(2),
+        end_line: Some(3),
+    };
+
+    let outcome = apply_single_edit_to_content(content, "mixed.txt", &edit).expect("edit");
+
+    let EditOutcome::Changed(result) = outcome else {
+        panic!("edit unexpectedly unchanged");
+    };
+    assert_eq!(result, "first\r\nnew one\nnew two\r\nlast\n");
+}
+
 // Feature 5 (lossless reads): a read genuinely cut short by view_file's own
 // default window must say so unambiguously, name exactly which lines were
 // omitted, and tell the model exactly how to fetch them.

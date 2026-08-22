@@ -1,6 +1,7 @@
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::io::Read;
-use std::process::{Output, Stdio};
+use std::process::{Child, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -58,6 +59,62 @@ pub const MANAGE_TASK: Tool = Tool {
 
 const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
+const CAPTURE_HEAD_BYTES: usize = MAX_COMMAND_OUTPUT_BYTES * 3 / 10;
+const CAPTURE_TAIL_BYTES: usize = MAX_COMMAND_OUTPUT_BYTES - CAPTURE_HEAD_BYTES;
+
+struct BoundedOutput {
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    total_bytes: usize,
+}
+
+impl BoundedOutput {
+    fn push(&mut self, bytes: &[u8]) {
+        self.total_bytes = self.total_bytes.saturating_add(bytes.len());
+
+        let head_remaining = CAPTURE_HEAD_BYTES.saturating_sub(self.head.len());
+        let head_len = head_remaining.min(bytes.len());
+        self.head.extend_from_slice(&bytes[..head_len]);
+
+        for byte in &bytes[head_len..] {
+            if self.tail.len() == CAPTURE_TAIL_BYTES {
+                self.tail.pop_front();
+            }
+            self.tail.push_back(*byte);
+        }
+    }
+
+    fn captured_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.head.len() + self.tail.len());
+        bytes.extend_from_slice(&self.head);
+        bytes.extend(self.tail.iter().copied());
+        bytes
+    }
+
+    fn captured_len(&self) -> usize {
+        self.head.len() + self.tail.len()
+    }
+
+    fn is_truncated(&self) -> bool {
+        self.total_bytes > MAX_COMMAND_OUTPUT_BYTES
+    }
+}
+
+impl Default for BoundedOutput {
+    fn default() -> Self {
+        Self {
+            head: Vec::with_capacity(CAPTURE_HEAD_BYTES),
+            tail: VecDeque::with_capacity(CAPTURE_TAIL_BYTES),
+            total_bytes: 0,
+        }
+    }
+}
+
+struct CommandOutput {
+    status: ExitStatus,
+    stdout: BoundedOutput,
+    stderr: BoundedOutput,
+}
 
 /// Short sudo options that consume a value (either glued to the flag or as the
 /// following token), e.g. `-u root`, `-p "prompt"`.
@@ -239,7 +296,7 @@ fn is_read_only_segment(segment: &str) -> bool {
         }),
         Some(
             "cat" | "date" | "echo" | "false" | "grep" | "head" | "less" | "ls" | "more"
-            | "printf" | "pwd" | "rg" | "sed" | "tail" | "test" | "true" | "type" | "uname"
+            | "printf" | "pwd" | "rg" | "tail" | "test" | "true" | "type" | "uname"
             | "which",
         ) => true,
         _ => false,
@@ -545,10 +602,10 @@ fn run_command_output_inner(
                         info.child_pid = Some(pid);
                     }
 
-                    match child.wait_with_output() {
+                    match wait_with_bounded_output(child) {
                         Ok(output) => {
-                            let out_str = String::from_utf8_lossy(&output.stdout).to_string();
-                            let err_str = String::from_utf8_lossy(&output.stderr).to_string();
+                            let out_str = format_bounded_output(&output.stdout);
+                            let err_str = format_bounded_output(&output.stderr);
                             let mut full = out_str;
                             if !err_str.is_empty() {
                                 if !full.is_empty() {
@@ -566,7 +623,8 @@ fn run_command_output_inner(
                                 content: full,
                                 success,
                                 exit_code,
-                                truncated: false,
+                                truncated: output.stdout.is_truncated()
+                                    || output.stderr.is_truncated(),
                                 replayed: false,
                                 error_kind: (!success).then_some(super::ToolErrorKind::CommandFailed),
                                 retryable: false,
@@ -613,10 +671,9 @@ fn run_command_output_inner(
     result.push_str(&format!("exit code: {exit_code}\n"));
 
     let failed = !output.status.success();
-    let truncated = output.stdout.len() > MAX_COMMAND_OUTPUT_BYTES
-        || output.stderr.len() > MAX_COMMAND_OUTPUT_BYTES;
-    let stdout = truncate_bytes(&output.stdout, MAX_COMMAND_OUTPUT_BYTES, failed);
-    let stderr = truncate_bytes(&output.stderr, MAX_COMMAND_OUTPUT_BYTES, failed);
+    let truncated = output.stdout.is_truncated() || output.stderr.is_truncated();
+    let stdout = format_bounded_output(&output.stdout);
+    let stderr = format_bounded_output(&output.stderr);
 
     if !stdout.is_empty() {
         result.push_str("stdout:\n");
@@ -727,51 +784,61 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
     }
 }
 
+fn spawn_output_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    progress: Option<CommandProgressCallback>,
+    is_stderr: bool,
+) -> thread::JoinHandle<BoundedOutput> {
+    thread::spawn(move || {
+        let mut output = BoundedOutput::default();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if let Some(callback) = progress.as_ref() {
+                        callback(&chunk[..read], is_stderr);
+                    }
+                    output.push(&chunk[..read]);
+                }
+            }
+        }
+        output
+    })
+}
+
+fn wait_with_bounded_output(mut child: Child) -> Result<CommandOutput, String> {
+    let child_stdout = child.stdout.take().ok_or("no stdout pipe")?;
+    let child_stderr = child.stderr.take().ok_or("no stderr pipe")?;
+    let out_handle = spawn_output_reader(child_stdout, None, false);
+    let err_handle = spawn_output_reader(child_stderr, None, true);
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed to wait on process: {e}"))?;
+    let stdout = out_handle.join().unwrap_or_default();
+    let stderr = err_handle.join().unwrap_or_default();
+    Ok(CommandOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 fn run_with_timeout(
     mut cmd: std::process::Command,
     timeout: Duration,
     progress: Option<CommandProgressCallback>,
-) -> Result<Output, String> {
+) -> Result<CommandOutput, String> {
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn process: {e}"))?;
-    let mut child_stdout = child.stdout.take().ok_or("no stdout pipe")?;
-    let mut child_stderr = child.stderr.take().ok_or("no stderr pipe")?;
+    let child_stdout = child.stdout.take().ok_or("no stdout pipe")?;
+    let child_stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
     let stdout_progress = progress.clone();
-    let out_handle = thread::spawn(move || {
-        let mut b = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            match child_stdout.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(read) => {
-                    if let Some(callback) = stdout_progress.as_ref() {
-                        callback(&chunk[..read], false);
-                    }
-                    b.extend_from_slice(&chunk[..read]);
-                }
-            }
-        }
-        b
-    });
+    let out_handle = spawn_output_reader(child_stdout, stdout_progress, false);
     let stderr_progress = progress;
-    let err_handle = thread::spawn(move || {
-        let mut b = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            match child_stderr.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(read) => {
-                    if let Some(callback) = stderr_progress.as_ref() {
-                        callback(&chunk[..read], true);
-                    }
-                    b.extend_from_slice(&chunk[..read]);
-                }
-            }
-        }
-        b
-    });
+    let err_handle = spawn_output_reader(child_stderr, stderr_progress, true);
 
     let start = Instant::now();
     let status = loop {
@@ -792,13 +859,13 @@ fn run_with_timeout(
         }
     };
 
-    let stdout_bytes = out_handle.join().unwrap_or_default();
-    let stderr_bytes = err_handle.join().unwrap_or_default();
+    let stdout = out_handle.join().unwrap_or_default();
+    let stderr = err_handle.join().unwrap_or_default();
 
-    Ok(Output {
+    Ok(CommandOutput {
         status,
-        stdout: stdout_bytes,
-        stderr: stderr_bytes,
+        stdout,
+        stderr,
     })
 }
 
@@ -808,21 +875,18 @@ fn run_with_timeout(
 /// head-only cut can throw away the only useful part of a failing command's
 /// output before it ever reaches the model. `keep_tail_priority` (set for a
 /// nonzero exit code) biases the split further toward the tail.
-fn truncate_bytes(bytes: &[u8], max: usize, keep_tail_priority: bool) -> String {
-    if bytes.len() <= max {
-        return String::from_utf8_lossy(bytes).to_string();
+fn format_bounded_output(output: &BoundedOutput) -> String {
+    let bytes = output.captured_bytes();
+    if !output.is_truncated() {
+        return String::from_utf8_lossy(&bytes).to_string();
     }
-    let tail_len = if keep_tail_priority {
-        max * 7 / 10
-    } else {
-        max * 3 / 10
-    };
-    let head_len = max - tail_len;
+    let head_len = output.head.len();
+    let tail_len = output.tail.len();
     let head = String::from_utf8_lossy(&bytes[..head_len]);
-    let tail = String::from_utf8_lossy(&bytes[bytes.len() - tail_len..]);
+    let tail = String::from_utf8_lossy(&bytes[head_len..]);
     format!(
         "{head}\n... (truncated, {} bytes total — showing first {head_len} and last {tail_len} bytes) ...\n{tail}\n",
-        bytes.len()
+        output.total_bytes
     )
 }
 
@@ -986,6 +1050,36 @@ mod tests {
                 "must not confirm: {command}"
             );
         }
+    }
+
+    #[test]
+    fn sed_commands_require_confirmation() {
+        for command in ["sed -i 's/old/new/' file.txt", "sed 'w output.txt' input.txt"] {
+            assert!(
+                command_requires_confirmation(&serde_json::json!({"command": command})),
+                "must confirm potentially mutating sed command: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_output_capture_is_bounded_before_process_exit() {
+        let output = super::run_with_timeout(
+            {
+                let mut command = std::process::Command::new("sh");
+                command.args(["-c", "head -c 200000 /dev/zero"]);
+                command.stdout(std::process::Stdio::piped());
+                command.stderr(std::process::Stdio::piped());
+                command
+            },
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .expect("command output");
+
+        assert!(output.stdout.captured_len() <= super::MAX_COMMAND_OUTPUT_BYTES);
+        assert!(output.stderr.captured_len() <= super::MAX_COMMAND_OUTPUT_BYTES);
+        assert!(output.stdout.is_truncated());
     }
 
     #[test]
