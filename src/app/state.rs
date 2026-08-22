@@ -1006,6 +1006,7 @@ pub struct AppState {
     pub tip_index: usize,
 
     pub current_terminal_title: Option<String>,
+    pub current_terminal_progress: Option<crate::app::activity::TerminalProgress>,
     /// Cached custom session title: the session id it was read for, and the
     /// title found on disk (`None` when that session has no `title.txt`).
     /// Keeps the draw loop from hitting the filesystem on every frame.
@@ -1379,6 +1380,7 @@ impl AppState {
             scroll_row: 0,
             is_scroll_locked_to_bottom: true,
             current_terminal_title: None,
+            current_terminal_progress: None,
             session_title_cache: None,
             redraw_requested: false,
             clear_screen_requested: false,

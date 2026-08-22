@@ -25,6 +25,35 @@ pub enum AnimationCell {
     Lead,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalProgress {
+    Hidden,
+    Indeterminate,
+    Paused,
+    Error,
+}
+
+impl TerminalProgress {
+    pub fn osc_sequence(&self) -> &'static str {
+        match self {
+            Self::Hidden => "\x1b]9;4;0;0\x07",
+            Self::Indeterminate => "\x1b]9;4;3;0\x07",
+            Self::Paused => "\x1b]9;4;4;100\x07",
+            Self::Error => "\x1b]9;4;2;100\x07",
+        }
+    }
+}
+
+pub fn terminal_progress_for_activity(kind: ActivityKind) -> TerminalProgress {
+    match kind {
+        ActivityKind::Ready => TerminalProgress::Hidden,
+        ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool => {
+            TerminalProgress::Indeterminate
+        }
+        ActivityKind::ActionRequired => TerminalProgress::Paused,
+    }
+}
+
 pub fn is_exploration_tool(tool_name: &str) -> bool {
     let lower = tool_name.to_ascii_lowercase();
     matches!(
@@ -518,5 +547,40 @@ mod tests {
             activity.detail.as_deref(),
             Some("Read src/main.rs, Search renderer in src")
         );
+    }
+
+    #[test]
+    fn terminal_progress_matches_activity_kind() {
+        use super::{TerminalProgress, terminal_progress_for_activity};
+
+        assert_eq!(
+            terminal_progress_for_activity(ActivityKind::Ready),
+            TerminalProgress::Hidden
+        );
+        assert_eq!(TerminalProgress::Hidden.osc_sequence(), "\x1b]9;4;0;0\x07");
+
+        assert_eq!(
+            terminal_progress_for_activity(ActivityKind::Queued),
+            TerminalProgress::Indeterminate
+        );
+        assert_eq!(
+            terminal_progress_for_activity(ActivityKind::Working),
+            TerminalProgress::Indeterminate
+        );
+        assert_eq!(
+            terminal_progress_for_activity(ActivityKind::RunningTool),
+            TerminalProgress::Indeterminate
+        );
+        assert_eq!(
+            TerminalProgress::Indeterminate.osc_sequence(),
+            "\x1b]9;4;3;0\x07"
+        );
+
+        assert_eq!(
+            terminal_progress_for_activity(ActivityKind::ActionRequired),
+            TerminalProgress::Paused
+        );
+        assert_eq!(TerminalProgress::Paused.osc_sequence(), "\x1b]9;4;4;100\x07");
+        assert_eq!(TerminalProgress::Error.osc_sequence(), "\x1b]9;4;2;100\x07");
     }
 }
