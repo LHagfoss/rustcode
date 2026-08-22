@@ -55,7 +55,8 @@ impl TerminalRuntime {
             EnableBracketedPaste,
             EnableFocusChange,
             SetCursorStyle::BlinkingBar,
-            crossterm::style::Print("\x1b]0;rustcode · new session\x07")
+            crossterm::style::Print("\x1b]0;rustcode · new session\x07"),
+            crossterm::style::Print("\x1b]9;4;0;0\x07")
         ) {
             let _ = terminal::disable_raw_mode();
             return Err(Box::new(error));
@@ -110,6 +111,7 @@ impl TerminalRuntime {
             DisableBracketedPaste,
             DisableFocusChange,
             SetCursorStyle::DefaultUserShape,
+            crossterm::style::Print("\x1b]9;4;0;0\x07"),
             MoveTo(0, transcript_end),
             Clear(ClearType::FromCursorDown)
         )?;

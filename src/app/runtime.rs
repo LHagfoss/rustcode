@@ -754,6 +754,16 @@ impl AppRuntime {
                     guard.current_terminal_title = Some(title_display.clone());
                 }
 
+                let progress = crate::app::activity::terminal_progress_for_activity(activity.kind);
+                if guard.current_terminal_progress != Some(progress) {
+                    use crossterm::style::Print;
+                    let _ = execute!(
+                        terminal_runtime.terminal().backend_mut(),
+                        Print(progress.osc_sequence())
+                    );
+                    guard.current_terminal_progress = Some(progress);
+                }
+
                 let terminal_height = terminal_runtime.terminal().size()?.height;
                 let desired_height = ui::desired_height(
                     &guard,
