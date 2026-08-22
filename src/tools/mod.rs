@@ -3188,6 +3188,16 @@ mod tests {
     }
 
     #[test]
+    fn manage_task_is_allowed_without_confirmation() {
+        // MANAGE_TASK is ToolSafety::ProcessControl, not Unknown, so it must
+        // not be swept into the conservative Unknown-confirmation fallback.
+        assert_eq!(
+            authorize_tool("manage_task", crate::config::AgentMode::Build, false, false),
+            AuthorizationDecision::Allow
+        );
+    }
+
+    #[test]
     fn command_authorization_distinguishes_git_inspection_from_recovery() {
         assert_eq!(
             authorize_tool_with_args(
