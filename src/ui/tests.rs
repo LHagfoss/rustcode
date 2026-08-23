@@ -2130,7 +2130,7 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
     state.generation_start_time = Some(std::time::Instant::now());
-    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
         "call-1",
         None,
         "run_command",
@@ -2196,7 +2196,7 @@ fn live_history_cell_keeps_identical_invocations_visible_separately() {
 #[test]
 fn live_tool_cell_is_a_projection_not_history() {
     let mut state = AppState::new();
-    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
         "local:1",
         None,
         "view_file",
@@ -2445,7 +2445,7 @@ fn active_transcript_cell_updates_in_place_and_clears_without_history() {
 fn action_required_status_wins_over_a_live_question_tool() {
     let mut state = AppState::new();
     state.status = AppStatus::AwaitingQuestion;
-    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
         "question",
         None,
         "ask_question",

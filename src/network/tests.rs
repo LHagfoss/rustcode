@@ -3389,7 +3389,7 @@ fn session_interruption_and_recovery_safety() {
         .push(ChatMessage::new("user", "Write a function"));
     state.replace_current_response("<think>\nThinking about function...");
     state.current_thought_started_at = Some(std::time::Instant::now());
-    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
         "call-temp",
         None,
         "run_command",

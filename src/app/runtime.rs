@@ -192,6 +192,30 @@ fn apply_subagent_selection(state: &mut AppState, id: u32) -> Result<(), AppErro
     Ok(())
 }
 
+async fn session_title_for_render(state: &Arc<Mutex<AppState>>) -> (String, Option<String>) {
+    let (session_id, generation, cached_title) = {
+        let guard = state.lock().await;
+        (
+            guard.active_session_id.clone(),
+            guard.session_title_cache_generation,
+            guard.cached_session_title(),
+        )
+    };
+    if let Some(title) = cached_title {
+        return (session_id, title);
+    }
+
+    let title = crate::config::load_session_title(&session_id);
+    let mut guard = state.lock().await;
+    if guard.install_session_title_cache(&session_id, generation, title.clone()) {
+        return (session_id, title);
+    }
+
+    let current_session_id = guard.active_session_id.clone();
+    let current_title = guard.cached_session_title().flatten();
+    (current_session_id, current_title)
+}
+
 fn render_finalized_assistant_scrollback(
     snapshot: &crate::ui::render_snapshot::RenderSnapshot,
     transcript_cursor: &mut crate::ui::scrollback::TranscriptCursor,
@@ -590,6 +614,8 @@ impl AppRuntime {
                     progress,
                     should_send_progress,
                 ) = {
+                    let (title_session_id, loaded_title) =
+                        session_title_for_render(&app_state).await;
                     let mut guard = app_state.lock().await;
                     let terminal_size = terminal_runtime.terminal().size()?;
                     let clear_screen = guard.clear_screen_requested;
@@ -597,13 +623,18 @@ impl AppRuntime {
                         guard.clear_screen_requested = false;
                     }
                     let clear_history_display_start = guard.history_display_start;
-                    let custom_title = guard.cached_session_title().or_else(|| {
-                        guard
-                            .history
-                            .iter()
-                            .find(|m| m.role == "user" && !m.content.starts_with('/'))
-                            .map(|m| m.content.lines().next().unwrap_or("").trim().to_string())
-                    });
+                    let custom_title = (guard.active_session_id == title_session_id)
+                        .then_some(loaded_title)
+                        .flatten()
+                        .or_else(|| {
+                            guard
+                                .history
+                                .iter()
+                                .find(|m| m.role == "user" && !m.content.starts_with('/'))
+                                .map(|m| {
+                                    m.content.lines().next().unwrap_or("").trim().to_string()
+                                })
+                        });
                     let snapshot = guard.render_snapshot();
                     let activity = crate::app::activity::classify_activity(
                         snapshot.status(),
@@ -2634,6 +2665,45 @@ mod tests {
         assert!(!state.publish_render_metrics(revision, 99, input_area));
         assert_eq!(state.conversation_content_height, 7);
         assert_eq!(state.input_text_area, Some(ratatui::layout::Rect::new(3, 4, 20, 2)));
+    }
+
+    #[tokio::test]
+    async fn render_title_cache_is_selected_against_the_current_session() {
+        let mut state = AppState::new();
+        state.active_session_id = "session-a".to_owned();
+        state.session_title_cache = Some((
+            "session-a".to_owned(),
+            Some("Session A".to_owned()),
+        ));
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+
+        let (session_id, title) = super::session_title_for_render(&state).await;
+
+        assert_eq!(session_id, "session-a");
+        assert_eq!(title.as_deref(), Some("Session A"));
+    }
+
+    #[test]
+    fn render_title_cache_does_not_install_a_title_for_another_session() {
+        let mut state = AppState::new();
+        state.active_session_id = "session-a".to_owned();
+        let stale_generation = state.session_title_cache_generation;
+        state.invalidate_session_title_cache();
+
+        assert!(!state.install_session_title_cache(
+            "session-a",
+            stale_generation,
+            Some("Stale Session A".to_owned())
+        ));
+
+        state.active_session_id = "session-b".to_owned();
+
+        assert!(!state.install_session_title_cache(
+            "session-a",
+            state.session_title_cache_generation,
+            Some("Session A".to_owned())
+        ));
+        assert!(state.session_title_cache.is_none());
     }
 
     #[test]

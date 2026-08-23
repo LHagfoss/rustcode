@@ -57,7 +57,7 @@ pub(crate) struct RenderSnapshot {
     tool_confirmation_selected: usize,
     pending_question: Option<PendingQuestion>,
     running_tools: Vec<String>,
-    live_tool_calls: Vec<LiveToolCall>,
+    live_tool_calls: Arc<Vec<LiveToolCall>>,
     stream_tracker: Option<StreamTracker>,
     auto_confirm: bool,
     verbosity: Verbosity,
@@ -78,6 +78,27 @@ pub(crate) struct RenderSnapshot {
 #[allow(dead_code)]
 impl RenderSnapshot {
     pub(crate) fn new(state: &crate::app::AppState) -> Self {
+        let subagents = state
+            .subagents
+            .iter()
+            .map(SubAgentSnapshot::from)
+            .collect::<Vec<_>>();
+        let selected_subagent = state.selected_subagent_id.and_then(|id| {
+            let agent = state.subagents.iter().find(|agent| agent.id == id)?;
+            let history = subagents
+                .iter()
+                .find(|snapshot| snapshot.id == id)
+                .map(|snapshot| Arc::clone(&snapshot.history))?;
+            Some(SelectedSubagentSnapshot {
+                id: agent.id,
+                name: agent.name.clone(),
+                history,
+                status: agent.status,
+                active_turn: agent.active_turn,
+                parent_id: agent.parent_id,
+            })
+        });
+
         Self {
             revision: state.render_revision,
             input_buffer: state.input_buffer.clone(),
@@ -129,7 +150,7 @@ impl RenderSnapshot {
             tool_confirmation_selected: state.tool_confirmation_selected,
             pending_question: state.pending_question.clone(),
             running_tools: state.running_tools.clone(),
-            live_tool_calls: state.live_tool_calls.clone(),
+            live_tool_calls: Arc::clone(&state.live_tool_calls),
             stream_tracker: state.stream_tracker.clone(),
             auto_confirm: state.auto_confirm,
             verbosity: state.verbosity.clone(),
@@ -138,15 +159,13 @@ impl RenderSnapshot {
             last_copy_text: state.last_copy_text.clone(),
             expanded_thoughts: state.expanded_thoughts.clone(),
             agent_mode: state.agent_mode,
-            subagents: state.subagents.iter().map(SubAgentSnapshot::from).collect(),
+            subagents,
             selected_subagent_id: state.selected_subagent_id,
             active_context_window: state.active_context_window(),
             active_model_profile: state.active_model_profile(),
             active_tool_protocol: state.active_tool_protocol(),
             command_suggestion: state.get_command_suggestion(),
-            selected_subagent: state
-                .selected_subagent()
-                .map(SelectedSubagentSnapshot::from),
+            selected_subagent,
         }
     }
 
@@ -378,7 +397,7 @@ pub(crate) struct SubAgentSnapshot {
     pub(crate) id: u32,
     pub(crate) name: String,
     pub(crate) task: String,
-    pub(crate) history: Vec<ChatMessage>,
+    pub(crate) history: Arc<Vec<ChatMessage>>,
     pub(crate) status: SubAgentStatus,
 }
 
@@ -388,7 +407,7 @@ impl From<&SubAgent> for SubAgentSnapshot {
             id: agent.id,
             name: agent.name.clone(),
             task: agent.task.clone(),
-            history: agent.history.clone(),
+            history: Arc::new(agent.history.clone()),
             status: agent.status,
         }
     }
@@ -398,23 +417,10 @@ impl From<&SubAgent> for SubAgentSnapshot {
 pub(crate) struct SelectedSubagentSnapshot {
     id: u32,
     name: String,
-    history: Vec<ChatMessage>,
+    history: Arc<Vec<ChatMessage>>,
     status: SubAgentStatus,
     active_turn: bool,
     parent_id: Option<u32>,
-}
-
-impl From<&crate::app::SubAgent> for SelectedSubagentSnapshot {
-    fn from(agent: &crate::app::SubAgent) -> Self {
-        Self {
-            id: agent.id,
-            name: agent.name.clone(),
-            history: agent.history.clone(),
-            status: agent.status,
-            active_turn: agent.active_turn,
-            parent_id: agent.parent_id,
-        }
-    }
 }
 
 impl SelectedSubagentSnapshot {
@@ -554,7 +560,7 @@ mod tests {
         state.pending_queue = vec!["queued prompt".to_owned()];
         state.dismissed_completion = Some("command:/help".to_owned());
         state.running_tools = vec!["run_command".to_owned()];
-        state.live_tool_calls.push(crate::app::LiveToolCall::new(
+        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
             "live",
             None,
             "run_command",
@@ -588,6 +594,50 @@ mod tests {
             "run_command"
         );
         assert_eq!(snapshot.pending_question().unwrap().question, "Proceed?");
+    }
+
+    #[test]
+    fn render_snapshot_shares_selected_subagent_and_live_tool_storage() {
+        let mut state = AppState::new();
+        state.subagents.push(SubAgent {
+            id: 7,
+            name: "reviewer".to_owned(),
+            task: "review the patch".to_owned(),
+            model: None,
+            history: vec![ChatMessage::new("assistant", "subagent response")],
+            status: SubAgentStatus::Running,
+            active_turn: true,
+            parent_id: None,
+            write_access: false,
+            allowed_paths: Vec::new(),
+            verification_command: None,
+            workspace_root: None,
+            review_manifest: None,
+        });
+        state.selected_subagent_id = Some(7);
+        std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
+            "live",
+            None,
+            "run_command",
+            "Ran",
+            "cargo test",
+        ));
+
+        let snapshot = state.render_snapshot();
+        let selected = snapshot.selected_subagent().expect("selected subagent");
+
+        assert_eq!(
+            snapshot.subagents()[0].history.as_ptr(),
+            selected.history.as_ptr()
+        );
+        assert_eq!(
+            snapshot.live_tool_calls.as_ptr(),
+            state.live_tool_calls.as_ptr()
+        );
+
+        state.append_live_tool_output("live", b"new output", false);
+        assert!(snapshot.live_tool_calls()[0].output.is_empty());
+        assert_eq!(state.live_tool_calls[0].output[0].text, "new output");
     }
 
     #[test]
