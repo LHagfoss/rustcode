@@ -18,10 +18,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub(crate) fn approval_event_for_key(
-    key: KeyEvent,
-    selected: usize,
-) -> Option<AppEvent> {
+pub(crate) fn approval_event_for_key(key: KeyEvent, selected: usize) -> Option<AppEvent> {
     let decision = match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => ApprovalDecision::Approve,
         KeyCode::Char('a') | KeyCode::Char('A') => ApprovalDecision::ApproveAll,
@@ -39,11 +36,7 @@ pub(crate) fn approval_event_for_key(
 }
 
 pub(crate) fn question_custom_answer_event(question: &PendingQuestion) -> AppEvent {
-    let answer = question
-        .custom_input
-        .as_deref()
-        .unwrap_or_default()
-        .trim();
+    let answer = question.custom_input.as_deref().unwrap_or_default().trim();
     let answer = if answer.is_empty() {
         "No response provided"
     } else {
@@ -83,14 +76,14 @@ pub(crate) fn question_cancel_event() -> AppEvent {
 
 pub(super) fn render_popup_menu(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     filtered_cmds: &[&CommandInfo],
     area: ratatui::layout::Rect,
 ) {
     // The popup is allocated below the input box. Scroll the list so the
     // selected command stays visible when the available rows are bounded.
     let max_rows = (area.height as usize).max(1);
-    let selected = state.active_suggestion_index.unwrap_or(0);
+    let selected = state.active_suggestion_index().unwrap_or(0);
     let offset = if selected >= max_rows {
         selected + 1 - max_rows
     } else {
@@ -101,7 +94,7 @@ pub(super) fn render_popup_menu(
     let mut popup_lines = Vec::new();
     for (idx, cmd) in filtered_cmds.iter().enumerate().skip(offset).take(max_rows) {
         let is_selected = state
-            .active_suggestion_index
+            .active_suggestion_index()
             .map(|i| i == idx)
             .unwrap_or(false);
 
@@ -114,11 +107,22 @@ pub(super) fn render_popup_menu(
             Span::styled(
                 left_text,
                 Style::default()
-                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
+                    .fg(if is_selected {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_TEXT()
+                    })
                     .bg(COLOR_PANEL())
-                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+                    .add_modifier(if is_selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
-            Span::styled(desc_text, Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL())),
+            Span::styled(
+                desc_text,
+                Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),
+            ),
             Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
         ]);
         popup_lines.push(line);
@@ -131,12 +135,12 @@ pub(super) fn render_popup_menu(
 
 pub(super) fn render_at_popup_menu(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     file_matches: &[String],
     area: ratatui::layout::Rect,
 ) {
     let max_rows = (area.height as usize).max(1);
-    let selected = state.active_suggestion_index.unwrap_or(0);
+    let selected = state.active_suggestion_index().unwrap_or(0);
     let offset = if selected >= max_rows {
         selected + 1 - max_rows
     } else {
@@ -155,9 +159,17 @@ pub(super) fn render_at_popup_menu(
             Span::styled(
                 left_text,
                 Style::default()
-                    .fg(if is_selected { COLOR_PRIMARY() } else { COLOR_TEXT() })
+                    .fg(if is_selected {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_TEXT()
+                    })
                     .bg(COLOR_PANEL())
-                    .add_modifier(if is_selected { Modifier::BOLD } else { Modifier::empty() }),
+                    .add_modifier(if is_selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
             Span::styled(" ".repeat(padding_len), Style::default().bg(COLOR_PANEL())),
         ]);
@@ -188,10 +200,10 @@ fn picker_group_for_url(url: &str) -> &'static str {
 
 /// Model picker rows for the current config profiles, filtered by the
 /// active search string. Shared by rendering (ui) and selection (main).
-pub fn get_filtered_picker_items(state: &AppState) -> Vec<PickerItem> {
-    let search = state.model_picker_search.to_lowercase();
+pub fn get_filtered_picker_items(state: &RenderSnapshot) -> Vec<PickerItem> {
+    let search = state.model_picker_search().to_lowercase();
     state
-        .config
+        .config()
         .models
         .iter()
         .map(|p| PickerItem {
@@ -232,10 +244,7 @@ fn render_padded_panel_with_color(
     panel: Color,
 ) -> ratatui::layout::Rect {
     f.render_widget(Clear, area);
-    f.render_widget(
-        Block::default().style(Style::default().bg(panel)),
-        area,
-    );
+    f.render_widget(Block::default().style(Style::default().bg(panel)), area);
     area.inner(Margin {
         vertical: 1,
         horizontal: 0,
@@ -293,7 +302,7 @@ fn truncate_middle_to_width(text: &str, max_width: usize) -> String {
 
 pub(super) fn render_verbosity_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 10);
@@ -320,7 +329,8 @@ pub(super) fn render_verbosity_picker_modal(
 
     let title_text = "Output verbosity";
     let right_esc = "esc";
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -350,13 +360,13 @@ pub(super) fn render_verbosity_picker_modal(
     ];
 
     let selected_idx = state
-        .modal_picker_index
+        .modal_picker_index()
         .min(choices.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
     for (idx, (name, verbosity_level, desc)) in choices.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let is_current = state.verbosity == *verbosity_level;
+        let is_current = *state.verbosity() == *verbosity_level;
         let active_badge = if is_current { " (active)" } else { "" };
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
@@ -414,7 +424,7 @@ pub(super) fn render_verbosity_picker_modal(
 
 pub(super) fn render_yolo_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 10);
@@ -441,7 +451,8 @@ pub(super) fn render_yolo_picker_modal(
 
     let title_text = "Automatic tool confirmation";
     let right_esc = "esc";
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -471,13 +482,13 @@ pub(super) fn render_yolo_picker_modal(
     ];
 
     let selected_idx = state
-        .modal_picker_index
+        .modal_picker_index()
         .min(choices.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
     for (idx, (name, val, desc)) in choices.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let is_current = state.auto_confirm == *val;
+        let is_current = state.auto_confirm() == *val;
         let active_badge = if is_current { " (active)" } else { "" };
         let full_desc = format!("{}{}", desc, active_badge);
         let line = if is_selected {
@@ -556,7 +567,9 @@ mod tests {
 
         let input_area = Rect::new(0, 2, 100, 10);
         terminal
-            .draw(|frame| render_tool_confirmation_modal(frame, &state, input_area))
+            .draw(|frame| {
+                render_tool_confirmation_modal(frame, &state.render_snapshot(), input_area)
+            })
             .unwrap();
 
         let rendered = (0..14)
@@ -618,19 +631,22 @@ mod tests {
 
         terminal
             .draw(|frame| {
-                render_tool_confirmation_modal(frame, &state, Rect::new(0, 1, 72, 14))
+                render_tool_confirmation_modal(
+                    frame,
+                    &state.render_snapshot(),
+                    Rect::new(0, 1, 72, 14),
+                )
             })
             .unwrap();
 
         let buffer = terminal.backend().buffer();
         let rows = (0..16)
-            .map(|y| {
-                (0..72)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
+            .map(|y| (0..72).map(|x| buffer[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>();
-        assert!(rows.iter().any(|row| row.contains("$ git log") && row.contains('…')));
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("$ git log") && row.contains('…'))
+        );
         assert!(!rows.iter().any(|row| row.contains(command)));
 
         let preview_rows = rows
@@ -648,11 +664,11 @@ mod tests {
 
     #[test]
     fn middle_truncation_keeps_command_start_and_tail() {
-        assert_eq!(truncate_middle_to_width("cargo check --tests", 40), "cargo check --tests");
-        let clipped = truncate_middle_to_width(
-            "git log --oneline; dangerous-command --force",
-            24,
+        assert_eq!(
+            truncate_middle_to_width("cargo check --tests", 40),
+            "cargo check --tests"
         );
+        let clipped = truncate_middle_to_width("git log --oneline; dangerous-command --force", 24);
         assert!(clipped.starts_with("git log"), "clipped command: {clipped}");
         assert!(clipped.ends_with("--force"), "clipped command: {clipped}");
         assert_eq!(clipped.width(), 24);
@@ -670,10 +686,20 @@ mod tests {
         }]);
         terminal
             .draw(|frame| {
-                render_tool_confirmation_modal(frame, &state, Rect::new(0, 2, 80, 5))
+                render_tool_confirmation_modal(
+                    frame,
+                    &state.render_snapshot(),
+                    Rect::new(0, 2, 80, 5),
+                )
             })
             .unwrap();
-        let rendered = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
         assert!(rendered.contains("Would you like to make the following change?"));
         assert!(rendered.contains("1. Yes, proceed"));
         assert!(rendered.contains("2. No, cancel"));
@@ -692,11 +718,20 @@ mod tests {
         }]);
         terminal
             .draw(|frame| {
-                render_tool_confirmation_modal(frame, &state, Rect::new(0, 1, 80, 10))
+                render_tool_confirmation_modal(
+                    frame,
+                    &state.render_snapshot(),
+                    Rect::new(0, 1, 80, 10),
+                )
             })
             .unwrap();
-        let rendered = terminal.backend().buffer().content.iter()
-            .map(|cell| cell.symbol()).collect::<String>();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
 
         assert!(rendered.contains("› 2. No, cancel this tool call"));
         assert!(!rendered.contains("› 1. Yes, proceed"));
@@ -707,15 +742,35 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         let mut state = AppState::new();
         state.pending_tool_confirmation = Some(vec![
-            ToolConfirmation { tool_name: "write_to_file".to_owned(), path: "src/one.rs".to_owned(), content_preview: String::new(), content_bytes: 1 },
-            ToolConfirmation { tool_name: "run_command".to_owned(), path: "cargo check".to_owned(), content_preview: String::new(), content_bytes: 11 },
+            ToolConfirmation {
+                tool_name: "write_to_file".to_owned(),
+                path: "src/one.rs".to_owned(),
+                content_preview: String::new(),
+                content_bytes: 1,
+            },
+            ToolConfirmation {
+                tool_name: "run_command".to_owned(),
+                path: "cargo check".to_owned(),
+                content_preview: String::new(),
+                content_bytes: 11,
+            },
         ]);
         terminal
             .draw(|frame| {
-                render_tool_confirmation_modal(frame, &state, Rect::new(0, 2, 100, 12))
+                render_tool_confirmation_modal(
+                    frame,
+                    &state.render_snapshot(),
+                    Rect::new(0, 2, 100, 12),
+                )
             })
             .unwrap();
-        let rendered = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
         assert!(rendered.contains("approve these 2 tool calls"));
         assert!(rendered.contains("write_to_file src/one.rs"));
         assert!(rendered.contains("run_command $ cargo check"));
@@ -787,10 +842,21 @@ mod tests {
         let mut state = AppState::new();
         state.modal_picker_index = 1;
         terminal
-            .draw(|frame| render_verbosity_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
+            .draw(|frame| {
+                render_verbosity_picker_modal(
+                    frame,
+                    &state.render_snapshot(),
+                    Rect::new(0, 12, 100, 3),
+                )
+            })
             .unwrap();
-        let rendered = terminal.backend().buffer().content.iter()
-            .map(|cell| cell.symbol()).collect::<String>();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
 
         assert!(rendered.contains("Output verbosity"));
         assert!(rendered.contains("● High"));
@@ -803,10 +869,17 @@ mod tests {
         let mut state = AppState::new();
         state.modal_picker_index = 0;
         terminal
-            .draw(|frame| render_yolo_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
+            .draw(|frame| {
+                render_yolo_picker_modal(frame, &state.render_snapshot(), Rect::new(0, 12, 100, 3))
+            })
             .unwrap();
-        let rendered = terminal.backend().buffer().content.iter()
-            .map(|cell| cell.symbol()).collect::<String>();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
 
         assert!(rendered.contains("Automatic tool confirmation"));
         assert!(rendered.contains("● On"));
@@ -820,10 +893,21 @@ mod tests {
         let mut state = AppState::new();
         state.modal_picker_index = 0;
         terminal
-            .draw(|frame| render_effort_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
+            .draw(|frame| {
+                render_effort_picker_modal(
+                    frame,
+                    &state.render_snapshot(),
+                    Rect::new(0, 12, 100, 3),
+                )
+            })
             .unwrap();
-        let rendered = terminal.backend().buffer().content.iter()
-            .map(|cell| cell.symbol()).collect::<String>();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
 
         assert!(rendered.contains("Reasoning effort"));
         assert!(rendered.contains("● Low"));
@@ -836,20 +920,29 @@ mod tests {
     fn history_picker_renders_borderless_full_width_options() {
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         let mut state = AppState::new();
-        state.history_picker_sessions = vec![
-            crate::config::SessionMeta {
-                path: std::path::PathBuf::from("/tmp/test-1.json"),
-                title: "Build a polished browser tower-defense game with canvas".to_string(),
-                message_count: 6,
-                when: "17:35".to_string(),
-            },
-        ];
+        state.history_picker_sessions = vec![crate::config::SessionMeta {
+            path: std::path::PathBuf::from("/tmp/test-1.json"),
+            title: "Build a polished browser tower-defense game with canvas".to_string(),
+            message_count: 6,
+            when: "17:35".to_string(),
+        }];
         state.history_picker_index = 0;
         terminal
-            .draw(|frame| render_history_picker_modal(frame, &state, Rect::new(0, 12, 100, 3)))
+            .draw(|frame| {
+                render_history_picker_modal(
+                    frame,
+                    &state.render_snapshot(),
+                    Rect::new(0, 12, 100, 3),
+                )
+            })
             .unwrap();
-        let rendered = terminal.backend().buffer().content.iter()
-            .map(|cell| cell.symbol()).collect::<String>();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
 
         assert!(rendered.contains("Resume session"));
         assert!(rendered.contains("●"));
@@ -860,7 +953,7 @@ mod tests {
 
 pub(super) fn render_thinking_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 10);
@@ -887,7 +980,8 @@ pub(super) fn render_thinking_picker_modal(
 
     let title_text = "Model thinking";
     let right_esc = "esc";
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -904,10 +998,10 @@ pub(super) fn render_thinking_picker_modal(
     );
 
     let current = state
-        .config
+        .config()
         .models
         .iter()
-        .find(|prof| prof.url == state.api_base_url)
+        .find(|prof| prof.url == state.api_base_url())
         .and_then(|prof| prof.enable_thinking);
 
     let choices = [
@@ -921,7 +1015,7 @@ pub(super) fn render_thinking_picker_modal(
     ];
 
     let selected_idx = state
-        .modal_picker_index
+        .modal_picker_index()
         .min(choices.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
@@ -985,7 +1079,7 @@ pub(super) fn render_thinking_picker_modal(
 
 pub(super) fn render_effort_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 11);
@@ -1012,7 +1106,8 @@ pub(super) fn render_effort_picker_modal(
 
     let title_text = "Reasoning effort";
     let right_esc = "esc";
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -1029,10 +1124,10 @@ pub(super) fn render_effort_picker_modal(
     );
 
     let current = state
-        .config
+        .config()
         .models
         .iter()
-        .find(|prof| prof.url == state.api_base_url)
+        .find(|prof| prof.url == state.api_base_url())
         .and_then(|prof| prof.reasoning_effort.as_deref());
 
     let choices = [
@@ -1043,7 +1138,7 @@ pub(super) fn render_effort_picker_modal(
     ];
 
     let selected_idx = state
-        .modal_picker_index
+        .modal_picker_index()
         .min(choices.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
@@ -1107,7 +1202,7 @@ pub(super) fn render_effort_picker_modal(
 
 pub(super) fn render_protocol_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 10);
@@ -1134,7 +1229,8 @@ pub(super) fn render_protocol_picker_modal(
 
     let title_text = "Tool protocol";
     let right_esc = "esc";
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -1171,7 +1267,7 @@ pub(super) fn render_protocol_picker_modal(
     ];
 
     let selected_idx = state
-        .modal_picker_index
+        .modal_picker_index()
         .min(choices.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
@@ -1236,7 +1332,7 @@ pub(super) fn render_protocol_picker_modal(
 /// Render the startup Homebrew update prompt directly above the chat input.
 pub(super) fn render_update_prompt_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 14);
@@ -1277,7 +1373,7 @@ pub(super) fn render_update_prompt_modal(
         modal_chunks[0],
     );
 
-    let latest = match state.update_check {
+    let latest = match state.update_check() {
         crate::update::UpdateState::Available(latest) => latest,
         _ => crate::update::current_version(),
     };
@@ -1312,10 +1408,7 @@ pub(super) fn render_update_prompt_modal(
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(command_label, Style::default().fg(COLOR_MUTED())),
-            Span::styled(
-                command_text,
-                Style::default().fg(COLOR_PRIMARY()),
-            ),
+            Span::styled(command_text, Style::default().fg(COLOR_PRIMARY())),
         ]))
         .style(Style::default().bg(COLOR_PANEL())),
         modal_chunks[2],
@@ -1326,7 +1419,7 @@ pub(super) fn render_update_prompt_modal(
         ("Skip", "do not update this time"),
         ("Skip until next version", "hide this version for this run"),
     ];
-    let selected = state.update_prompt_index.min(options.len() - 1);
+    let selected = state.update_prompt_index().min(options.len() - 1);
     let option_lines = options
         .iter()
         .enumerate()
@@ -1334,8 +1427,8 @@ pub(super) fn render_update_prompt_modal(
             let selected = index == selected;
             let prefix = if selected { " ● " } else { "   " };
             let left = format!("{prefix}{label}");
-            let padding = (inner_area.width as usize)
-                .saturating_sub(left.width() + description.width());
+            let padding =
+                (inner_area.width as usize).saturating_sub(left.width() + description.width());
             if selected {
                 Line::from(vec![
                     Span::styled(
@@ -1385,13 +1478,13 @@ pub(super) fn render_update_prompt_modal(
 /// Render the model picker directly above the chat input.
 pub(super) fn render_model_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let filtered_items = get_filtered_picker_items(state);
 
     let selected_idx = state
-        .model_picker_index
+        .model_picker_index()
         .min(filtered_items.len().saturating_sub(1));
 
     let modal_area = input_anchor_rect(f, input_area, 14);
@@ -1416,14 +1509,19 @@ pub(super) fn render_model_picker_modal(
         ])
         .split(inner_area);
 
-    let search_part = if state.model_picker_search.is_empty() {
+    let search_part = if state.model_picker_search().is_empty() {
         "".to_owned()
     } else {
-        format!(" · {}", state.model_picker_search)
+        format!(" · {}", state.model_picker_search())
     };
     let title_text = format!("Select model{search_part}");
-    let right_esc = if state.model_picker_search.is_empty() { "type to search  esc" } else { "esc" };
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let right_esc = if state.model_picker_search().is_empty() {
+        "type to search  esc"
+    } else {
+        "esc"
+    };
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -1510,11 +1608,11 @@ pub(super) fn render_model_picker_modal(
 /// Render the session history picker modal overlay (/history).
 pub(super) fn render_history_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     // Confirmation overlay for delete (Ctrl+D)
-    if let Some(del_idx) = state.pending_delete_session_idx {
+    if let Some(del_idx) = state.pending_delete_session_idx() {
         let modal_area = input_anchor_rect(f, input_area, 10);
         f.render_widget(Clear, modal_area);
         f.render_widget(
@@ -1549,7 +1647,7 @@ pub(super) fn render_history_picker_modal(
             modal_chunks[0],
         );
 
-        if let Some(meta) = state.history_picker_sessions.get(del_idx) {
+        if let Some(meta) = state.history_picker_sessions().get(del_idx) {
             let title_line = Line::from(vec![
                 Span::styled("  session  ", Style::default().fg(COLOR_MUTED())),
                 Span::styled(
@@ -1601,9 +1699,9 @@ pub(super) fn render_history_picker_modal(
         return;
     }
 
-    let sessions = &state.history_picker_sessions;
+    let sessions = &state.history_picker_sessions();
     let selected_idx = state
-        .history_picker_index
+        .history_picker_index()
         .min(sessions.len().saturating_sub(1));
 
     let modal_area = input_anchor_rect(f, input_area, 14);
@@ -1630,7 +1728,8 @@ pub(super) fn render_history_picker_modal(
 
     let title_text = "Resume session";
     let right_esc = "esc";
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -1706,7 +1805,7 @@ pub(super) fn render_history_picker_modal(
         Span::styled("delete ", Style::default().fg(COLOR_TEXT())),
         Span::styled("ctrl+d", Style::default().fg(COLOR_MUTED())),
     ];
-    if state.history_picker_truncated {
+    if state.history_picker_truncated() {
         footer_spans.push(Span::styled(
             "   (Truncated to 50 sessions. Use /delete_chat to clean up.)",
             Style::default()
@@ -1726,11 +1825,11 @@ pub(super) fn render_history_picker_modal(
 /// the user switches the active view.
 pub(super) fn render_subagent_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let total = state.subagents.len() + 1;
-    let selected = state.subagent_picker_index.min(total.saturating_sub(1));
+    let total = state.subagents().len() + 1;
+    let selected = state.subagent_picker_index().min(total.saturating_sub(1));
     let modal_area = input_anchor_rect(f, input_area, 18);
     f.render_widget(Clear, modal_area);
     f.render_widget(
@@ -1753,7 +1852,8 @@ pub(super) fn render_subagent_picker_modal(
         .split(inner);
     let title_text = "Agent contexts";
     let right_esc = "esc";
-    let padding_header = (inner.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner.width as usize).saturating_sub(title_text.width() + right_esc.width());
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
@@ -1784,10 +1884,10 @@ pub(super) fn render_subagent_picker_modal(
         root_selected,
         "main",
         "root conversation",
-        state.selected_subagent_id.is_none(),
+        state.selected_subagent_id().is_none(),
         inner.width as usize,
     ));
-    for (index, agent) in state.subagents.iter().enumerate() {
+    for (index, agent) in state.subagents().iter().enumerate() {
         let is_selected = selected == index + 1;
         let status = match agent.status {
             crate::app::SubAgentStatus::Running => "running",
@@ -1800,7 +1900,7 @@ pub(super) fn render_subagent_picker_modal(
             is_selected,
             &agent.name,
             &format!("{status} · {task}"),
-            state.selected_subagent_id == Some(agent.id),
+            state.selected_subagent_id() == Some(agent.id),
             inner.width as usize,
         ));
     }
@@ -1811,14 +1911,20 @@ pub(super) fn render_subagent_picker_modal(
         0
     };
     f.render_widget(
-        Paragraph::new(lines.into_iter().skip(offset).take(list_height).collect::<Vec<_>>())
-            .style(Style::default().bg(COLOR_PANEL())),
+        Paragraph::new(
+            lines
+                .into_iter()
+                .skip(offset)
+                .take(list_height)
+                .collect::<Vec<_>>(),
+        )
+        .style(Style::default().bg(COLOR_PANEL())),
         chunks[2],
     );
 
     let detail = if selected == 0 {
         "main · root context".to_owned()
-    } else if let Some(agent) = state.subagents.get(selected - 1) {
+    } else if let Some(agent) = state.subagents().get(selected - 1) {
         let status = match agent.status {
             crate::app::SubAgentStatus::Running => "running",
             crate::app::SubAgentStatus::Completed => "completed",
@@ -1830,7 +1936,12 @@ pub(super) fn render_subagent_picker_modal(
             .last()
             .map(|message| message.content.lines().next().unwrap_or_default())
             .unwrap_or_default();
-        format!("{} · {} · {}", agent.name, status, last.chars().take(48).collect::<String>())
+        format!(
+            "{} · {} · {}",
+            agent.name,
+            status,
+            last.chars().take(48).collect::<String>()
+        )
     } else {
         "No subagent contexts".to_owned()
     };
@@ -1868,11 +1979,11 @@ fn agent_picker_line(
 
 pub(super) fn render_mcp_config_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let servers = &state.config.mcp_servers;
-    let selected_idx = state.mcp_picker_index;
+    let servers = &state.config().mcp_servers;
+    let selected_idx = state.mcp_picker_index();
 
     let modal_area = input_anchor_rect(f, input_area, 14);
     f.render_widget(Clear, modal_area);
@@ -1896,7 +2007,7 @@ pub(super) fn render_mcp_config_modal(
         ])
         .split(inner_area);
 
-    if let Some(ref edit_state) = state.mcp_edit_state {
+    if let Some(ref edit_state) = state.mcp_edit_state() {
         // --- ADD / EDIT MODE ---
         let title = if edit_state.is_add {
             "Add MCP Server"
@@ -1996,7 +2107,8 @@ pub(super) fn render_mcp_config_modal(
         // --- LIST MODE ---
         let title_text = "MCP Servers Configuration";
         let right_esc = "esc";
-        let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+        let padding_header =
+            (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
         let header_line = Line::from(vec![
             Span::styled(
                 title_text,
@@ -2027,8 +2139,8 @@ pub(super) fn render_mcp_config_modal(
             let line = if is_selected {
                 let left_text = format!(" ● {}", srv.name);
                 let right_text = format!(" [{}] {}", status, cmd_text);
-                let padding_len =
-                    (inner_area.width as usize).saturating_sub(left_text.width() + right_text.width());
+                let padding_len = (inner_area.width as usize)
+                    .saturating_sub(left_text.width() + right_text.width());
 
                 Line::from(vec![
                     Span::styled(
@@ -2254,10 +2366,10 @@ pub const PALETTE_ITEMS: &[PaletteItem] = &[
 
 pub(super) fn render_command_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let search = state.command_picker_search.to_lowercase();
+    let search = state.command_picker_search().to_lowercase();
     let filtered_items: Vec<&PaletteItem> = PALETTE_ITEMS
         .iter()
         .filter(|item| {
@@ -2267,7 +2379,7 @@ pub(super) fn render_command_picker_modal(
         .collect();
 
     let selected_idx = state
-        .command_picker_index
+        .command_picker_index()
         .min(filtered_items.len().saturating_sub(1));
 
     let modal_area = input_anchor_rect(f, input_area, 14);
@@ -2292,14 +2404,19 @@ pub(super) fn render_command_picker_modal(
         ])
         .split(inner_area);
 
-    let search_part = if state.command_picker_search.is_empty() {
+    let search_part = if state.command_picker_search().is_empty() {
         "".to_owned()
     } else {
-        format!(" · {}", state.command_picker_search)
+        format!(" · {}", state.command_picker_search())
     };
     let title_text = format!("Commands{search_part}");
-    let right_esc = if state.command_picker_search.is_empty() { "type to search  esc" } else { "esc" };
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let right_esc = if state.command_picker_search().is_empty() {
+        "type to search  esc"
+    } else {
+        "esc"
+    };
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -2320,8 +2437,8 @@ pub(super) fn render_command_picker_modal(
         let is_selected = selected_idx == idx;
         let line = if is_selected {
             let left_text = format!(" ● {}", item.name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + item.shortcut.width());
+            let padding_len = (inner_area.width as usize)
+                .saturating_sub(left_text.width() + item.shortcut.width());
             Line::from(vec![
                 Span::styled(
                     left_text,
@@ -2341,12 +2458,15 @@ pub(super) fn render_command_picker_modal(
             ])
         } else {
             let left_text = format!("   {}", item.name);
-            let padding_len =
-                (inner_area.width as usize).saturating_sub(left_text.width() + item.shortcut.width());
+            let padding_len = (inner_area.width as usize)
+                .saturating_sub(left_text.width() + item.shortcut.width());
             Line::from(vec![
                 Span::styled(left_text, Style::default().fg(COLOR_TEXT())),
                 Span::styled(" ".repeat(padding_len), Style::default()),
-                Span::styled(item.shortcut.to_string(), Style::default().fg(COLOR_MUTED())),
+                Span::styled(
+                    item.shortcut.to_string(),
+                    Style::default().fg(COLOR_MUTED()),
+                ),
             ])
         };
         list_lines.push(line);
@@ -2381,8 +2501,9 @@ pub(super) fn render_command_picker_modal(
     );
 }
 
-pub(super) fn tool_confirmation_height(state: &AppState, available: u16) -> u16 {
-    let Some(confirmations) = state.pending_tool_confirmation.as_ref() else {
+pub(super) fn tool_confirmation_height(state: &RenderSnapshot, available: u16) -> u16 {
+    let pending = state.pending_tool_confirmation();
+    let Some(confirmations) = pending else {
         return 3;
     };
     let preview = confirmations
@@ -2403,14 +2524,15 @@ pub(super) fn tool_confirmation_height(state: &AppState, available: u16) -> u16 
 /// presentation and keeps the normal composer hidden while a decision is due.
 pub(super) fn render_tool_confirmation_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     area: ratatui::layout::Rect,
 ) {
-    let confirmations = match &state.pending_tool_confirmation {
+    let pending = state.pending_tool_confirmation();
+    let confirmations = match pending {
         Some(confirmations) if !confirmations.is_empty() => confirmations,
         _ => return,
     };
-    let panel = crate::ui::theme::get_palette(&state.config.theme).panel;
+    let panel = crate::ui::theme::get_palette(&state.config().theme).panel;
     let content_area = render_padded_panel_with_color(f, area, panel);
 
     let mut lines = Vec::new();
@@ -2422,11 +2544,16 @@ pub(super) fn render_tool_confirmation_modal(
     } else if single {
         "Would you like to make the following change?".to_owned()
     } else {
-        format!("Would you like to approve these {} tool calls?", confirmations.len())
+        format!(
+            "Would you like to approve these {} tool calls?",
+            confirmations.len()
+        )
     };
     lines.push(Line::from(Span::styled(
         format!("  {heading}"),
-        Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(COLOR_TEXT())
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -2453,16 +2580,17 @@ pub(super) fn render_tool_confirmation_modal(
             );
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(first.tool_name.clone(), Style::default().fg(COLOR_SECONDARY())),
+                Span::styled(
+                    first.tool_name.clone(),
+                    Style::default().fg(COLOR_SECONDARY()),
+                ),
                 Span::raw(" "),
                 Span::styled(path, Style::default().fg(COLOR_TEXT())),
             ]));
         }
         for source in first.content_preview.lines().take(8) {
-            let source = truncate_middle_to_width(
-                source,
-                content_area.width.saturating_sub(4) as usize,
-            );
+            let source =
+                truncate_middle_to_width(source, content_area.width.saturating_sub(4) as usize);
             let mut line = highlight_diff_line(
                 &source,
                 content_area.width.saturating_sub(4) as usize,
@@ -2475,7 +2603,10 @@ pub(super) fn render_tool_confirmation_modal(
         for confirmation in confirmations.iter().take(8) {
             let mut spans = vec![
                 Span::raw("  • "),
-                Span::styled(confirmation.tool_name.clone(), Style::default().fg(COLOR_SECONDARY())),
+                Span::styled(
+                    confirmation.tool_name.clone(),
+                    Style::default().fg(COLOR_SECONDARY()),
+                ),
                 Span::raw(" "),
             ];
             if confirmation.tool_name == "run_command" {
@@ -2488,10 +2619,9 @@ pub(super) fn render_tool_confirmation_modal(
                     &confirmation.path,
                     (content_area.width as usize).saturating_sub(prefix_width),
                 );
-                if let Some(command) =
-                    highlight_shell_command(&command, panel, false)
-                        .into_iter()
-                        .next()
+                if let Some(command) = highlight_shell_command(&command, panel, false)
+                    .into_iter()
+                    .next()
                 {
                     spans.extend(command.spans);
                 }
@@ -2510,30 +2640,58 @@ pub(super) fn render_tool_confirmation_modal(
     }
 
     lines.push(Line::from(""));
-    let approve_selected = state.tool_confirmation_selected == 0;
+    let approve_selected = state.tool_confirmation_selected() == 0;
     lines.push(Line::from(vec![
         Span::styled(
             if approve_selected { "› " } else { "  " },
-            Style::default().fg(if approve_selected { COLOR_PRIMARY() } else { COLOR_MUTED() })
-                .add_modifier(if approve_selected { Modifier::BOLD } else { Modifier::empty() }),
+            Style::default()
+                .fg(if approve_selected {
+                    COLOR_PRIMARY()
+                } else {
+                    COLOR_MUTED()
+                })
+                .add_modifier(if approve_selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ),
         Span::styled(
             "1. Yes, proceed",
-            Style::default().fg(COLOR_TEXT())
-                .add_modifier(if approve_selected { Modifier::BOLD } else { Modifier::empty() }),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(if approve_selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
         ),
         Span::styled(" (y)", Style::default().fg(COLOR_MUTED())),
     ]));
     lines.push(Line::from(vec![
         Span::styled(
             if approve_selected { "  " } else { "› " },
-            Style::default().fg(if approve_selected { COLOR_MUTED() } else { COLOR_PRIMARY() })
-                .add_modifier(if approve_selected { Modifier::empty() } else { Modifier::BOLD }),
+            Style::default()
+                .fg(if approve_selected {
+                    COLOR_MUTED()
+                } else {
+                    COLOR_PRIMARY()
+                })
+                .add_modifier(if approve_selected {
+                    Modifier::empty()
+                } else {
+                    Modifier::BOLD
+                }),
         ),
         Span::styled(
             "2. No, cancel this tool call ",
-            Style::default().fg(COLOR_TEXT())
-                .add_modifier(if approve_selected { Modifier::empty() } else { Modifier::BOLD }),
+            Style::default()
+                .fg(COLOR_TEXT())
+                .add_modifier(if approve_selected {
+                    Modifier::empty()
+                } else {
+                    Modifier::BOLD
+                }),
         ),
         Span::styled("(esc)", Style::default().fg(COLOR_MUTED())),
     ]));
@@ -2541,7 +2699,11 @@ pub(super) fn render_tool_confirmation_modal(
     lines.push(Line::from(Span::styled(
         format!(
             "  Press enter to confirm · tab to {} auto-confirm",
-            if state.auto_confirm { "disable" } else { "enable" }
+            if state.auto_confirm() {
+                "disable"
+            } else {
+                "enable"
+            }
         ),
         Style::default().fg(COLOR_MUTED()),
     )));
@@ -2597,10 +2759,11 @@ pub(super) fn render_tool_confirmation_modal(
 #[allow(dead_code)]
 fn render_tool_confirmation_modal_legacy(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let confirmations = match &state.pending_tool_confirmation {
+    let pending = state.pending_tool_confirmation();
+    let confirmations = match pending {
         Some(c) if !c.is_empty() => c,
         _ => return,
     };
@@ -2667,9 +2830,9 @@ fn render_tool_confirmation_modal_legacy(
                     Constraint::Length(1),                               // 2: Tool & target line
                     Constraint::Length(1),                               // 3: Auto-confirm status
                     Constraint::Length(1),                               // 4: Spacer
-                    Constraint::Min(if has_preview { 2 } else { 0 }),    // 5: Preview Diff / Content
+                    Constraint::Min(if has_preview { 2 } else { 0 }), // 5: Preview Diff / Content
                     Constraint::Length(if has_preview { 1 } else { 0 }), // 6: Spacer
-                    Constraint::Length(1),                               // 7: Footer buttons
+                    Constraint::Length(1),                            // 7: Footer buttons
                 ]
             })
             .split(inner_area);
@@ -2739,7 +2902,7 @@ fn render_tool_confirmation_modal_legacy(
             f.render_widget(Paragraph::new(tool_line), modal_chunks[2]);
         }
 
-        let auto_confirm_status = if state.auto_confirm {
+        let auto_confirm_status = if state.auto_confirm() {
             "[x] Auto-confirm future tool calls"
         } else {
             "[ ] Auto-confirm future tool calls"
@@ -2758,7 +2921,7 @@ fn render_tool_confirmation_modal_legacy(
 
         if !confirmation.content_preview.is_empty() {
             let diff_height = modal_chunks[5].height as usize;
-            let scroll = state.modal_scroll_row as usize;
+            let scroll = state.modal_scroll_row() as usize;
 
             let has_null = confirmation.content_preview.contains('\x00');
             if has_null {
@@ -2832,7 +2995,7 @@ fn render_tool_confirmation_modal_legacy(
         {
             format!(
                 "  ↑/↓ scroll ({}/{})",
-                state.modal_scroll_row + 1,
+                state.modal_scroll_row() + 1,
                 total_lines
             )
         } else {
@@ -2942,7 +3105,11 @@ fn render_tool_confirmation_modal_legacy(
             let line = Line::from(vec![
                 Span::styled(
                     format!("{} {}. ", marker, i + 1),
-                    Style::default().fg(if i == 0 { COLOR_PRIMARY() } else { COLOR_MUTED() }),
+                    Style::default().fg(if i == 0 {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_MUTED()
+                    }),
                 ),
                 Span::styled(
                     format!("{:<15}", action),
@@ -2960,7 +3127,7 @@ fn render_tool_confirmation_modal_legacy(
 
         f.render_widget(Paragraph::new(tool_lines), modal_chunks[2]);
 
-        let auto_confirm_status = if state.auto_confirm {
+        let auto_confirm_status = if state.auto_confirm() {
             "[x] Auto-confirm future tool calls"
         } else {
             "[ ] Auto-confirm future tool calls"
@@ -3006,12 +3173,13 @@ fn render_tool_confirmation_modal_legacy(
 
 /// Interactive `ask_question` modal: renders the question and its options, with
 /// the highlighted option (and, for multi-select, ticked options) emphasized.
-pub(super) fn question_height(state: &AppState, width: u16, available: u16) -> u16 {
-    let Some(question) = state.pending_question.as_ref() else {
+pub(super) fn question_height(state: &RenderSnapshot, width: u16, available: u16) -> u16 {
+    let pending = state.pending_question();
+    let Some(question) = pending else {
         return 3;
     };
-    let question_rows = textwrap_simple(&question.question, width.saturating_sub(4).max(10) as usize)
-        .len() as u16;
+    let question_rows =
+        textwrap_simple(&question.question, width.saturating_sub(4).max(10) as usize).len() as u16;
     let option_rows = if question.custom_input.is_some() {
         1
     } else {
@@ -3022,20 +3190,21 @@ pub(super) fn question_height(state: &AppState, width: u16, available: u16) -> u
 
 pub(super) fn render_question_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     area: ratatui::layout::Rect,
 ) {
-    let Some(question) = state.pending_question.as_ref() else {
+    let pending = state.pending_question();
+    let Some(question) = pending else {
         return;
     };
-    let panel = crate::ui::theme::get_palette(&state.config.theme).panel;
+    let panel = crate::ui::theme::get_palette(&state.config().theme).panel;
     let content_area = render_padded_panel_with_color(f, area, panel);
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "  Question 1/1 (1 unanswered)",
-            Style::default().fg(COLOR_TEXT()).add_modifier(Modifier::BOLD),
-        )),
-    ];
+    let mut lines = vec![Line::from(Span::styled(
+        "  Question 1/1 (1 unanswered)",
+        Style::default()
+            .fg(COLOR_TEXT())
+            .add_modifier(Modifier::BOLD),
+    ))];
     for line in textwrap_simple(
         &question.question,
         content_area.width.saturating_sub(4).max(10) as usize,
@@ -3047,10 +3216,23 @@ pub(super) fn render_question_modal(
     let custom_row = if let Some(custom) = question.custom_input.as_ref() {
         let row = lines.len() as u16;
         lines.push(Line::from(vec![
-            Span::styled("  › ", Style::default().fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD)),
             Span::styled(
-                if custom.is_empty() { "Type your answer (optional)".to_owned() } else { custom.clone() },
-                Style::default().fg(if custom.is_empty() { COLOR_MUTED() } else { COLOR_TEXT() }),
+                "  › ",
+                Style::default()
+                    .fg(COLOR_PRIMARY())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                if custom.is_empty() {
+                    "Type your answer (optional)".to_owned()
+                } else {
+                    custom.clone()
+                },
+                Style::default().fg(if custom.is_empty() {
+                    COLOR_MUTED()
+                } else {
+                    COLOR_TEXT()
+                }),
             ),
         ]));
         Some(row)
@@ -3061,7 +3243,11 @@ pub(super) fn render_question_modal(
             lines.push(Line::from(vec![
                 Span::styled(
                     if selected { "  › " } else { "    " },
-                    Style::default().fg(if selected { COLOR_PRIMARY() } else { COLOR_TEXT() }),
+                    Style::default().fg(if selected {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_TEXT()
+                    }),
                 ),
                 Span::styled(
                     if question.is_multi_select {
@@ -3069,13 +3255,19 @@ pub(super) fn render_question_modal(
                     } else {
                         format!("{}. ", index + 1)
                     },
-                    Style::default().fg(if selected { COLOR_PRIMARY() } else { COLOR_MUTED() }),
+                    Style::default().fg(if selected {
+                        COLOR_PRIMARY()
+                    } else {
+                        COLOR_MUTED()
+                    }),
                 ),
                 Span::styled(
                     option.clone(),
-                    Style::default()
-                        .fg(COLOR_TEXT())
-                        .add_modifier(if selected { Modifier::BOLD } else { Modifier::empty() }),
+                    Style::default().fg(COLOR_TEXT()).add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
                 ),
             ]));
         }
@@ -3083,13 +3275,25 @@ pub(super) fn render_question_modal(
         lines.push(Line::from(vec![
             Span::styled(
                 if custom_selected { "  › " } else { "    " },
-                Style::default().fg(if custom_selected { COLOR_PRIMARY() } else { COLOR_TEXT() }),
+                Style::default().fg(if custom_selected {
+                    COLOR_PRIMARY()
+                } else {
+                    COLOR_TEXT()
+                }),
             ),
             Span::styled(
                 "Type your own answer",
                 Style::default()
-                    .fg(if custom_selected { COLOR_TEXT() } else { COLOR_MUTED() })
-                    .add_modifier(if custom_selected { Modifier::BOLD } else { Modifier::empty() }),
+                    .fg(if custom_selected {
+                        COLOR_TEXT()
+                    } else {
+                        COLOR_MUTED()
+                    })
+                    .add_modifier(if custom_selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
             ),
         ]));
         None
@@ -3129,10 +3333,10 @@ pub(super) fn render_question_modal(
 #[allow(dead_code)]
 fn render_question_modal_legacy(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let Some(q) = &state.pending_question else {
+    let Some(q) = &state.pending_question() else {
         return;
     };
 
@@ -3370,7 +3574,7 @@ fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
 
 pub(super) fn render_theme_picker_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 12);
@@ -3397,7 +3601,8 @@ pub(super) fn render_theme_picker_modal(
 
     let title_text = "Select theme (live preview)";
     let right_esc = "esc";
-    let padding_header = (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
+    let padding_header =
+        (inner_area.width as usize).saturating_sub(title_text.width() + right_esc.width());
     let header_line = Line::from(vec![
         Span::styled(
             title_text,
@@ -3414,12 +3619,16 @@ pub(super) fn render_theme_picker_modal(
     );
 
     let themes = crate::ui::theme::load_available_themes();
-    let selected_idx = state.theme_picker_index.min(themes.len().saturating_sub(1));
+    let selected_idx = state
+        .theme_picker_index()
+        .min(themes.len().saturating_sub(1));
 
     let mut list_lines = Vec::new();
     for (idx, theme) in themes.iter().enumerate() {
         let is_selected = selected_idx == idx;
-        let is_active = state.theme_picker_initial.eq_ignore_ascii_case(&theme.name);
+        let is_active = state
+            .theme_picker_initial()
+            .eq_ignore_ascii_case(&theme.name);
         let active_badge = if is_active { " (active)" } else { "" };
         let full_desc = format!("{}{}", theme.description, active_badge);
         let line = if is_selected {
@@ -3500,14 +3709,14 @@ pub struct ContextBreakdown {
     pub free_tokens: usize,
 }
 
-pub fn calculate_context_breakdown(state: &AppState) -> ContextBreakdown {
+pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     let context_window = state.active_context_window() as usize;
 
     let mut user_tokens = 0;
     let mut assistant_tokens = 0;
     let mut tool_tokens = 0;
 
-    for msg in &state.history {
+    for msg in state.history() {
         match msg.role.as_str() {
             "user" => {
                 user_tokens += crate::network::compaction::estimate_tokens(&msg.content);
@@ -3531,14 +3740,15 @@ pub fn calculate_context_breakdown(state: &AppState) -> ContextBreakdown {
     }
 
     let protocol = state
-        .config
+        .config()
         .models
         .iter()
-        .find(|m| m.url == state.api_base_url)
+        .find(|m| m.url == state.api_base_url())
         .and_then(|m| m.tool_protocol)
-        .unwrap_or(state.config.tool_protocol);
-    let agent_mode = state.agent_mode;
-    let tools_prompt = crate::tools::tool_system_prompt(state.delegation_active, protocol, agent_mode);
+        .unwrap_or(state.config().tool_protocol);
+    let agent_mode = state.agent_mode();
+    let tools_prompt =
+        crate::tools::tool_system_prompt(state.delegation_active(), protocol, agent_mode);
     let full_system_prompt_tokens = crate::network::compaction::estimate_tokens(&tools_prompt);
 
     let skills = crate::skills::discover_skills();
@@ -3559,7 +3769,7 @@ pub fn calculate_context_breakdown(state: &AppState) -> ContextBreakdown {
         .saturating_sub(skills_tokens);
 
     let subagent_tokens: usize = state
-        .subagents
+        .subagents()
         .iter()
         .flat_map(|sa| sa.history.iter())
         .map(crate::network::compaction::estimate_message_tokens)
@@ -3576,7 +3786,7 @@ pub fn calculate_context_breakdown(state: &AppState) -> ContextBreakdown {
     let free_tokens = context_window.saturating_sub(total_used);
 
     ContextBreakdown {
-        model_name: state.model_name.clone(),
+        model_name: state.model_name().to_owned(),
         context_window,
         user_tokens,
         assistant_tokens,
@@ -3602,7 +3812,7 @@ fn format_token_count(tokens: usize) -> String {
 
 pub(super) fn render_context_modal(
     f: &mut Frame,
-    state: &AppState,
+    state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
     let modal_area = input_anchor_rect(f, input_area, 18);
@@ -3786,14 +3996,70 @@ pub(super) fn render_context_modal(
 
     // Category breakdown lines
     let categories = [
-        ("●", color_user, "User messages", breakdown.user_tokens, pct(breakdown.user_tokens), true),
-        ("●", color_asst, "Agent responses", breakdown.assistant_tokens, pct(breakdown.assistant_tokens), true),
-        ("●", color_tool, "Tool calls", breakdown.tool_tokens, pct(breakdown.tool_tokens), true),
-        ("⛃", color_sys_p, "System prompt", breakdown.system_prompt_tokens, pct(breakdown.system_prompt_tokens), true),
-        ("⛃", color_sys_t, "System tools", breakdown.system_tools_tokens, pct(breakdown.system_tools_tokens), true),
-        ("⛃", color_skill, "Skills", breakdown.skills_tokens, pct(breakdown.skills_tokens), true),
-        ("⛃", color_sub, "Subagents", breakdown.subagent_tokens, pct(breakdown.subagent_tokens), true),
-        ("□", color_free, "Free space", breakdown.free_tokens, free_pct, false),
+        (
+            "●",
+            color_user,
+            "User messages",
+            breakdown.user_tokens,
+            pct(breakdown.user_tokens),
+            true,
+        ),
+        (
+            "●",
+            color_asst,
+            "Agent responses",
+            breakdown.assistant_tokens,
+            pct(breakdown.assistant_tokens),
+            true,
+        ),
+        (
+            "●",
+            color_tool,
+            "Tool calls",
+            breakdown.tool_tokens,
+            pct(breakdown.tool_tokens),
+            true,
+        ),
+        (
+            "⛃",
+            color_sys_p,
+            "System prompt",
+            breakdown.system_prompt_tokens,
+            pct(breakdown.system_prompt_tokens),
+            true,
+        ),
+        (
+            "⛃",
+            color_sys_t,
+            "System tools",
+            breakdown.system_tools_tokens,
+            pct(breakdown.system_tools_tokens),
+            true,
+        ),
+        (
+            "⛃",
+            color_skill,
+            "Skills",
+            breakdown.skills_tokens,
+            pct(breakdown.skills_tokens),
+            true,
+        ),
+        (
+            "⛃",
+            color_sub,
+            "Subagents",
+            breakdown.subagent_tokens,
+            pct(breakdown.subagent_tokens),
+            true,
+        ),
+        (
+            "□",
+            color_free,
+            "Free space",
+            breakdown.free_tokens,
+            free_pct,
+            false,
+        ),
     ];
 
     for (icon, color, label, count, percent, include_tokens_word) in categories {
@@ -3808,10 +4074,7 @@ pub(super) fn render_context_modal(
                 format!("{icon} "),
                 Style::default().fg(color).bg(COLOR_PANEL()),
             ),
-            Span::styled(
-                label,
-                Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL()),
-            ),
+            Span::styled(label, Style::default().fg(COLOR_TEXT()).bg(COLOR_PANEL())),
             Span::styled(
                 count_str,
                 Style::default().fg(COLOR_MUTED()).bg(COLOR_PANEL()),

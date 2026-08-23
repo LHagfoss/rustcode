@@ -17,6 +17,90 @@ fn render_state_to_text(state: &mut AppState, width: u16, height: u16) -> String
         .join("\n")
 }
 
+fn render_snapshot_to_text(state: &AppState, width: u16, height: u16) -> String {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::backend::TestBackend;
+
+    let snapshot = state.render_snapshot();
+    let mut transcript = TranscriptState::default();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let _ = render_with_transcript_snapshot(frame, &snapshot, &mut transcript);
+        })
+        .unwrap();
+
+    (0..height)
+        .map(|row| {
+            (0..width)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn render_snapshot_preserves_existing_ui_output() {
+    let mut states = Vec::new();
+
+    states.push(AppState::new());
+
+    let mut streaming = AppState::new();
+    streaming.history.push(ChatMessage::new("user", "hello"));
+    streaming.status = AppStatus::Streaming;
+    streaming.current_response = "streamed output".to_owned();
+    states.push(streaming);
+
+    let mut approval = AppState::new();
+    approval.status = AppStatus::AwaitingToolConfirmation;
+    approval.pending_tool_confirmation = Some(vec![crate::app::ToolConfirmation {
+        tool_name: "run_command".to_owned(),
+        path: "cargo test".to_owned(),
+        content_preview: String::new(),
+        content_bytes: 0,
+    }]);
+    states.push(approval);
+
+    let mut question = AppState::new();
+    question.status = AppStatus::AwaitingQuestion;
+    question.pending_question = Some(crate::app::PendingQuestion::new(
+        "Proceed?".to_owned(),
+        vec!["Yes".to_owned(), "No".to_owned()],
+        false,
+    ));
+    states.push(question);
+
+    let mut picker = AppState::new();
+    picker.show_model_picker = true;
+    states.push(picker);
+
+    let mut selected_subagent = AppState::new();
+    selected_subagent.subagents.push(crate::app::SubAgent {
+        id: 7,
+        name: "reviewer".to_owned(),
+        task: "review the patch".to_owned(),
+        model: Some("test-model".to_owned()),
+        history: vec![ChatMessage::new("assistant", "subagent response")],
+        status: crate::app::SubAgentStatus::Running,
+        active_turn: true,
+        parent_id: Some(3),
+        write_access: false,
+        allowed_paths: Vec::new(),
+        verification_command: None,
+        workspace_root: None,
+        review_manifest: None,
+    });
+    selected_subagent.selected_subagent_id = Some(7);
+    states.push(selected_subagent);
+
+    for (index, mut state) in states.into_iter().enumerate() {
+        let expected = render_state_to_text(&mut state, 100, 28);
+        let actual = render_snapshot_to_text(&state, 100, 28);
+        assert_eq!(actual, expected, "render case {index} diverged");
+    }
+}
+
 #[test]
 fn acceptance_empty_session_has_welcome_and_composer() {
     let mut state = AppState::new();
@@ -453,8 +537,14 @@ fn sky_theme_loads_and_updates_syntax_highlighting() {
     assert_eq!(sky.panel, ratatui::style::Color::Rgb(22, 32, 50));
 
     theme::set_active_theme("sky");
-    assert_eq!(super::COLOR_PRIMARY(), ratatui::style::Color::Rgb(56, 148, 240));
-    assert_eq!(super::COLOR_SECONDARY(), ratatui::style::Color::Rgb(136, 196, 56));
+    assert_eq!(
+        super::COLOR_PRIMARY(),
+        ratatui::style::Color::Rgb(56, 148, 240)
+    );
+    assert_eq!(
+        super::COLOR_SECONDARY(),
+        ratatui::style::Color::Rgb(136, 196, 56)
+    );
 
     let spans = super::highlight_code_line("let x = 42;", "rust", false);
     assert!(!spans.is_empty());
@@ -808,7 +898,11 @@ fn work_separator_follows_tool_with_padding_gap() {
 
     let separator = super::render_work_separator_before_assistant(&state, 2, 80);
     assert_eq!(separator.len(), 2);
-    assert!(separator[0].to_string().starts_with("─ Worked for 4m 14s ─"));
+    assert!(
+        separator[0]
+            .to_string()
+            .starts_with("─ Worked for 4m 14s ─")
+    );
     assert_eq!(separator[1].to_string(), "");
 }
 
@@ -948,8 +1042,9 @@ fn committed_batched_edits_with_casing_aliases_group_under_edited() {
     use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord};
 
     let mut state = AppState::new();
-    state.history.push(
-        ChatMessage::new("assistant", "").with_tool_calls(vec![
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
             ToolCallRef {
                 id: "call-1".to_owned(),
                 name: "replace_file_content".to_owned(),
@@ -960,8 +1055,7 @@ fn committed_batched_edits_with_casing_aliases_group_under_edited() {
                 name: "WriteFile".to_owned(),
                 arguments: r#"{"path":"src/App.tsx"}"#.to_owned(),
             },
-        ]),
-    );
+        ]));
     state.history.push(
         ChatMessage::new("tool", "replace_file_content: ok")
             .answering(Some("call-1".to_owned()))
@@ -1692,7 +1786,10 @@ fn status_panel_help_box_lines_have_uniform_width() {
             line.width(),
             expected_box_width,
             "line {i} ({:?}) must match box width {expected_box_width}",
-            line.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+            line.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
         );
     }
 }
@@ -1886,12 +1983,12 @@ fn input_footer_only_advertises_command_palette() {
 fn input_bar_contains_live_status_and_command_hint() {
     let state = AppState::new();
     assert_eq!(
-        format_input_status_text(&state),
+        format_input_status_text(&state.render_snapshot()),
         "Auto-Confirm: OFF  Context: 0 (0%)  Tps: 0.0  Ctrl+P commands"
     );
-    assert_eq!(activity_status_label(&state), "Idle");
+    assert_eq!(activity_status_label(&state.render_snapshot()), "Idle");
     assert_eq!(
-        activity_status_line(&state, false)
+        activity_status_line(&state.render_snapshot(), false)
             .spans
             .last()
             .unwrap()
@@ -1901,10 +1998,16 @@ fn input_bar_contains_live_status_and_command_hint() {
 
     let mut streaming_state = AppState::new();
     streaming_state.status = AppStatus::Streaming;
-    assert_eq!(activity_status_label(&streaming_state), "Working");
+    assert_eq!(
+        activity_status_label(&streaming_state.render_snapshot()),
+        "Working"
+    );
 
     streaming_state.current_thought_started_at = Some(std::time::Instant::now());
-    assert_eq!(activity_status_label(&streaming_state), "Thinking");
+    assert_eq!(
+        activity_status_label(&streaming_state.render_snapshot()),
+        "Thinking"
+    );
 }
 
 #[test]
@@ -1920,7 +2023,7 @@ fn live_tool_activity_is_rendered_without_protocol_text() {
         "cargo test",
     ));
 
-    let line = super::activity_status_line(&state, false).to_string();
+    let line = super::activity_status_line(&state.render_snapshot(), false).to_string();
 
     assert!(line.contains("Working"));
     assert!(line.contains("esc interrupt"));
@@ -2046,17 +2149,10 @@ fn live_audio_generation_cell_shows_editing_heading_and_output_path() {
         "duration_seconds": 0.4,
         "output_path": "assets/audio/balloon-pop.wav"
     });
-    let (action, target) = crate::app::activity::summarize_tool_call(
-        "generate_sound_effect",
-        &arguments,
-    );
-    let call = crate::app::LiveToolCall::new(
-        "local:1",
-        None,
-        "generate_sound_effect",
-        action,
-        target,
-    );
+    let (action, target) =
+        crate::app::activity::summarize_tool_call("generate_sound_effect", &arguments);
+    let call =
+        crate::app::LiveToolCall::new("local:1", None, "generate_sound_effect", action, target);
 
     let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
         .into_iter()
@@ -2076,13 +2172,7 @@ fn live_batched_edits_with_casing_aliases_group_under_editing_without_actions() 
             "Edit",
             "src/game/engine.ts",
         ),
-        crate::app::LiveToolCall::new(
-            "local:2",
-            None,
-            "WriteFile",
-            "Write",
-            "src/App.tsx",
-        ),
+        crate::app::LiveToolCall::new("local:2", None, "WriteFile", "Write", "src/App.tsx"),
     ];
     let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
         .into_iter()
@@ -2098,20 +2188,8 @@ fn live_batched_edits_with_casing_aliases_group_under_editing_without_actions() 
 #[test]
 fn live_multiple_generic_tools_show_running_heading() {
     let calls = vec![
-        crate::app::LiveToolCall::new(
-            "local:1",
-            None,
-            "clockify_timer",
-            "ClockifyTimer",
-            "start",
-        ),
-        crate::app::LiveToolCall::new(
-            "local:2",
-            None,
-            "notify_user",
-            "NotifyUser",
-            "done",
-        ),
+        crate::app::LiveToolCall::new("local:1", None, "clockify_timer", "ClockifyTimer", "start"),
+        crate::app::LiveToolCall::new("local:2", None, "notify_user", "NotifyUser", "done"),
     ];
     let rendered = super::history_cell::render_live_tool_cell(&calls, 80, false)
         .into_iter()
@@ -2120,7 +2198,11 @@ fn live_multiple_generic_tools_show_running_heading() {
 
     assert_eq!(
         rendered,
-        ["• Running", "  └ ClockifyTimer start", "    NotifyUser done"]
+        [
+            "• Running",
+            "  └ ClockifyTimer start",
+            "    NotifyUser done"
+        ]
     );
 }
 
@@ -2256,7 +2338,10 @@ fn action_required_status_wins_over_a_live_question_tool() {
         "continue?",
     ));
 
-    assert_eq!(super::activity_status_label(&state), "Action Required");
+    assert_eq!(
+        super::activity_status_label(&state.render_snapshot()),
+        "Action Required"
+    );
 }
 
 #[test]
@@ -2557,9 +2642,24 @@ fn committed_user_messages_keep_regular_body_text() {
 
     assert_eq!(block[1].spans[0].content, "› ");
     assert_eq!(block[1].width(), 80);
-    assert!(block[0].spans.iter().all(|span| span.style.bg == Some(super::COLOR_PANEL())));
-    assert!(block[1].spans.iter().all(|span| span.style.bg == Some(super::COLOR_PANEL())));
-    assert!(block[2].spans.iter().all(|span| span.style.bg == Some(super::COLOR_PANEL())));
+    assert!(
+        block[0]
+            .spans
+            .iter()
+            .all(|span| span.style.bg == Some(super::COLOR_PANEL()))
+    );
+    assert!(
+        block[1]
+            .spans
+            .iter()
+            .all(|span| span.style.bg == Some(super::COLOR_PANEL()))
+    );
+    assert!(
+        block[2]
+            .spans
+            .iter()
+            .all(|span| span.style.bg == Some(super::COLOR_PANEL()))
+    );
     assert!(
         !block[1].spans[1]
             .style
@@ -2761,10 +2861,16 @@ fn consecutive_thought_blocks_have_a_blank_line_gap() {
 #[test]
 fn active_turn_uses_only_the_history_separator_above_working() {
     let mut state = AppState::new();
-    assert_eq!(super::live_surface_padding(&state), (1, 1));
+    assert_eq!(
+        super::live_surface_padding(&state.render_snapshot()),
+        (1, 1)
+    );
 
     state.status = AppStatus::Streaming;
-    assert_eq!(super::live_surface_padding(&state), (0, 1));
+    assert_eq!(
+        super::live_surface_padding(&state.render_snapshot()),
+        (0, 1)
+    );
 }
 
 #[test]
@@ -3176,13 +3282,31 @@ fn multiline_input_indentation_aligns_continuation_lines() {
     }
 
     // Check that the first line starts with "› first line" and second line starts with "  second line"
-    let first = rendered_lines.iter().find(|l| l.contains("first line")).expect("first line rendered");
-    let second = rendered_lines.iter().find(|l| l.contains("second line")).expect("second line rendered");
-    let third = rendered_lines.iter().find(|l| l.contains("third line")).expect("third line rendered");
+    let first = rendered_lines
+        .iter()
+        .find(|l| l.contains("first line"))
+        .expect("first line rendered");
+    let second = rendered_lines
+        .iter()
+        .find(|l| l.contains("second line"))
+        .expect("second line rendered");
+    let third = rendered_lines
+        .iter()
+        .find(|l| l.contains("third line"))
+        .expect("third line rendered");
 
-    assert!(first.contains("› first line"), "first line must start with prompt chevron: {first}");
-    assert!(second.contains("  second line"), "second line must have 2-space padding: {second}");
-    assert!(third.contains("  third line"), "third line must have 2-space padding: {third}");
+    assert!(
+        first.contains("› first line"),
+        "first line must start with prompt chevron: {first}"
+    );
+    assert!(
+        second.contains("  second line"),
+        "second line must have 2-space padding: {second}"
+    );
+    assert!(
+        third.contains("  third line"),
+        "third line must have 2-space padding: {third}"
+    );
 }
 
 #[test]
@@ -3205,16 +3329,26 @@ fn input_wraps_at_word_boundaries_before_splitting_long_words() {
         .chars()
         .map(|character| (character, ratatui::style::Style::default()))
         .collect::<Vec<_>>();
-    let (lines, cursor_x, cursor_y) =
-        super::wrap_input_chars(&styled_chars, 18, styled_chars.len(), ratatui::style::Style::default());
+    let (lines, cursor_x, cursor_y) = super::wrap_input_chars(
+        &styled_chars,
+        18,
+        styled_chars.len(),
+        ratatui::style::Style::default(),
+    );
     let rendered = lines
         .iter()
         .map(ratatui::text::Line::to_string)
         .collect::<Vec<_>>();
 
     assert_eq!(rendered.len(), 2);
-    assert!(!rendered[0].contains("toggling"), "word was split: {rendered:?}");
-    assert!(rendered[1].contains("toggling speed"), "rendered: {rendered:?}");
+    assert!(
+        !rendered[0].contains("toggling"),
+        "word was split: {rendered:?}"
+    );
+    assert!(
+        rendered[1].contains("toggling speed"),
+        "rendered: {rendered:?}"
+    );
     assert_eq!((cursor_x, cursor_y), (16, 1));
 
     let long_word = "abcdefghijklmnop";
@@ -3243,7 +3377,10 @@ fn live_streaming_thinking_block_uses_thought_duration_not_total_generation_time
     state.current_response = "<think>\nAnalyzing the project\n".to_string();
 
     let lines = super::render_live_tail(&state, 80, 24);
-    let rendered = lines.iter().map(ratatui::text::Line::to_string).collect::<Vec<_>>();
+    let rendered = lines
+        .iter()
+        .map(ratatui::text::Line::to_string)
+        .collect::<Vec<_>>();
     let thought_header = rendered
         .iter()
         .find(|l| l.contains("Thought"))
@@ -3272,7 +3409,10 @@ fn live_streaming_completed_thought_preserves_duration_while_rest_of_response_st
         "<think>\nAnalyzing the project\n</think>\nHere is the rest of the stream".to_string();
 
     let lines = super::render_live_tail(&state, 80, 24);
-    let rendered = lines.iter().map(ratatui::text::Line::to_string).collect::<Vec<_>>();
+    let rendered = lines
+        .iter()
+        .map(ratatui::text::Line::to_string)
+        .collect::<Vec<_>>();
     let thought_header = rendered
         .iter()
         .find(|l| l.contains("Thought"))
@@ -3318,7 +3458,10 @@ fn command_child_lines_wrap_with_indentation() {
     );
 
     let rendered = super::render_committed_tool_result_group(&state, &[1], 40, false);
-    assert!(rendered.len() > 2, "long command should wrap across multiple lines: {rendered:?}");
+    assert!(
+        rendered.len() > 2,
+        "long command should wrap across multiple lines: {rendered:?}"
+    );
     assert!(rendered[0].to_string().starts_with("• Ran"));
     assert!(rendered[1].to_string().starts_with("  └ Bash"));
     // Continuation lines must have indentation ("    ")
@@ -3334,26 +3477,40 @@ fn command_child_lines_wrap_with_indentation() {
 #[test]
 fn default_turn_separator_is_lighter_color() {
     let default_palette = super::theme::get_palette("default");
-    assert_eq!(default_palette.turn_separator, ratatui::style::Color::Rgb(90, 112, 126));
+    assert_eq!(
+        default_palette.turn_separator,
+        ratatui::style::Color::Rgb(90, 112, 126)
+    );
 }
 
 #[test]
 fn acceptance_context_modal_renders_usage_and_breakdown() {
     let mut state = AppState::new();
-    state.history.push(ChatMessage::new("user", "Hello assistant"));
-    state.history.push(ChatMessage::new("assistant", "Hello! How can I help you today?"));
+    state
+        .history
+        .push(ChatMessage::new("user", "Hello assistant"));
+    state.history.push(ChatMessage::new(
+        "assistant",
+        "Hello! How can I help you today?",
+    ));
     state.show_context_modal = true;
 
-    let breakdown = modals::calculate_context_breakdown(&state);
+    let breakdown = modals::calculate_context_breakdown(&state.render_snapshot());
     assert!(breakdown.user_tokens > 0);
     assert!(breakdown.assistant_tokens > 0);
     assert!(breakdown.total_used > 0);
 
     let rendered = render_state_to_text(&mut state, 120, 24);
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
-    assert!(rendered.contains("Token usage by category"), "rendered: {rendered:?}");
+    assert!(
+        rendered.contains("Token usage by category"),
+        "rendered: {rendered:?}"
+    );
     assert!(rendered.contains("User messages"), "rendered: {rendered:?}");
-    assert!(rendered.contains("Agent responses"), "rendered: {rendered:?}");
+    assert!(
+        rendered.contains("Agent responses"),
+        "rendered: {rendered:?}"
+    );
     assert!(rendered.contains("Free space"), "rendered: {rendered:?}");
 
     let lines = rendered.lines().collect::<Vec<_>>();
