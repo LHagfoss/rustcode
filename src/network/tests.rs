@@ -1356,6 +1356,33 @@ async fn test_compact_prunes_throwaway_before_file_contents() {
 }
 
 #[tokio::test]
+async fn test_compact_prunes_oldest_result_before_newer_result_in_same_class() {
+    let old = format!(
+        "run_command: old output\n{}",
+        (0..80)
+            .map(|i| format!("old diagnostic line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let new = format!(
+        "grep: new output\n{}",
+        (0..80)
+            .map(|i| format!("new diagnostic line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let mut history = vec![
+        ChatMessage::new("tool", old.clone()),
+        ChatMessage::new("tool", new.clone()),
+    ];
+
+    compact_history_to_budget(&mut history, 70).await;
+
+    assert_ne!(history[0].content, old);
+    assert_eq!(history[1].content, new);
+}
+
+#[tokio::test]
 async fn deterministic_compaction_keeps_goal_state_and_recent_activity() {
     let mut history = Vec::new();
     for round in 0..10 {
