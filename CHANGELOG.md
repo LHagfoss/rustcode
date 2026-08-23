@@ -1,3 +1,22 @@
+## [v0.35.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.0) - 2026-08-23
+
+### Performance
+- **UI/Rendering:** Render from immutable state snapshots to release the state lock during draw, eliminating lock contention between the event loop and render path ([#799](https://github.com/LHagfoss/rustcode/pull/799))
+- **UI/Rendering:** Share history, streamed response, and subagent history snapshots via `Arc` to avoid redundant clones on every frame ([#799](https://github.com/LHagfoss/rustcode/pull/799))
+- **History:** Track history revisions across turns and deduplicate queued snapshot writes, avoiding redundant disk I/O on unchanged history ([#789](https://github.com/LHagfoss/rustcode/pull/789), [#790](https://github.com/LHagfoss/rustcode/pull/790))
+- **History:** Make message pruning linear instead of quadratic by sorting and deduplicating in a single pass ([#792](https://github.com/LHagfoss/rustcode/pull/792))
+- **Network:** Cache serialized tool schemas and request bytes across turns to avoid repeated JSON serialization ([#793](https://github.com/LHagfoss/rustcode/pull/793))
+- **MCP:** Stabilize MCP tool selection to avoid unnecessary schema recomputation ([#794](https://github.com/LHagfoss/rustcode/pull/794))
+- **Streaming:** Reduce periodic streaming redraws by coalescing rapid frame requests ([#795](https://github.com/LHagfoss/rustcode/pull/795))
+- **Tools:** Await web search tool calls concurrently instead of sequentially ([#798](https://github.com/LHagfoss/rustcode/pull/798))
+
+### Build
+- **Release Profile:** Optimize release binary linking for faster startup and smaller binary size ([#797](https://github.com/LHagfoss/rustcode/pull/797))
+- **Dependencies:** Trim unused async runtime features to reduce compile times and binary weight ([#796](https://github.com/LHagfoss/rustcode/pull/796))
+
+### Fixes
+- **Compaction:** Exclude stubbed tool outputs from the compaction context window cap to prevent over-truncation ([#791](https://github.com/LHagfoss/rustcode/pull/791))
+
 ## [v0.34.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.3) - 2026-08-23
 
 ### Tools & Safety
