@@ -2069,7 +2069,7 @@ impl AppRuntime {
                                             }
                                             "/clear" => {
                                                 s.history_display_start = s.history.len();
-                                                s.current_response.clear();
+                                                s.clear_current_response();
                                                 s.current_token_usage = None;
                                                 s.status = crate::app::AppStatus::Idle;
                                             }

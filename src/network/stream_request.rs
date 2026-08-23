@@ -1114,7 +1114,7 @@ pub async fn stream_request(
                                             buffer.lock().await.content.push_str(&chunk);
                                             if !quiet {
                                                 let mut s = state.lock().await;
-                                                s.current_response.push_str(&chunk);
+                                                s.append_current_response(&chunk);
                                                 if s.raw_cli_mode {
                                                     use std::io::Write;
                                                     print!("{chunk}");
@@ -1226,7 +1226,7 @@ pub async fn stream_request(
         buffer.lock().await.content.push_str("\n</think>\n\n");
         if !quiet {
             let mut s = state.lock().await;
-            s.current_response.push_str("\n</think>\n\n");
+            s.append_current_response("\n</think>\n\n");
             if s.raw_cli_mode {
                 use std::io::Write;
                 print!("\n</think>\n\n");

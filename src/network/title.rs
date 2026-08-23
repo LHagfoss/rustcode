@@ -74,7 +74,7 @@ pub(crate) async fn record_prompt_to_history(
     }
     let active_id = s.active_session_id.clone();
     crate::config::save_session_history(&active_id, &s.history);
-    s.current_response.clear();
+    s.clear_current_response();
     s.current_token_usage = None;
     s.response_time = None;
 }
