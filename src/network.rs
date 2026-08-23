@@ -118,6 +118,11 @@ Do NOT emit any tool calls (no reads, writes, edits, searches). Respond with TEX
 a short statement that you stopped to avoid looping, a summary of what you found or accomplished so far, \
 any remaining tasks, and a recommendation for what to do next. This overrides all other instructions.";
 
+/// Low-bit local models can return an empty completion after a successful tool
+/// call. Give the model one concise answer-only retry before treating the turn
+/// as unrecoverable.
+pub(crate) const EMPTY_RESPONSE_RECOVERY_PROMPT: &str = "The previous model response was empty. Use the tool result already provided and answer the user's request now. Do not call tools unless the answer truly requires another tool call. Be concise.";
+
 pub(crate) const LOOP_RECOVERY_PROMPT: &str = "The previous tool action repeated without making progress. Tools remain enabled for one recovery attempt. \
 Do not repeat the same tool call or the same exact edit. Re-read a broader file region or use grep to verify exact target content, \
 then use a grounded approach. If emitting a tool call in this recovery attempt, output the ```tool block cleanly. \
