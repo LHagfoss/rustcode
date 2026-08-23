@@ -801,7 +801,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 let warning_text = format!(
                     "[Loop warning: '{action}' has repeated {n} times. If a tool edit or view is failing, stop retrying the same inputs — if an edit failed to match, view a wider line range or use grep to verify exact target content.]"
                 );
-                push_or_replace_loop_warning(&mut s.history, warning_text);
+                push_or_replace_loop_warning(s.history.as_mut_vec(), warning_text);
                 drop(s);
             }
             loop_detect::LoopStatus::Ok => {}
@@ -901,7 +901,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 dbg_log!("Orchestrator: Cancelled during tool execution");
                 ctx.stop_reason = Some(lifecycle::StopReason::Cancelled);
                 let mut s = state.lock().await;
-                append_cancelled_batch_results(&mut s.history, results, &call_refs);
+                append_cancelled_batch_results(s.history.as_mut_vec(), results, &call_refs);
                 if call_refs.is_empty() {
                     s.history
                         .push(ChatMessage::new("system", "Request cancelled by user"));
@@ -1158,7 +1158,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 stagnation
             {
                 push_or_replace_loop_warning(
-                    &mut s.history,
+                    s.history.as_mut_vec(),
                     format!(
                         "[Loop warning: the last {n} tool results were identical in kind (e.g. repeated \"no matches\"). Re-phrasing the same search is not progress — the answer is not where you are looking. View the relevant file directly or change approach.]"
                     ),

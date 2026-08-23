@@ -1,9 +1,9 @@
-use crate::app::state::{AppState, ChatMessage, TokenUsage};
+use crate::app::state::{AppState, History, TokenUsage};
 use ratatui::layout::Rect;
 
 #[allow(dead_code)]
 pub(crate) struct TranscriptState<'a> {
-    history: &'a mut Vec<ChatMessage>,
+    history: &'a mut History,
     history_display_start: &'a mut usize,
     current_response: &'a mut String,
     current_token_usage: &'a mut Option<TokenUsage>,
