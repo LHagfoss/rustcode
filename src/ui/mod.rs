@@ -1471,11 +1471,11 @@ fn to_pascal_case(name: &str) -> String {
         .collect()
 }
 
-fn contract_home_path(path: &str) -> String {
+fn contract_home_path(path: &str, home_path: Option<&str>) -> String {
     if path.is_empty() {
         return String::new();
     }
-    if let Ok(home) = std::env::var("HOME") {
+    if let Some(home) = home_path {
         if path.starts_with(&home) {
             return format!("~{}", &path[home.len()..]);
         }
@@ -1483,7 +1483,11 @@ fn contract_home_path(path: &str) -> String {
     path.to_string()
 }
 
-fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, String) {
+fn format_pi_tool_action(
+    name: &str,
+    args: &serde_json::Value,
+    home_path: Option<&str>,
+) -> (String, String) {
     let name_lower = name.to_ascii_lowercase();
     let action_label = match name_lower.as_str() {
         "view_file" | "viewfile" | "read_file" | "readfile" => "Read".to_string(),
@@ -1546,7 +1550,7 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
                 .or_else(|| args.get("filepath"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            contract_home_path(path)
+            contract_home_path(path, home_path)
         }
         "move_file" | "movefile" | "copy_file" | "copyfile" => {
             let src = args
@@ -1571,7 +1575,7 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
                 .or_else(|| args.get("pattern"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(".");
-            contract_home_path(path)
+            contract_home_path(path, home_path)
         }
         "grep" | "grep_search" => {
             let query = args
@@ -1876,6 +1880,7 @@ fn tool_result_action(
     format_pi_tool_action(
         tool_name,
         &tool_call_arguments(state, message_index, tool_name),
+        state.home_path(),
     )
 }
 
@@ -1995,7 +2000,11 @@ fn tool_transcript_kind(tool_name: &str) -> ToolTranscriptKind {
     }
 }
 
-fn format_exploration_action(name: &str, args: &serde_json::Value) -> (String, String) {
+fn format_exploration_action(
+    name: &str,
+    args: &serde_json::Value,
+    home_path: Option<&str>,
+) -> (String, String) {
     match name {
         "view_file" => {
             let path = args
@@ -2004,7 +2013,7 @@ fn format_exploration_action(name: &str, args: &serde_json::Value) -> (String, S
                 .or_else(|| args.get("path"))
                 .and_then(|value| value.as_str())
                 .unwrap_or("?");
-            ("Read".to_string(), contract_home_path(path))
+            ("Read".to_string(), contract_home_path(path, home_path))
         }
         "list_directory" | "list_dir" | "glob" => {
             let path = args
@@ -2014,7 +2023,7 @@ fn format_exploration_action(name: &str, args: &serde_json::Value) -> (String, S
                 .or_else(|| args.get("pattern"))
                 .and_then(|value| value.as_str())
                 .unwrap_or(".");
-            ("List".to_string(), contract_home_path(path))
+            ("List".to_string(), contract_home_path(path, home_path))
         }
         "grep" | "grep_search" => {
             let query = args
@@ -2029,7 +2038,7 @@ fn format_exploration_action(name: &str, args: &serde_json::Value) -> (String, S
                 .and_then(|value| value.as_str())
                 .filter(|path| !path.is_empty() && *path != ".");
             let target = path
-                .map(|path| format!("{query} in {}", contract_home_path(path)))
+                .map(|path| format!("{query} in {}", contract_home_path(path, home_path)))
                 .unwrap_or_else(|| query.to_string());
             ("Search".to_string(), target)
         }
@@ -2042,7 +2051,7 @@ fn format_exploration_action(name: &str, args: &serde_json::Value) -> (String, S
             ("Search".to_string(), query.to_string())
         }
         "get_project_map" => ("Read".to_string(), "project map".to_string()),
-        _ => format_pi_tool_action(name, args),
+        _ => format_pi_tool_action(name, args, home_path),
     }
 }
 
@@ -2142,7 +2151,7 @@ fn tool_transcript_entry(
     let kind = tool_transcript_kind(&tool_name);
     let (action, target) = if kind == ToolTranscriptKind::Explored {
         let args = tool_call_arguments(state, message_index, &tool_name);
-        format_exploration_action(&tool_name, &args)
+        format_exploration_action(&tool_name, &args, state.home_path())
     } else {
         tool_result_action(state, message_index, &tool_name)
     };

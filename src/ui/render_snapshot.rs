@@ -25,6 +25,7 @@ pub(crate) struct RenderSnapshot {
     model_name: String,
     api_base_url: String,
     cwd_and_branch: String,
+    home_path: Option<String>,
     show_model_picker: bool,
     model_picker_index: usize,
     modal_picker_index: usize,
@@ -96,6 +97,7 @@ impl RenderSnapshot {
             model_name: state.model_name.clone(),
             api_base_url: state.api_base_url.clone(),
             cwd_and_branch: state.cwd_and_branch.clone(),
+            home_path: std::env::var("HOME").ok(),
             show_model_picker: state.show_model_picker,
             model_picker_index: state.model_picker_index,
             modal_picker_index: state.modal_picker_index,
@@ -216,6 +218,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn cwd_and_branch(&self) -> &str {
         &self.cwd_and_branch
+    }
+    pub(crate) fn home_path(&self) -> Option<&str> {
+        self.home_path.as_deref()
     }
     pub(crate) fn running_tools(&self) -> &[String] {
         &self.running_tools
