@@ -23,6 +23,7 @@ pub(crate) use exec::{
 };
 
 pub(crate) use filesystem::edit_target_and_replacement;
+pub(crate) use misc::search_web_async;
 
 /// A parsed tool request emitted by a model.
 #[derive(Debug, Clone, PartialEq)]

@@ -290,6 +290,17 @@ pub fn complete_task_tool(args: &Value) -> Result<String, String> {
 }
 
 pub fn search_web(args: &Value) -> Result<String, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to create async runtime: {e}"))?;
+    runtime.block_on(search_web_async(args, &reqwest::Client::new()))
+}
+
+pub(crate) async fn search_web_async(
+    args: &Value,
+    client: &reqwest::Client,
+) -> Result<String, String> {
     let query = args
         .get("query")
         .and_then(|q| q.as_str())
@@ -304,11 +315,6 @@ pub fn search_web(args: &Value) -> Result<String, String> {
     let exa_key = std::env::var("EXA_API_KEY")
         .unwrap_or_else(|_| "9a49efa5-675c-4684-94c0-3f96979aa2ac".to_string());
     if !exa_key.is_empty() {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
         let body = serde_json::json!({
             "query": search_query,
             "numResults": 5,
@@ -322,12 +328,14 @@ pub fn search_web(args: &Value) -> Result<String, String> {
 
         if let Ok(response) = client
             .post("https://api.exa.ai/search")
+            .timeout(std::time::Duration::from_secs(10))
             .header("x-api-key", &exa_key)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
+            .await
             && response.status().is_success()
-            && let Ok(res_json) = response.json::<serde_json::Value>()
+            && let Ok(res_json) = response.json::<serde_json::Value>().await
             && let Some(results) = res_json.get("results").and_then(|r| r.as_array())
         {
             let mut out = String::new();
@@ -359,11 +367,6 @@ pub fn search_web(args: &Value) -> Result<String, String> {
     }
 
     if let Ok(api_key) = std::env::var("TAVILY_API_KEY") {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
         let body = serde_json::json!({
             "api_key": api_key,
             "query": search_query,
@@ -372,13 +375,16 @@ pub fn search_web(args: &Value) -> Result<String, String> {
 
         let response = client
             .post("https://api.tavily.com/search")
+            .timeout(std::time::Duration::from_secs(10))
             .json(&body)
             .send()
+            .await
             .map_err(|e| format!("Tavily request failed: {e}"))?;
 
         if response.status().is_success() {
             let res_json: serde_json::Value = response
                 .json()
+                .await
                 .map_err(|e| format!("failed to parse Tavily JSON: {e}"))?;
 
             if let Some(results) = res_json.get("results").and_then(|r| r.as_array()) {
@@ -415,15 +421,15 @@ pub fn search_web(args: &Value) -> Result<String, String> {
         urlencoding::encode(&search_query)
     );
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
     let response = client
         .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
         .send()
+        .await
         .map_err(|e| format!("failed to request search results: {e}"))?;
 
     if !response.status().is_success() {
@@ -435,6 +441,7 @@ pub fn search_web(args: &Value) -> Result<String, String> {
 
     let html_content = response
         .text()
+        .await
         .map_err(|e| format!("failed to read search response body: {e}"))?;
 
     if html_content.contains("anomaly-modal") || html_content.contains("bots use DuckDuckGo too") {
@@ -604,5 +611,22 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
         Ok(format!("No memory facts found for '{key}' in scope '{scope}'."))
     } else {
         Ok(format!("Removed {total_removed} fact(s) matching '{key}'."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_web_async;
+
+    #[tokio::test]
+    async fn async_search_web_requires_query() {
+        let error = search_web_async(
+            &serde_json::json!({}),
+            &reqwest::Client::new(),
+        )
+        .await
+        .expect_err("missing query should fail before any request");
+
+        assert_eq!(error, "missing 'query' argument");
     }
 }
