@@ -425,6 +425,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         push_status_line(&mut s, format!("agent-{agent_id} → {name} {target}"));
                     }
                     confirm_and_execute(
+                        client,
                         state,
                         cancel_token,
                         name,
