@@ -1,3 +1,10 @@
+## [v0.35.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.2) - 2026-08-23
+
+### Local Models & Recovery
+- **Local Models:** Reduce the implicit completion reserve for local profiles to 4096 tokens while preserving explicit per-profile overrides ([`89579d6`](https://github.com/LHagfoss/rustcode/commit/89579d6))
+- **Response Recovery:** Retry one empty model completion with a concise answer-focused prompt instead of immediately failing the turn ([`a447080`](https://github.com/LHagfoss/rustcode/commit/a447080))
+- **Reasoning Recovery:** Return a concise terminal response after repeated reasoning loops instead of launching another verbose wrap-up request ([`5d9c340`](https://github.com/LHagfoss/rustcode/commit/5d9c340))
+
 ## [v0.35.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.1) - 2026-08-23
 
 ### Skills & Performance
