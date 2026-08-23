@@ -581,22 +581,45 @@ fn custom_tools_render_pascalcase_with_param() {
     let (label, arg) = format_pi_tool_action(
         "use_skill",
         &serde_json::json!({"name": "git-feature-workflow"}),
+        None,
     );
     assert_eq!(label, "UseSkill");
     assert_eq!(arg, "git-feature-workflow");
 
     let (label, arg) =
-        format_pi_tool_action("complete_task", &serde_json::json!({"result": "done"}));
+        format_pi_tool_action("complete_task", &serde_json::json!({"result": "done"}), None);
     assert_eq!(label, "CompleteTask");
     assert_eq!(arg, "result=\"done\"");
 
-    let (label, arg) = format_pi_tool_action("complete_task", &serde_json::json!({}));
+    let (label, arg) = format_pi_tool_action("complete_task", &serde_json::json!({}), None);
     assert_eq!(label, "CompleteTask");
     assert_eq!(arg, "");
 
     // Built-in aliases are unchanged.
-    let (label, _) = format_pi_tool_action("run_command", &serde_json::json!({"command": "ls"}));
+    let (label, _) = format_pi_tool_action(
+        "run_command",
+        &serde_json::json!({"command": "ls"}),
+        None,
+    );
     assert_eq!(label, "Bash");
+}
+
+#[test]
+fn tool_path_formatting_uses_captured_snapshot_home() {
+    let state = AppState::new();
+    let snapshot = state.render_snapshot();
+    let Some(home) = snapshot.home_path() else {
+        return;
+    };
+    let path = format!("{home}/project/file.rs");
+
+    let (_, rendered) = format_pi_tool_action(
+        "view_file",
+        &serde_json::json!({"path": path}),
+        snapshot.home_path(),
+    );
+
+    assert_eq!(rendered, "~/project/file.rs");
 }
 
 #[test]
@@ -1919,23 +1942,25 @@ fn tool_action_formats_generic_args_and_omits_empty() {
     let (action, arg) = format_pi_tool_action(
         "manage_task",
         &serde_json::json!({"Action": "status", "TaskId": "task-123"}),
+        None,
     );
     assert_eq!(action, "ManageTask");
     assert_eq!(arg, "status task-123");
 
     let (action_list, arg_list) =
-        format_pi_tool_action("manage_task", &serde_json::json!({"Action": "list"}));
+        format_pi_tool_action("manage_task", &serde_json::json!({"Action": "list"}), None);
     assert_eq!(action_list, "ManageTask");
     assert_eq!(arg_list, "list");
 
     let (action_bg, arg_bg) = format_pi_tool_action(
         "background_task",
         &serde_json::json!({"TaskId": "task-456"}),
+        None,
     );
     assert_eq!(action_bg, "TaskDone");
     assert_eq!(arg_bg, "task-456");
 
-    let (action2, arg2) = format_pi_tool_action("get_date", &serde_json::json!({}));
+    let (action2, arg2) = format_pi_tool_action("get_date", &serde_json::json!({}), None);
     assert_eq!(action2, "GetDate");
     assert_eq!(arg2, "");
 }

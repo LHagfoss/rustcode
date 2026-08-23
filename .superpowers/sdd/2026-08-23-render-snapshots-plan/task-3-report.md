@@ -8,6 +8,7 @@ Implemented and verified on branch `perf/render-snapshots`, based on the approve
 
 - Added `render_snapshot_preserves_existing_ui_output` with committed literal 60x16 golden buffers for idle, streaming, approval, question, picker, and selected-subagent states. The test no longer compares two paths that share the snapshot implementation.
 - Fixed the startup banner snapshot renderer to derive its directory row from `RenderSnapshot::cwd_and_branch()`; the `/repo` golden fixture now proves rendering is independent of the process checkout directory.
+- Captured `HOME` once in `RenderSnapshot` and routed tool-path contraction through that accessor at every render-only call site. Added coverage showing an absolute path is contracted using the captured snapshot home rather than reading process environment during formatting.
 - Converted render-only helpers in `src/ui/mod.rs` to consume `&RenderSnapshot`, including live-tail rendering, layout sizing, input/composer rendering, status/footer rendering, committed-history projections, and modal support helpers.
 - Converted composer rendering and modal render functions to immutable snapshot accessors.
 - Extended `RenderSnapshot` with the remaining render-visible values needed by picker, context, completion, status, and selected-subagent rendering.
