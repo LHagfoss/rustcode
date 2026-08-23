@@ -373,6 +373,7 @@ pub(crate) async fn ask_user_question(
 }
 
 pub(crate) async fn confirm_and_execute(
+    client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     name: &str,
@@ -452,33 +453,49 @@ pub(crate) async fn confirm_and_execute(
         let workspace_root_for_task = workspace_root.clone();
         let live_key_owned = live_key.map(str::to_owned);
         let cancel_token_for_task = cancel_token.clone();
+        let client_for_task = client.clone();
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let run_fut = tokio::task::spawn_blocking(move || {
-            crate::tools::set_active_session_id(Some(session_id));
-            crate::tools::set_active_workspace_root(workspace_root_for_task);
-            let result = if name_owned == "run_command" && live_key_owned.is_some() {
-                let callback: crate::tools::CommandProgressCallback = Arc::new(move |bytes, stderr| {
-                    let _ = progress_tx.send((bytes.to_vec(), stderr));
-                });
-                crate::tools::run_command_output_with_progress(&args_owned, callback)
-                    .unwrap_or_else(|error| {
-                        crate::tools::ToolExecutionOutput::failure_with_kind(
-                            format!("error: {error}"),
-                            crate::tools::ToolErrorKind::CommandFailed,
-                            true,
-                        )
-                    })
-            } else {
-                crate::tools::execute_with_metadata_cancellable(
-                    &name_owned,
-                    &args_owned,
-                    Some(cancel_token_for_task),
-                )
-            };
-            crate::tools::set_active_workspace_root(None);
-            crate::tools::set_active_session_id(None);
-            result
-        });
+        let run_fut = async move {
+            if name_owned == "search_web" {
+                return match crate::tools::search_web_async(&args_owned, &client_for_task).await {
+                    Ok(output) => crate::tools::ToolExecutionOutput::success(output),
+                    Err(error) => crate::tools::ToolExecutionOutput::failure(
+                        format!("error: {error}"),
+                    ),
+                };
+            }
+
+            tokio::task::spawn_blocking(move || {
+                crate::tools::set_active_session_id(Some(session_id));
+                crate::tools::set_active_workspace_root(workspace_root_for_task);
+                let result = if name_owned == "run_command" && live_key_owned.is_some() {
+                    let callback: crate::tools::CommandProgressCallback = Arc::new(move |bytes, stderr| {
+                        let _ = progress_tx.send((bytes.to_vec(), stderr));
+                    });
+                    crate::tools::run_command_output_with_progress(&args_owned, callback)
+                        .unwrap_or_else(|error| {
+                            crate::tools::ToolExecutionOutput::failure_with_kind(
+                                format!("error: {error}"),
+                                crate::tools::ToolErrorKind::CommandFailed,
+                                true,
+                            )
+                        })
+                } else {
+                    crate::tools::execute_with_metadata_cancellable(
+                        &name_owned,
+                        &args_owned,
+                        Some(cancel_token_for_task),
+                    )
+                };
+                crate::tools::set_active_workspace_root(None);
+                crate::tools::set_active_session_id(None);
+                result
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
+            })
+        };
         tokio::pin!(run_fut);
         let is_audio_generation = matches!(
             name,
@@ -488,9 +505,7 @@ pub(crate) async fn confirm_and_execute(
         loop {
             tokio::select! {
                 res = &mut run_fut => {
-                    break res.unwrap_or_else(|e| {
-                        crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
-                    });
+                    break res;
                 }
                 event = progress_rx.recv(), if progress_open => {
                     if let Some((bytes, stderr)) = event {
@@ -1044,6 +1059,7 @@ different, read another range or make an edit first; repeating this call returns
             } else {
                 let workspace_root = { state_clone.lock().await.workspace_root.clone() };
                 confirm_and_execute(
+                    &client_clone,
                     &state_clone,
                     &cancel_token_clone,
                     &name_clone,
