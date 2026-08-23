@@ -289,7 +289,7 @@ pub async fn handle_enter(
                         &client_clone,
                         &api_base_url,
                         &model_name,
-                        &mut history_to_compact,
+                        history_to_compact.as_mut_vec(),
                         Some(budget),
                         Some(&compaction_cancel_token),
                     )
@@ -300,10 +300,10 @@ pub async fn handle_enter(
                             let live_session_id = s.active_session_id.clone();
                             if try_merge_compacted_history(
                                 &live_session_id,
-                                &mut s.history,
+                                s.history.as_mut_vec(),
                                 &active_session_id,
                                 &original_history,
-                                history_to_compact,
+                                history_to_compact.into_vec(),
                             ) {
                                 s.history.push(ChatMessage::new(
                                     "system",
@@ -316,7 +316,7 @@ pub async fn handle_enter(
                                 report_stale_compaction(
                                     &live_session_id,
                                     &active_session_id,
-                                    &mut s.history,
+                                    s.history.as_mut_vec(),
                                 );
                             }
                         }
@@ -337,7 +337,7 @@ pub async fn handle_enter(
                                 report_stale_compaction(
                                     &live_session_id,
                                     &active_session_id,
-                                    &mut s.history,
+                                    s.history.as_mut_vec(),
                                 );
                             }
                         }
@@ -1518,7 +1518,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
         crate::config::set_active_session_id(&s.active_session_id);
     }
 
-    s.history = loaded;
+    s.history.replace(loaded);
     s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
     s.pending_queue.clear();
@@ -2451,13 +2451,13 @@ mod tests {
 
         {
             let mut s = state.lock().await;
-            s.history = original_history.clone();
+            s.history.replace(original_history.clone());
             s.input_buffer = "/clear".to_string();
         }
         assert!(!super::handle_enter(&state, &client, &mut cancel_token).await);
         {
             let s = state.lock().await;
-            assert!(s.history == original_history);
+            assert!(s.history.as_slice() == original_history);
             assert_eq!(s.history_display_start, s.history.len());
         }
 

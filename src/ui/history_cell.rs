@@ -5,7 +5,7 @@
 //! gives the TUI the same lifecycle shape without serializing terminal state or
 //! making provider code depend on ratatui.
 
-use crate::app::{ChatMessage, LiveToolCall, Verbosity};
+use crate::app::{History, LiveToolCall, Verbosity};
 use ratatui::{
     style::Modifier,
     text::{Line, Span},
@@ -59,6 +59,7 @@ pub(crate) struct TranscriptState {
     active: Option<ActiveHistoryCell>,
     active_key: Option<ActiveHistoryCellKind>,
     revision: u64,
+    history_revision: Option<u64>,
     model: super::TranscriptModel,
 }
 
@@ -67,8 +68,11 @@ impl TranscriptState {
         *self = Self::default();
     }
 
-    pub(crate) fn sync_model(&mut self, history: &[ChatMessage], live_text: &str) {
-        self.model.sync_history(history);
+    pub(crate) fn sync_model(&mut self, history: &History, live_text: &str) {
+        if self.history_revision != Some(history.revision()) {
+            self.model.sync_history(history);
+            self.history_revision = Some(history.revision());
+        }
         self.model.replace_live_text(live_text);
     }
 
@@ -85,6 +89,11 @@ impl TranscriptState {
 
     pub(crate) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    #[cfg(test)]
+    fn history_revision(&self) -> Option<u64> {
+        self.history_revision
     }
 
     pub(crate) fn set_assistant(
@@ -535,4 +544,29 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     }
 
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TranscriptState;
+    use crate::app::state::{ChatMessage, History};
+
+    #[test]
+    fn transcript_sync_tracks_history_revision_and_reuses_unchanged_projection() {
+        let mut history = History::default();
+        history.push(ChatMessage::new("user", "hello"));
+        let mut transcript = TranscriptState::default();
+
+        transcript.sync_model(&history, "");
+        let first_revision = transcript.history_revision();
+        transcript.sync_model(&history, "");
+
+        assert_eq!(transcript.history_revision(), first_revision);
+        assert_eq!(transcript.model().committed().len(), 1);
+
+        history.push(ChatMessage::new("assistant", "answer"));
+        transcript.sync_model(&history, "");
+        assert_ne!(transcript.history_revision(), first_revision);
+        assert_eq!(transcript.model().committed().len(), 2);
+    }
 }

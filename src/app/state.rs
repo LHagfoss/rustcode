@@ -381,6 +381,152 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
 }
 
+/// The durable conversation history with a cheap mutation marker. The marker
+/// lets request preparation and the UI distinguish an unchanged snapshot
+/// without comparing every message.
+#[derive(Clone, Debug, Default)]
+pub struct History {
+    messages: Vec<ChatMessage>,
+    revision: u64,
+    last_rewrite_revision: u64,
+}
+
+impl History {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn is_append_only_since(&self, revision: u64) -> bool {
+        self.last_rewrite_revision <= revision
+    }
+
+    pub fn replace(&mut self, messages: Vec<ChatMessage>) {
+        self.messages = messages;
+        self.bump_rewrite();
+    }
+
+    pub fn as_mut_vec(&mut self) -> &mut Vec<ChatMessage> {
+        self.bump_rewrite();
+        &mut self.messages
+    }
+
+    pub fn into_vec(self) -> Vec<ChatMessage> {
+        self.messages
+    }
+
+    fn bump(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn bump_rewrite(&mut self) {
+        self.bump();
+        self.last_rewrite_revision = self.revision;
+    }
+
+    pub fn push(&mut self, message: ChatMessage) {
+        self.messages.push(message);
+        self.bump();
+    }
+
+    pub fn clear(&mut self) {
+        if !self.messages.is_empty() {
+            self.messages.clear();
+            self.bump_rewrite();
+        }
+    }
+
+    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, ChatMessage>
+    where
+        R: std::ops::RangeBounds<usize>,
+    {
+        self.bump_rewrite();
+        self.messages.drain(range)
+    }
+
+    pub fn retain<F>(&mut self, f: F)
+    where
+        F: FnMut(&ChatMessage) -> bool,
+    {
+        self.messages.retain(f);
+        self.bump_rewrite();
+    }
+
+    pub fn as_slice(&self) -> &[ChatMessage] {
+        &self.messages
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [ChatMessage] {
+        self.bump_rewrite();
+        &mut self.messages
+    }
+}
+
+impl From<Vec<ChatMessage>> for History {
+    fn from(messages: Vec<ChatMessage>) -> Self {
+        Self {
+            messages,
+            revision: 0,
+            last_rewrite_revision: 0,
+        }
+    }
+}
+
+impl PartialEq for History {
+    fn eq(&self, other: &Self) -> bool {
+        self.messages == other.messages
+    }
+}
+
+impl Eq for History {}
+
+impl std::ops::Deref for History {
+    type Target = [ChatMessage];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl std::ops::DerefMut for History {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+    }
+}
+
+impl Extend<ChatMessage> for History {
+    fn extend<T: IntoIterator<Item = ChatMessage>>(&mut self, iter: T) {
+        let before = self.messages.len();
+        self.messages.extend(iter);
+        if self.messages.len() != before {
+            self.bump();
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a History {
+    type Item = &'a ChatMessage;
+    type IntoIter = std::slice::Iter<'a, ChatMessage>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.messages.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut History {
+    type Item = &'a mut ChatMessage;
+    type IntoIter = std::slice::IterMut<'a, ChatMessage>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_mut_slice().iter_mut()
+    }
+}
+
+impl std::iter::FromIterator<ChatMessage> for History {
+    fn from_iter<T: IntoIterator<Item = ChatMessage>>(iter: T) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<_>>())
+    }
+}
+
 /// Identity of one structured tool call, kept so a result can name the call it
 /// answers when the transcript is replayed to the provider.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -828,7 +974,7 @@ impl LiveToolCall {
 
 pub struct AppState {
     pub input_buffer: String,
-    pub history: Vec<ChatMessage>,
+    pub history: History,
     /// First history index shown in the TUI. The full history remains available
     /// to the model; `/clear` advances this boundary without deleting messages.
     pub history_display_start: usize,
@@ -1293,7 +1439,7 @@ impl AppState {
         let verbosity = config.verbosity.clone();
         let subagent_supervisor =
             crate::app::SubagentSupervisor::new(config.subagent_concurrency_limit);
-        let history = Vec::new();
+        let history = History::default();
         let cwd_and_branch = get_cwd_and_branch();
         crate::ui::theme::ensure_themes_dir();
         crate::ui::theme::set_active_theme(&config.theme);
@@ -2126,6 +2272,38 @@ mod input_history_tests {
         s.history_down();
         assert_eq!(s.input_buffer, "");
         assert!(s.history_index.is_none());
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::{ChatMessage, History};
+
+    #[test]
+    fn history_revision_tracks_structural_and_in_place_mutations() {
+        let mut history = History::default();
+        let initial_revision = history.revision();
+
+        history.push(ChatMessage::new("user", "hello"));
+        let after_push = history.revision();
+        assert!(after_push > initial_revision);
+
+        history[0].content = "changed".to_string();
+        assert!(history.revision() > after_push);
+
+        history.clear();
+        assert!(history.revision() > after_push);
+    }
+
+    #[test]
+    fn history_clone_keeps_snapshot_revision_without_sharing_storage() {
+        let mut history = History::default();
+        history.push(ChatMessage::new("user", "hello"));
+        let snapshot = history.clone();
+
+        assert_eq!(snapshot.revision(), history.revision());
+        history[0].content = "changed".to_string();
+        assert_eq!(snapshot[0].content, "hello");
     }
 }
 
