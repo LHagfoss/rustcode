@@ -90,7 +90,7 @@ impl SessionController {
     ) -> Result<SessionTransition, SessionError> {
         let (source_session_id, source_history) = match action {
             SessionAction::Latest if crate::config::session_has_content(&state.history) => {
-                (state.active_session_id.clone(), state.history.clone())
+                (state.active_session_id.clone(), state.history.to_vec())
             }
             SessionAction::Latest => {
                 let meta = self.resolve_meta(state, SessionAction::Latest)?;
@@ -110,7 +110,7 @@ impl SessionController {
 
         crate::app::actions::start_new_session(state);
         let new_session_id = state.active_session_id.clone();
-        state.history = source_history;
+        state.history.replace(source_history);
         state.history_display_start = 0;
         state.current_response.clear();
         state.current_token_usage = None;
