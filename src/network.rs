@@ -925,7 +925,14 @@ pub(crate) async fn prepare_turn_request(
     // under a short lock, compact the owned copy with the lock released, then
     // re-acquire and merge the result back in.
     {
-        let (api_url, model_name, budget, local_model, active_session_id, captured_history) = {
+        let (
+            api_url,
+            model_name,
+            budget,
+            local_model,
+            active_session_id,
+            captured_history,
+        ) = {
             let s = state.lock().await;
             let local_model = s
                 .active_model_profile()
@@ -944,14 +951,15 @@ pub(crate) async fn prepare_turn_request(
             )
         };
         let pre_len = captured_history.len();
-        let mut working_history = captured_history.clone();
+        let captured_revision = captured_history.revision();
+        let mut working_history = captured_history;
 
         // Lock released here: this await performs I/O.
         let compacted = compaction::maybe_compact_with_local_policy(
             client,
             &api_url,
             &model_name,
-            &mut working_history,
+            working_history.as_mut_vec(),
             budget,
             cancel_token,
             local_model,
@@ -975,14 +983,17 @@ pub(crate) async fn prepare_turn_request(
         // the return value; the flag only gates the cache invalidation below.
         let mut s = state.lock().await;
         let live_session_id = s.active_session_id.clone();
-        let prefix_intact =
-            live_session_id == active_session_id && s.history.starts_with(&captured_history);
+        let prefix_intact = live_session_id == active_session_id
+            && s.history.len() >= pre_len
+            && s.history.is_append_only_since(captured_revision);
         if prefix_intact {
             if s.history.len() > pre_len {
-                working_history.extend(s.history.drain(pre_len..));
+                working_history.extend(s.history[pre_len..].iter().cloned());
             }
-            let history_changed = working_history != s.history;
-            s.history = working_history;
+            let history_changed = working_history.revision() != captured_revision;
+            if history_changed {
+                s.history.replace(working_history.into_vec());
+            }
             if compacted {
                 dbg_log!("History compacted. Clearing read/dedup cache.");
                 s.recent_read_calls.clear();
@@ -1110,7 +1121,7 @@ pub(crate) async fn prepare_turn_request(
         context_section.push_str(&instructions);
     }
 
-    compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
+    compact_history_to_budget(history_snapshot.as_mut_vec(), budget_token_limit).await;
 
     if history_snapshot
         .iter()
@@ -1145,7 +1156,8 @@ pub(crate) async fn prepare_turn_request(
                     }
                 },
             )
-            .await?;
+            .await?
+            .into();
             let mut guard = state.lock().await;
             guard.image_analysis_cache.extend(image_cache);
             let session_id = guard.active_session_id.clone();
