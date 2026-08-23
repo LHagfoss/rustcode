@@ -1295,6 +1295,24 @@ impl AppState {
         self.render_revision = self.render_revision.wrapping_add(1);
     }
 
+    /// Clear the render-visible response buffer and invalidate in-flight layout metrics.
+    pub(crate) fn clear_current_response(&mut self) {
+        self.current_response.clear();
+        self.request_redraw();
+    }
+
+    /// Append streamed render-visible response text and invalidate in-flight layout metrics.
+    pub(crate) fn append_current_response(&mut self, chunk: &str) {
+        self.current_response.push_str(chunk);
+        self.request_redraw();
+    }
+
+    /// Replace the render-visible response buffer and invalidate in-flight layout metrics.
+    pub(crate) fn replace_current_response(&mut self, response: impl Into<String>) {
+        self.current_response = response.into();
+        self.request_redraw();
+    }
+
     pub(crate) fn render_snapshot(&self) -> crate::ui::render_snapshot::RenderSnapshot {
         crate::ui::render_snapshot::RenderSnapshot::new(self)
     }

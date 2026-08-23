@@ -303,7 +303,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 
     {
         let mut s = state.lock().await;
-        s.current_response.clear();
+        s.clear_current_response();
         s.current_thought_time_ms = 0;
         s.current_thought_tokens = 0;
         s.current_thought_started_at = None;
@@ -443,7 +443,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 
     {
         let mut s = state.lock().await;
-        s.current_response = accumulated_content.clone();
+        s.replace_current_response(accumulated_content.clone());
         let reported = s
             .current_token_usage
             .as_ref()
@@ -517,7 +517,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     REASONING_LOOP_RECOVERY_PROMPT,
                 ));
                 crate::config::save_history(&s.history);
-                s.current_response.clear();
+                s.clear_current_response();
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
                 drop(s);
@@ -548,7 +548,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     FORCE_ANSWER_PROMPT,
                 ));
                 crate::config::save_history(&s.history);
-                s.current_response.clear();
+                s.clear_current_response();
                 drop(s);
                 ctx.turn_machine.abandon_tool_phase();
                 ctx.tool_rounds += 1;
@@ -687,7 +687,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     ),
                 ));
         crate::config::save_history(&s.history);
-        s.current_response.clear();
+        s.clear_current_response();
         s.status = AppStatus::Streaming;
         drop(s);
         ctx.tool_rounds += 1;
@@ -761,7 +761,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.history
                             .push(ChatMessage::new("system", LOOP_RECOVERY_PROMPT));
                         crate::config::save_history(&s.history);
-                        s.current_response.clear();
+                        s.clear_current_response();
                         s.status = AppStatus::Streaming;
                         s.stream_tracker = Some(StreamTracker::new());
                         drop(s);
@@ -785,7 +785,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         s.history
                             .push(ChatMessage::new("system", FORCE_ANSWER_PROMPT));
                         crate::config::save_history(&s.history);
-                        s.current_response.clear();
+                        s.clear_current_response();
                         drop(s);
                         ctx.turn_machine.abandon_tool_phase();
                         ctx.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
@@ -1190,7 +1190,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             format!("{evidence}\n{LOOP_RECOVERY_PROMPT}"),
                         ));
                         crate::config::save_history(&s.history);
-                        s.current_response.clear();
+                        s.clear_current_response();
                         s.status = AppStatus::Streaming;
                         s.stream_tracker = Some(StreamTracker::new());
                         drop(s);
@@ -1211,7 +1211,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                             format!("{evidence}\n{FORCE_ANSWER_PROMPT}"),
                         ));
                         crate::config::save_history(&s.history);
-                        s.current_response.clear();
+                        s.clear_current_response();
                         drop(s);
                         ctx.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
                         ctx.force_final = true;
@@ -1233,7 +1233,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 ctx.loop_detector.reset();
                 s.history.push(ChatMessage::new("system", replan));
                 crate::config::save_history(&s.history);
-                s.current_response.clear();
+                s.clear_current_response();
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
                 drop(s);
@@ -1262,7 +1262,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     completion_block_message(ctx.failed_mutations),
                 ));
                 crate::config::save_history(&s.history);
-                s.current_response.clear();
+                s.clear_current_response();
                 drop(s);
                 ctx.turn_machine.finish_tools_if_executing();
                 return true;
@@ -1298,7 +1298,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         ),
                     ));
                     crate::config::save_history(&s.history);
-                    s.current_response.clear();
+                    s.clear_current_response();
                     drop(s);
                     ctx.turn_machine.finish_tools_if_executing();
                     return true;
@@ -1340,7 +1340,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                                         ),
                                     ));
                             crate::config::save_history(&s.history);
-                            s.current_response.clear();
+                            s.clear_current_response();
                             drop(s);
                             ctx.turn_machine.finish_tools_if_executing();
                             return true;
@@ -1391,7 +1391,7 @@ nothing in this summary was written to disk by this task]",
                 return false;
             }
             crate::config::save_history(&s.history);
-            s.current_response.clear();
+            s.clear_current_response();
             drop(s);
             ctx.turn_machine.finish_tools_if_executing();
             dbg_log!("Tool round finished, looping back");
@@ -1437,7 +1437,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
 
         s.history.push(ChatMessage::new("tool", feedback));
         crate::config::save_history(&s.history);
-        s.current_response.clear();
+        s.clear_current_response();
         s.status = AppStatus::Streaming;
         s.stream_tracker = Some(StreamTracker::new());
         drop(s);
@@ -1515,7 +1515,7 @@ Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/b
                             ),
                         ));
                 crate::config::save_history(&s.history);
-                s.current_response.clear();
+                s.clear_current_response();
                 s.status = AppStatus::Streaming;
                 s.stream_tracker = Some(StreamTracker::new());
                 drop(s);
@@ -1638,7 +1638,7 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
         crate::config::save_session_history(&active_id, &s.history);
         crate::config::flush_history_async();
 
-        s.current_response.clear();
+        s.clear_current_response();
         s.clear_live_tool_calls();
         s.status = AppStatus::Idle;
         s.request_redraw();

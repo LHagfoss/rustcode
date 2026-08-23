@@ -1366,7 +1366,7 @@ pub fn start_new_session(s: &mut AppState) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
     s.pending_queue.clear();
-    s.current_response.clear();
+    s.clear_current_response();
     s.expanded_thoughts.clear();
     s.current_token_usage = None;
     s.response_time = None;
@@ -1523,7 +1523,7 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
     s.pending_queue.clear();
-    s.current_response.clear();
+    s.clear_current_response();
     s.expanded_thoughts.clear();
     s.current_token_usage = None;
     s.response_time = None;
@@ -1640,7 +1640,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
 
         s.status = AppStatus::Streaming;
         s.generation_start_time = Some(started);
-        s.current_response.clear();
+        s.clear_current_response();
 
         (s.api_base_url.clone(), s.model_name.clone(), transcript)
     };
@@ -1694,7 +1694,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
     let mut s = state_arc.lock().await;
     s.status = AppStatus::Idle;
     s.generation_start_time = None;
-    s.current_response.clear();
+    s.clear_current_response();
 
     match stream_result {
         Ok(_) if !summary_content.trim().is_empty() => {

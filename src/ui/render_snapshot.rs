@@ -505,6 +505,29 @@ mod tests {
     }
 
     #[test]
+    fn response_mutations_invalidate_render_metrics() {
+        let mut state = AppState::new();
+
+        let append_revision = state.render_snapshot().revision();
+        state.append_current_response("streamed output");
+        assert_eq!(state.current_response, "streamed output");
+        assert!(!state.publish_render_metrics(
+            append_revision,
+            12,
+            ratatui::layout::Rect::default()
+        ));
+
+        let clear_revision = state.render_snapshot().revision();
+        state.clear_current_response();
+        assert!(state.current_response.is_empty());
+        assert!(!state.publish_render_metrics(
+            clear_revision,
+            12,
+            ratatui::layout::Rect::default()
+        ));
+    }
+
+    #[test]
     fn render_snapshot_captures_live_and_modal_render_data() {
         let mut state = AppState::new();
         state.pending_queue = vec!["queued prompt".to_owned()];
