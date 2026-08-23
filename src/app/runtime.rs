@@ -20,7 +20,10 @@ use tokio::sync::{Mutex, MutexGuard, mpsc};
 use tokio_util::sync::CancellationToken;
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
-const STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+// Streaming text and spinner updates do not need terminal refreshes at the
+// input/event poll rate. Event-driven redraws still happen immediately; this
+// interval only bounds periodic redraws while a turn is active.
+const STREAM_FRAME_INTERVAL: Duration = Duration::from_millis(100);
 
 async fn apply_approval_decision(
     state: &Arc<Mutex<AppState>>,
