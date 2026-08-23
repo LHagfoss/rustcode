@@ -78,22 +78,23 @@ pub(crate) struct RenderSnapshot {
 #[allow(dead_code)]
 impl RenderSnapshot {
     pub(crate) fn new(state: &crate::app::AppState) -> Self {
+        let capture_details = state.show_context_modal || state.show_subagent_picker;
+        let subagents = state
+            .subagents
+            .iter()
+            .map(|agent| SubAgentSnapshot::new(agent, capture_details))
+            .collect::<Vec<_>>();
         let selected_subagent = state.selected_subagent_id.and_then(|id| {
             let agent = state.subagents.iter().find(|agent| agent.id == id)?;
             Some(SelectedSubagentSnapshot {
                 id: agent.id,
                 name: agent.name.clone(),
-                history: Arc::new(agent.history.clone()),
+                history: Arc::clone(&agent.history),
                 status: agent.status,
                 active_turn: agent.active_turn,
                 parent_id: agent.parent_id,
             })
         });
-        let subagents = state
-            .subagents
-            .iter()
-            .map(SubAgentSnapshot::from)
-            .collect::<Vec<_>>();
 
         Self {
             revision: state.render_revision,
@@ -398,31 +399,37 @@ pub(crate) struct SubAgentSnapshot {
     pub(crate) status: SubAgentStatus,
 }
 
-impl From<&SubAgent> for SubAgentSnapshot {
-    fn from(agent: &SubAgent) -> Self {
-        let last_message = agent
-            .history
-            .last()
-            .map(|message| {
-                message
-                    .content
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .chars()
-                    .take(48)
-                    .collect()
-            })
-            .unwrap_or_default();
+impl SubAgentSnapshot {
+    fn new(agent: &SubAgent, capture_details: bool) -> Self {
+        let (history_tokens, last_message) = if capture_details {
+            let last_message = agent
+                .history
+                .last()
+                .map(|message| {
+                    message
+                        .content
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(48)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let history_tokens = agent
+                .history
+                .iter()
+                .map(crate::network::compaction::estimate_message_tokens)
+                .sum();
+            (history_tokens, last_message)
+        } else {
+            (0, String::new())
+        };
         Self {
             id: agent.id,
             name: agent.name.clone(),
             task: agent.task.clone(),
-            history_tokens: agent
-                .history
-                .iter()
-                .map(crate::network::compaction::estimate_message_tokens)
-                .sum(),
+            history_tokens,
             last_message,
             status: agent.status,
         }
@@ -473,6 +480,7 @@ impl SelectedSubagentSnapshot {
 #[cfg(test)]
 mod tests {
     use crate::app::{AppState, AppStatus, ChatMessage, SubAgent, SubAgentStatus};
+    use std::sync::Arc;
 
     #[test]
     fn render_snapshot_captures_ui_state() {
@@ -489,7 +497,7 @@ mod tests {
             name: "reviewer".to_owned(),
             task: "review the patch".to_owned(),
             model: Some("test-model".to_owned()),
-            history: vec![ChatMessage::new("assistant", "subagent response")],
+            history: Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
             status: SubAgentStatus::Running,
             active_turn: true,
             parent_id: Some(3),
@@ -630,7 +638,7 @@ mod tests {
             name: "reviewer".to_owned(),
             task: "review the patch".to_owned(),
             model: None,
-            history: vec![ChatMessage::new("assistant", "subagent response")],
+            history: Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
             status: SubAgentStatus::Running,
             active_turn: true,
             parent_id: None,
@@ -654,6 +662,15 @@ mod tests {
 
         assert_eq!(selected.history()[0].content, "subagent response");
         assert_eq!(
+            selected.history().as_ptr(),
+            state.subagents[0].history.as_ptr()
+        );
+
+        Arc::make_mut(&mut state.subagents[0].history)
+            .push(ChatMessage::new("assistant", "later response"));
+        assert_eq!(selected.history().len(), 1);
+        assert_eq!(state.subagents[0].history.len(), 2);
+        assert_eq!(
             snapshot.live_tool_calls.as_ptr(),
             state.live_tool_calls.as_ptr()
         );
@@ -666,12 +683,13 @@ mod tests {
     #[test]
     fn subagent_snapshots_keep_picker_metadata_and_selected_history() {
         let mut state = AppState::new();
+        state.show_subagent_picker = true;
         state.subagents.push(SubAgent {
             id: 1,
             name: "background".to_owned(),
             task: "check the background task".to_owned(),
             model: None,
-            history: vec![ChatMessage::new("assistant", "background result")],
+            history: Arc::new(vec![ChatMessage::new("assistant", "background result")]),
             status: SubAgentStatus::Completed,
             active_turn: false,
             parent_id: None,
@@ -686,10 +704,10 @@ mod tests {
             name: "selected".to_owned(),
             task: "inspect the selected context".to_owned(),
             model: None,
-            history: vec![
+            history: Arc::new(vec![
                 ChatMessage::new("user", "inspect"),
                 ChatMessage::new("assistant", "selected result"),
-            ],
+            ]),
             status: SubAgentStatus::Running,
             active_turn: true,
             parent_id: Some(1),
@@ -708,6 +726,31 @@ mod tests {
         let selected = snapshot.selected_subagent().expect("selected subagent");
         assert_eq!(selected.history().len(), 2);
         assert_eq!(selected.history()[1].content, "selected result");
+    }
+
+    #[test]
+    fn subagent_snapshot_omits_picker_metadata_when_picker_surfaces_are_hidden() {
+        let mut state = AppState::new();
+        state.subagents.push(SubAgent {
+            id: 1,
+            name: "background".to_owned(),
+            task: "check the background task".to_owned(),
+            model: None,
+            history: Arc::new(vec![ChatMessage::new("assistant", "background result")]),
+            status: SubAgentStatus::Completed,
+            active_turn: false,
+            parent_id: None,
+            write_access: false,
+            allowed_paths: Vec::new(),
+            verification_command: None,
+            workspace_root: None,
+            review_manifest: None,
+        });
+
+        let snapshot = state.render_snapshot();
+
+        assert_eq!(snapshot.subagents()[0].history_tokens(), 0);
+        assert_eq!(snapshot.subagents()[0].last_message(), "");
     }
 
     #[test]

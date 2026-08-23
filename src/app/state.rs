@@ -666,7 +666,7 @@ pub struct SubAgent {
     pub name: String,
     pub task: String,
     pub model: Option<String>,
-    pub history: Vec<ChatMessage>,
+    pub history: Arc<Vec<ChatMessage>>,
     pub status: SubAgentStatus,
     pub active_turn: bool,
     pub parent_id: Option<u32>,

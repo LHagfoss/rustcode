@@ -136,7 +136,7 @@ fn render_snapshot_preserves_existing_ui_output() {
         name: "reviewer".to_owned(),
         task: "review the patch".to_owned(),
         model: Some("test-model".to_owned()),
-        history: vec![ChatMessage::new("assistant", "subagent response")],
+        history: std::sync::Arc::new(vec![ChatMessage::new("assistant", "subagent response")]),
         status: crate::app::SubAgentStatus::Running,
         active_turn: true,
         parent_id: Some(3),
@@ -3212,8 +3212,7 @@ fn selected_subagent_renders_its_transcript_without_replacing_parent_history() {
         None,
         None,
     );
-    state.subagents[0]
-        .history
+    std::sync::Arc::make_mut(&mut state.subagents[0].history)
         .push(crate::app::ChatMessage::new("assistant", "child result"));
     crate::app::SubagentController
         .select(&mut state, id)
