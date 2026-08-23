@@ -1,4 +1,5 @@
 use crate::app::state::{AppState, AppStatus, LiveToolCall, StreamTracker, TokenUsage};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(crate) fn format_elapsed_compact(elapsed_secs: u64) -> String {
@@ -44,7 +45,7 @@ pub(crate) struct StatusState<'a> {
     current_thought_tokens: &'a mut u32,
     stream_tracker: &'a mut Option<StreamTracker>,
     running_tools: &'a mut Vec<String>,
-    live_tool_calls: &'a mut Vec<LiveToolCall>,
+    live_tool_calls: &'a Arc<Vec<LiveToolCall>>,
     current_terminal_title: &'a mut Option<String>,
 }
 
@@ -59,7 +60,7 @@ impl<'a> StatusState<'a> {
             current_thought_tokens: &mut state.current_thought_tokens,
             stream_tracker: &mut state.stream_tracker,
             running_tools: &mut state.running_tools,
-            live_tool_calls: &mut state.live_tool_calls,
+            live_tool_calls: &state.live_tool_calls,
             current_terminal_title: &mut state.current_terminal_title,
         }
     }

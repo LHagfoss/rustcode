@@ -1118,7 +1118,7 @@ pub struct AppState {
     /// finish too quickly to be useful as a name-only `running_tools` status.
     /// This is deliberately not serialized: it is a terminal presentation
     /// projection, not conversation context.
-    pub live_tool_calls: Vec<LiveToolCall>,
+    pub live_tool_calls: Arc<Vec<LiveToolCall>>,
     /// Monotonic identity source for presentation-only live tool projections.
     pub live_tool_call_sequence: u64,
 
@@ -1196,6 +1196,8 @@ pub struct AppState {
     /// title found on disk (`None` when that session has no `title.txt`).
     /// Keeps the draw loop from hitting the filesystem on every frame.
     pub session_title_cache: Option<(String, Option<String>)>,
+    /// Changes whenever an in-flight title load must be discarded.
+    pub session_title_cache_generation: u64,
     /// Set by background tasks that mutate state outside the input path, so the
     /// draw loop knows to render once even though no key was pressed.
     pub redraw_requested: bool,
@@ -1271,24 +1273,37 @@ impl AppState {
             .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
     }
 
-    /// Custom title of the active session, read from disk at most once per
-    /// session id. Call [`AppState::invalidate_session_title_cache`] after
-    /// writing a new title so the next lookup picks it up.
-    pub fn cached_session_title(&mut self) -> Option<String> {
-        if let Some((cached_id, title)) = &self.session_title_cache
-            && *cached_id == self.active_session_id
+    /// Return the cached custom title for the active session without touching
+    /// the filesystem. `Some(None)` means the cache contains a miss.
+    pub(crate) fn cached_session_title(&self) -> Option<Option<String>> {
+        self.session_title_cache
+            .as_ref()
+            .filter(|(cached_id, _)| *cached_id == self.active_session_id)
+            .map(|(_, title)| title.clone())
+    }
+
+    /// Install a title loaded for `session_id` only if that session is still
+    /// active. Returns whether the cache was installed.
+    pub(crate) fn install_session_title_cache(
+        &mut self,
+        session_id: &str,
+        generation: u64,
+        title: Option<String>,
+    ) -> bool {
+        if self.active_session_id != session_id
+            || self.session_title_cache_generation != generation
         {
-            return title.clone();
+            return false;
         }
-        let title = crate::config::load_session_title(&self.active_session_id);
-        self.session_title_cache = Some((self.active_session_id.clone(), title.clone()));
-        title
+        self.session_title_cache = Some((session_id.to_owned(), title));
+        true
     }
 
     /// Forget the cached session title so it is re-read from disk on the next
     /// draw. Use after `save_session_title`.
     pub fn invalidate_session_title_cache(&mut self) {
         self.session_title_cache = None;
+        self.session_title_cache_generation = self.session_title_cache_generation.wrapping_add(1);
     }
 
     /// Ask the draw loop for one more frame. Background tasks that mutate state
@@ -1365,13 +1380,15 @@ impl AppState {
         arguments: &serde_json::Value,
     ) -> String {
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
-        if let Some(call) = self.live_tool_calls.iter_mut().find(|call| {
-            !call.execution_started
-                && match provider_call_id {
-                    Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
-                    None => call.provider_call_id.is_none() && call.tool_name == tool_name,
-                }
-        }) {
+        if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
+            .iter_mut()
+            .find(|call| {
+                !call.execution_started
+                    && match provider_call_id {
+                        Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
+                        None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                    }
+            }) {
             call.action = action;
             call.target = target;
             call.execution_started = true;
@@ -1387,7 +1404,7 @@ impl AppState {
             Some(call_id) => format!("provider:{call_id}:{sequence}"),
             None => format!("local:{sequence}"),
         };
-        self.live_tool_calls.push(LiveToolCall::new(
+        Arc::make_mut(&mut self.live_tool_calls).push(LiveToolCall::new(
             key.clone(),
             provider_call_id.map(str::to_owned),
             tool_name,
@@ -1411,13 +1428,15 @@ impl AppState {
         }
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
 
-        if let Some(call) = self.live_tool_calls.iter_mut().find(|call| {
-            !call.execution_started
-                && match provider_call_id {
-                    Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
-                    None => call.provider_call_id.is_none() && call.tool_name == tool_name,
-                }
-        }) {
+        if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
+            .iter_mut()
+            .find(|call| {
+                !call.execution_started
+                    && match provider_call_id {
+                        Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
+                        None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                    }
+            }) {
             call.action = action;
             call.target = target;
             self.request_redraw();
@@ -1438,7 +1457,7 @@ impl AppState {
             target,
         );
         call.execution_started = false;
-        self.live_tool_calls.push(call);
+        Arc::make_mut(&mut self.live_tool_calls).push(call);
         self.request_redraw();
     }
 
@@ -1449,7 +1468,10 @@ impl AppState {
         if bytes.is_empty() {
             return;
         }
-        let Some(call) = self.live_tool_calls.iter_mut().find(|call| call.key == key) else {
+        let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
+            .iter_mut()
+            .find(|call| call.key == key)
+        else {
             return;
         };
         let text = String::from_utf8_lossy(bytes);
@@ -1495,7 +1517,7 @@ impl AppState {
             .iter()
             .position(|live_call| live_call.key == key)
         {
-            self.live_tool_calls.remove(position);
+            Arc::make_mut(&mut self.live_tool_calls).remove(position);
             self.request_redraw();
         }
     }
@@ -1503,7 +1525,7 @@ impl AppState {
     /// Remove projections left by cancellation or an interrupted turn.
     pub fn clear_live_tool_calls(&mut self) {
         if !self.live_tool_calls.is_empty() {
-            self.live_tool_calls.clear();
+            Arc::make_mut(&mut self.live_tool_calls).clear();
             self.request_redraw();
         }
     }
@@ -1607,7 +1629,7 @@ impl AppState {
             pending_question: None,
             question_response: None,
             running_tools: Vec::new(),
-            live_tool_calls: Vec::new(),
+            live_tool_calls: Arc::new(Vec::new()),
             live_tool_call_sequence: 0,
             stream_tracker: None,
             auto_confirm: false,
@@ -1627,6 +1649,7 @@ impl AppState {
             current_terminal_title: None,
             current_terminal_progress: None,
             session_title_cache: None,
+            session_title_cache_generation: 0,
             redraw_requested: false,
             render_revision: 0,
             clear_screen_requested: false,

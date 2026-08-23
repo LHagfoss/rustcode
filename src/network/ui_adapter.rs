@@ -148,7 +148,7 @@ async fn publish_snapshot(
             state.current_response.clone(),
             state.current_response_revision,
             state.current_response_last_rewrite_revision,
-            state.live_tool_calls.clone(),
+            Arc::clone(&state.live_tool_calls),
             state.pending_tool_confirmation.is_some(),
             state.active_tool_protocol(),
             state
@@ -198,11 +198,11 @@ async fn publish_snapshot(
     previous_response.len = response.len();
     previous_response.revision = response_revision;
 
-    for call in live_tools {
+    for call in live_tools.iter() {
         if started_tools.insert(call.key.clone()) {
             sender.send(AgentUiEvent::ToolStarted {
-                id: call.key,
-                name: call.tool_name,
+                id: call.key.clone(),
+                name: call.tool_name.clone(),
             });
         }
     }
