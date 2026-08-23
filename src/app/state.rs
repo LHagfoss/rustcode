@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum AppStatus {
@@ -386,7 +387,7 @@ pub struct ChatMessage {
 /// without comparing every message.
 #[derive(Clone, Debug, Default)]
 pub struct History {
-    messages: Vec<ChatMessage>,
+    messages: Arc<Vec<ChatMessage>>,
     revision: u64,
     last_rewrite_revision: u64,
 }
@@ -400,18 +401,22 @@ impl History {
         self.last_rewrite_revision <= revision
     }
 
+    pub fn snapshot(&self) -> History {
+        self.clone()
+    }
+
     pub fn replace(&mut self, messages: Vec<ChatMessage>) {
-        self.messages = messages;
+        self.messages = Arc::new(messages);
         self.bump_rewrite();
     }
 
     pub fn as_mut_vec(&mut self) -> &mut Vec<ChatMessage> {
         self.bump_rewrite();
-        &mut self.messages
+        Arc::make_mut(&mut self.messages)
     }
 
     pub fn into_vec(self) -> Vec<ChatMessage> {
-        self.messages
+        Arc::try_unwrap(self.messages).unwrap_or_else(|messages| messages.as_ref().clone())
     }
 
     fn bump(&mut self) {
@@ -424,13 +429,13 @@ impl History {
     }
 
     pub fn push(&mut self, message: ChatMessage) {
-        self.messages.push(message);
+        Arc::make_mut(&mut self.messages).push(message);
         self.bump();
     }
 
     pub fn clear(&mut self) {
         if !self.messages.is_empty() {
-            self.messages.clear();
+            Arc::make_mut(&mut self.messages).clear();
             self.bump_rewrite();
         }
     }
@@ -440,14 +445,14 @@ impl History {
         R: std::ops::RangeBounds<usize>,
     {
         self.bump_rewrite();
-        self.messages.drain(range)
+        Arc::make_mut(&mut self.messages).drain(range)
     }
 
     pub fn retain<F>(&mut self, f: F)
     where
         F: FnMut(&ChatMessage) -> bool,
     {
-        self.messages.retain(f);
+        Arc::make_mut(&mut self.messages).retain(f);
         self.bump_rewrite();
     }
 
@@ -457,14 +462,14 @@ impl History {
 
     pub fn as_mut_slice(&mut self) -> &mut [ChatMessage] {
         self.bump_rewrite();
-        &mut self.messages
+        Arc::make_mut(&mut self.messages).as_mut_slice()
     }
 }
 
 impl From<Vec<ChatMessage>> for History {
     fn from(messages: Vec<ChatMessage>) -> Self {
         Self {
-            messages,
+            messages: Arc::new(messages),
             revision: 0,
             last_rewrite_revision: 0,
         }
@@ -496,7 +501,7 @@ impl std::ops::DerefMut for History {
 impl Extend<ChatMessage> for History {
     fn extend<T: IntoIterator<Item = ChatMessage>>(&mut self, iter: T) {
         let before = self.messages.len();
-        self.messages.extend(iter);
+        Arc::make_mut(&mut self.messages).extend(iter);
         if self.messages.len() != before {
             self.bump();
         }
@@ -2334,6 +2339,22 @@ mod history_tests {
         assert_eq!(snapshot.revision(), history.revision());
         history[0].content = "changed".to_string();
         assert_eq!(snapshot[0].content, "hello");
+    }
+
+    #[test]
+    fn history_snapshot_is_stable_after_live_mutation() {
+        let mut history = History::default();
+        history.push(ChatMessage::new("user", "hello"));
+        let snapshot = history.snapshot();
+        let snapshot_revision = snapshot.revision();
+
+        history.push(ChatMessage::new("assistant", "answer"));
+
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].content, "hello");
+        assert_eq!(snapshot.revision(), snapshot_revision);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].content, "answer");
     }
 }
 
