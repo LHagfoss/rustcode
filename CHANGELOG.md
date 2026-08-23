@@ -1,3 +1,9 @@
+## [v0.35.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.1) - 2026-08-23
+
+### Skills & Performance
+- **Skill Routing:** Route named skills through a fast path to reduce discovery overhead ([`5bcf281`](https://github.com/LHagfoss/rustcode/commit/5bcf281))
+- **Skill Routing:** Stabilize the skill-routing cache for consistent repeated lookups ([`ab14758`](https://github.com/LHagfoss/rustcode/commit/ab14758))
+
 ## [v0.35.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.0) - 2026-08-23
 
 ### Performance
