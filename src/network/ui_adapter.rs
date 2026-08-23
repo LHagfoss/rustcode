@@ -33,6 +33,14 @@ pub(crate) struct AgentUiEventSender {
 
 pub(crate) type AgentUiEventReceiver = mpsc::UnboundedReceiver<AgentUiEvent>;
 
+#[derive(Default)]
+struct ResponseDeltaTracker {
+    /// Address is used only as an identity check; it is never dereferenced.
+    pointer: usize,
+    len: usize,
+    revision: u64,
+}
+
 impl AgentUiEventSender {
     pub(crate) fn channel() -> (Self, AgentUiEventReceiver) {
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -117,17 +125,29 @@ fn history_tool_result_event(message: &ChatMessage) -> Option<AgentUiEvent> {
 async fn publish_snapshot(
     state: &Arc<Mutex<AppState>>,
     sender: &AgentUiEventSender,
-    previous_response: &mut Arc<String>,
+    previous_response: &mut ResponseDeltaTracker,
     previous_history_len: &mut usize,
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
     approval_sent: &mut bool,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
 ) {
-    let (response, live_tools, pending_approval, protocol, history, history_len, subagents) = {
+    let (
+        response,
+        response_revision,
+        response_last_rewrite_revision,
+        live_tools,
+        pending_approval,
+        protocol,
+        history,
+        history_len,
+        subagents,
+    ) = {
         let state = state.lock().await;
         (
             state.current_response.clone(),
+            state.current_response_revision,
+            state.current_response_last_rewrite_revision,
             state.live_tool_calls.clone(),
             state.pending_tool_confirmation.is_some(),
             state.active_tool_protocol(),
@@ -157,17 +177,26 @@ async fn publish_snapshot(
         }
     }
 
-    if response.as_str() != previous_response.as_str() {
-        let text = response
-            .as_str()
-            .strip_prefix(previous_response.as_str())
-            .unwrap_or(response.as_str())
-            .to_owned();
-        if !text.is_empty() {
-            sender.send(AgentUiEvent::TextDelta { text });
-        }
-        *previous_response = Arc::clone(&response);
+    let response_pointer = Arc::as_ptr(&response) as usize;
+    let text = if response_revision != previous_response.revision
+        && response_last_rewrite_revision <= previous_response.revision
+        && response.len() >= previous_response.len
+    {
+        response[previous_response.len..].to_owned()
+    } else if response_pointer != previous_response.pointer
+        || response.len() != previous_response.len
+        || response_revision != previous_response.revision
+    {
+        response.as_str().to_owned()
+    } else {
+        String::new()
+    };
+    if !text.is_empty() {
+        sender.send(AgentUiEvent::TextDelta { text });
     }
+    previous_response.pointer = response_pointer;
+    previous_response.len = response.len();
+    previous_response.revision = response_revision;
 
     for call in live_tools {
         if started_tools.insert(call.key.clone()) {
@@ -226,7 +255,7 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
         policy,
         stream_buffer,
     ));
-    let mut previous_response = Arc::new(String::new());
+    let mut previous_response = ResponseDeltaTracker::default();
     let mut previous_history_len = 0;
     let mut started_tools = HashSet::new();
     let mut finished_tools = HashSet::new();
@@ -278,10 +307,13 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentUiEvent, AgentUiEventSender, map_agent_event};
+    use super::{AgentUiEvent, AgentUiEventSender, map_agent_event, publish_snapshot};
+    use crate::app::AppState;
     use crate::network::events::{AgentEvent, FinishReason, ToolResult, ToolResultMetadata};
     use crate::tools::ToolCall;
     use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     #[test]
     fn maps_text_tool_completion_cancellation_and_errors() {
@@ -361,5 +393,116 @@ mod tests {
             receiver.recv().await,
             Some(AgentUiEvent::TurnRecovered { message }) if message == "retrying"
         ));
+    }
+
+    #[tokio::test]
+    async fn snapshot_delta_tracker_does_not_retain_response_and_resets_on_rewrite() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        state
+            .lock()
+            .await
+            .replace_current_response("initial response");
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut previous_response = super::ResponseDeltaTracker::default();
+        let mut previous_history_len = 0;
+        let mut started_tools = std::collections::HashSet::new();
+        let mut finished_tools = std::collections::HashSet::new();
+        let mut approval_sent = false;
+        let mut previous_subagents = std::collections::HashMap::new();
+
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut previous_response,
+            &mut previous_history_len,
+            &mut started_tools,
+            &mut finished_tools,
+            &mut approval_sent,
+            &mut previous_subagents,
+        )
+        .await;
+
+        assert_eq!(
+            receiver.recv().await,
+            Some(AgentUiEvent::TextDelta {
+                text: "initial response".to_owned()
+            })
+        );
+        assert_eq!(
+            Arc::strong_count(&state.lock().await.current_response),
+            1,
+            "snapshot tracking must not retain the response Arc"
+        );
+
+        state
+            .lock()
+            .await
+            .append_current_response(" + more");
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut previous_response,
+            &mut previous_history_len,
+            &mut started_tools,
+            &mut finished_tools,
+            &mut approval_sent,
+            &mut previous_subagents,
+        )
+        .await;
+
+        assert_eq!(
+            receiver.recv().await,
+            Some(AgentUiEvent::TextDelta {
+                text: " + more".to_owned()
+            })
+        );
+
+        {
+            let mut state = state.lock().await;
+            state.clear_current_response();
+            state.append_current_response("replacement response");
+        }
+
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut previous_response,
+            &mut previous_history_len,
+            &mut started_tools,
+            &mut finished_tools,
+            &mut approval_sent,
+            &mut previous_subagents,
+        )
+        .await;
+
+        assert_eq!(
+            receiver.recv().await,
+            Some(AgentUiEvent::TextDelta {
+                text: "replacement response".to_owned()
+            })
+        );
+
+        state
+            .lock()
+            .await
+            .replace_current_response("final response");
+        publish_snapshot(
+            &state,
+            &sender,
+            &mut previous_response,
+            &mut previous_history_len,
+            &mut started_tools,
+            &mut finished_tools,
+            &mut approval_sent,
+            &mut previous_subagents,
+        )
+        .await;
+
+        assert_eq!(
+            receiver.recv().await,
+            Some(AgentUiEvent::TextDelta {
+                text: "final response".to_owned()
+            })
+        );
     }
 }
