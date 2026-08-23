@@ -1,6 +1,6 @@
 use crate::app::{
     AppStatus, ChatMessage, History, LiveToolCall, McpEditState, PendingQuestion, StreamTracker,
-    SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
+    SubAgent, SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
 };
 
 /// Immutable data captured for one UI render attempt.
@@ -61,6 +61,15 @@ pub(crate) struct RenderSnapshot {
     verbosity: Verbosity,
     delegation_active: bool,
     modal_open: bool,
+    last_copy_text: Option<(String, std::time::Instant)>,
+    expanded_thoughts: std::collections::HashSet<usize>,
+    agent_mode: crate::config::AgentMode,
+    subagents: Vec<SubAgentSnapshot>,
+    selected_subagent_id: Option<u32>,
+    active_context_window: u32,
+    active_model_profile: Option<crate::config::ModelProfile>,
+    active_tool_protocol: crate::config::ToolProtocol,
+    command_suggestion: Option<String>,
     selected_subagent: Option<SelectedSubagentSnapshot>,
 }
 
@@ -123,6 +132,15 @@ impl RenderSnapshot {
             verbosity: state.verbosity.clone(),
             delegation_active: state.delegation_active,
             modal_open: state.modal_open(),
+            last_copy_text: state.last_copy_text.clone(),
+            expanded_thoughts: state.expanded_thoughts.clone(),
+            agent_mode: state.agent_mode,
+            subagents: state.subagents.iter().map(SubAgentSnapshot::from).collect(),
+            selected_subagent_id: state.selected_subagent_id,
+            active_context_window: state.active_context_window(),
+            active_model_profile: state.active_model_profile(),
+            active_tool_protocol: state.active_tool_protocol(),
+            command_suggestion: state.get_command_suggestion(),
             selected_subagent: state
                 .selected_subagent()
                 .map(SelectedSubagentSnapshot::from),
@@ -309,6 +327,64 @@ impl RenderSnapshot {
     }
     pub(crate) fn selected_subagent(&self) -> Option<&SelectedSubagentSnapshot> {
         self.selected_subagent.as_ref()
+    }
+    pub(crate) fn last_copy_text(&self) -> Option<&(String, std::time::Instant)> {
+        self.last_copy_text.as_ref()
+    }
+    pub(crate) fn expanded_thoughts(&self) -> &std::collections::HashSet<usize> {
+        &self.expanded_thoughts
+    }
+    pub(crate) fn agent_mode(&self) -> crate::config::AgentMode {
+        self.agent_mode
+    }
+    pub(crate) fn subagents(&self) -> &[SubAgentSnapshot] {
+        &self.subagents
+    }
+    pub(crate) fn selected_subagent_id(&self) -> Option<u32> {
+        self.selected_subagent_id
+    }
+    pub(crate) fn active_context_window(&self) -> u32 {
+        self.active_context_window
+    }
+    pub(crate) fn active_model_profile(&self) -> Option<&crate::config::ModelProfile> {
+        self.active_model_profile.as_ref()
+    }
+    pub(crate) fn active_tool_protocol(&self) -> crate::config::ToolProtocol {
+        self.active_tool_protocol
+    }
+    pub(crate) fn auto_confirm_status_text(&self) -> &'static str {
+        if self.auto_confirm { "ON" } else { "OFF" }
+    }
+    pub(crate) fn completion_identity(&self) -> Option<String> {
+        if let Some(command) = crate::app::suggestion::command_token(&self.input_buffer) {
+            return Some(format!("command:{command}"));
+        }
+        crate::app::get_at_word_query(&self.input_buffer, self.cursor_position)
+            .map(|(start, query)| format!("file:{start}:{query}"))
+    }
+    pub(crate) fn get_command_suggestion(&self) -> Option<&str> {
+        self.command_suggestion.as_deref()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SubAgentSnapshot {
+    pub(crate) id: u32,
+    pub(crate) name: String,
+    pub(crate) task: String,
+    pub(crate) history: Vec<ChatMessage>,
+    pub(crate) status: SubAgentStatus,
+}
+
+impl From<&SubAgent> for SubAgentSnapshot {
+    fn from(agent: &SubAgent) -> Self {
+        Self {
+            id: agent.id,
+            name: agent.name.clone(),
+            task: agent.task.clone(),
+            history: agent.history.clone(),
+            status: agent.status,
+        }
     }
 }
 

@@ -14,8 +14,8 @@ mod transcript;
 pub(crate) use composer::{Composer, ComposerAction};
 pub(crate) use events::{TuiEvent, TuiEventStream};
 pub(crate) use frame_requester::{FrameRequester, FrameStream};
-use history_cell::{HistoryCell, is_live_tool_call_visible};
 pub(crate) use history_cell::TranscriptState;
+use history_cell::{HistoryCell, is_live_tool_call_visible};
 pub(crate) use transcript::TranscriptModel;
 pub(crate) mod scrollback;
 mod tool_result;
@@ -36,13 +36,12 @@ pub(crate) use modals::{
     question_custom_answer_event,
 };
 use modals::{
-    question_height, render_at_popup_menu, render_command_picker_modal,
-    render_context_modal, render_effort_picker_modal, render_history_picker_modal,
-    render_mcp_config_modal, render_model_picker_modal, render_popup_menu,
-    render_protocol_picker_modal, render_question_modal, render_subagent_picker_modal,
-    render_theme_picker_modal, render_thinking_picker_modal, render_update_prompt_modal,
-    render_tool_confirmation_modal, render_verbosity_picker_modal,
-    render_yolo_picker_modal, tool_confirmation_height,
+    question_height, render_at_popup_menu, render_command_picker_modal, render_context_modal,
+    render_effort_picker_modal, render_history_picker_modal, render_mcp_config_modal,
+    render_model_picker_modal, render_popup_menu, render_protocol_picker_modal,
+    render_question_modal, render_subagent_picker_modal, render_theme_picker_modal,
+    render_thinking_picker_modal, render_tool_confirmation_modal, render_update_prompt_modal,
+    render_verbosity_picker_modal, render_yolo_picker_modal, tool_confirmation_height,
 };
 use tool_result::render_tool_result;
 
@@ -55,6 +54,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Clear, Paragraph, Wrap},
 };
+use render_snapshot::RenderSnapshot;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -262,9 +262,7 @@ fn collapse_image_markers(text: &str) -> String {
     })
 }
 
-fn collapsed_marker_lines(
-    text: &str,
-) -> Vec<Vec<(String, Option<CollapsedMarker>)>> {
+fn collapsed_marker_lines(text: &str) -> Vec<Vec<(String, Option<CollapsedMarker>)>> {
     let mut lines = vec![Vec::new()];
     for (segment, marker) in collapsed_marker_segments(text) {
         let mut rest = segment.as_str();
@@ -288,9 +286,9 @@ fn collapsed_marker_lines(
     lines
 }
 
-fn model_label(state: &AppState) -> String {
+fn model_label(state: &RenderSnapshot) -> String {
     // Only show the main (big) model — hide the small model entirely.
-    state.config.default.big().to_string()
+    state.config().default.big().to_string()
 }
 
 struct AssistantRenderOptions {
@@ -958,9 +956,9 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
         .len() as u16
 }
 
-fn current_tps(state: &AppState) -> f64 {
-    if state.status == AppStatus::Streaming
-        && let Some(ref tracker) = state.stream_tracker
+fn current_tps(state: &RenderSnapshot) -> f64 {
+    if *state.status() == AppStatus::Streaming
+        && let Some(ref tracker) = state.stream_tracker()
     {
         return tracker.snapshot().0;
     }
@@ -1008,8 +1006,8 @@ fn input_footer_hint_text() -> &'static str {
     "Ctrl+P commands"
 }
 
-fn context_usage(state: &AppState) -> (u32, Option<u32>) {
-    if let Some(usage) = &state.current_token_usage {
+fn context_usage(state: &RenderSnapshot) -> (u32, Option<u32>) {
+    if let Some(usage) = &state.current_token_usage() {
         return (usage.total_tokens, usage.cached_tokens);
     }
 
@@ -1030,7 +1028,7 @@ fn context_usage(state: &AppState) -> (u32, Option<u32>) {
     ((chars / 4) as u32, None)
 }
 
-fn format_input_status_text(state: &AppState) -> String {
+fn format_input_status_text(state: &RenderSnapshot) -> String {
     let (total_tokens, cached_tokens) = context_usage(state);
     let mut status = vec![
         format!("Auto-Confirm: {}", state.auto_confirm_status_text()),
@@ -1038,7 +1036,7 @@ fn format_input_status_text(state: &AppState) -> String {
         format_tps_info(current_tps(state)),
     ];
 
-    if let Some(quota) = state.model_quota_remaining {
+    if let Some(quota) = state.model_quota_remaining() {
         status.push(format!("Quota: {quota:.0}%"));
     }
 
@@ -1046,12 +1044,12 @@ fn format_input_status_text(state: &AppState) -> String {
     status.join("  ")
 }
 
-fn activity_status_label(state: &AppState) -> String {
-    let base_activity = classify_activity(&state.status, &state.running_tools);
+fn activity_status_label(state: &RenderSnapshot) -> String {
+    let base_activity = classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == ActivityKind::ActionRequired {
         base_activity
     } else {
-        classify_live_tools(&state.live_tool_calls).unwrap_or(base_activity)
+        classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
     };
     if activity.kind == ActivityKind::ActionRequired {
         return "Action Required".to_string();
@@ -1062,7 +1060,7 @@ fn activity_status_label(state: &AppState) -> String {
     if activity.kind == ActivityKind::Ready {
         return "Idle".to_string();
     }
-    if state.current_thought_started_at.is_some() {
+    if state.current_thought_started_at().is_some() {
         return "Thinking".to_string();
     }
     "Working".to_string()
@@ -1131,21 +1129,21 @@ fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     crate::app::status::format_elapsed_compact(elapsed_secs)
 }
 
-fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
-    let base_activity = classify_activity(&state.status, &state.running_tools);
+fn activity_status_line(state: &RenderSnapshot, show_picker: bool) -> Line<'static> {
+    let base_activity = classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == ActivityKind::ActionRequired {
         base_activity
     } else {
-        classify_live_tools(&state.live_tool_calls).unwrap_or(base_activity)
+        classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
     };
     let action_detail = state
-        .pending_tool_confirmation
+        .pending_tool_confirmation()
         .as_ref()
         .and_then(|confirmations| confirmations.first())
         .map(|confirmation| format!("approve {}", confirmation.tool_name))
         .or_else(|| {
             state
-                .pending_question
+                .pending_question()
                 .as_ref()
                 .map(|_| "answer question".to_string())
         });
@@ -1204,7 +1202,7 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
     if matches!(
         activity.kind,
         ActivityKind::Working | ActivityKind::RunningTool
-    ) && let Some(started) = state.generation_start_time
+    ) && let Some(started) = state.generation_start_time()
     {
         spans.push(Span::styled(
             format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
@@ -1233,9 +1231,9 @@ fn activity_status_line(state: &AppState, show_picker: bool) -> Line<'static> {
 /// Maximum queued user prompts previewed above the composer.
 const MAX_QUEUE_PREVIEW_ROWS: usize = 3;
 
-fn queued_user_prompts(state: &AppState) -> Vec<&str> {
+fn queued_user_prompts(state: &RenderSnapshot) -> Vec<&str> {
     state
-        .pending_queue
+        .pending_queue()
         .iter()
         .filter(|prompt| !prompt.starts_with("__task_wakeup__:"))
         .rev()
@@ -1247,7 +1245,7 @@ fn queued_user_prompts(state: &AppState) -> Vec<&str> {
         .collect()
 }
 
-fn queue_preview_height(state: &AppState) -> u16 {
+fn queue_preview_height(state: &RenderSnapshot) -> u16 {
     let rows = queued_user_prompts(state).len();
     if rows == 0 { 0 } else { rows as u16 + 1 }
 }
@@ -1274,7 +1272,7 @@ fn truncate_queue_prompt(prompt: &str, max_width: usize) -> String {
 /// Shows the most recent queued user prompts directly above the input box.
 /// Internal wakeups stay queued but never consume composer space or leak into
 /// this transcript-like preview.
-fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &AppState) {
+fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &RenderSnapshot) {
     let prompts = queued_user_prompts(state);
     if prompts.is_empty() {
         return;
@@ -1285,7 +1283,7 @@ fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &Ap
     }
     let show_picker = state.modal_open();
     let queued_count = state
-        .pending_queue
+        .pending_queue()
         .iter()
         .filter(|prompt| !prompt.starts_with("__task_wakeup__:"))
         .count();
@@ -1321,7 +1319,7 @@ fn render_queue_line(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &Ap
     }
 }
 
-fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut AppState) -> Margin {
+fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &RenderSnapshot) -> Margin {
     let show_picker = state.modal_open();
     let area = chunks[2];
     f.render_widget(Clear, area);
@@ -1335,7 +1333,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
     };
     let input_inner = area.inner(input_margin);
 
-    let text_style = if state.input_buffer.starts_with('/') {
+    let text_style = if state.input_buffer().starts_with('/') {
         get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker)
     } else {
         get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker)
@@ -1350,7 +1348,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
         let marker_style =
             get_themed_style(COLOR_PRIMARY(), COLOR_PANEL(), Modifier::BOLD, show_picker);
         let mut styled_chars = Vec::new();
-        for (segment, marker) in collapsed_marker_segments(&state.input_buffer) {
+        for (segment, marker) in collapsed_marker_segments(&state.input_buffer()) {
             let style = if marker.is_some() {
                 marker_style
             } else {
@@ -1359,7 +1357,7 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
             styled_chars.extend(segment.chars().map(|c| (c, style)));
         }
 
-        if state.input_buffer.is_empty() && state.get_command_suggestion().is_none() {
+        if state.input_buffer().is_empty() && state.get_command_suggestion().is_none() {
             let placeholder_style =
                 get_themed_style(COLOR_MUTED(), COLOR_PANEL(), Modifier::ITALIC, show_picker);
             let placeholder_text = "Ask RustCode to do anything";
@@ -1370,19 +1368,19 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
             styled_chars.extend(suffix.chars().map(|c| (c, suggestion_style)));
         }
 
-        let safe_end = state.cursor_position.min(state.input_buffer.len());
-        let safe_end = if state.input_buffer.is_char_boundary(safe_end) {
+        let safe_end = state.cursor_position().min(state.input_buffer().len());
+        let safe_end = if state.input_buffer().is_char_boundary(safe_end) {
             safe_end
         } else {
             state
-                .input_buffer
+                .input_buffer()
                 .char_indices()
                 .map(|(i, _)| i)
                 .take_while(|&i| i <= safe_end)
                 .last()
                 .unwrap_or(0)
         };
-        let raw_prefix = &state.input_buffer[..safe_end];
+        let raw_prefix = &state.input_buffer()[..safe_end];
         let cursor_char_index = collapse_image_markers(raw_prefix).chars().count();
 
         let prompt_style =
@@ -1407,25 +1405,25 @@ fn render_input(f: &mut Frame, chunks: &[ratatui::layout::Rect], state: &mut App
 }
 
 fn composer_footer_visible(
-    state: &AppState,
+    state: &RenderSnapshot,
     has_command_completions: bool,
     has_file_completions: bool,
 ) -> bool {
     !state.modal_open() && !has_command_completions && !has_file_completions
 }
 
-fn footer_location(state: &AppState) -> String {
+fn footer_location(state: &RenderSnapshot) -> String {
     let (path, branch) = state
-        .cwd_and_branch
+        .cwd_and_branch()
         .rsplit_once(':')
-        .unwrap_or((&state.cwd_and_branch, "unknown"));
+        .unwrap_or((&state.cwd_and_branch(), "unknown"));
     let branch = if branch.is_empty() { "unknown" } else { branch };
     let branch = fit_to_width(branch, 24).trim_end().to_string();
     let path = if path.is_empty() { "~" } else { path };
     format!("{branch} · {path}")
 }
 
-fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState) {
+fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &RenderSnapshot) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -1435,9 +1433,9 @@ fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &Ap
     let remaining = crate::app::status::context_remaining_percent(used, window);
     let location = footer_location(state);
     let left_content = if let Some(agent) = state.selected_subagent() {
-        format!("  {} · {} · {}", agent.name, state.model_name, location)
+        format!("  {} · {} · {}", agent.name(), state.model_name(), location)
     } else {
-        format!("  {} · {}", state.model_name, location)
+        format!("  {} · {}", state.model_name(), location)
     };
     let right = format!("{remaining}% context left  ");
     let left = fit_to_width(
@@ -1497,11 +1495,7 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
         | "editfile"
         | "patch_file"
         | "patchfile" => "Edit".to_string(),
-        "write_to_file"
-        | "writetofile"
-        | "write_file"
-        | "writefile"
-        | "create_file"
+        "write_to_file" | "writetofile" | "write_file" | "writefile" | "create_file"
         | "createfile" => "Write".to_string(),
         "delete_file" | "deletefile" => "Delete".to_string(),
         "move_file" | "movefile" => "Move".to_string(),
@@ -1594,12 +1588,13 @@ fn format_pi_tool_action(name: &str, args: &serde_json::Value) -> (String, Strin
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
-        "search_web" | "codebase_search" | "find_symbol" | "codebase_symbol" | "recall_memory" => args
-            .get("query")
-            .or_else(|| args.get("Query"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("?")
-            .to_string(),
+        "search_web" | "codebase_search" | "find_symbol" | "codebase_symbol" | "recall_memory" => {
+            args.get("query")
+                .or_else(|| args.get("Query"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?")
+                .to_string()
+        }
         "remember" | "forget_memory" => args
             .get("key")
             .and_then(|v| v.as_str())
@@ -1783,7 +1778,7 @@ thread_local! {
 }
 
 #[allow(dead_code)]
-fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
+fn chat_cache_key(state: &RenderSnapshot, width: u16, show_picker: bool) -> ChatKey {
     let history = state.active_history();
     ChatKey {
         hist_len: history.len(),
@@ -1793,10 +1788,10 @@ fn chat_cache_key(state: &AppState, width: u16, show_picker: bool) -> ChatKey {
         width,
         show_picker,
         copied_recently: state
-            .last_copy_text
+            .last_copy_text()
             .as_ref()
             .map(|(t_text, t)| (t_text.clone(), t.elapsed().as_secs() < 2)),
-        theme: state.config.theme.clone(),
+        theme: state.config().theme.clone(),
     }
 }
 
@@ -1873,7 +1868,11 @@ fn tool_result_is_hidden(tool_name: &str) -> bool {
     )
 }
 
-fn tool_result_action(state: &AppState, message_index: usize, tool_name: &str) -> (String, String) {
+fn tool_result_action(
+    state: &RenderSnapshot,
+    message_index: usize,
+    tool_name: &str,
+) -> (String, String) {
     format_pi_tool_action(
         tool_name,
         &tool_call_arguments(state, message_index, tool_name),
@@ -2059,7 +2058,7 @@ struct ToolTranscriptEntry {
 }
 
 fn tool_call_arguments(
-    state: &AppState,
+    state: &RenderSnapshot,
     message_index: usize,
     tool_name: &str,
 ) -> serde_json::Value {
@@ -2113,7 +2112,7 @@ fn tool_call_arguments(
 }
 
 fn tool_transcript_entry(
-    state: &AppState,
+    state: &RenderSnapshot,
     message_index: usize,
     width: u16,
     show_picker: bool,
@@ -2152,7 +2151,7 @@ fn tool_transcript_entry(
         &tool_name,
         result,
         width as usize,
-        &state.verbosity,
+        &state.verbosity(),
         show_picker,
     );
 
@@ -2206,23 +2205,13 @@ fn tool_child_line(
         } else {
             spans.push(Span::styled(
                 entry.action.clone(),
-                get_themed_style(
-                    COLOR_TEXT(),
-                    COLOR_BG(),
-                    Modifier::BOLD,
-                    show_picker,
-                ),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
             ));
         }
     } else {
         spans.push(Span::styled(
             entry.action.clone(),
-            get_themed_style(
-                COLOR_TEXT(),
-                COLOR_BG(),
-                Modifier::BOLD,
-                show_picker,
-            ),
+            get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
         ));
         if !entry.target.is_empty() && entry.target != "?" {
             spans.push(Span::raw(" "));
@@ -2243,7 +2232,12 @@ fn tool_child_line(
         "    ",
         get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
     );
-    push_wrapped_with_continuation(&mut lines, spans, (width as usize).max(10), Some(continuation));
+    push_wrapped_with_continuation(
+        &mut lines,
+        spans,
+        (width as usize).max(10),
+        Some(continuation),
+    );
     lines
 }
 
@@ -2271,12 +2265,7 @@ fn command_child_lines(
         if command_index == 0 {
             spans.push(Span::styled(
                 entry.action.clone(),
-                get_themed_style(
-                    COLOR_TEXT(),
-                    COLOR_BG(),
-                    Modifier::BOLD,
-                    show_picker,
-                ),
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
             ));
             if !entry.target.is_empty() && entry.target != "?" {
                 spans.push(Span::styled(
@@ -2413,8 +2402,8 @@ fn indent_generic_tool_body(
     indented
 }
 
-pub(crate) fn render_committed_tool_result_group(
-    state: &AppState,
+fn render_committed_tool_result_group_snapshot(
+    state: &RenderSnapshot,
     message_indices: &[usize],
     width: u16,
     show_picker: bool,
@@ -2428,7 +2417,7 @@ pub(crate) fn render_committed_tool_result_group(
     while index < entries.len() {
         let kind = entries[index].kind;
         let group_end = if kind == ToolTranscriptKind::Command
-            && matches!(state.verbosity, crate::app::Verbosity::Low)
+            && matches!(state.verbosity(), crate::app::Verbosity::Low)
         {
             index + 1
         } else {
@@ -2443,10 +2432,15 @@ pub(crate) fn render_committed_tool_result_group(
             lines.push(Line::from(""));
         }
         if kind == ToolTranscriptKind::Command {
-            if matches!(state.verbosity, crate::app::Verbosity::High) {
+            if matches!(state.verbosity(), crate::app::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
-                    lines.extend(command_child_lines(entry, child_index == 0, width, show_picker));
+                    lines.extend(command_child_lines(
+                        entry,
+                        child_index == 0,
+                        width,
+                        show_picker,
+                    ));
                 }
             } else {
                 let entry = &group[0];
@@ -2454,7 +2448,7 @@ pub(crate) fn render_committed_tool_result_group(
                 lines.extend(indent_tool_result_body(
                     entry.body.clone(),
                     &entry.tool_name,
-                    &state.verbosity,
+                    &state.verbosity(),
                     width,
                 ));
             }
@@ -2474,20 +2468,26 @@ pub(crate) fn render_committed_tool_result_group(
             for entry in group {
                 let identity = format!("{}\0{}", entry.action, entry.target);
                 if kind != ToolTranscriptKind::Explored || seen.insert(identity) {
-                    let is_expanded = state.expanded_thoughts.contains(&entry.message_index);
+                    let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
                     let show_hint = kind == ToolTranscriptKind::Tool
                         && !entry.body.is_empty()
                         && !is_expanded
-                        && matches!(state.verbosity, crate::app::Verbosity::Low);
-                    lines.extend(tool_child_line(entry, first_child, show_hint, width, show_picker));
+                        && matches!(state.verbosity(), crate::app::Verbosity::Low);
+                    lines.extend(tool_child_line(
+                        entry,
+                        first_child,
+                        show_hint,
+                        width,
+                        show_picker,
+                    ));
                     first_child = false;
                     if kind == ToolTranscriptKind::Tool
                         && is_expanded
-                        && matches!(state.verbosity, crate::app::Verbosity::Low)
+                        && matches!(state.verbosity(), crate::app::Verbosity::Low)
                     {
                         lines.extend(indent_generic_tool_body(
                             entry.body.clone(),
-                            &state.verbosity,
+                            &state.verbosity(),
                             width,
                             show_picker,
                         ));
@@ -2502,14 +2502,14 @@ pub(crate) fn render_committed_tool_result_group(
 }
 
 fn render_committed_tool_result(
-    state: &AppState,
+    state: &RenderSnapshot,
     message_index: usize,
     _tool_name: &str,
     _result: &str,
     width: u16,
     show_picker: bool,
 ) -> Vec<Line<'static>> {
-    render_committed_tool_result_group(state, &[message_index], width, show_picker)
+    render_committed_tool_result_group_snapshot(state, &[message_index], width, show_picker)
 }
 
 fn format_elapsed_compact(milliseconds: u64) -> String {
@@ -2523,8 +2523,8 @@ fn format_elapsed_compact(milliseconds: u64) -> String {
     }
 }
 
-pub(crate) fn render_work_separator_before_assistant(
-    state: &AppState,
+fn render_work_separator_before_assistant_snapshot(
+    state: &RenderSnapshot,
     assistant_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
@@ -2582,10 +2582,13 @@ fn push_centered_separator<'a>(
     let remaining = (width as usize).saturating_sub(label.width());
     let left = remaining / 2;
     let right = remaining - left;
-    let line_style =
-        get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), show_picker);
-    let label_style =
-        get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
+    let line_style = get_themed_style(
+        COLOR_TURN_SEPARATOR(),
+        COLOR_BG(),
+        Modifier::empty(),
+        show_picker,
+    );
+    let label_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     lines.push(Line::from(vec![
         Span::styled("─".repeat(left), line_style),
         Span::styled(label, label_style),
@@ -2619,10 +2622,7 @@ fn next_visible_message(history: &[ChatMessage], index: usize) -> Option<&ChatMe
     })
 }
 
-pub(crate) fn tool_result_needs_assistant_gap(
-    history: &[ChatMessage],
-    tool_index: usize,
-) -> bool {
+pub(crate) fn tool_result_needs_assistant_gap(history: &[ChatMessage], tool_index: usize) -> bool {
     next_visible_message(history, tool_index).is_some_and(|message| message.role == "assistant")
 }
 
@@ -2884,8 +2884,8 @@ fn render_status_panel<'a>(
     )]));
 }
 
-pub(crate) fn build_claude_startup_banner(
-    state: &AppState,
+fn build_claude_startup_banner_snapshot(
+    state: &RenderSnapshot,
     total_width: usize,
     _max_height: usize,
 ) -> Vec<Line<'static>> {
@@ -2913,7 +2913,10 @@ pub(crate) fn build_claude_startup_banner(
 
     let make_row = |spans: Vec<Span<'static>>| -> Line<'static> {
         let mut line_spans = Vec::new();
-        line_spans.push(Span::styled("│", Style::default().fg(border_c).bg(reset_bg)));
+        line_spans.push(Span::styled(
+            "│",
+            Style::default().fg(border_c).bg(reset_bg),
+        ));
 
         let mut used = 0;
         for s in &spans {
@@ -2925,7 +2928,10 @@ pub(crate) fn build_claude_startup_banner(
         if pad > 0 {
             line_spans.push(Span::styled(" ".repeat(pad), Style::default().bg(reset_bg)));
         }
-        line_spans.push(Span::styled("│", Style::default().fg(border_c).bg(reset_bg)));
+        line_spans.push(Span::styled(
+            "│",
+            Style::default().fg(border_c).bg(reset_bg),
+        ));
         Line::from(line_spans)
     };
 
@@ -2964,7 +2970,7 @@ pub(crate) fn build_claude_startup_banner(
     // Row 2: reasoning effort
     let effort = state
         .active_model_profile()
-        .and_then(|profile| profile.reasoning_effort)
+        .and_then(|profile| profile.reasoning_effort.clone())
         .unwrap_or_else(|| "default".to_string());
     banner.push(make_row(vec![
         Span::styled(
@@ -3040,7 +3046,7 @@ pub(crate) fn build_claude_startup_banner(
 
     // Row 5: branch
     let branch_name = state
-        .cwd_and_branch
+        .cwd_and_branch()
         .rsplit_once(':')
         .map(|(_, branch)| branch)
         .filter(|branch| !branch.is_empty())
@@ -3055,7 +3061,7 @@ pub(crate) fn build_claude_startup_banner(
     ]));
 
     // Row 6: permissions
-    let (perm_text, perm_style) = if state.auto_confirm {
+    let (perm_text, perm_style) = if state.auto_confirm() {
         (
             "YOLO mode",
             Style::default()
@@ -3115,9 +3121,18 @@ fn conversation_area_height(content_height: u16, available_height: u16) -> u16 {
 
 /// Render only the mutable portion of the current turn. Completed history is
 /// deliberately excluded: it will be committed to terminal scrollback.
-pub(crate) fn render_live_tail(state: &AppState, width: u16, height: u16) -> Vec<Line<'static>> {
+fn render_live_tail_snapshot(
+    state: &RenderSnapshot,
+    width: u16,
+    height: u16,
+) -> Vec<Line<'static>> {
     let mut transcript = TranscriptState::default();
     render_live_tail_with_transcript(state, width, height, &mut transcript)
+}
+
+pub(crate) fn render_live_tail(state: &AppState, width: u16, height: u16) -> Vec<Line<'static>> {
+    let snapshot = state.render_snapshot();
+    render_live_tail_snapshot(&snapshot, width, height)
 }
 
 /// Render the mutable end of the transcript using a persistent presentation
@@ -3126,7 +3141,7 @@ pub(crate) fn render_live_tail(state: &AppState, width: u16, height: u16) -> Vec
 /// across frames so deltas replace one active cell instead of constructing a
 /// new terminal block on every redraw.
 pub(crate) fn render_live_tail_with_transcript(
-    state: &AppState,
+    state: &RenderSnapshot,
     width: u16,
     height: u16,
     transcript: &mut TranscriptState,
@@ -3136,29 +3151,29 @@ pub(crate) fn render_live_tail_with_transcript(
     }
 
     let visible_history_is_empty =
-        state.history.is_empty() || state.history_display_start >= state.history.len();
+        state.history().is_empty() || state.history_display_start() >= state.history().len();
     if visible_history_is_empty
-        && state.current_response.is_empty()
-        && matches!(state.status, AppStatus::Idle)
-        && state.running_tools.is_empty()
-        && state.live_tool_calls.is_empty()
+        && state.current_response().is_empty()
+        && matches!(state.status(), AppStatus::Idle)
+        && state.running_tools().is_empty()
+        && state.live_tool_calls().is_empty()
     {
-        return build_claude_startup_banner(state, width as usize, height as usize);
+        return build_claude_startup_banner_snapshot(state, width as usize, height as usize);
     }
 
-    let tail = scrollback::mutable_stream_text(&state.current_response);
+    let tail = scrollback::mutable_stream_text(&state.current_response());
     let mut lines = Vec::new();
 
     let mut has_visible_active_cell = false;
     let mut model_live_text = "";
     let visible_live_tool_calls = state
-        .live_tool_calls
+        .live_tool_calls()
         .iter()
         .filter(|call| is_live_tool_call_visible(call))
         .cloned()
         .collect::<Vec<_>>();
     if !visible_live_tool_calls.is_empty() {
-        transcript.set_tools_with_verbosity(&visible_live_tool_calls, &state.verbosity);
+        transcript.set_tools_with_verbosity(&visible_live_tool_calls, &state.verbosity());
         has_visible_active_cell = true;
     } else if !tail.is_empty() {
         let parsed_tool = crate::tools::parse_tool_call(&tail, state.active_tool_protocol());
@@ -3178,36 +3193,36 @@ pub(crate) fn render_live_tail_with_transcript(
         transcript.clear();
     }
 
-    transcript.sync_model(&state.history, model_live_text);
+    transcript.sync_model(&state.history(), model_live_text);
     let model_tail = transcript
         .model()
         .live_text()
         .unwrap_or_default()
         .to_owned();
 
-    if has_visible_active_cell && state.live_tool_calls.is_empty() {
-        let live_thought_time_ms = if state.current_thought_started_at.is_some()
-            || state.current_thought_time_ms > 0
+    if has_visible_active_cell && state.live_tool_calls().is_empty() {
+        let live_thought_time_ms = if state.current_thought_started_at().is_some()
+            || state.current_thought_time_ms() > 0
         {
             let elapsed_current = state
-                .current_thought_started_at
+                .current_thought_started_at()
                 .map(|started| started.elapsed().as_millis() as u64)
                 .unwrap_or(0);
             let total_ms = state
-                .current_thought_time_ms
+                .current_thought_time_ms()
                 .saturating_add(elapsed_current);
             (total_ms > 0).then_some(total_ms)
         } else {
             None
         };
-        let live_thought_tokens = (state.current_thought_tokens > 0)
-            .then_some(state.current_thought_tokens);
+        let live_thought_tokens =
+            (state.current_thought_tokens() > 0).then_some(state.current_thought_tokens());
 
         transcript.set_assistant(
             &model_tail,
-            scrollback::mutable_stream_is_continuation(&state.current_response),
+            scrollback::mutable_stream_is_continuation(&state.current_response()),
             state
-                .generation_start_time
+                .generation_start_time()
                 .map(|started| started.elapsed().as_millis() as u64),
             live_thought_time_ms,
             live_thought_tokens,
@@ -3218,8 +3233,8 @@ pub(crate) fn render_live_tail_with_transcript(
         lines.extend(transcript.display_lines(width));
     }
 
-    let activity_visible = matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
-        || !state.running_tools.is_empty();
+    let activity_visible = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
+        || !state.running_tools().is_empty();
     if activity_visible {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
@@ -3237,26 +3252,26 @@ pub(crate) fn render_live_tail_with_transcript(
 }
 
 fn render_selected_subagent_context(
-    state: &AppState,
+    state: &RenderSnapshot,
     width: u16,
     height: u16,
 ) -> Vec<Line<'static>> {
     let Some(agent) = state.selected_subagent() else {
         return Vec::new();
     };
-    let status = match agent.status {
+    let status = match agent.status() {
         crate::app::SubAgentStatus::Running => "running",
         crate::app::SubAgentStatus::Completed => "completed",
         crate::app::SubAgentStatus::Failed => "failed",
         crate::app::SubAgentStatus::Cancelled => "cancelled",
     };
     let parent = agent
-        .parent_id
+        .parent_id()
         .map(|id| format!("agent-{id}"))
         .unwrap_or_else(|| "main".to_owned());
     let mut lines = vec![Line::from(vec![
         Span::styled(
-            format!("↳ {}", agent.name),
+            format!("↳ {}", agent.name()),
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
         ),
         Span::styled(
@@ -3272,9 +3287,9 @@ fn render_selected_subagent_context(
     let history = state.active_history();
     let start = history.len().saturating_sub(8);
     for index in start..history.len() {
-        lines.extend(render_committed_history_block(state, index, width));
+        lines.extend(render_committed_history_block_snapshot(state, index, width));
     }
-    if agent.active_turn {
+    if agent.active_turn() {
         lines.push(Line::from(Span::styled(
             "• Working",
             get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false),
@@ -3287,8 +3302,8 @@ fn render_selected_subagent_context(
 }
 
 /// Render one finalized history entry for insertion into terminal scrollback.
-pub(crate) fn render_committed_history_block(
-    state: &AppState,
+fn render_committed_history_block_snapshot(
+    state: &RenderSnapshot,
     message_index: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
@@ -3309,11 +3324,10 @@ pub(crate) fn render_committed_history_block(
                 get_themed_style(COLOR_TEXT(), COLOR_PANEL(), Modifier::empty(), show_picker);
             let continuation = Span::styled("  ", prefix_style);
             let mut user_lines = Vec::new();
-            for (index, segments) in collapsed_marker_lines(
-                message.content.trim_end_matches(['\r', '\n']),
-            )
-            .into_iter()
-            .enumerate()
+            for (index, segments) in
+                collapsed_marker_lines(message.content.trim_end_matches(['\r', '\n']))
+                    .into_iter()
+                    .enumerate()
             {
                 let prefix = if index == 0 {
                     Span::styled("› ", prefix_style)
@@ -3324,7 +3338,11 @@ pub(crate) fn render_committed_history_block(
                 for (segment, marker) in segments {
                     spans.push(Span::styled(
                         segment,
-                        if marker.is_some() { marker_style } else { text_style },
+                        if marker.is_some() {
+                            marker_style
+                        } else {
+                            text_style
+                        },
                     ));
                 }
                 push_wrapped_with_continuation(
@@ -3414,8 +3432,45 @@ pub(crate) fn render_committed_history_block(
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
-pub(crate) fn render_committed_assistant_chunk(
-    _state: &AppState,
+pub(crate) fn render_committed_tool_result_group(
+    state: &AppState,
+    message_indices: &[usize],
+    width: u16,
+    show_picker: bool,
+) -> Vec<Line<'static>> {
+    let snapshot = state.render_snapshot();
+    render_committed_tool_result_group_snapshot(&snapshot, message_indices, width, show_picker)
+}
+
+pub(crate) fn render_work_separator_before_assistant(
+    state: &AppState,
+    assistant_index: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let snapshot = state.render_snapshot();
+    render_work_separator_before_assistant_snapshot(&snapshot, assistant_index, width)
+}
+
+pub(crate) fn build_claude_startup_banner(
+    state: &AppState,
+    total_width: usize,
+    max_height: usize,
+) -> Vec<Line<'static>> {
+    let snapshot = state.render_snapshot();
+    build_claude_startup_banner_snapshot(&snapshot, total_width, max_height)
+}
+
+pub(crate) fn render_committed_history_block(
+    state: &AppState,
+    message_index: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let snapshot = state.render_snapshot();
+    render_committed_history_block_snapshot(&snapshot, message_index, width)
+}
+
+fn render_committed_assistant_chunk_snapshot(
+    _state: &RenderSnapshot,
     content: &str,
     width: u16,
     is_continuation: bool,
@@ -3424,12 +3479,34 @@ pub(crate) fn render_committed_assistant_chunk(
         .display_lines(width)
 }
 
+fn render_committed_assistant_text_snapshot(
+    _state: &RenderSnapshot,
+    content: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    render_committed_assistant_text_with_metrics(content, width, None, None, None, None)
+}
+
+pub(crate) fn render_committed_assistant_chunk(
+    _state: &AppState,
+    content: &str,
+    width: u16,
+    is_continuation: bool,
+) -> Vec<Line<'static>> {
+    render_committed_assistant_chunk_snapshot(
+        &RenderSnapshot::new(_state),
+        content,
+        width,
+        is_continuation,
+    )
+}
+
 pub(crate) fn render_committed_assistant_text(
     _state: &AppState,
     content: &str,
     width: u16,
 ) -> Vec<Line<'static>> {
-    render_committed_assistant_text_with_metrics(content, width, None, None, None, None)
+    render_committed_assistant_text_snapshot(&RenderSnapshot::new(_state), content, width)
 }
 
 fn render_committed_assistant_text_with_metrics(
@@ -3471,12 +3548,16 @@ fn render_live_conversation(f: &mut Frame, area: ratatui::layout::Rect, lines: V
 
 pub fn render(f: &mut Frame, state: &mut AppState) {
     let mut transcript = TranscriptState::default();
-    render_with_transcript(f, state, &mut transcript);
+    let snapshot = state.render_snapshot();
+    let revision = snapshot.revision();
+    let (content_height, input_area) =
+        render_with_transcript_snapshot(f, &snapshot, &mut transcript);
+    state.publish_render_metrics(revision, content_height, input_area);
 }
 
-fn live_surface_padding(state: &AppState) -> (u16, u16) {
-    let active = matches!(state.status, AppStatus::Streaming | AppStatus::Queued)
-        || !state.running_tools.is_empty();
+fn live_surface_padding(state: &RenderSnapshot) -> (u16, u16) {
+    let active = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
+        || !state.running_tools().is_empty();
     (u16::from(!active), 1)
 }
 
@@ -3491,8 +3572,8 @@ fn inset_vertical(area: ratatui::layout::Rect, top: u16, bottom: u16) -> ratatui
 
 /// Height of the mutable inline surface for the next frame. Finalized history
 /// is rendered above this area into terminal scrollback.
-pub(crate) fn desired_height(
-    state: &AppState,
+fn desired_height_snapshot(
+    state: &RenderSnapshot,
     transcript: &mut TranscriptState,
     width: u16,
     terminal_height: u16,
@@ -3500,17 +3581,19 @@ pub(crate) fn desired_height(
     let available = terminal_height.max(1);
     let inner_width = width.saturating_sub(2).max(1);
     let completion_dismissed =
-        state.dismissed_completion.as_ref() == state.completion_identity().as_ref();
+        state.dismissed_completion() == state.completion_identity().as_deref();
     let filtered_cmds = if completion_dismissed {
         Vec::new()
     } else {
-        crate::app::suggestion::filtered_commands(&state.input_buffer)
+        crate::app::suggestion::filtered_commands(&state.input_buffer())
     };
-    let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
-        .unwrap_or((0, String::new()));
+    let (_, at_query) =
+        crate::app::get_at_word_query(&state.input_buffer(), state.cursor_position())
+            .unwrap_or((0, String::new()));
     let at_files = if !completion_dismissed
         && (!at_query.is_empty()
-            || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
+            || state.input_buffer()
+                [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
                 .ends_with('@'))
     {
         crate::app::list_project_file_paths(&at_query)
@@ -3518,14 +3601,14 @@ pub(crate) fn desired_height(
         Vec::new()
     };
 
-    let approval_active = state.status == AppStatus::AwaitingToolConfirmation;
-    let question_active = state.status == AppStatus::AwaitingQuestion;
+    let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
+    let question_active = *state.status() == AppStatus::AwaitingQuestion;
     let input_height = if approval_active {
         tool_confirmation_height(state, available.saturating_sub(2))
     } else if question_active {
         question_height(state, width, available.saturating_sub(2))
     } else {
-        count_input_lines(&state.input_buffer, inner_width as usize).min(8) + 2
+        count_input_lines(&state.input_buffer(), inner_width as usize).min(8) + 2
     };
     let queue_height = queue_preview_height(state);
     let popup_height = if approval_active || question_active {
@@ -3547,7 +3630,7 @@ pub(crate) fn desired_height(
     let mut chat_height = Paragraph::new(live_lines)
         .wrap(Wrap { trim: false })
         .line_count(width) as u16;
-    if state.history.is_empty() {
+    if state.history().is_empty() {
         chat_height = chat_height.max(15);
     }
     // Inline pickers are anchored above the composer and replace this portion
@@ -3568,30 +3651,40 @@ pub(crate) fn desired_height(
         .max(1)
 }
 
+pub(crate) fn desired_height(
+    state: &AppState,
+    transcript: &mut TranscriptState,
+    width: u16,
+    terminal_height: u16,
+) -> u16 {
+    let snapshot = state.render_snapshot();
+    desired_height_snapshot(&snapshot, transcript, width, terminal_height)
+}
+
 /// Interactive TUI entry point. `transcript` is terminal-only mutable state;
 /// it must never be persisted with `ChatMessage` history or included in a
 /// provider request.
-pub fn render_with_transcript(
+fn render_with_transcript_snapshot(
     f: &mut Frame,
-    state: &mut AppState,
+    state: &RenderSnapshot,
     transcript: &mut TranscriptState,
-) {
-    theme::set_active_theme(&state.config.theme);
+) -> (u16, ratatui::layout::Rect) {
+    theme::set_active_theme(&state.config().theme);
 
     let completion_dismissed =
-        state.dismissed_completion.as_ref() == state.completion_identity().as_ref();
+        state.dismissed_completion() == state.completion_identity().as_deref();
     let filtered_cmds: Vec<&CommandInfo> = if completion_dismissed {
         Vec::new()
     } else {
-        crate::app::suggestion::filtered_commands(&state.input_buffer)
+        crate::app::suggestion::filtered_commands(&state.input_buffer())
     };
 
     let inner_width = f.area().width.saturating_sub(2).max(1);
     let chat_width = f.area().width.max(1);
-    let raw_input_lines = count_input_lines(&state.input_buffer, inner_width as usize);
+    let raw_input_lines = count_input_lines(&state.input_buffer(), inner_width as usize);
     let input_lines = raw_input_lines.min(8);
-    let approval_active = state.status == AppStatus::AwaitingToolConfirmation;
-    let question_active = state.status == AppStatus::AwaitingQuestion;
+    let approval_active = *state.status() == AppStatus::AwaitingToolConfirmation;
+    let question_active = *state.status() == AppStatus::AwaitingQuestion;
     let input_height = if approval_active {
         tool_confirmation_height(state, f.area().height.saturating_sub(2))
     } else if question_active {
@@ -3601,11 +3694,13 @@ pub fn render_with_transcript(
     };
     let queue_block_height = queue_preview_height(state);
 
-    let (_, at_query) = crate::app::get_at_word_query(&state.input_buffer, state.cursor_position)
-        .unwrap_or((0, String::new()));
+    let (_, at_query) =
+        crate::app::get_at_word_query(&state.input_buffer(), state.cursor_position())
+            .unwrap_or((0, String::new()));
     let at_files = if !completion_dismissed
         && (!at_query.is_empty()
-            || state.input_buffer[..safe_byte_index(&state.input_buffer, state.cursor_position)]
+            || state.input_buffer()
+                [..safe_byte_index(&state.input_buffer(), state.cursor_position())]
                 .ends_with('@'))
     {
         crate::app::list_project_file_paths(&at_query)
@@ -3649,15 +3744,14 @@ pub fn render_with_transcript(
     let layout_area = inset_vertical(f.area(), top_padding, bottom_padding);
 
     let lines = render_live_tail_with_transcript(state, chat_width, max_chat_height, transcript);
-    state.conversation_content_height = Paragraph::new(lines.clone())
+    let conversation_content_height = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .line_count(chat_width) as u16;
 
-    let min_welcome_height = if state.history.is_empty() { 15 } else { 0 };
-    let mut chat_height =
-        conversation_area_height(state.conversation_content_height, max_chat_height)
-            .max(min_welcome_height)
-            .min(max_chat_height);
+    let min_welcome_height = if state.history().is_empty() { 15 } else { 0 };
+    let mut chat_height = conversation_area_height(conversation_content_height, max_chat_height)
+        .max(min_welcome_height)
+        .min(max_chat_height);
     if state.modal_open() {
         chat_height = chat_height.max(14.min(max_chat_height));
     }
@@ -3691,7 +3785,6 @@ pub fn render_with_transcript(
     } else {
         Composer::default().render(f, &chunks, state)
     };
-    state.input_text_area = Some(chunks[2]);
     if footer_visible {
         render_composer_footer(f, chunks[3], state);
     }
@@ -3718,57 +3811,70 @@ pub fn render_with_transcript(
 
     let input_box_area = chunks[2];
 
-    if state.show_model_picker {
+    if state.show_model_picker() {
         render_model_picker_modal(f, state, input_box_area);
     }
 
-    if state.show_theme_picker {
+    if state.show_theme_picker() {
         render_theme_picker_modal(f, state, input_box_area);
     }
 
-    if state.show_command_picker {
+    if state.show_command_picker() {
         render_command_picker_modal(f, state, input_box_area);
     }
 
-    if state.show_history_picker {
+    if state.show_history_picker() {
         render_history_picker_modal(f, state, input_box_area);
     }
 
-    if state.show_subagent_picker {
+    if state.show_subagent_picker() {
         render_subagent_picker_modal(f, state, input_box_area);
     }
 
-    if state.show_context_modal {
+    if state.show_context_modal() {
         render_context_modal(f, state, input_box_area);
     }
 
-    if state.show_update_prompt {
+    if state.show_update_prompt() {
         render_update_prompt_modal(f, state, input_box_area);
     }
 
-    if state.show_mcp_config {
+    if state.show_mcp_config() {
         render_mcp_config_modal(f, state, input_box_area);
     }
 
-    if state.status == AppStatus::VerbosityPicker {
+    if *state.status() == AppStatus::VerbosityPicker {
         render_verbosity_picker_modal(f, state, input_box_area);
     }
 
-    if state.status == AppStatus::ThinkingPicker {
+    if *state.status() == AppStatus::ThinkingPicker {
         render_thinking_picker_modal(f, state, input_box_area);
     }
 
-    if state.status == AppStatus::EffortPicker {
+    if *state.status() == AppStatus::EffortPicker {
         render_effort_picker_modal(f, state, input_box_area);
     }
 
-    if state.status == AppStatus::ProtocolPicker {
+    if *state.status() == AppStatus::ProtocolPicker {
         render_protocol_picker_modal(f, state, input_box_area);
     }
 
-    if state.status == AppStatus::YoloPicker {
+    if *state.status() == AppStatus::YoloPicker {
         render_yolo_picker_modal(f, state, input_box_area);
     }
+
+    (conversation_content_height, input_box_area)
+}
+
+pub fn render_with_transcript(
+    f: &mut Frame,
+    state: &mut AppState,
+    transcript: &mut TranscriptState,
+) {
+    let snapshot = state.render_snapshot();
+    let revision = snapshot.revision();
+    let (content_height, input_area) = render_with_transcript_snapshot(f, &snapshot, transcript);
+    state.publish_render_metrics(revision, content_height, input_area);
 }
 
 #[cfg(test)]
