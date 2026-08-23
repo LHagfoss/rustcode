@@ -592,7 +592,7 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
     let mut pruned = 0;
     // Walk backward through history
     for m in history.iter_mut().rev() {
-        if m.role == "tool" {
+        if m.role == "tool" && !is_stubbed_tool_output(&m.content) {
             let tokens = estimate_message_tokens(m);
             total_tool_tokens += tokens;
             // Protect the last ~90k tokens of tool outputs (approx 360k chars).
@@ -603,8 +603,6 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
             // NOTE: still a fixed cap; if you run a small-context model as the
             // main model, lower this to fit its window.
             if total_tool_tokens > threshold
-                && !m.content.contains("content cleared to save context")
-                && !m.content.contains("output cleared to save context")
             {
                 let valuable = has_failure_or_diagnostic(&m.content);
                 if let Some(pos) = m.content.find(": ") {
@@ -629,6 +627,15 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
         }
     }
     pruned
+}
+
+fn is_stubbed_tool_output(content: &str) -> bool {
+    content.contains("[Tool output truncated")
+        || content.contains("[Tool Output Truncated")
+        || content.contains("content cleared to save context")
+        || content.contains("output cleared to save context")
+        || content.contains("[Duplicate unchanged file read omitted")
+        || content.contains("[superseded")
 }
 
 /// Strip `<think>...</think>` blocks from older assistant messages.
@@ -1507,6 +1514,19 @@ mod tests {
         }
         prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
         assert_eq!(history[0].content, "grep: match at line 4");
+    }
+
+    #[test]
+    fn prune_old_tool_outputs_does_not_count_already_stubbed_results() {
+        let stub = "run_command: [Tool output truncated: 2000 tokens pruned to maintain context window]";
+        let recent = "grep: recent match";
+        let mut history = vec![tool_msg(stub), tool_msg(recent)];
+        let threshold = estimate_message_tokens(&history[1]) + 1;
+
+        let pruned = prune_old_tool_outputs(&mut history, threshold);
+
+        assert_eq!(pruned, 0);
+        assert_eq!(history[0].content, stub);
     }
 
     #[test]
