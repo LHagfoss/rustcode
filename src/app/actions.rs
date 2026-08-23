@@ -1330,6 +1330,7 @@ pub fn apply_autocomplete(s: &mut AppState) {
         }
         s.active_suggestion_index = None;
     }
+    s.request_redraw();
 }
 
 pub fn check_memory_usage(s: &mut AppState) {
