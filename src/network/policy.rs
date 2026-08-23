@@ -88,6 +88,7 @@ impl TurnPolicy for InteractivePolicy {
                 s.pending_tool_confirmation = Some(confirmations);
                 s.tool_confirmation_response = Some(tx);
                 s.status = AppStatus::AwaitingToolConfirmation;
+                s.request_redraw();
             }
 
             let first_tool_name = &tool_calls[0].name;

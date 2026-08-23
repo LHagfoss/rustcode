@@ -78,26 +78,22 @@ pub(crate) struct RenderSnapshot {
 #[allow(dead_code)]
 impl RenderSnapshot {
     pub(crate) fn new(state: &crate::app::AppState) -> Self {
-        let subagents = state
-            .subagents
-            .iter()
-            .map(SubAgentSnapshot::from)
-            .collect::<Vec<_>>();
         let selected_subagent = state.selected_subagent_id.and_then(|id| {
             let agent = state.subagents.iter().find(|agent| agent.id == id)?;
-            let history = subagents
-                .iter()
-                .find(|snapshot| snapshot.id == id)
-                .map(|snapshot| Arc::clone(&snapshot.history))?;
             Some(SelectedSubagentSnapshot {
                 id: agent.id,
                 name: agent.name.clone(),
-                history,
+                history: Arc::new(agent.history.clone()),
                 status: agent.status,
                 active_turn: agent.active_turn,
                 parent_id: agent.parent_id,
             })
         });
+        let subagents = state
+            .subagents
+            .iter()
+            .map(SubAgentSnapshot::from)
+            .collect::<Vec<_>>();
 
         Self {
             revision: state.render_revision,
@@ -397,19 +393,49 @@ pub(crate) struct SubAgentSnapshot {
     pub(crate) id: u32,
     pub(crate) name: String,
     pub(crate) task: String,
-    pub(crate) history: Arc<Vec<ChatMessage>>,
+    history_tokens: usize,
+    last_message: String,
     pub(crate) status: SubAgentStatus,
 }
 
 impl From<&SubAgent> for SubAgentSnapshot {
     fn from(agent: &SubAgent) -> Self {
+        let last_message = agent
+            .history
+            .last()
+            .map(|message| {
+                message
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(48)
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             id: agent.id,
             name: agent.name.clone(),
             task: agent.task.clone(),
-            history: Arc::new(agent.history.clone()),
+            history_tokens: agent
+                .history
+                .iter()
+                .map(crate::network::compaction::estimate_message_tokens)
+                .sum(),
+            last_message,
             status: agent.status,
         }
+    }
+}
+
+impl SubAgentSnapshot {
+    pub(crate) fn history_tokens(&self) -> usize {
+        self.history_tokens
+    }
+
+    pub(crate) fn last_message(&self) -> &str {
+        &self.last_message
     }
 }
 
@@ -597,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn render_snapshot_shares_selected_subagent_and_live_tool_storage() {
+    fn render_snapshot_keeps_selected_subagent_and_live_tool_storage_stable() {
         let mut state = AppState::new();
         state.subagents.push(SubAgent {
             id: 7,
@@ -626,10 +652,7 @@ mod tests {
         let snapshot = state.render_snapshot();
         let selected = snapshot.selected_subagent().expect("selected subagent");
 
-        assert_eq!(
-            snapshot.subagents()[0].history.as_ptr(),
-            selected.history.as_ptr()
-        );
+        assert_eq!(selected.history()[0].content, "subagent response");
         assert_eq!(
             snapshot.live_tool_calls.as_ptr(),
             state.live_tool_calls.as_ptr()
@@ -638,6 +661,53 @@ mod tests {
         state.append_live_tool_output("live", b"new output", false);
         assert!(snapshot.live_tool_calls()[0].output.is_empty());
         assert_eq!(state.live_tool_calls[0].output[0].text, "new output");
+    }
+
+    #[test]
+    fn subagent_snapshots_keep_picker_metadata_and_selected_history() {
+        let mut state = AppState::new();
+        state.subagents.push(SubAgent {
+            id: 1,
+            name: "background".to_owned(),
+            task: "check the background task".to_owned(),
+            model: None,
+            history: vec![ChatMessage::new("assistant", "background result")],
+            status: SubAgentStatus::Completed,
+            active_turn: false,
+            parent_id: None,
+            write_access: false,
+            allowed_paths: Vec::new(),
+            verification_command: None,
+            workspace_root: None,
+            review_manifest: None,
+        });
+        state.subagents.push(SubAgent {
+            id: 2,
+            name: "selected".to_owned(),
+            task: "inspect the selected context".to_owned(),
+            model: None,
+            history: vec![
+                ChatMessage::new("user", "inspect"),
+                ChatMessage::new("assistant", "selected result"),
+            ],
+            status: SubAgentStatus::Running,
+            active_turn: true,
+            parent_id: Some(1),
+            write_access: false,
+            allowed_paths: Vec::new(),
+            verification_command: None,
+            workspace_root: None,
+            review_manifest: None,
+        });
+        state.selected_subagent_id = Some(2);
+
+        let snapshot = state.render_snapshot();
+
+        assert_eq!(snapshot.subagents()[0].last_message(), "background result");
+        assert!(snapshot.subagents()[0].history_tokens() > 0);
+        let selected = snapshot.selected_subagent().expect("selected subagent");
+        assert_eq!(selected.history().len(), 2);
+        assert_eq!(selected.history()[1].content, "selected result");
     }
 
     #[test]

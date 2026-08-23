@@ -1931,16 +1931,11 @@ pub(super) fn render_subagent_picker_modal(
             crate::app::SubAgentStatus::Failed => "failed",
             crate::app::SubAgentStatus::Cancelled => "cancelled",
         };
-        let last = agent
-            .history
-            .last()
-            .map(|message| message.content.lines().next().unwrap_or_default())
-            .unwrap_or_default();
         format!(
             "{} · {} · {}",
             agent.name,
             status,
-            last.chars().take(48).collect::<String>()
+            agent.last_message()
         )
     } else {
         "No subagent contexts".to_owned()
@@ -3771,8 +3766,7 @@ pub fn calculate_context_breakdown(state: &RenderSnapshot) -> ContextBreakdown {
     let subagent_tokens: usize = state
         .subagents()
         .iter()
-        .flat_map(|sa| sa.history.iter())
-        .map(crate::network::compaction::estimate_message_tokens)
+        .map(crate::ui::render_snapshot::SubAgentSnapshot::history_tokens)
         .sum();
 
     let total_used = user_tokens
