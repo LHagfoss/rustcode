@@ -1195,6 +1195,9 @@ pub struct AppState {
     /// Set by background tasks that mutate state outside the input path, so the
     /// draw loop knows to render once even though no key was pressed.
     pub redraw_requested: bool,
+    /// Monotonic version of render-visible state. A render may publish its
+    /// layout metrics only while this remains unchanged.
+    pub(crate) render_revision: u64,
     /// Requests the terminal loop to clear the entire screen and reset the inline viewport.
     pub clear_screen_requested: bool,
 
@@ -1289,12 +1292,33 @@ impl AppState {
     /// longer redraws on a fixed timer.
     pub fn request_redraw(&mut self) {
         self.redraw_requested = true;
+        self.render_revision = self.render_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn render_snapshot(&self) -> crate::ui::render_snapshot::RenderSnapshot {
+        crate::ui::render_snapshot::RenderSnapshot::new(self)
+    }
+
+    /// Publish layout information only if the state rendered to obtain it is
+    /// still current. Returns false when a newer redraw invalidated it.
+    pub(crate) fn publish_render_metrics(
+        &mut self,
+        revision: u64,
+        height: u16,
+        input_area: ratatui::layout::Rect,
+    ) -> bool {
+        if revision != self.render_revision {
+            return false;
+        }
+        self.conversation_content_height = height;
+        self.input_text_area = Some(input_area);
+        true
     }
 
     /// Request that the draw loop clear the physical terminal screen and reset the inline viewport.
     pub fn request_clear_screen(&mut self) {
         self.clear_screen_requested = true;
-        self.redraw_requested = true;
+        self.request_redraw();
     }
 
     /// Add a live tool projection for the TUI without changing canonical
@@ -1361,7 +1385,7 @@ impl AppState {
         }) {
             call.action = action;
             call.target = target;
-            self.redraw_requested = true;
+            self.request_redraw();
             return;
         }
 
@@ -1567,6 +1591,7 @@ impl AppState {
             current_terminal_progress: None,
             session_title_cache: None,
             redraw_requested: false,
+            render_revision: 0,
             clear_screen_requested: false,
             last_max_scroll: 0,
             conversation_content_height: 0,
@@ -2099,7 +2124,7 @@ impl AppState {
     /// Append a compact notification to the durable conversation transcript.
     pub fn set_notice(&mut self, text: impl Into<String>) {
         self.history.push(ChatMessage::new("system", text.into()));
-        self.redraw_requested = true;
+        self.request_redraw();
     }
 
     pub fn set_warning_notice(&mut self, text: impl Into<String>) {
