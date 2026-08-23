@@ -933,7 +933,7 @@ pub(crate) struct McpSchemaSelectionStats {
     pub selected_names: Vec<String>,
 }
 
-fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+fn build_builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
         if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
@@ -951,7 +951,20 @@ fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     tools
 }
 
-fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> =
+        LazyLock::new(|| build_builtin_native_tools_schema(false));
+    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> =
+        LazyLock::new(|| build_builtin_native_tools_schema(true));
+
+    if include_agent_tools {
+        WITH_AGENT_TOOLS.clone()
+    } else {
+        WITHOUT_AGENT_TOOLS.clone()
+    }
+}
+
+fn build_agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     let mut tools = Vec::new();
     if include_agent_tools {
         for (name, desc, _args) in AGENT_TOOL_SPECS {
@@ -966,6 +979,18 @@ fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
         }
     }
     tools
+}
+
+fn agent_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(Vec::new);
+    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> =
+        LazyLock::new(|| build_agent_native_tools_schema(true));
+
+    if include_agent_tools {
+        WITH_AGENT_TOOLS.clone()
+    } else {
+        WITHOUT_AGENT_TOOLS.clone()
+    }
 }
 
 fn mcp_schema_value(name: &str, desc: &str, schema: &Value) -> Value {
@@ -2187,6 +2212,20 @@ mod tests {
             !no_agents
                 .iter()
                 .any(|t| t["function"]["name"] == "spawn_agent")
+        );
+    }
+
+    #[test]
+    fn native_tool_schema_variants_are_stable_across_reuse() {
+        assert_eq!(
+            native_tools_schema(false),
+            native_tools_schema(false),
+            "built-in schema variant changed between requests"
+        );
+        assert_eq!(
+            native_tools_schema(true),
+            native_tools_schema(true),
+            "agent-enabled schema variant changed between requests"
         );
     }
 
