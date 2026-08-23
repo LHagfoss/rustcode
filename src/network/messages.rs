@@ -41,37 +41,64 @@ pub(crate) fn estimate_msg_tokens(msg: &serde_json::Value) -> u32 {
 /// assistant/tool pair is never orphaned by trimming. Returns how many
 /// messages were dropped.
 pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_tokens: u32) -> usize {
-    let mut total: u32 = msgs.iter().map(estimate_msg_tokens).sum();
-    let mut dropped = 0;
-    while total > budget_tokens && msgs.len() > 3 {
-        let Some(start) = msgs
-            .iter()
-            .position(is_user_turn_boundary)
-        else {
-            break;
-        };
+    let total: u32 = msgs.iter().map(estimate_msg_tokens).sum();
+    if total <= budget_tokens || msgs.len() <= 3 {
+        return 0;
+    }
 
-        // Remove one complete old user turn through the message before the
-        // next real user turn. Tool results in the text protocol also use the
-        // user role, so they are explicitly excluded from the boundary search.
-        let end = msgs
-            .iter()
-            .enumerate()
-            .skip(start + 1)
-            .find(|(_, m)| is_user_turn_boundary(m))
-            .map(|(i, _)| i);
-        let Some(remove_end) = end else {
-            // The only remaining user turn is the current one. Never drop its
-            // user prompt or its assistant/tool pairing just to make progress;
-            // deterministic tool pruning should have reduced oversized results
-            // before this final fallback.
+    // Precompute the complete old-turn boundaries once. Each loop of the old
+    // implementation searched the unchanged suffix again, then shifted the
+    // Vec with a middle drain. The ranges are contiguous, so one final drain
+    // preserves the same oldest-first behavior without repeated scans/shifts.
+    let boundaries: Vec<usize> = msgs
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| is_user_turn_boundary(message))
+        .map(|(index, _)| index)
+        .collect();
+    if boundaries.len() < 2 {
+        // The only remaining user turn is the current one. Never drop its
+        // user prompt or its assistant/tool pairing just to make progress;
+        // deterministic tool pruning should have reduced oversized results
+        // before this final fallback.
+        return 0;
+    }
+
+    let message_tokens: Vec<u32> = msgs.iter().map(estimate_msg_tokens).collect();
+    let mut token_prefix: Vec<u32> = Vec::with_capacity(message_tokens.len() + 1);
+    token_prefix.push(0);
+    for tokens in &message_tokens {
+        token_prefix.push(token_prefix.last().copied().unwrap_or(0).saturating_add(*tokens));
+    }
+
+    let first_boundary = boundaries[0];
+    let mut remove_end = first_boundary;
+    let mut removed_tokens: u32 = 0;
+    let mut dropped = 0;
+    for pair in boundaries.windows(2) {
+        // Each prior iteration removes the range ending at pair[0], so the
+        // current length is the original length minus the already removed
+        // prefix. Match the old `msgs.len() > 3` guard before each removal.
+        if msgs.len().saturating_sub(dropped) <= 3 {
             break;
-        };
-        for msg in msgs.drain(start..remove_end) {
-            total = total.saturating_sub(estimate_msg_tokens(&msg));
-            dropped += 1;
+        }
+
+        let start = pair[0];
+        let end = pair[1];
+        dropped += end - start;
+        removed_tokens = removed_tokens.saturating_add(
+            token_prefix[end].saturating_sub(token_prefix[start]),
+        );
+        remove_end = end;
+        if total.saturating_sub(removed_tokens) <= budget_tokens {
+            break;
         }
     }
+
+    if remove_end == first_boundary {
+        return 0;
+    }
+    msgs.drain(first_boundary..remove_end);
     dropped
 }
 
@@ -218,6 +245,25 @@ mod tests {
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["content"], "old tool result");
         assert_eq!(msgs[2]["content"], "latest answer");
+    }
+
+    #[test]
+    fn trim_removes_multiple_complete_old_exchanges_without_touching_current_turn() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "system", "content": "system"}),
+            serde_json::json!({"role": "user", "content": "old request 1"}),
+            serde_json::json!({"role": "assistant", "content": "old answer 1"}),
+            serde_json::json!({"role": "user", "content": "old request 2"}),
+            serde_json::json!({"role": "assistant", "content": "old answer 2"}),
+            serde_json::json!({"role": "user", "content": "current request"}),
+        ];
+
+        let dropped = trim_msgs_to_budget(&mut msgs, 1);
+
+        assert_eq!(dropped, 4);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["content"], "current request");
     }
 
     #[test]

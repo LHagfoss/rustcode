@@ -401,23 +401,27 @@ async fn prune_class(
     budget: u32,
     class: &'static str,
 ) {
-    while *total > budget {
-        let target = history
-            .iter()
-            .enumerate()
-            .find(|(_, m)| classify_tool_msg(m) == Some(class) && !is_fully_stubbed(m))
-            .map(|(i, _)| i);
-        let Some(idx) = target else {
-            return;
-        };
-        let before = tokens[idx];
-        let new_t = reduce_tool_msg(&mut history[idx], before).await;
-        if new_t >= before {
-            // Defensive: nothing more we can do here.
+    let candidates: Vec<usize> = history
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| classify_tool_msg(m) == Some(class) && !is_fully_stubbed(m))
+        .map(|(i, _)| i)
+        .collect();
+
+    for idx in candidates {
+        while *total > budget && !is_fully_stubbed(&history[idx]) {
+            let before = tokens[idx];
+            let new_t = reduce_tool_msg(&mut history[idx], before).await;
+            if new_t >= before {
+                // Defensive: nothing more we can do here.
+                return;
+            }
+            *total = total.saturating_sub(before).saturating_add(new_t);
+            tokens[idx] = new_t;
+        }
+        if *total <= budget {
             return;
         }
-        *total = total.saturating_sub(before).saturating_add(new_t);
-        tokens[idx] = new_t;
     }
 }
 
