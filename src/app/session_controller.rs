@@ -112,7 +112,7 @@ impl SessionController {
         let new_session_id = state.active_session_id.clone();
         state.history.replace(source_history);
         state.history_display_start = 0;
-        state.current_response.clear();
+        state.clear_current_response();
         state.current_token_usage = None;
         state.response_time = None;
         state.image_analysis_cache = crate::config::load_session_image_cache(&new_session_id);
@@ -131,7 +131,7 @@ impl SessionController {
 
     pub(crate) fn clear(&self, state: &mut AppState) -> Result<SessionTransition, SessionError> {
         state.history_display_start = state.history.len();
-        state.current_response.clear();
+        state.clear_current_response();
         state.current_token_usage = None;
         state.response_time = None;
         state.status = AppStatus::Idle;
@@ -234,7 +234,7 @@ mod tests {
     fn clear_preserves_history_but_hides_the_current_transcript() {
         let mut state = AppState::new();
         state.history.push(ChatMessage::new("user", "keep this"));
-        state.current_response = "draft".to_owned();
+        state.replace_current_response("draft");
         let history_len = state.history.len();
 
         let transition = SessionController::default()

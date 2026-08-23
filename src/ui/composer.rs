@@ -1,3 +1,4 @@
+use super::RenderSnapshot;
 use super::keymap::{KeyAction, KeyMap};
 use crate::app::{AppState, ChatMessage};
 use crate::inline_terminal::Frame;
@@ -196,7 +197,7 @@ impl Composer {
         &self,
         frame: &mut Frame,
         chunks: &[Rect],
-        state: &mut AppState,
+        state: &RenderSnapshot,
     ) -> Margin {
         super::render_input(frame, chunks, state)
     }

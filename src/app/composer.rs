@@ -9,6 +9,7 @@ pub(crate) struct ComposerState<'a> {
     history_index: &'a mut Option<usize>,
     temp_input: &'a mut String,
     suggestion_cycle: &'a mut SuggestionCycle,
+    render_revision: &'a mut u64,
 }
 
 impl<'a> ComposerState<'a> {
@@ -21,6 +22,7 @@ impl<'a> ComposerState<'a> {
             history_index: &mut state.history_index,
             temp_input: &mut state.temp_input,
             suggestion_cycle: &mut state.suggestion_cycle,
+            render_revision: &mut state.render_revision,
         }
     }
 
@@ -32,6 +34,7 @@ impl<'a> ComposerState<'a> {
         *self.input_buffer = input.into();
         *self.cursor_position = self.input_buffer.len();
         *self.history_index = None;
+        *self.render_revision = self.render_revision.wrapping_add(1);
     }
 
     pub(crate) fn reset_suggestion_cycle(&mut self) {
@@ -48,6 +51,7 @@ impl<'a> ComposerState<'a> {
         };
         *self.input_buffer = self.pending_queue.remove(pos);
         *self.cursor_position = self.input_buffer.len();
+        *self.render_revision = self.render_revision.wrapping_add(1);
         true
     }
 
@@ -67,6 +71,7 @@ impl<'a> ComposerState<'a> {
         *self.history_index = Some(next_idx);
         *self.input_buffer = self.input_history[next_idx].clone();
         *self.cursor_position = self.input_buffer.len();
+        *self.render_revision = self.render_revision.wrapping_add(1);
     }
 
     pub(crate) fn history_down(&mut self) {
@@ -79,10 +84,12 @@ impl<'a> ComposerState<'a> {
                 *self.history_index = Some(idx + 1);
                 *self.input_buffer = self.input_history[idx + 1].clone();
                 *self.cursor_position = self.input_buffer.len();
+                *self.render_revision = self.render_revision.wrapping_add(1);
             } else {
                 *self.history_index = None;
                 *self.input_buffer = self.temp_input.clone();
                 *self.cursor_position = self.input_buffer.len();
+                *self.render_revision = self.render_revision.wrapping_add(1);
             }
         }
     }

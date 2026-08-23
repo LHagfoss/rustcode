@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum AppStatus {
@@ -386,7 +387,7 @@ pub struct ChatMessage {
 /// without comparing every message.
 #[derive(Clone, Debug, Default)]
 pub struct History {
-    messages: Vec<ChatMessage>,
+    messages: Arc<Vec<ChatMessage>>,
     revision: u64,
     last_rewrite_revision: u64,
 }
@@ -400,18 +401,22 @@ impl History {
         self.last_rewrite_revision <= revision
     }
 
+    pub fn snapshot(&self) -> History {
+        self.clone()
+    }
+
     pub fn replace(&mut self, messages: Vec<ChatMessage>) {
-        self.messages = messages;
+        self.messages = Arc::new(messages);
         self.bump_rewrite();
     }
 
     pub fn as_mut_vec(&mut self) -> &mut Vec<ChatMessage> {
         self.bump_rewrite();
-        &mut self.messages
+        Arc::make_mut(&mut self.messages)
     }
 
     pub fn into_vec(self) -> Vec<ChatMessage> {
-        self.messages
+        Arc::try_unwrap(self.messages).unwrap_or_else(|messages| messages.as_ref().clone())
     }
 
     fn bump(&mut self) {
@@ -424,13 +429,13 @@ impl History {
     }
 
     pub fn push(&mut self, message: ChatMessage) {
-        self.messages.push(message);
+        Arc::make_mut(&mut self.messages).push(message);
         self.bump();
     }
 
     pub fn clear(&mut self) {
         if !self.messages.is_empty() {
-            self.messages.clear();
+            Arc::make_mut(&mut self.messages).clear();
             self.bump_rewrite();
         }
     }
@@ -440,14 +445,14 @@ impl History {
         R: std::ops::RangeBounds<usize>,
     {
         self.bump_rewrite();
-        self.messages.drain(range)
+        Arc::make_mut(&mut self.messages).drain(range)
     }
 
     pub fn retain<F>(&mut self, f: F)
     where
         F: FnMut(&ChatMessage) -> bool,
     {
-        self.messages.retain(f);
+        Arc::make_mut(&mut self.messages).retain(f);
         self.bump_rewrite();
     }
 
@@ -457,14 +462,14 @@ impl History {
 
     pub fn as_mut_slice(&mut self) -> &mut [ChatMessage] {
         self.bump_rewrite();
-        &mut self.messages
+        Arc::make_mut(&mut self.messages).as_mut_slice()
     }
 }
 
 impl From<Vec<ChatMessage>> for History {
     fn from(messages: Vec<ChatMessage>) -> Self {
         Self {
-            messages,
+            messages: Arc::new(messages),
             revision: 0,
             last_rewrite_revision: 0,
         }
@@ -496,7 +501,7 @@ impl std::ops::DerefMut for History {
 impl Extend<ChatMessage> for History {
     fn extend<T: IntoIterator<Item = ChatMessage>>(&mut self, iter: T) {
         let before = self.messages.len();
-        self.messages.extend(iter);
+        Arc::make_mut(&mut self.messages).extend(iter);
         if self.messages.len() != before {
             self.bump();
         }
@@ -661,7 +666,7 @@ pub struct SubAgent {
     pub name: String,
     pub task: String,
     pub model: Option<String>,
-    pub history: Vec<ChatMessage>,
+    pub history: Arc<Vec<ChatMessage>>,
     pub status: SubAgentStatus,
     pub active_turn: bool,
     pub parent_id: Option<u32>,
@@ -1008,7 +1013,11 @@ pub struct AppState {
     /// First history index shown in the TUI. The full history remains available
     /// to the model; `/clear` advances this boundary without deleting messages.
     pub history_display_start: usize,
-    pub current_response: String,
+    pub current_response: Arc<String>,
+    /// Monotonic content revision used by snapshot delta consumers.
+    pub(crate) current_response_revision: u64,
+    /// Revision of the most recent clear or replacement, if any.
+    pub(crate) current_response_last_rewrite_revision: u64,
     pub current_token_usage: Option<TokenUsage>,
     pub current_thought_time_ms: u64,
     pub current_thought_tokens: u32,
@@ -1109,7 +1118,7 @@ pub struct AppState {
     /// finish too quickly to be useful as a name-only `running_tools` status.
     /// This is deliberately not serialized: it is a terminal presentation
     /// projection, not conversation context.
-    pub live_tool_calls: Vec<LiveToolCall>,
+    pub live_tool_calls: Arc<Vec<LiveToolCall>>,
     /// Monotonic identity source for presentation-only live tool projections.
     pub live_tool_call_sequence: u64,
 
@@ -1187,9 +1196,14 @@ pub struct AppState {
     /// title found on disk (`None` when that session has no `title.txt`).
     /// Keeps the draw loop from hitting the filesystem on every frame.
     pub session_title_cache: Option<(String, Option<String>)>,
+    /// Changes whenever an in-flight title load must be discarded.
+    pub session_title_cache_generation: u64,
     /// Set by background tasks that mutate state outside the input path, so the
     /// draw loop knows to render once even though no key was pressed.
     pub redraw_requested: bool,
+    /// Monotonic version of render-visible state. A render may publish its
+    /// layout metrics only while this remains unchanged.
+    pub(crate) render_revision: u64,
     /// Requests the terminal loop to clear the entire screen and reset the inline viewport.
     pub clear_screen_requested: bool,
 
@@ -1259,24 +1273,37 @@ impl AppState {
             .and_then(|id| self.subagents.iter().find(|agent| agent.id == id))
     }
 
-    /// Custom title of the active session, read from disk at most once per
-    /// session id. Call [`AppState::invalidate_session_title_cache`] after
-    /// writing a new title so the next lookup picks it up.
-    pub fn cached_session_title(&mut self) -> Option<String> {
-        if let Some((cached_id, title)) = &self.session_title_cache
-            && *cached_id == self.active_session_id
+    /// Return the cached custom title for the active session without touching
+    /// the filesystem. `Some(None)` means the cache contains a miss.
+    pub(crate) fn cached_session_title(&self) -> Option<Option<String>> {
+        self.session_title_cache
+            .as_ref()
+            .filter(|(cached_id, _)| *cached_id == self.active_session_id)
+            .map(|(_, title)| title.clone())
+    }
+
+    /// Install a title loaded for `session_id` only if that session is still
+    /// active. Returns whether the cache was installed.
+    pub(crate) fn install_session_title_cache(
+        &mut self,
+        session_id: &str,
+        generation: u64,
+        title: Option<String>,
+    ) -> bool {
+        if self.active_session_id != session_id
+            || self.session_title_cache_generation != generation
         {
-            return title.clone();
+            return false;
         }
-        let title = crate::config::load_session_title(&self.active_session_id);
-        self.session_title_cache = Some((self.active_session_id.clone(), title.clone()));
-        title
+        self.session_title_cache = Some((session_id.to_owned(), title));
+        true
     }
 
     /// Forget the cached session title so it is re-read from disk on the next
     /// draw. Use after `save_session_title`.
     pub fn invalidate_session_title_cache(&mut self) {
         self.session_title_cache = None;
+        self.session_title_cache_generation = self.session_title_cache_generation.wrapping_add(1);
     }
 
     /// Ask the draw loop for one more frame. Background tasks that mutate state
@@ -1284,12 +1311,64 @@ impl AppState {
     /// longer redraws on a fixed timer.
     pub fn request_redraw(&mut self) {
         self.redraw_requested = true;
+        self.render_revision = self.render_revision.wrapping_add(1);
+    }
+
+    /// Clear the render-visible response buffer and invalidate in-flight layout metrics.
+    pub(crate) fn clear_current_response(&mut self) {
+        let changed = !self.current_response.is_empty();
+        Arc::make_mut(&mut self.current_response).clear();
+        if changed {
+            self.current_response_revision = self.current_response_revision.wrapping_add(1);
+            self.current_response_last_rewrite_revision = self.current_response_revision;
+        }
+        self.request_redraw();
+    }
+
+    /// Append streamed render-visible response text and invalidate in-flight layout metrics.
+    pub(crate) fn append_current_response(&mut self, chunk: &str) {
+        Arc::make_mut(&mut self.current_response).push_str(chunk);
+        if !chunk.is_empty() {
+            self.current_response_revision = self.current_response_revision.wrapping_add(1);
+        }
+        self.request_redraw();
+    }
+
+    /// Replace the render-visible response buffer and invalidate in-flight layout metrics.
+    pub(crate) fn replace_current_response(&mut self, response: impl Into<String>) {
+        let response = response.into();
+        if self.current_response.as_str() != response {
+            self.current_response = Arc::new(response);
+            self.current_response_revision = self.current_response_revision.wrapping_add(1);
+            self.current_response_last_rewrite_revision = self.current_response_revision;
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn render_snapshot(&self) -> crate::ui::render_snapshot::RenderSnapshot {
+        crate::ui::render_snapshot::RenderSnapshot::new(self)
+    }
+
+    /// Publish layout information only if the state rendered to obtain it is
+    /// still current. Returns false when a newer redraw invalidated it.
+    pub(crate) fn publish_render_metrics(
+        &mut self,
+        revision: u64,
+        height: u16,
+        input_area: ratatui::layout::Rect,
+    ) -> bool {
+        if revision != self.render_revision {
+            return false;
+        }
+        self.conversation_content_height = height;
+        self.input_text_area = Some(input_area);
+        true
     }
 
     /// Request that the draw loop clear the physical terminal screen and reset the inline viewport.
     pub fn request_clear_screen(&mut self) {
         self.clear_screen_requested = true;
-        self.redraw_requested = true;
+        self.request_redraw();
     }
 
     /// Add a live tool projection for the TUI without changing canonical
@@ -1301,13 +1380,15 @@ impl AppState {
         arguments: &serde_json::Value,
     ) -> String {
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
-        if let Some(call) = self.live_tool_calls.iter_mut().find(|call| {
-            !call.execution_started
-                && match provider_call_id {
-                    Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
-                    None => call.provider_call_id.is_none() && call.tool_name == tool_name,
-                }
-        }) {
+        if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
+            .iter_mut()
+            .find(|call| {
+                !call.execution_started
+                    && match provider_call_id {
+                        Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
+                        None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                    }
+            }) {
             call.action = action;
             call.target = target;
             call.execution_started = true;
@@ -1323,7 +1404,7 @@ impl AppState {
             Some(call_id) => format!("provider:{call_id}:{sequence}"),
             None => format!("local:{sequence}"),
         };
-        self.live_tool_calls.push(LiveToolCall::new(
+        Arc::make_mut(&mut self.live_tool_calls).push(LiveToolCall::new(
             key.clone(),
             provider_call_id.map(str::to_owned),
             tool_name,
@@ -1347,16 +1428,18 @@ impl AppState {
         }
         let (action, target) = crate::app::activity::summarize_tool_call(tool_name, arguments);
 
-        if let Some(call) = self.live_tool_calls.iter_mut().find(|call| {
-            !call.execution_started
-                && match provider_call_id {
-                    Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
-                    None => call.provider_call_id.is_none() && call.tool_name == tool_name,
-                }
-        }) {
+        if let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
+            .iter_mut()
+            .find(|call| {
+                !call.execution_started
+                    && match provider_call_id {
+                        Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
+                        None => call.provider_call_id.is_none() && call.tool_name == tool_name,
+                    }
+            }) {
             call.action = action;
             call.target = target;
-            self.redraw_requested = true;
+            self.request_redraw();
             return;
         }
 
@@ -1374,7 +1457,7 @@ impl AppState {
             target,
         );
         call.execution_started = false;
-        self.live_tool_calls.push(call);
+        Arc::make_mut(&mut self.live_tool_calls).push(call);
         self.request_redraw();
     }
 
@@ -1385,7 +1468,10 @@ impl AppState {
         if bytes.is_empty() {
             return;
         }
-        let Some(call) = self.live_tool_calls.iter_mut().find(|call| call.key == key) else {
+        let Some(call) = Arc::make_mut(&mut self.live_tool_calls)
+            .iter_mut()
+            .find(|call| call.key == key)
+        else {
             return;
         };
         let text = String::from_utf8_lossy(bytes);
@@ -1431,7 +1517,7 @@ impl AppState {
             .iter()
             .position(|live_call| live_call.key == key)
         {
-            self.live_tool_calls.remove(position);
+            Arc::make_mut(&mut self.live_tool_calls).remove(position);
             self.request_redraw();
         }
     }
@@ -1439,7 +1525,7 @@ impl AppState {
     /// Remove projections left by cancellation or an interrupted turn.
     pub fn clear_live_tool_calls(&mut self) {
         if !self.live_tool_calls.is_empty() {
-            self.live_tool_calls.clear();
+            Arc::make_mut(&mut self.live_tool_calls).clear();
             self.request_redraw();
         }
     }
@@ -1480,7 +1566,9 @@ impl AppState {
             hover: HoverTarget::None,
             history,
             history_display_start: 0,
-            current_response: String::new(),
+            current_response: Arc::new(String::new()),
+            current_response_revision: 0,
+            current_response_last_rewrite_revision: 0,
             current_token_usage: None,
             current_thought_time_ms: 0,
             current_thought_tokens: 0,
@@ -1541,7 +1629,7 @@ impl AppState {
             pending_question: None,
             question_response: None,
             running_tools: Vec::new(),
-            live_tool_calls: Vec::new(),
+            live_tool_calls: Arc::new(Vec::new()),
             live_tool_call_sequence: 0,
             stream_tracker: None,
             auto_confirm: false,
@@ -1561,7 +1649,9 @@ impl AppState {
             current_terminal_title: None,
             current_terminal_progress: None,
             session_title_cache: None,
+            session_title_cache_generation: 0,
             redraw_requested: false,
+            render_revision: 0,
             clear_screen_requested: false,
             last_max_scroll: 0,
             conversation_content_height: 0,
@@ -1710,6 +1800,7 @@ impl AppState {
         self.input_buffer.insert(self.cursor_position, c);
         self.cursor_position += c.len_utf8();
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_char_backspace(&mut self) {
@@ -1720,6 +1811,7 @@ impl AppState {
             self.input_buffer.remove(self.cursor_position);
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_char_delete(&mut self) {
@@ -1729,6 +1821,7 @@ impl AppState {
             self.input_buffer.remove(self.cursor_position);
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_word_backspace(&mut self) {
@@ -1741,6 +1834,7 @@ impl AppState {
             self.input_buffer.replace_range(start..end, "");
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_word_forward(&mut self) {
@@ -1754,6 +1848,7 @@ impl AppState {
             self.input_buffer.replace_range(start..end, "");
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn kill_line_to_start(&mut self) {
@@ -1766,6 +1861,7 @@ impl AppState {
             self.cursor_position = start;
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn reset_suggestion_index(&mut self) {
@@ -1796,6 +1892,7 @@ impl AppState {
         };
         self.dismissed_completion = Some(completion);
         self.active_suggestion_index = None;
+        self.request_redraw();
         true
     }
 
@@ -1805,6 +1902,7 @@ impl AppState {
             self.cursor_position -= len;
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_right(&mut self) {
@@ -1813,6 +1911,7 @@ impl AppState {
             self.cursor_position += c.len_utf8();
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_word_left(&mut self) {
@@ -1834,6 +1933,7 @@ impl AppState {
         }
         self.cursor_position = pos;
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_word_right(&mut self) {
@@ -1855,16 +1955,19 @@ impl AppState {
         }
         self.cursor_position = pos;
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_to_start(&mut self) {
         self.cursor_position = 0;
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_to_end(&mut self) {
         self.cursor_position = self.input_buffer.len();
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_line_up(&mut self) {
@@ -1891,6 +1994,7 @@ impl AppState {
         } else {
             self.cursor_position = 0;
         }
+        self.request_redraw();
     }
 
     pub fn move_cursor_line_down(&mut self) {
@@ -1917,6 +2021,7 @@ impl AppState {
         } else {
             self.cursor_position = self.input_buffer.len();
         }
+        self.request_redraw();
     }
 
     pub fn get_command_suggestion(&self) -> Option<String> {
@@ -1943,17 +2048,23 @@ impl AppState {
                 self.cursor_position = self.input_buffer.len();
             }
         }
+        self.request_redraw();
     }
 
     pub fn reset_suggestion_cycle(&mut self) {
         self.composer().reset_suggestion_cycle();
+        self.request_redraw();
     }
 
     /// Pull the most recently queued prompt back into the input box so the
     /// user can edit or drop it. Internal wakeup entries are left untouched.
     /// Returns true when a prompt was pulled.
     pub fn pop_queued_prompt(&mut self) -> bool {
-        self.composer().pop_queued_prompt()
+        let changed = self.composer().pop_queued_prompt();
+        if changed {
+            self.request_redraw();
+        }
+        changed
     }
 
     /// Remove background wakeups whose results are already part of the history
@@ -1967,10 +2078,12 @@ impl AppState {
 
     pub fn history_up(&mut self) {
         self.composer().history_up();
+        self.request_redraw();
     }
 
     pub fn history_down(&mut self) {
         self.composer().history_down();
+        self.request_redraw();
     }
 
     #[allow(dead_code)]
@@ -2094,7 +2207,7 @@ impl AppState {
     /// Append a compact notification to the durable conversation transcript.
     pub fn set_notice(&mut self, text: impl Into<String>) {
         self.history.push(ChatMessage::new("system", text.into()));
-        self.redraw_requested = true;
+        self.request_redraw();
     }
 
     pub fn set_warning_notice(&mut self, text: impl Into<String>) {
@@ -2334,6 +2447,22 @@ mod history_tests {
         assert_eq!(snapshot.revision(), history.revision());
         history[0].content = "changed".to_string();
         assert_eq!(snapshot[0].content, "hello");
+    }
+
+    #[test]
+    fn history_snapshot_is_stable_after_live_mutation() {
+        let mut history = History::default();
+        history.push(ChatMessage::new("user", "hello"));
+        let snapshot = history.snapshot();
+        let snapshot_revision = snapshot.revision();
+
+        history.push(ChatMessage::new("assistant", "answer"));
+
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].content, "hello");
+        assert_eq!(snapshot.revision(), snapshot_revision);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].content, "answer");
     }
 }
 

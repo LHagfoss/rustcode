@@ -340,6 +340,7 @@ pub(crate) async fn ask_user_question(
         ));
         s.question_response = Some(tx);
         s.status = AppStatus::AwaitingQuestion;
+        s.request_redraw();
     }
     let _ = crate::notifications::notify_pending_confirmation("ask_question");
 
@@ -352,10 +353,16 @@ pub(crate) async fn ask_user_question(
 
     {
         let mut s = state.lock().await;
-        s.pending_question = None;
+        let pending_changed = s.pending_question.take().is_some();
         s.question_response = None;
-        if s.status == AppStatus::AwaitingQuestion {
+        let status_changed = if s.status == AppStatus::AwaitingQuestion {
             s.status = AppStatus::Streaming;
+            true
+        } else {
+            false
+        };
+        if pending_changed || status_changed {
+            s.request_redraw();
         }
     }
 
@@ -435,6 +442,7 @@ pub(crate) async fn confirm_and_execute(
         crate::tools::AuthorizationDecision::RequireConfirmation
     );
     let mut user_wait_dur = std::time::Duration::ZERO;
+    let mut confirmation_transition_redrawn = false;
     let mut result = if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
         let tool_name = name.to_string();
@@ -575,6 +583,7 @@ pub(crate) async fn confirm_and_execute(
             }]);
             s.tool_confirmation_response = Some(tx);
             s.status = AppStatus::AwaitingToolConfirmation;
+            s.request_redraw();
         }
         let _ = crate::notifications::notify_pending_confirmation(name);
         dbg_log!("Awaiting user confirmation for '{}'", name);
@@ -592,7 +601,9 @@ pub(crate) async fn confirm_and_execute(
                     s.status = AppStatus::Streaming;
                     s.stream_tracker = Some(StreamTracker::new());
                     s.running_tools.push(tool_name.clone());
+                    s.request_redraw();
                 }
+                confirmation_transition_redrawn = true;
                 let _cleanup = ToolCleanup {
                     state: Arc::clone(state),
                     tool_name,
@@ -658,9 +669,13 @@ pub(crate) async fn confirm_and_execute(
         };
         {
             let mut s = state.lock().await;
-            s.pending_tool_confirmation = None;
+            let pending_changed = s.pending_tool_confirmation.take().is_some();
+            let status_changed = s.status != AppStatus::Streaming;
             s.status = AppStatus::Streaming;
             s.stream_tracker = Some(StreamTracker::new());
+            if !confirmation_transition_redrawn && (pending_changed || status_changed) {
+                s.request_redraw();
+            }
         }
         res
     };
