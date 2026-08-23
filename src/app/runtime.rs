@@ -659,7 +659,7 @@ impl AppRuntime {
                     replaying_transcript = true;
                 }
 
-                let live_response = snapshot.current_response().to_owned();
+                let live_response = snapshot.current_response();
                 transcript_cursor.begin_stream(&live_response);
                 let stable_source = if replaying_transcript {
                     String::new()

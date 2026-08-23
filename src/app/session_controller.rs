@@ -234,7 +234,7 @@ mod tests {
     fn clear_preserves_history_but_hides_the_current_transcript() {
         let mut state = AppState::new();
         state.history.push(ChatMessage::new("user", "keep this"));
-        state.current_response = "draft".to_owned();
+        state.replace_current_response("draft");
         let history_len = state.history.len();
 
         let transition = SessionController::default()

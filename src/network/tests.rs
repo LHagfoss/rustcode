@@ -3387,7 +3387,7 @@ fn session_interruption_and_recovery_safety() {
     state
         .history
         .push(ChatMessage::new("user", "Write a function"));
-    state.current_response = "<think>\nThinking about function...".to_string();
+    state.replace_current_response("<think>\nThinking about function...");
     state.current_thought_started_at = Some(std::time::Instant::now());
     state.live_tool_calls.push(crate::app::LiveToolCall::new(
         "call-temp",
@@ -3399,7 +3399,7 @@ fn session_interruption_and_recovery_safety() {
 
     // Simulate killing/stopping turn: live tool calls & transient thought buffer are cleared
     state.clear_live_tool_calls();
-    state.current_response.clear();
+    state.clear_current_response();
     state.current_thought_started_at = None;
     state.status = crate::app::AppStatus::Idle;
 

@@ -117,7 +117,7 @@ fn history_tool_result_event(message: &ChatMessage) -> Option<AgentUiEvent> {
 async fn publish_snapshot(
     state: &Arc<Mutex<AppState>>,
     sender: &AgentUiEventSender,
-    previous_response: &mut String,
+    previous_response: &mut Arc<String>,
     previous_history_len: &mut usize,
     started_tools: &mut HashSet<String>,
     finished_tools: &mut HashSet<String>,
@@ -157,15 +157,16 @@ async fn publish_snapshot(
         }
     }
 
-    if response != *previous_response {
+    if response.as_str() != previous_response.as_str() {
         let text = response
+            .as_str()
             .strip_prefix(previous_response.as_str())
-            .unwrap_or(&response)
+            .unwrap_or(response.as_str())
             .to_owned();
         if !text.is_empty() {
             sender.send(AgentUiEvent::TextDelta { text });
         }
-        *previous_response = response.clone();
+        *previous_response = Arc::clone(&response);
     }
 
     for call in live_tools {
@@ -225,7 +226,7 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
         policy,
         stream_buffer,
     ));
-    let mut previous_response = String::new();
+    let mut previous_response = Arc::new(String::new());
     let mut previous_history_len = 0;
     let mut started_tools = HashSet::new();
     let mut finished_tools = HashSet::new();

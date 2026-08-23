@@ -49,7 +49,7 @@ fn render_snapshot_preserves_existing_ui_output() {
     let mut streaming = AppState::new();
     streaming.history.push(ChatMessage::new("user", "hello"));
     streaming.status = AppStatus::Streaming;
-    streaming.current_response = "streamed output".to_owned();
+    streaming.replace_current_response("streamed output");
     states.push(streaming);
 
     let mut approval = AppState::new();
@@ -138,7 +138,7 @@ fn acceptance_streaming_session_has_working_surface_and_live_text() {
     let mut state = AppState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     state.status = AppStatus::Streaming;
-    state.current_response = "streamed output".to_owned();
+    state.replace_current_response("streamed output");
 
     let rendered = render_state_to_text(&mut state, 100, 20);
 
@@ -198,10 +198,12 @@ fn desired_height_grows_with_streaming_text_and_clamps_to_terminal() {
     let mut state = AppState::new();
     state.history.push(ChatMessage::new("user", "hello"));
     state.status = AppStatus::Streaming;
-    state.current_response = (0..50)
-        .map(|line| format!("streamed line {line}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    state.replace_current_response(
+        (0..50)
+            .map(|line| format!("streamed line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
     let mut transcript = TranscriptState::default();
 
     let height = super::desired_height(&state, &mut transcript, 40, 18);
@@ -2547,7 +2549,7 @@ fn live_tail_excludes_committed_history() {
         .history
         .push(ChatMessage::new("assistant", "old completed answer"));
     state.status = AppStatus::Streaming;
-    state.current_response = "stable line\nunclosed tail".to_owned();
+    state.replace_current_response("stable line\nunclosed tail");
 
     let text = super::render_live_tail(&state, 80, 24)
         .iter()
@@ -2564,8 +2566,9 @@ fn live_tail_excludes_committed_history() {
 fn reasoning_prefixed_stream_keeps_completed_answer_lines_live() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
-    state.current_response =
-        "<think>\nPlanning\n</think>\n\nFirst answer line\nSecond answer line".to_owned();
+    state.replace_current_response(
+        "<think>\nPlanning\n</think>\n\nFirst answer line\nSecond answer line",
+    );
 
     let text = super::render_live_tail(&state, 80, 24)
         .iter()
@@ -2584,7 +2587,7 @@ fn reasoning_prefixed_stream_keeps_completed_answer_lines_live() {
 fn bare_thought_stream_stays_in_the_compact_reasoning_preview() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
-    state.current_response = "thoughtPlanning the response\n".to_owned();
+    state.replace_current_response("thoughtPlanning the response\n");
 
     let text = super::render_live_tail(&state, 80, 24)
         .iter()
@@ -2830,10 +2833,12 @@ fn live_tail_includes_working_status_with_trailing_gap() {
 fn visible_streaming_text_keeps_working_status_until_completion() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
-    state.current_response = (1..=10)
-        .map(|line| format!("streamed line {line}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    state.replace_current_response(
+        (1..=10)
+            .map(|line| format!("streamed line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
 
     let lines = super::render_live_tail(&state, 30, 24);
     let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
@@ -3416,7 +3421,7 @@ fn live_streaming_thinking_block_uses_thought_duration_not_total_generation_time
     state.current_thought_started_at =
         Some(std::time::Instant::now() - std::time::Duration::from_millis(2300));
     state.current_thought_tokens = 106;
-    state.current_response = "<think>\nAnalyzing the project\n".to_string();
+    state.replace_current_response("<think>\nAnalyzing the project\n");
 
     let lines = super::render_live_tail(&state, 80, 24);
     let rendered = lines
@@ -3447,8 +3452,9 @@ fn live_streaming_completed_thought_preserves_duration_while_rest_of_response_st
     state.current_thought_started_at = None;
     state.current_thought_time_ms = 43000;
     state.current_thought_tokens = 1400;
-    state.current_response =
-        "<think>\nAnalyzing the project\n</think>\nHere is the rest of the stream".to_string();
+    state.replace_current_response(
+        "<think>\nAnalyzing the project\n</think>\nHere is the rest of the stream",
+    );
 
     let lines = super::render_live_tail(&state, 80, 24);
     let rendered = lines
