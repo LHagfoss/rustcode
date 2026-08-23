@@ -1740,6 +1740,7 @@ impl AppState {
         self.input_buffer.insert(self.cursor_position, c);
         self.cursor_position += c.len_utf8();
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_char_backspace(&mut self) {
@@ -1750,6 +1751,7 @@ impl AppState {
             self.input_buffer.remove(self.cursor_position);
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_char_delete(&mut self) {
@@ -1759,6 +1761,7 @@ impl AppState {
             self.input_buffer.remove(self.cursor_position);
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_word_backspace(&mut self) {
@@ -1771,6 +1774,7 @@ impl AppState {
             self.input_buffer.replace_range(start..end, "");
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn delete_word_forward(&mut self) {
@@ -1784,6 +1788,7 @@ impl AppState {
             self.input_buffer.replace_range(start..end, "");
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn kill_line_to_start(&mut self) {
@@ -1796,6 +1801,7 @@ impl AppState {
             self.cursor_position = start;
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn reset_suggestion_index(&mut self) {
@@ -1826,6 +1832,7 @@ impl AppState {
         };
         self.dismissed_completion = Some(completion);
         self.active_suggestion_index = None;
+        self.request_redraw();
         true
     }
 
@@ -1835,6 +1842,7 @@ impl AppState {
             self.cursor_position -= len;
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_right(&mut self) {
@@ -1843,6 +1851,7 @@ impl AppState {
             self.cursor_position += c.len_utf8();
         }
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_word_left(&mut self) {
@@ -1864,6 +1873,7 @@ impl AppState {
         }
         self.cursor_position = pos;
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_word_right(&mut self) {
@@ -1885,16 +1895,19 @@ impl AppState {
         }
         self.cursor_position = pos;
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_to_start(&mut self) {
         self.cursor_position = 0;
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_to_end(&mut self) {
         self.cursor_position = self.input_buffer.len();
         self.reset_suggestion_index();
+        self.request_redraw();
     }
 
     pub fn move_cursor_line_up(&mut self) {
@@ -1921,6 +1934,7 @@ impl AppState {
         } else {
             self.cursor_position = 0;
         }
+        self.request_redraw();
     }
 
     pub fn move_cursor_line_down(&mut self) {
@@ -1947,6 +1961,7 @@ impl AppState {
         } else {
             self.cursor_position = self.input_buffer.len();
         }
+        self.request_redraw();
     }
 
     pub fn get_command_suggestion(&self) -> Option<String> {
@@ -1973,17 +1988,23 @@ impl AppState {
                 self.cursor_position = self.input_buffer.len();
             }
         }
+        self.request_redraw();
     }
 
     pub fn reset_suggestion_cycle(&mut self) {
         self.composer().reset_suggestion_cycle();
+        self.request_redraw();
     }
 
     /// Pull the most recently queued prompt back into the input box so the
     /// user can edit or drop it. Internal wakeup entries are left untouched.
     /// Returns true when a prompt was pulled.
     pub fn pop_queued_prompt(&mut self) -> bool {
-        self.composer().pop_queued_prompt()
+        let changed = self.composer().pop_queued_prompt();
+        if changed {
+            self.request_redraw();
+        }
+        changed
     }
 
     /// Remove background wakeups whose results are already part of the history
@@ -1997,10 +2018,12 @@ impl AppState {
 
     pub fn history_up(&mut self) {
         self.composer().history_up();
+        self.request_redraw();
     }
 
     pub fn history_down(&mut self) {
         self.composer().history_down();
+        self.request_redraw();
     }
 
     #[allow(dead_code)]
