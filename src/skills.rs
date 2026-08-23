@@ -57,6 +57,43 @@ pub fn discover_skills() -> Vec<SkillMetadata> {
     skills
 }
 
+fn is_skill_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_')
+}
+
+fn prompt_mentions_skill(prompt: &str, skill_name: &str) -> bool {
+    if skill_name.is_empty() {
+        return false;
+    }
+
+    let prompt = prompt.to_ascii_lowercase();
+    let skill_name = skill_name.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(relative_start) = prompt[search_from..].find(&skill_name) {
+        let start = search_from + relative_start;
+        let end = start + skill_name.len();
+        let before = prompt[..start].chars().next_back();
+        let after = prompt[end..].chars().next();
+        if before.is_none_or(|c| !is_skill_name_char(c))
+            && after.is_none_or(|c| !is_skill_name_char(c))
+        {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
+pub fn skill_routing_hint(prompt: &str, skills: &[SkillMetadata]) -> Option<String> {
+    let skill = skills
+        .iter()
+        .find(|skill| prompt_mentions_skill(prompt, &skill.name))?;
+    Some(format!(
+        "\n# Priority skill route\nThe latest user prompt explicitly names available skill `{}`. Call `use_skill` first with the exact name `{}` before any filesystem, web, or exploration tool.\n",
+        skill.name, skill.name
+    ))
+}
+
 fn split_skill_dirs(value: &OsStr) -> Vec<PathBuf> {
     std::env::split_paths(value)
         .filter(|p| !p.as_os_str().is_empty())
@@ -332,5 +369,33 @@ mod tests {
         let (name, desc) = parse_frontmatter(&content);
         assert_eq!(name, "my-skill");
         assert_eq!(desc, "My skill");
+    }
+
+    #[test]
+    fn skill_routing_hint_matches_an_explicit_available_skill_name() {
+        let skills = [SkillMetadata {
+            name: "solidtime".to_string(),
+            description: "Solidtime workflow".to_string(),
+            path: PathBuf::from("/skills/solidtime"),
+        }];
+
+        let hint = skill_routing_hint("Please check Solidtime for this week.", &skills)
+            .expect("explicitly named skill should route");
+
+        assert!(hint.contains("use_skill"));
+        assert!(hint.contains("solidtime"));
+    }
+
+    #[test]
+    fn skill_routing_hint_ignores_unrelated_prompts() {
+        let skills = [SkillMetadata {
+            name: "solidtime".to_string(),
+            description: "Solidtime workflow".to_string(),
+            path: PathBuf::from("/skills/solidtime"),
+        }];
+
+        assert!(skill_routing_hint("Please inspect the time module.", &skills).is_none());
+        assert!(skill_routing_hint("Please inspect solidtimes.", &skills).is_none());
+        assert!(skill_routing_hint("Please inspect solidtime-like behavior.", &skills).is_none());
     }
 }

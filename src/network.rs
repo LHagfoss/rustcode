@@ -1044,7 +1044,7 @@ pub(crate) async fn prepare_turn_request(
         volatile_quota,
         volatile_window,
         mut context_section,
-        system_prompt,
+        mut system_prompt,
         native_schema_policy,
         active_profile,
         vision_profile,
@@ -1176,13 +1176,26 @@ pub(crate) async fn prepare_turn_request(
             || is_model_directed_note(m)
     });
 
-    // The system prompt is kept STATIC across turns (it only depends on the
-    // tool protocol and agent mode, which don't change mid-task). A stable
-    // prefix lets the provider's automatic prompt cache stay warm — every
-    // round after the first re-bills only the dynamic tail below instead of
-    // the whole tool-definition block. Turn-varying context (environment
-    // delta, files-in-context, task plan) is appended to the LAST message
-    // instead, so it never invalidates the cached prefix.
+    if let Some(latest_user_prompt) = history_snapshot
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.as_str())
+        && let Some(hint) = crate::skills::skill_routing_hint(
+            latest_user_prompt,
+            &crate::skills::discover_skills(),
+        )
+    {
+        system_prompt.insert_str(0, &hint);
+    }
+
+    // The base system prompt is kept STATIC across turns (it only depends on
+    // the tool protocol and agent mode, which don't change mid-task). A
+    // per-turn priority skill prefix is prepended only for an explicitly named
+    // available skill; otherwise the provider's automatic prompt cache stays
+    // warm. Turn-varying context (environment delta, files-in-context, task
+    // plan) is appended to the LAST message instead, so it never invalidates
+    // the cached base prompt.
     //
     // The static system prompt is served from AppState's PromptCache: it's only
     // rebuilt (skill scan + MCP schema serialization) when the protocol, agent
