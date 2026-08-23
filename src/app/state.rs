@@ -869,6 +869,10 @@ struct PromptCacheKey {
 pub struct PromptCache {
     key: Option<PromptCacheKey>,
     system_prompt: String,
+    mcp_selection_generation: u64,
+    mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
+    mcp_selection_session_id: Option<String>,
+    mcp_selected_names: Vec<String>,
 }
 
 impl PromptCache {
@@ -900,6 +904,32 @@ impl PromptCache {
     ) -> &str {
         self.ensure(include_agent_tools, protocol, agent_mode);
         &self.system_prompt
+    }
+
+    pub(crate) fn native_tool_schemas(
+        &mut self,
+        policy: crate::tools::ToolSchemaPolicy,
+        messages: &[serde_json::Value],
+        session_id: &str,
+    ) -> (Vec<serde_json::Value>, crate::tools::McpSchemaSelectionStats) {
+        let generation = crate::mcp::mcp_generation();
+        if self.mcp_selection_generation != generation
+            || self.mcp_selection_policy != Some(policy)
+            || self.mcp_selection_session_id.as_deref() != Some(session_id)
+        {
+            self.mcp_selected_names.clear();
+            self.mcp_selection_generation = generation;
+            self.mcp_selection_policy = Some(policy);
+            self.mcp_selection_session_id = Some(session_id.to_string());
+        }
+
+        let result = crate::tools::native_tools_schema_for_context_with_sticky(
+            policy,
+            messages,
+            &self.mcp_selected_names,
+        );
+        self.mcp_selected_names = result.1.selected_names.clone();
+        result
     }
 }
 

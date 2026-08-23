@@ -691,15 +691,27 @@ pub async fn stream_request(
         payload["frequency_penalty"] = serde_json::json!(0.3);
     }
 
-    let tool_protocol = { state.lock().await.active_tool_protocol() };
-    let mut native_tool_schemas = Vec::new();
-    if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        let (selected_schema, mcp_selection) = if allow_tools {
-            crate::tools::native_tools_schema_for_context(schema_policy, &aligned_messages)
+    let (tool_protocol, native_tool_schemas, mcp_selection) = {
+        let mut s = state.lock().await;
+        let tool_protocol = s.active_tool_protocol();
+        if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) && allow_tools {
+            let session_id = s.active_session_id.clone();
+            let (schemas, selection) =
+                s.prompt_cache.native_tool_schemas(
+                    schema_policy,
+                    &aligned_messages,
+                    &session_id,
+                );
+            (tool_protocol, schemas, selection)
         } else {
-            (Vec::new(), crate::tools::McpSchemaSelectionStats::default())
-        };
-        native_tool_schemas = selected_schema;
+            (
+                tool_protocol,
+                Vec::new(),
+                crate::tools::McpSchemaSelectionStats::default(),
+            )
+        }
+    };
+    if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
         crate::logger::operational_event(
             "mcp.native_schema_selection",
