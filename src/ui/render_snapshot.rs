@@ -2,6 +2,7 @@ use crate::app::{
     AppStatus, ChatMessage, History, LiveToolCall, McpEditState, PendingQuestion, StreamTracker,
     SubAgent, SubAgentStatus, TokenUsage, ToolConfirmation, Verbosity,
 };
+use std::sync::Arc;
 
 /// Immutable data captured for one UI render attempt.
 #[allow(dead_code)]
@@ -11,7 +12,7 @@ pub(crate) struct RenderSnapshot {
     cursor_position: usize,
     history: History,
     history_display_start: usize,
-    current_response: String,
+    current_response: Arc<String>,
     current_token_usage: Option<TokenUsage>,
     current_thought_time_ms: u64,
     current_thought_tokens: u32,
@@ -83,7 +84,7 @@ impl RenderSnapshot {
             cursor_position: state.cursor_position,
             history: state.history.snapshot(),
             history_display_start: state.history_display_start,
-            current_response: state.current_response.clone(),
+            current_response: Arc::clone(&state.current_response),
             current_token_usage: state.current_token_usage.clone(),
             current_thought_time_ms: state.current_thought_time_ms,
             current_thought_tokens: state.current_thought_tokens,
@@ -178,7 +179,7 @@ impl RenderSnapshot {
         }
     }
     pub(crate) fn current_response(&self) -> &str {
-        &self.current_response
+        self.current_response.as_str()
     }
     pub(crate) fn current_token_usage(&self) -> Option<&TokenUsage> {
         self.current_token_usage.as_ref()
@@ -449,7 +450,7 @@ mod tests {
         state.status = AppStatus::Streaming;
         state.history.push(ChatMessage::new("user", "root message"));
         state.history_display_start = 1;
-        state.current_response = "streamed response".to_owned();
+        state.replace_current_response("streamed response");
         state.show_model_picker = true;
         state.subagents.push(SubAgent {
             id: 7,
@@ -505,12 +506,32 @@ mod tests {
     }
 
     #[test]
+    fn render_snapshot_shares_response_storage_and_stays_stable_after_mutation() {
+        let mut state = AppState::new();
+        state.append_current_response("initial response");
+
+        let snapshot = state.render_snapshot();
+        assert!(std::ptr::eq(
+            snapshot.current_response().as_ptr(),
+            state.current_response.as_str().as_ptr()
+        ));
+
+        state.append_current_response(" after snapshot");
+
+        assert_eq!(snapshot.current_response(), "initial response");
+        assert_eq!(
+            state.current_response.as_str(),
+            "initial response after snapshot"
+        );
+    }
+
+    #[test]
     fn response_mutations_invalidate_render_metrics() {
         let mut state = AppState::new();
 
         let append_revision = state.render_snapshot().revision();
         state.append_current_response("streamed output");
-        assert_eq!(state.current_response, "streamed output");
+        assert_eq!(state.current_response.as_str(), "streamed output");
         assert!(!state.publish_render_metrics(
             append_revision,
             12,

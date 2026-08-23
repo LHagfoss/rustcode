@@ -1,11 +1,12 @@
 use crate::app::state::{AppState, History, TokenUsage};
 use ratatui::layout::Rect;
+use std::sync::Arc;
 
 #[allow(dead_code)]
 pub(crate) struct TranscriptState<'a> {
     history: &'a mut History,
     history_display_start: &'a mut usize,
-    current_response: &'a mut String,
+    current_response: &'a mut Arc<String>,
     current_token_usage: &'a mut Option<TokenUsage>,
     scroll_row: &'a mut u16,
     is_scroll_locked_to_bottom: &'a mut bool,
@@ -36,7 +37,7 @@ impl<'a> TranscriptState<'a> {
     }
 
     pub(crate) fn live_response(&self) -> &str {
-        self.current_response
+        self.current_response.as_ref()
     }
 
     pub(crate) fn history_len(&self) -> usize {
@@ -51,7 +52,7 @@ impl<'a> TranscriptState<'a> {
 
     #[allow(dead_code)]
     pub(crate) fn clear_live_response(&mut self) {
-        self.current_response.clear();
+        Arc::make_mut(self.current_response).clear();
         *self.current_token_usage = None;
         *self.redraw_requested = true;
         *self.render_revision = self.render_revision.wrapping_add(1);
@@ -81,7 +82,7 @@ mod tests {
     #[test]
     fn transcript_view_tracks_live_response_and_replay_boundary() {
         let mut state = AppState::new();
-        state.current_response = "streaming".to_string();
+        state.replace_current_response("streaming");
 
         {
             let mut transcript = TranscriptState::new(&mut state);

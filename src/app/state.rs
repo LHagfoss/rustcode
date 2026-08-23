@@ -1013,7 +1013,7 @@ pub struct AppState {
     /// First history index shown in the TUI. The full history remains available
     /// to the model; `/clear` advances this boundary without deleting messages.
     pub history_display_start: usize,
-    pub current_response: String,
+    pub current_response: Arc<String>,
     pub current_token_usage: Option<TokenUsage>,
     pub current_thought_time_ms: u64,
     pub current_thought_tokens: u32,
@@ -1297,19 +1297,19 @@ impl AppState {
 
     /// Clear the render-visible response buffer and invalidate in-flight layout metrics.
     pub(crate) fn clear_current_response(&mut self) {
-        self.current_response.clear();
+        Arc::make_mut(&mut self.current_response).clear();
         self.request_redraw();
     }
 
     /// Append streamed render-visible response text and invalidate in-flight layout metrics.
     pub(crate) fn append_current_response(&mut self, chunk: &str) {
-        self.current_response.push_str(chunk);
+        Arc::make_mut(&mut self.current_response).push_str(chunk);
         self.request_redraw();
     }
 
     /// Replace the render-visible response buffer and invalidate in-flight layout metrics.
     pub(crate) fn replace_current_response(&mut self, response: impl Into<String>) {
-        self.current_response = response.into();
+        self.current_response = Arc::new(response.into());
         self.request_redraw();
     }
 
@@ -1527,7 +1527,7 @@ impl AppState {
             hover: HoverTarget::None,
             history,
             history_display_start: 0,
-            current_response: String::new(),
+            current_response: Arc::new(String::new()),
             current_token_usage: None,
             current_thought_time_ms: 0,
             current_thought_tokens: 0,
