@@ -1,5 +1,5 @@
 use crate::app::{AppState, TokenUsage};
-use futures::StreamExt;
+use futures_util::StreamExt;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
