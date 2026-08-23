@@ -192,6 +192,36 @@ fn apply_subagent_selection(state: &mut AppState, id: u32) -> Result<(), AppErro
     Ok(())
 }
 
+fn render_finalized_assistant_scrollback(
+    snapshot: &crate::ui::render_snapshot::RenderSnapshot,
+    transcript_cursor: &mut crate::ui::scrollback::TranscriptCursor,
+    message_index: usize,
+    message: &str,
+    width: u16,
+) -> Vec<ratatui::text::Line<'static>> {
+    let is_continuation = transcript_cursor.has_committed_stream();
+    match transcript_cursor.take_final_stream_remainder(message) {
+        Some(remainder) if !remainder.is_empty() => {
+            let mut chunk = crate::ui::render_committed_assistant_chunk_snapshot(
+                snapshot,
+                &remainder,
+                width,
+                is_continuation,
+            );
+            if !chunk.is_empty() {
+                chunk.push(ratatui::text::Line::from(""));
+            }
+            chunk
+        }
+        Some(_) => vec![ratatui::text::Line::from("")],
+        None => crate::ui::render_committed_history_block_snapshot(
+            snapshot,
+            message_index,
+            width,
+        ),
+    }
+}
+
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
     app_state: Arc<Mutex<AppState>>,
@@ -711,31 +741,13 @@ impl AppRuntime {
                         if !separator.is_empty() {
                             blocks.push(separator);
                         }
-                        let is_continuation = transcript_cursor.has_committed_stream();
-                        if let Some(remainder) =
-                            transcript_cursor.take_final_stream_remainder(&message.content)
-                        {
-                            if !remainder.is_empty() {
-                                let mut chunk =
-                                    crate::ui::render_committed_assistant_chunk_snapshot(
-                                        &snapshot,
-                                        &remainder,
-                                        terminal_width,
-                                        is_continuation,
-                                    );
-                                if !chunk.is_empty() {
-                                    chunk.push(ratatui::text::Line::from(""));
-                                    blocks.push(chunk);
-                                }
-                            }
-                        } else {
-                            // Stable stream rows were already inserted above the live viewport.
-                            // They do not carry a trailing separator while the response is
-                            // streaming, so add one when the finalized history entry hands off
-                            // to the next message. Without this row a follow-up prompt can sit
-                            // directly on the last table/multiline response row.
-                            blocks.push(vec![ratatui::text::Line::from("")]);
-                        }
+                        blocks.push(render_finalized_assistant_scrollback(
+                            &snapshot,
+                            &mut transcript_cursor,
+                            index,
+                            &message.content,
+                            terminal_width,
+                        ));
                     } else {
                         blocks.push(crate::ui::render_committed_history_block_snapshot(
                             &snapshot,
@@ -2622,6 +2634,35 @@ mod tests {
         assert!(!state.publish_render_metrics(revision, 99, input_area));
         assert_eq!(state.conversation_content_height, 7);
         assert_eq!(state.input_text_area, Some(ratatui::layout::Rect::new(3, 4, 20, 2)));
+    }
+
+    #[test]
+    fn non_streamed_assistant_scrollback_keeps_history_block() {
+        let mut state = AppState::new();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("assistant", "final answer"));
+        let snapshot = state.render_snapshot();
+        let mut cursor = crate::ui::scrollback::TranscriptCursor::default();
+
+        let lines = super::render_finalized_assistant_scrollback(
+            &snapshot,
+            &mut cursor,
+            0,
+            "final answer",
+            80,
+        );
+        assert!(lines.iter().any(|line| line.to_string().contains("final answer")));
+
+        cursor.commit_stable_stream("final answer");
+        let separator = super::render_finalized_assistant_scrollback(
+            &snapshot,
+            &mut cursor,
+            0,
+            "final answer",
+            80,
+        );
+        assert_eq!(separator, vec![ratatui::text::Line::from("")]);
     }
 
     #[test]
