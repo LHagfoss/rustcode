@@ -17,7 +17,8 @@ use super::title::{record_prompt_to_history, spawn_title_generation};
 use super::tool_exec::{execute_tool_batch, get_tool_project_root, tool_result_history_message};
 use super::verification;
 use super::{
-    FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction, MAX_REASONING_RECOVERY_ROUNDS,
+    EMPTY_RESPONSE_RECOVERY_PROMPT, FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction,
+    MAX_REASONING_RECOVERY_ROUNDS,
     REASONING_LOOP_RECOVERY_PROMPT, accumulate_tokens_used, active_todo_checkpoint,
     cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
     completion_block_message, completion_claims_unapplied_work, failure_replan_message,
@@ -65,6 +66,7 @@ pub struct TurnContext {
     pub reasoning_loop_detector: loop_detect::ReasoningLoopDetector,
     pub loop_recovery_attempts: u8,
     pub reasoning_recovery_attempts: u8,
+    pub empty_response_recovery_attempts: u8,
     pub reasoning_loops_detected: usize,
     pub force_final: bool,
     pub made_edits: bool,
@@ -121,6 +123,7 @@ impl TurnContext {
             reasoning_loop_detector: loop_detect::ReasoningLoopDetector::default(),
             loop_recovery_attempts: 0,
             reasoning_recovery_attempts: 0,
+            empty_response_recovery_attempts: 0,
             reasoning_loops_detected: 0,
             force_final: false,
             made_edits: false,
@@ -175,6 +178,7 @@ impl TurnContext {
             "progress_no_information_streak": self.progress_ledger.no_progress_streak(),
             "reasoning_loops_detected": self.reasoning_loops_detected,
             "reasoning_recovery_attempts": self.reasoning_recovery_attempts,
+            "empty_response_recovery_attempts": self.empty_response_recovery_attempts,
             "last_progress_reason": self.last_progress_reason.map(|reason| reason.label()),
             "compiler_diagnostic_streak": self.consecutive_compiler_diagnostics,
             "provider_errors": self.provider_errors,
@@ -484,7 +488,34 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     );
 
     if ctx.final_content.is_empty() && native_tool_calls.is_empty() {
-        dbg_log!("Stream returned empty content, finishing");
+        if ctx.empty_response_recovery_attempts < 1 {
+            ctx.empty_response_recovery_attempts += 1;
+            dbg_log!(
+                "Stream returned empty content, starting recovery attempt {}/1",
+                ctx.empty_response_recovery_attempts
+            );
+            crate::logger::operational_event(
+                "turn.empty_response_recovery",
+                serde_json::json!({
+                    "attempt": ctx.empty_response_recovery_attempts,
+                    "after_tool_round": ctx.tool_rounds > 0,
+                }),
+            );
+            let mut s = state.lock().await;
+            s.history.push(ChatMessage::new(
+                "system",
+                EMPTY_RESPONSE_RECOVERY_PROMPT,
+            ));
+            s.current_token_usage = None;
+            s.clear_current_response();
+            s.status = AppStatus::Streaming;
+            s.stream_tracker = Some(StreamTracker::new());
+            drop(s);
+            ctx.tool_rounds += 1;
+            return true;
+        }
+
+        dbg_log!("Stream returned empty content after recovery, finishing");
         let mut s = state.lock().await;
         s.current_token_usage = None;
         return false;
@@ -1757,6 +1788,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
 #[cfg(test)]
 mod tests {
     use super::reasoning_loop_final_response;
+    use crate::network::EMPTY_RESPONSE_RECOVERY_PROMPT;
 
     #[test]
     fn exhausted_reasoning_loop_uses_a_concise_terminal_response() {
@@ -1767,5 +1799,12 @@ mod tests {
             "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
         );
         assert!(response.len() <= 160);
+    }
+
+    #[test]
+    fn empty_response_recovery_prompt_is_bounded_and_answer_focused() {
+        assert!(EMPTY_RESPONSE_RECOVERY_PROMPT.len() <= 300);
+        assert!(EMPTY_RESPONSE_RECOVERY_PROMPT.contains("answer the user's request"));
+        assert!(EMPTY_RESPONSE_RECOVERY_PROMPT.contains("Do not call tools"));
     }
 }
