@@ -192,6 +192,60 @@ fn apply_subagent_selection(state: &mut AppState, id: u32) -> Result<(), AppErro
     Ok(())
 }
 
+async fn session_title_for_render(state: &Arc<Mutex<AppState>>) -> (String, Option<String>) {
+    let (session_id, generation, cached_title) = {
+        let guard = state.lock().await;
+        (
+            guard.active_session_id.clone(),
+            guard.session_title_cache_generation,
+            guard.cached_session_title(),
+        )
+    };
+    if let Some(title) = cached_title {
+        return (session_id, title);
+    }
+
+    let title = crate::config::load_session_title(&session_id);
+    let mut guard = state.lock().await;
+    if guard.install_session_title_cache(&session_id, generation, title.clone()) {
+        return (session_id, title);
+    }
+
+    let current_session_id = guard.active_session_id.clone();
+    let current_title = guard.cached_session_title().flatten();
+    (current_session_id, current_title)
+}
+
+fn render_finalized_assistant_scrollback(
+    snapshot: &crate::ui::render_snapshot::RenderSnapshot,
+    transcript_cursor: &mut crate::ui::scrollback::TranscriptCursor,
+    message_index: usize,
+    message: &str,
+    width: u16,
+) -> Vec<ratatui::text::Line<'static>> {
+    let is_continuation = transcript_cursor.has_committed_stream();
+    match transcript_cursor.take_final_stream_remainder(message) {
+        Some(remainder) if !remainder.is_empty() => {
+            let mut chunk = crate::ui::render_committed_assistant_chunk_snapshot(
+                snapshot,
+                &remainder,
+                width,
+                is_continuation,
+            );
+            if !chunk.is_empty() {
+                chunk.push(ratatui::text::Line::from(""));
+            }
+            chunk
+        }
+        Some(_) => vec![ratatui::text::Line::from("")],
+        None => crate::ui::render_committed_history_block_snapshot(
+            snapshot,
+            message_index,
+            width,
+        ),
+    }
+}
+
 pub(crate) struct AppRuntime {
     terminal_runtime: Option<TerminalRuntime>,
     app_state: Arc<Mutex<AppState>>,
@@ -549,20 +603,94 @@ impl AppRuntime {
             let should_draw = needs_redraw || frame_stream.try_next().is_some();
 
             if should_draw {
-                let mut guard = app_state.lock().await;
+                let (
+                    snapshot,
+                    terminal_width,
+                    terminal_height,
+                    clear_screen,
+                    clear_history_display_start,
+                    title_display,
+                    old_title,
+                    progress,
+                    should_send_progress,
+                ) = {
+                    let (title_session_id, loaded_title) =
+                        session_title_for_render(&app_state).await;
+                    let mut guard = app_state.lock().await;
+                    let terminal_size = terminal_runtime.terminal().size()?;
+                    let clear_screen = guard.clear_screen_requested;
+                    if clear_screen {
+                        guard.clear_screen_requested = false;
+                    }
+                    let clear_history_display_start = guard.history_display_start;
+                    let custom_title = (guard.active_session_id == title_session_id)
+                        .then_some(loaded_title)
+                        .flatten()
+                        .or_else(|| {
+                            guard
+                                .history
+                                .iter()
+                                .find(|m| m.role == "user" && !m.content.starts_with('/'))
+                                .map(|m| {
+                                    m.content.lines().next().unwrap_or("").trim().to_string()
+                                })
+                        });
+                    let snapshot = guard.render_snapshot();
+                    let activity = crate::app::activity::classify_activity(
+                        snapshot.status(),
+                        snapshot.running_tools(),
+                    );
+                    let animation_frame = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64
+                        / 100;
+                    let session_name = custom_title
+                        .filter(|title| !title.is_empty() && !title.starts_with('/'))
+                        .unwrap_or_else(|| "session".to_string());
+                    let title_display = crate::app::activity::format_terminal_title(
+                        activity.kind,
+                        &session_name,
+                        animation_frame,
+                    );
+                    let old_title = guard.current_terminal_title.clone();
+                    if old_title.as_deref() != Some(title_display.as_str()) {
+                        guard.current_terminal_title = Some(title_display.clone());
+                    }
 
-                if guard.clear_screen_requested {
-                    guard.clear_screen_requested = false;
+                    let progress =
+                        crate::app::activity::terminal_progress_for_activity(activity.kind);
+                    let should_send_progress = guard.current_terminal_progress != Some(progress)
+                        || (progress != crate::app::activity::TerminalProgress::Hidden
+                            && last_progress_sent.elapsed()
+                                >= std::time::Duration::from_secs(3));
+                    if should_send_progress {
+                        guard.current_terminal_progress = Some(progress);
+                    }
+
+                    (
+                        snapshot,
+                        terminal_size.width,
+                        terminal_size.height,
+                        clear_screen,
+                        clear_history_display_start,
+                        title_display,
+                        old_title,
+                        progress,
+                        should_send_progress,
+                    )
+                };
+
+                if clear_screen {
                     terminal_runtime.terminal().clear_screen().ok();
                     transcript_cursor.reset();
-                    transcript_cursor.commit_history_through(guard.history_display_start);
+                    transcript_cursor.commit_history_through(clear_history_display_start);
                     transcript_state.reset();
                     stream_commits.reset();
                     replaying_transcript = true;
                 }
 
-                let terminal_width = terminal_runtime.terminal().size()?.width;
-                let live_response = guard.transcript().live_response().to_owned();
+                let live_response = snapshot.current_response();
                 transcript_cursor.begin_stream(&live_response);
                 let stable_source = if replaying_transcript {
                     String::new()
@@ -571,8 +699,8 @@ impl AppRuntime {
                 };
                 if !stable_source.is_empty() {
                     let is_continuation = transcript_cursor.has_committed_stream();
-                    let lines = crate::ui::render_committed_assistant_chunk(
-                        &guard,
+                    let lines = crate::ui::render_committed_assistant_chunk_snapshot(
+                        &snapshot,
                         &stable_source,
                         terminal_width,
                         is_continuation,
@@ -583,7 +711,7 @@ impl AppRuntime {
                     transcript_cursor.commit_stable_stream(&stable_source);
                 }
 
-                let history_len = guard.transcript().history_len();
+                let history_len = snapshot.history().len();
                 let history_range = transcript_cursor.pending_history_range(history_len);
                 let stable_lines = stream_commits
                     .take_ready(!history_range.is_empty() || !response_active);
@@ -606,22 +734,25 @@ impl AppRuntime {
                     terminal_runtime.terminal().draw_height(0, |_| {})?;
                 }
                 if transcript_cursor.is_at_start() && !history_range.is_empty() {
-                    let banner =
-                        crate::ui::build_claude_startup_banner(&guard, terminal_width as usize, 24);
+                    let banner = crate::ui::build_claude_startup_banner_snapshot(
+                        &snapshot,
+                        terminal_width as usize,
+                        24,
+                    );
                     if !banner.is_empty() {
                         blocks.push(banner);
                     }
                 }
                 let mut index = history_range.start;
                 while index < history_range.end {
-                    let message = &guard.history[index];
+                    let message = &snapshot.history()[index];
                     if message.role == "tool" {
                         let group_end = (index + 1..history_range.end)
-                            .find(|&next| guard.history[next].role != "tool")
+                            .find(|&next| snapshot.history()[next].role != "tool")
                             .unwrap_or(history_range.end);
                         let indices = (index..group_end).collect::<Vec<_>>();
-                        let mut block = crate::ui::render_committed_tool_result_group(
-                            &guard,
+                        let mut block = crate::ui::render_committed_tool_result_group_snapshot(
+                            &snapshot,
                             &indices,
                             terminal_width,
                             false,
@@ -633,53 +764,27 @@ impl AppRuntime {
                         index = group_end;
                         continue;
                     } else if message.role == "assistant" {
-                        let separator = crate::ui::render_work_separator_before_assistant(
-                            &guard,
+                        let separator = crate::ui::render_work_separator_before_assistant_snapshot(
+                            &snapshot,
                             index,
                             terminal_width,
                         );
                         if !separator.is_empty() {
                             blocks.push(separator);
                         }
-                        let is_continuation = transcript_cursor.has_committed_stream();
-                        if let Some(remainder) =
-                            transcript_cursor.take_final_stream_remainder(&message.content)
-                        {
-                            if !remainder.is_empty() {
-                                let mut chunk = crate::ui::render_committed_assistant_chunk(
-                                    &guard,
-                                    &remainder,
-                                    terminal_width,
-                                    is_continuation,
-                                );
-                                if !chunk.is_empty() {
-                                    chunk.push(ratatui::text::Line::from(""));
-                                    blocks.push(chunk);
-                                }
-                            } else {
-                                // Stable stream rows were already inserted above the live viewport.
-                                // They do not carry a trailing separator while the response is
-                                // streaming, so add one when the finalized history entry hands off
-                                // to the next message. Without this row a follow-up prompt can sit
-                                // directly on the last table/multiline response row.
-                                blocks.push(vec![ratatui::text::Line::from("")]);
-                            }
-                        } else {
-                            blocks.push(crate::ui::render_committed_history_block(
-                                &guard,
-                                index,
-                                terminal_width,
-                            ));
-                        }
+                        blocks.push(render_finalized_assistant_scrollback(
+                            &snapshot,
+                            &mut transcript_cursor,
+                            index,
+                            &message.content,
+                            terminal_width,
+                        ));
                     } else {
-                        let block = crate::ui::render_committed_history_block(
-                            &guard,
+                        blocks.push(crate::ui::render_committed_history_block_snapshot(
+                            &snapshot,
                             index,
                             terminal_width,
-                        );
-                        if !block.is_empty() {
-                            blocks.push(block);
-                        }
+                        ));
                     }
                     index += 1;
                 }
@@ -697,8 +802,8 @@ impl AppRuntime {
                     let stable_source = transcript_cursor.pending_stable_source(&live_response);
                     if !stable_source.is_empty() {
                         let is_continuation = transcript_cursor.has_committed_stream();
-                        let lines = crate::ui::render_committed_assistant_chunk(
-                            &guard,
+                        let lines = crate::ui::render_committed_assistant_chunk_snapshot(
+                            &snapshot,
                             &stable_source,
                             terminal_width,
                             is_continuation,
@@ -719,69 +824,41 @@ impl AppRuntime {
                     replaying_transcript = false;
                 }
 
-                // Update terminal title based on the same activity snapshot used by
-                // the footer, so state and animation stay synchronized.
-                let custom_title = guard.cached_session_title().or_else(|| {
-                    guard
-                        .history
-                        .iter()
-                        .find(|m| m.role == "user" && !m.content.starts_with('/'))
-                        .map(|m| m.content.lines().next().unwrap_or("").trim().to_string())
-                });
-                let session_name = custom_title
-                    .filter(|title| !title.is_empty() && !title.starts_with('/'))
-                    .unwrap_or_else(|| "session".to_string());
-                let activity =
-                    crate::app::activity::classify_activity(&guard.status, &guard.running_tools);
-                let animation_frame = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64
-                    / 100;
-                let title_display = crate::app::activity::format_terminal_title(
-                    activity.kind,
-                    &session_name,
-                    animation_frame,
-                );
-
                 // Only update if the title changed to avoid unnecessary OSC sequences
-                let old_title = guard.current_terminal_title.clone();
                 if old_title.as_deref() != Some(title_display.as_str()) {
                     use crossterm::style::Print;
                     let _ = execute!(
                         terminal_runtime.terminal().backend_mut(),
                         Print(format!("\x1b]0;{}\x07", title_display))
                     );
-                    guard.current_terminal_title = Some(title_display.clone());
                 }
-
-                let progress = crate::app::activity::terminal_progress_for_activity(activity.kind);
-                let should_send_progress = guard.current_terminal_progress != Some(progress)
-                    || (progress != crate::app::activity::TerminalProgress::Hidden
-                        && last_progress_sent.elapsed() >= std::time::Duration::from_secs(3));
                 if should_send_progress {
                     use crossterm::style::Print;
                     let _ = execute!(
                         terminal_runtime.terminal().backend_mut(),
                         Print(progress.osc_sequence())
                     );
-                    guard.current_terminal_progress = Some(progress);
                     last_progress_sent = std::time::Instant::now();
                 }
 
-                let terminal_height = terminal_runtime.terminal().size()?.height;
-                let desired_height = ui::desired_height(
-                    &guard,
+                let desired_height = ui::desired_height_snapshot(
+                    &snapshot,
                     &mut transcript_state,
                     terminal_width,
                     terminal_height,
                 );
-                terminal_runtime
-                    .terminal()
-                    .draw_height(desired_height, |f| {
-                        ui::render_with_transcript(f, &mut guard, &mut transcript_state)
-                    })?;
-                drop(guard);
+                let mut frame_metrics = None;
+                terminal_runtime.terminal().draw_height(desired_height, |f| {
+                    frame_metrics = Some(ui::render_with_transcript_snapshot(
+                        f,
+                        &snapshot,
+                        &mut transcript_state,
+                    ));
+                })?;
+                let (content_height, input_area) =
+                    frame_metrics.expect("render_with_transcript_snapshot must run once");
+                let mut guard = app_state.lock().await;
+                guard.publish_render_metrics(snapshot.revision(), content_height, input_area);
                 needs_redraw = false;
             }
 
@@ -2023,7 +2100,7 @@ impl AppRuntime {
                                             }
                                             "/clear" => {
                                                 s.history_display_start = s.history.len();
-                                                s.current_response.clear();
+                                                s.clear_current_response();
                                                 s.current_token_usage = None;
                                                 s.status = crate::app::AppStatus::Idle;
                                             }
@@ -2567,6 +2644,95 @@ mod tests {
         let state = runtime.app_state().await;
         assert_eq!(state.input_buffer, "hello");
         assert!(state.redraw_requested);
+    }
+
+    #[tokio::test]
+    async fn stale_render_metrics_cannot_overwrite_new_state() {
+        let runtime = AppRuntime::for_test(AppState::new());
+        let (revision, input_area) = {
+            let state = runtime.app_state().await;
+            (
+                state.render_snapshot().revision(),
+                ratatui::layout::Rect::new(1, 2, 30, 4),
+            )
+        };
+
+        let mut state = runtime.app_state().await;
+        state.conversation_content_height = 7;
+        state.input_text_area = Some(ratatui::layout::Rect::new(3, 4, 20, 2));
+        state.request_redraw();
+
+        assert!(!state.publish_render_metrics(revision, 99, input_area));
+        assert_eq!(state.conversation_content_height, 7);
+        assert_eq!(state.input_text_area, Some(ratatui::layout::Rect::new(3, 4, 20, 2)));
+    }
+
+    #[tokio::test]
+    async fn render_title_cache_is_selected_against_the_current_session() {
+        let mut state = AppState::new();
+        state.active_session_id = "session-a".to_owned();
+        state.session_title_cache = Some((
+            "session-a".to_owned(),
+            Some("Session A".to_owned()),
+        ));
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
+
+        let (session_id, title) = super::session_title_for_render(&state).await;
+
+        assert_eq!(session_id, "session-a");
+        assert_eq!(title.as_deref(), Some("Session A"));
+    }
+
+    #[test]
+    fn render_title_cache_does_not_install_a_title_for_another_session() {
+        let mut state = AppState::new();
+        state.active_session_id = "session-a".to_owned();
+        let stale_generation = state.session_title_cache_generation;
+        state.invalidate_session_title_cache();
+
+        assert!(!state.install_session_title_cache(
+            "session-a",
+            stale_generation,
+            Some("Stale Session A".to_owned())
+        ));
+
+        state.active_session_id = "session-b".to_owned();
+
+        assert!(!state.install_session_title_cache(
+            "session-a",
+            state.session_title_cache_generation,
+            Some("Session A".to_owned())
+        ));
+        assert!(state.session_title_cache.is_none());
+    }
+
+    #[test]
+    fn non_streamed_assistant_scrollback_keeps_history_block() {
+        let mut state = AppState::new();
+        state
+            .history
+            .push(crate::app::ChatMessage::new("assistant", "final answer"));
+        let snapshot = state.render_snapshot();
+        let mut cursor = crate::ui::scrollback::TranscriptCursor::default();
+
+        let lines = super::render_finalized_assistant_scrollback(
+            &snapshot,
+            &mut cursor,
+            0,
+            "final answer",
+            80,
+        );
+        assert!(lines.iter().any(|line| line.to_string().contains("final answer")));
+
+        cursor.commit_stable_stream("final answer");
+        let separator = super::render_finalized_assistant_scrollback(
+            &snapshot,
+            &mut cursor,
+            0,
+            "final answer",
+            80,
+        );
+        assert_eq!(separator, vec![ratatui::text::Line::from("")]);
     }
 
     #[test]

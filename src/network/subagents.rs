@@ -102,7 +102,7 @@ pub(crate) async fn run_subagent(
             s.subagents
                 .iter()
                 .find(|a| a.id == agent_id)
-                .map(|a| a.history.clone())
+                .map(|a| a.history.as_ref().clone())
                 .unwrap_or_default()
         };
         if history_snapshot.is_empty() {
@@ -300,7 +300,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             {
                 let mut s = state.lock().await;
                 if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
-                    a.history.push(ChatMessage::new("assistant", &content).with_tool_calls(call_refs));
+                    Arc::make_mut(&mut a.history)
+                        .push(ChatMessage::new("assistant", &content).with_tool_calls(call_refs));
                 }
             }
 
@@ -323,7 +324,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     );
                     let mut s = state.lock().await;
                     if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
-                        a.history.push(message);
+                        Arc::make_mut(&mut a.history).push(message);
                     }
                     continue;
                 }
@@ -345,14 +346,14 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     );
                     let mut s = state.lock().await;
                     if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
-                        a.history.push(message);
+                        Arc::make_mut(&mut a.history).push(message);
                         for (remaining_call, remaining_id) in parsed_calls.iter().skip(index + 1) {
                             let skipped = crate::tools::ToolExecutionOutput::failure_with_kind(
                                 "error: tool call was not run because the subagent loop stopped".to_string(),
                                 crate::tools::ToolErrorKind::Internal,
                                 false,
                             );
-                            a.history.push(subagent_tool_history_message(
+                            Arc::make_mut(&mut a.history).push(subagent_tool_history_message(
                                 &remaining_call.name,
                                 &remaining_call.arguments,
                                 skipped,
@@ -458,7 +459,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 );
                 let mut s = state.lock().await;
                 if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
-                    a.history.push(message);
+                    Arc::make_mut(&mut a.history).push(message);
                 }
                 if cancel_token.is_cancelled() {
                     let mut s = state.lock().await;
@@ -469,7 +470,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                                 crate::tools::ToolErrorKind::Cancelled,
                                 false,
                             );
-                            a.history.push(subagent_tool_history_message(
+                            Arc::make_mut(&mut a.history).push(subagent_tool_history_message(
                                 &remaining_call.name,
                                 &remaining_call.arguments,
                                 cancelled,
@@ -486,7 +487,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
 
         let mut s = state.lock().await;
         if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
-            a.history.push(ChatMessage::new("assistant", &content));
+            Arc::make_mut(&mut a.history).push(ChatMessage::new("assistant", &content));
         }
         crate::logger::operational_event(
             "subagent.finish",
@@ -522,8 +523,7 @@ async fn project_subagent_completion(
             && agent.history.last().map(|message| message.content.as_str())
                 != Some(completion.output.as_str())
         {
-            agent
-                .history
+            Arc::make_mut(&mut agent.history)
                 .push(ChatMessage::new("system", &completion.output));
         }
         agent.review_manifest = review_manifest;

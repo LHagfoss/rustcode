@@ -945,6 +945,178 @@ async fn test_confirm_and_execute_bypassed() {
 }
 
 #[tokio::test]
+async fn question_prompt_transitions_invalidate_render_metrics_once() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let initial_revision = state.lock().await.render_snapshot().revision();
+    let state_for_task = Arc::clone(&state);
+    let cancel_for_task = cancel_token.clone();
+    let task = tokio::spawn(async move {
+        super::tool_exec::ask_user_question(
+            &state_for_task,
+            &cancel_for_task,
+            &serde_json::json!({
+                "question": "Continue?",
+                "options": ["Proceed", "Cancel"]
+            }),
+        )
+        .await
+    });
+
+    let awaiting_revision = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let s = state.lock().await;
+            if s.pending_question.is_some() {
+                break s.render_snapshot().revision();
+            }
+            drop(s);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("question prompt should become visible");
+    assert_eq!(
+        awaiting_revision,
+        initial_revision.wrapping_add(1),
+        "publishing a question should invalidate one render revision"
+    );
+
+    let response = state
+        .lock()
+        .await
+        .question_response
+        .take()
+        .expect("question response channel");
+    response.send("Proceed".to_owned()).expect("question task alive");
+    task.await.expect("question task should finish");
+
+    let s = state.lock().await;
+    assert!(s.pending_question.is_none());
+    assert_eq!(s.status, AppStatus::Streaming);
+    assert_eq!(
+        s.render_snapshot().revision(),
+        awaiting_revision.wrapping_add(1),
+        "clearing a question should invalidate one additional render revision"
+    );
+}
+
+#[tokio::test]
+async fn tool_confirmation_cleanup_invalidates_render_metrics_once() {
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    let state = Arc::new(Mutex::new(app));
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
+    let initial_revision = state.lock().await.render_snapshot().revision();
+    let state_for_task = Arc::clone(&state);
+    let cancel_for_task = cancel_token.clone();
+    let task = tokio::spawn(async move {
+        super::tool_exec::confirm_and_execute(
+            &client,
+            &state_for_task,
+            &cancel_for_task,
+            "write_to_file",
+            &serde_json::json!({
+                "path": "sandbox/render-metrics-confirmation.txt",
+                "content": "content"
+            }),
+            "write_to_file",
+            false,
+            None,
+            None,
+        )
+        .await
+    });
+
+    let awaiting_revision = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let s = state.lock().await;
+            if s.pending_tool_confirmation.is_some() {
+                break s.render_snapshot().revision();
+            }
+            drop(s);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("confirmation should become visible");
+    assert_eq!(
+        awaiting_revision,
+        initial_revision.wrapping_add(1),
+        "publishing a tool confirmation should invalidate one render revision"
+    );
+
+    let response = state
+        .lock()
+        .await
+        .tool_confirmation_response
+        .take()
+        .expect("confirmation response channel");
+    response.send(false).expect("confirmation task alive");
+    let _ = task.await.expect("confirmation task should finish");
+
+    let s = state.lock().await;
+    assert!(s.pending_tool_confirmation.is_none());
+    assert_eq!(s.status, AppStatus::Streaming);
+    assert_eq!(
+        s.render_snapshot().revision(),
+        awaiting_revision.wrapping_add(1),
+        "clearing a tool confirmation should invalidate one additional render revision"
+    );
+}
+
+#[tokio::test]
+async fn interactive_confirmation_publication_invalidates_render_metrics_once() {
+    use crate::network::policy::TurnPolicy;
+
+    let mut app = AppState::new();
+    app.agent_mode = crate::config::AgentMode::Build;
+    let state = Arc::new(Mutex::new(app));
+    let initial_revision = state.lock().await.render_snapshot().revision();
+    let calls = vec![crate::tools::ToolCall {
+        name: "write_to_file".to_owned(),
+        arguments: serde_json::json!({
+            "path": "sandbox/render-metrics.txt",
+            "content": "content"
+        }),
+        call_id: None,
+    }];
+    let state_for_task = Arc::clone(&state);
+    let task = tokio::spawn(async move {
+        super::policy::InteractivePolicy
+            .should_approve(&state_for_task, &calls)
+            .await
+    });
+
+    let awaiting_revision = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let s = state.lock().await;
+            if s.pending_tool_confirmation.is_some() {
+                break s.render_snapshot().revision();
+            }
+            drop(s);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("confirmation should become visible");
+    assert_eq!(
+        awaiting_revision,
+        initial_revision.wrapping_add(1),
+        "publishing a confirmation should invalidate one render revision"
+    );
+
+    let response = state
+        .lock()
+        .await
+        .tool_confirmation_response
+        .take()
+        .expect("confirmation response channel");
+    response.send(false).expect("confirmation task alive");
+    assert!(!task.await.expect("confirmation task should finish"));
+}
+
+#[tokio::test]
 async fn test_compact_history_strips_thinking_blocks() {
     let mut history = vec![
         crate::app::ChatMessage::new(
@@ -3387,9 +3559,9 @@ fn session_interruption_and_recovery_safety() {
     state
         .history
         .push(ChatMessage::new("user", "Write a function"));
-    state.current_response = "<think>\nThinking about function...".to_string();
+    state.replace_current_response("<think>\nThinking about function...");
     state.current_thought_started_at = Some(std::time::Instant::now());
-    state.live_tool_calls.push(crate::app::LiveToolCall::new(
+    std::sync::Arc::make_mut(&mut state.live_tool_calls).push(crate::app::LiveToolCall::new(
         "call-temp",
         None,
         "run_command",
@@ -3399,7 +3571,7 @@ fn session_interruption_and_recovery_safety() {
 
     // Simulate killing/stopping turn: live tool calls & transient thought buffer are cleared
     state.clear_live_tool_calls();
-    state.current_response.clear();
+    state.clear_current_response();
     state.current_thought_started_at = None;
     state.status = crate::app::AppStatus::Idle;
 
