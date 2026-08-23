@@ -3022,17 +3022,15 @@ fn build_claude_startup_banner_snapshot(
     banner.push(make_row(context_spans));
 
     // Row 4: directory
-    let dir_display = std::env::current_dir()
-        .ok()
-        .map(|path| {
-            if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
-                if let Ok(rel) = path.strip_prefix(&home) {
-                    return format!("~/{}", rel.display());
-                }
-            }
-            path.display().to_string()
-        })
-        .unwrap_or_else(|| "~".to_string());
+    let (dir_display, _) = state
+        .cwd_and_branch()
+        .rsplit_once(':')
+        .unwrap_or((state.cwd_and_branch(), ""));
+    let dir_display = if dir_display.is_empty() {
+        "~"
+    } else {
+        dir_display
+    };
 
     let max_dir_len = inner_w.saturating_sub(label_w + 1);
     let dir_fitted = fit_to_width(&dir_display, max_dir_len);
