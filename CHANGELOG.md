@@ -1,3 +1,8 @@
+## [v0.35.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.3) - 2026-08-23
+
+### Tests & Release Hygiene
+- **UI Snapshots:** Resolve the rendered-version golden fixture from the package version so release bumps do not require manual snapshot edits ([`0e11a12`](https://github.com/LHagfoss/rustcode/commit/0e11a12))
+
 ## [v0.35.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.2) - 2026-08-23
 
 ### Local Models & Recovery
