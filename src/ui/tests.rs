@@ -167,7 +167,10 @@ fn render_snapshot_preserves_existing_ui_output() {
     // These fixtures are the independent rendering oracle: changing the
     // snapshot renderer changes a terminal cell and fails this test.
     fn expand_golden_fixture(fixture: &str) -> String {
-        fixture.trim_end().replace('␠', " ")
+        fixture
+            .trim_end()
+            .replace('␠', " ")
+            .replace("v0.00.0", concat!("v", env!("CARGO_PKG_VERSION")))
     }
 
     let golden_outputs = [
