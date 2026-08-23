@@ -107,7 +107,7 @@ impl ModelProfile {
         // cannot fit the provider's configured window.
         let context_window = self.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW).max(1);
         let default_completion = if self.is_local() {
-            (context_window / 8).clamp(1024, 8192)
+            (context_window / 8).clamp(1024, 4096)
         } else {
             DEFAULT_REQUEST_MAX_TOKENS.min((context_window / 4).max(1))
         };
@@ -2341,6 +2341,23 @@ mod tests {
                 + tiny.safety_reserve,
             tiny.context_window
         );
+    }
+
+    #[test]
+    fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
+        let mut profile = ModelProfile {
+            name: "local-ollama".to_string(),
+            url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
+            model: "qwen2.5:32b".to_string(),
+            context_window: Some(128_000),
+            engine: Some("ollama".to_string()),
+            ..ModelProfile::default()
+        };
+
+        assert_eq!(profile.context_budget().completion_reserve, 4096);
+
+        profile.max_tokens = Some(8192);
+        assert_eq!(profile.context_budget().completion_reserve, 8192);
     }
 
     #[test]
