@@ -7,6 +7,7 @@ mod keymap;
 mod lru;
 mod markdown;
 mod modals;
+pub(crate) mod render_snapshot;
 mod terminal_runtime;
 mod transcript;
 

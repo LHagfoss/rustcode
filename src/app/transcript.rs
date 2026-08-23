@@ -14,6 +14,7 @@ pub(crate) struct TranscriptState<'a> {
     viewport_height: &'a mut u16,
     chat_area: &'a mut Option<Rect>,
     redraw_requested: &'a mut bool,
+    render_revision: &'a mut u64,
 }
 
 impl<'a> TranscriptState<'a> {
@@ -30,6 +31,7 @@ impl<'a> TranscriptState<'a> {
             viewport_height: &mut state.viewport_height,
             chat_area: &mut state.chat_area,
             redraw_requested: &mut state.redraw_requested,
+            render_revision: &mut state.render_revision,
         }
     }
 
@@ -44,6 +46,7 @@ impl<'a> TranscriptState<'a> {
     pub(crate) fn request_replay(&mut self) {
         *self.history_display_start = 0;
         *self.redraw_requested = true;
+        *self.render_revision = self.render_revision.wrapping_add(1);
     }
 
     #[allow(dead_code)]
@@ -51,6 +54,7 @@ impl<'a> TranscriptState<'a> {
         self.current_response.clear();
         *self.current_token_usage = None;
         *self.redraw_requested = true;
+        *self.render_revision = self.render_revision.wrapping_add(1);
     }
 
     #[allow(dead_code)]
