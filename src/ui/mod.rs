@@ -2411,7 +2411,7 @@ fn indent_generic_tool_body(
     indented
 }
 
-fn render_committed_tool_result_group_snapshot(
+pub(crate) fn render_committed_tool_result_group_snapshot(
     state: &RenderSnapshot,
     message_indices: &[usize],
     width: u16,
@@ -2532,7 +2532,7 @@ fn format_elapsed_compact(milliseconds: u64) -> String {
     }
 }
 
-fn render_work_separator_before_assistant_snapshot(
+pub(crate) fn render_work_separator_before_assistant_snapshot(
     state: &RenderSnapshot,
     assistant_index: usize,
     width: u16,
@@ -2893,7 +2893,7 @@ fn render_status_panel<'a>(
     )]));
 }
 
-fn build_claude_startup_banner_snapshot(
+pub(crate) fn build_claude_startup_banner_snapshot(
     state: &RenderSnapshot,
     total_width: usize,
     _max_height: usize,
@@ -3309,7 +3309,7 @@ fn render_selected_subagent_context(
 }
 
 /// Render one finalized history entry for insertion into terminal scrollback.
-fn render_committed_history_block_snapshot(
+pub(crate) fn render_committed_history_block_snapshot(
     state: &RenderSnapshot,
     message_index: usize,
     width: u16,
@@ -3476,7 +3476,7 @@ pub(crate) fn render_committed_history_block(
     render_committed_history_block_snapshot(&snapshot, message_index, width)
 }
 
-fn render_committed_assistant_chunk_snapshot(
+pub(crate) fn render_committed_assistant_chunk_snapshot(
     _state: &RenderSnapshot,
     content: &str,
     width: u16,
@@ -3579,7 +3579,7 @@ fn inset_vertical(area: ratatui::layout::Rect, top: u16, bottom: u16) -> ratatui
 
 /// Height of the mutable inline surface for the next frame. Finalized history
 /// is rendered above this area into terminal scrollback.
-fn desired_height_snapshot(
+pub(crate) fn desired_height_snapshot(
     state: &RenderSnapshot,
     transcript: &mut TranscriptState,
     width: u16,
@@ -3671,7 +3671,7 @@ pub(crate) fn desired_height(
 /// Interactive TUI entry point. `transcript` is terminal-only mutable state;
 /// it must never be persisted with `ChatMessage` history or included in a
 /// provider request.
-fn render_with_transcript_snapshot(
+pub(crate) fn render_with_transcript_snapshot(
     f: &mut Frame,
     state: &RenderSnapshot,
     transcript: &mut TranscriptState,
