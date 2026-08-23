@@ -21,6 +21,23 @@ fn render_snapshot_to_text(state: &AppState, width: u16, height: u16) -> String 
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct CellAppearance {
+        foreground: ratatui::style::Color,
+        background: ratatui::style::Color,
+        modifiers: ratatui::style::Modifier,
+    }
+
+    impl From<&ratatui::buffer::Cell> for CellAppearance {
+        fn from(cell: &ratatui::buffer::Cell) -> Self {
+            Self {
+                foreground: cell.fg,
+                background: cell.bg,
+                modifiers: cell.modifier,
+            }
+        }
+    }
+
     let snapshot = state.render_snapshot();
     let mut transcript = TranscriptState::default();
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -30,14 +47,52 @@ fn render_snapshot_to_text(state: &AppState, width: u16, height: u16) -> String 
         })
         .unwrap();
 
-    (0..height)
-        .map(|row| {
-            (0..width)
-                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
-                .collect::<String>()
+    let buffer = terminal.backend().buffer();
+    let mut appearances = Vec::new();
+    let mut symbol_rows = Vec::with_capacity(height as usize);
+    let mut appearance_rows = Vec::with_capacity(height as usize);
+
+    for row in 0..height {
+        let mut symbols = String::new();
+        let mut row_appearances = Vec::with_capacity(width as usize);
+
+        for column in 0..width {
+            let cell = &buffer[(column, row)];
+            symbols.push_str(cell.symbol());
+
+            let appearance = CellAppearance::from(cell);
+            let appearance_id = appearances
+                .iter()
+                .position(|existing| *existing == appearance)
+                .unwrap_or_else(|| {
+                    appearances.push(appearance);
+                    appearances.len() - 1
+                });
+            row_appearances.push(format!("{appearance_id:02}"));
+        }
+
+        symbol_rows.push(symbols);
+        appearance_rows.push(row_appearances.join(" "));
+    }
+
+    let appearance_palette = appearances
+        .iter()
+        .enumerate()
+        .map(|(id, appearance)| {
+            format!(
+                "{id:02}: fg={:?}, bg={:?}, modifiers={:?}",
+                appearance.foreground, appearance.background, appearance.modifiers
+            )
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+
+    format!(
+        "{}\n\ncell appearances:\n{}\n\nappearance palette:\n{}",
+        symbol_rows.join("\n"),
+        appearance_rows.join("\n"),
+        appearance_palette
+    )
 }
 
 #[test]
@@ -101,20 +156,36 @@ fn render_snapshot_preserves_existing_ui_output() {
         state.cwd_and_branch = "/repo:main".to_owned();
     }
 
-    // These literals are the independent rendering oracle: changing the
+    let appearance_oracle = render_snapshot_to_text(&states[0], 1, 1);
+    assert!(
+        appearance_oracle.contains("fg=")
+            && appearance_oracle.contains("bg=")
+            && appearance_oracle.contains("modifiers="),
+        "render oracle must include complete cell appearance"
+    );
+
+    // These fixtures are the independent rendering oracle: changing the
     // snapshot renderer changes a terminal cell and fails this test.
-    const GOLDEN_OUTPUTS: [&str; 6] = [
-        "                                                            \n╭─ >_ RustCode v0.34.3 ──────────────────────────────────╮  \n│                                                        │  \n│  model:       gemini-3.6-flash    /model to change     │  \n│  effort:      default    /effort to change             │  \n│  context:     128.0K tokens    /context to change      │  \n│  directory:   /repo                                    │  \n│  branch:      main                                     │  \n│  permissions: Interactive                              │  \n│  help:        /help for commands                       │  \n│                                                        │  \n                                                            \n› Ask RustCode to do anything                               \n                                                            \n  gemini-3.6-flash · main · /repo        100% context left  \n                                                            ",
-        "• streamed output                                           \n                                                            \n • Working · esc interrupt                                  \n                                                            \n                                                            \n› Ask RustCode to do anything                               \n                                                            \n  gemini-3.6-flash · main · /repo        100% context left  \n                                                            \n                                                            \n                                                            \n                                                            \n                                                            \n                                                            \n                                                            \n                                                            ",
-        "                                                            \n                                                            \n                                                            \n                                                            \n                                                            \n  Would you like to run the following command?              \n                                                            \n  $ cargo test                                              \n                                                            \n› 1. Yes, proceed (y)                                       \n  2. No, cancel this tool call (esc)                        \n                                                            \n  Press enter to confirm · tab to enable auto-confirm       \n                                                            \n                                                            \n                                                            ",
-        "                                                            \n                                                            \n                                                            \n                                                            \n                                                            \n  Question 1/1 (1 unanswered)                               \n  Proceed?                                                  \n                                                            \n  › 1. Yes                                                  \n    2. No                                                   \n    Type your own answer                                    \n                                                            \n  enter to submit answer | esc to interrupt                 \n                                                            \n                                                            \n                                                            ",
-        "                                                            \n  Select model                         type to search  esc  \n                                                            \n   ● qwen3.6-dense                qwen3.6:27b-coding-mxfp8  \n     gemini-3.6-flash                     gemini-3.6-flash  \n     gemma4:e2b-it-qat                   gemma4:e2b-it-qat  \n     tinkerer                     thinkingmachines/Inkling  \n                                                            \n                                                            \n                                                            \n  select ↑/↓   confirm enter   cancel esc                   \n                                                            \n                                                            \n› Ask RustCode to do anything                               \n                                                            \n                                                            ",
-        "                                                            \n↳ reviewer · running · parent agent-3                       \n  agent context · use /agents to navigate · main history    \npreserved                                                   \n• subagent response                                         \n                                                            \n• Working                                                   \n                                                            \n                                                            \n                                                            \n                                                            \n                                                            \n› Ask RustCode to do anything                               \n                                                            \n  reviewer · gemini-3.6-flash · main · /…100% context left  \n                                                            ",
+    fn expand_golden_fixture(fixture: &str) -> String {
+        fixture.trim_end().replace('␠', " ")
+    }
+
+    let golden_outputs = [
+        expand_golden_fixture(include_str!("fixtures/render_snapshot_0.txt")),
+        expand_golden_fixture(include_str!("fixtures/render_snapshot_1.txt")),
+        expand_golden_fixture(include_str!("fixtures/render_snapshot_2.txt")),
+        expand_golden_fixture(include_str!("fixtures/render_snapshot_3.txt")),
+        expand_golden_fixture(include_str!("fixtures/render_snapshot_4.txt")),
+        expand_golden_fixture(include_str!("fixtures/render_snapshot_5.txt")),
     ];
 
     for (index, state) in states.into_iter().enumerate() {
         let actual = render_snapshot_to_text(&state, 60, 16);
-        assert_eq!(actual, GOLDEN_OUTPUTS[index], "render case {index} diverged");
+        assert_eq!(
+            actual,
+            golden_outputs[index],
+            "render case {index} diverged"
+        );
     }
 }
 
