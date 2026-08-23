@@ -914,6 +914,7 @@ async fn test_confirm_and_execute_bypassed() {
     let state = Arc::new(Mutex::new(AppState::new()));
     state.lock().await.agent_mode = crate::config::AgentMode::Build;
     let cancel_token = tokio_util::sync::CancellationToken::new();
+    let client = reqwest::Client::new();
     let args = serde_json::json!({
         "path": "sandbox/test_bypass.txt",
         "content": "bypassed content",
@@ -921,6 +922,7 @@ async fn test_confirm_and_execute_bypassed() {
     });
 
     let (result, _, _) = confirm_and_execute(
+        &client,
         &state,
         &cancel_token,
         "write_to_file",
