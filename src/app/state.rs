@@ -1014,6 +1014,10 @@ pub struct AppState {
     /// to the model; `/clear` advances this boundary without deleting messages.
     pub history_display_start: usize,
     pub current_response: Arc<String>,
+    /// Monotonic content revision used by snapshot delta consumers.
+    pub(crate) current_response_revision: u64,
+    /// Revision of the most recent clear or replacement, if any.
+    pub(crate) current_response_last_rewrite_revision: u64,
     pub current_token_usage: Option<TokenUsage>,
     pub current_thought_time_ms: u64,
     pub current_thought_tokens: u32,
@@ -1297,19 +1301,32 @@ impl AppState {
 
     /// Clear the render-visible response buffer and invalidate in-flight layout metrics.
     pub(crate) fn clear_current_response(&mut self) {
+        let changed = !self.current_response.is_empty();
         Arc::make_mut(&mut self.current_response).clear();
+        if changed {
+            self.current_response_revision = self.current_response_revision.wrapping_add(1);
+            self.current_response_last_rewrite_revision = self.current_response_revision;
+        }
         self.request_redraw();
     }
 
     /// Append streamed render-visible response text and invalidate in-flight layout metrics.
     pub(crate) fn append_current_response(&mut self, chunk: &str) {
         Arc::make_mut(&mut self.current_response).push_str(chunk);
+        if !chunk.is_empty() {
+            self.current_response_revision = self.current_response_revision.wrapping_add(1);
+        }
         self.request_redraw();
     }
 
     /// Replace the render-visible response buffer and invalidate in-flight layout metrics.
     pub(crate) fn replace_current_response(&mut self, response: impl Into<String>) {
-        self.current_response = Arc::new(response.into());
+        let response = response.into();
+        if self.current_response.as_str() != response {
+            self.current_response = Arc::new(response);
+            self.current_response_revision = self.current_response_revision.wrapping_add(1);
+            self.current_response_last_rewrite_revision = self.current_response_revision;
+        }
         self.request_redraw();
     }
 
@@ -1528,6 +1545,8 @@ impl AppState {
             history,
             history_display_start: 0,
             current_response: Arc::new(String::new()),
+            current_response_revision: 0,
+            current_response_last_rewrite_revision: 0,
             current_token_usage: None,
             current_thought_time_ms: 0,
             current_thought_tokens: 0,
