@@ -1,3 +1,9 @@
+## [v0.34.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.3) - 2026-08-23
+
+### Tools & Safety
+- **Tools/File Editing:** Preserve exact line ending conventions (CRLF vs LF) and mixed newline styles faithfully across file modifications in `replace_file_content` and `write_to_file` ([#787](https://github.com/LHagfoss/rustcode/pull/787))
+- **Tools/Safety & Bounds:** Bound unbounded read/search paths and memory consumption across tool execution, context generation, and output capture ([#787](https://github.com/LHagfoss/rustcode/pull/787))
+
 ## [v0.34.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.34.2) - 2026-08-22
 
 ### Fixes & UI
