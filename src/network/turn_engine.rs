@@ -241,6 +241,10 @@ pub(crate) fn record_malformed_call(
     repeated
 }
 
+pub(crate) fn reasoning_loop_final_response() -> &'static str {
+    "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
+}
+
 pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -526,7 +530,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 return true;
             }
             LoopRecoveryAction::ForceFinal => {
-                dbg_log!("Reasoning loop recovery exhausted — forcing wrap-up turn");
+                dbg_log!("Reasoning loop recovery exhausted — returning concise final response");
                 crate::logger::operational_event(
                     loop_detect::DIAG_RECOVERY_EXHAUSTED,
                     serde_json::json!({
@@ -534,7 +538,6 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     }),
                 );
                 ctx.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
-                ctx.force_final = true;
                 let mut s = state.lock().await;
                 let mut msg = ChatMessage::new("assistant", &ctx.final_content);
                 msg.response_time_ms = Some(turn_response_time_ms);
@@ -543,16 +546,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 ctx.final_content_persisted = true;
-                s.history.push(ChatMessage::new(
-                    "system",
-                    FORCE_ANSWER_PROMPT,
-                ));
                 crate::config::save_history(&s.history);
                 s.clear_current_response();
                 drop(s);
                 ctx.turn_machine.abandon_tool_phase();
-                ctx.tool_rounds += 1;
-                return true;
+                ctx.final_content = reasoning_loop_final_response().to_string();
+                ctx.final_content_persisted = false;
+                return false;
             }
         }
     }
@@ -1752,4 +1752,20 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
     }
     state.lock().await.orchestrator_running = false;
     dbg_log!("Orchestrator finished");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reasoning_loop_final_response;
+
+    #[test]
+    fn exhausted_reasoning_loop_uses_a_concise_terminal_response() {
+        let response = reasoning_loop_final_response();
+
+        assert_eq!(
+            response,
+            "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
+        );
+        assert!(response.len() <= 160);
+    }
 }
