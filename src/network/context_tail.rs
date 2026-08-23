@@ -96,6 +96,22 @@ pub(crate) fn build_dynamic_context_tail(
     build_dynamic_context_tail_with_memory(context_section, read_files, todos, None)
 }
 
+pub(crate) fn prepend_skill_routing_hint(context: &mut String, hint: Option<&str>) {
+    let Some(hint) = hint.filter(|hint| !hint.is_empty()) else {
+        return;
+    };
+    if context.is_empty() {
+        context.push_str(hint);
+        return;
+    }
+
+    let mut prefixed = String::with_capacity(hint.len() + context.len() + 2);
+    prefixed.push_str(hint);
+    prefixed.push_str("\n\n");
+    prefixed.push_str(context);
+    *context = prefixed;
+}
+
 pub(crate) fn build_dynamic_context_tail_with_memory(
     context_section: String,
     read_files: &[String],
@@ -230,5 +246,26 @@ mod tests {
         assert!(later.contains("Model quota remaining: 84.0%"));
         assert_ne!(first, later);
         assert_eq!(later.matches("- Current date/time:").count(), 1);
+    }
+
+    #[test]
+    fn skill_routing_hint_is_first_dynamic_context_fragment() {
+        let mut context =
+            "# Environment\nworkspace\n\n# Files already in context\n- src/lib.rs".to_string();
+
+        prepend_skill_routing_hint(
+            &mut context,
+            Some("# Priority skill route\nCall use_skill with `solidtime` first."),
+        );
+
+        let hint_end = context.find("# Environment").expect("environment fragment");
+        let files_start = context
+            .find("# Files already in context")
+            .expect("files fragment");
+        assert_eq!(
+            &context[..hint_end],
+            "# Priority skill route\nCall use_skill with `solidtime` first.\n\n"
+        );
+        assert!(hint_end < files_start);
     }
 }

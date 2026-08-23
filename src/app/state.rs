@@ -874,6 +874,7 @@ struct PromptCacheKey {
 pub struct PromptCache {
     key: Option<PromptCacheKey>,
     system_prompt: String,
+    skill_metadata: Option<Arc<Vec<crate::skills::SkillMetadata>>>,
     mcp_selection_generation: u64,
     mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
     mcp_selection_session_id: Option<String>,
@@ -909,6 +910,13 @@ impl PromptCache {
     ) -> &str {
         self.ensure(include_agent_tools, protocol, agent_mode);
         &self.system_prompt
+    }
+
+    pub(crate) fn skill_metadata(&mut self) -> Arc<Vec<crate::skills::SkillMetadata>> {
+        let metadata = self
+            .skill_metadata
+            .get_or_insert_with(|| Arc::new(crate::skills::discover_skills()));
+        Arc::clone(metadata)
     }
 
     pub(crate) fn native_tool_schemas(
@@ -2538,6 +2546,24 @@ mod chat_message_tests {
         let calls = msg.resolved_tool_calls(ToolProtocol::Json);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "grep");
+    }
+}
+
+#[cfg(test)]
+mod prompt_cache_tests {
+    use super::PromptCache;
+
+    #[test]
+    fn skill_metadata_reuses_the_cached_allocation() {
+        let mut cache = PromptCache::default();
+        let first = cache.skill_metadata();
+        let first_ptr = first.as_ptr();
+        let first_len = first.len();
+
+        let second = cache.skill_metadata();
+
+        assert_eq!(second.as_ptr(), first_ptr);
+        assert_eq!(second.len(), first_len);
     }
 }
 
