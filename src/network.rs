@@ -106,7 +106,7 @@ pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
 pub(crate) mod context_tail;
 pub(crate) use context_tail::{
     build_dynamic_context_tail, build_dynamic_context_tail_with_memory,
-    build_volatile_context_block, format_read_file_context_entry,
+    build_volatile_context_block, format_read_file_context_entry, prepend_skill_routing_hint,
 };
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -1044,7 +1044,8 @@ pub(crate) async fn prepare_turn_request(
         volatile_quota,
         volatile_window,
         mut context_section,
-        mut system_prompt,
+        system_prompt,
+        skill_metadata,
         native_schema_policy,
         active_profile,
         vision_profile,
@@ -1088,6 +1089,7 @@ pub(crate) async fn prepare_turn_request(
             .prompt_cache
             .system_prompt(delegation_active, protocol, agent_mode)
             .to_string();
+        let skill_metadata = s.prompt_cache.skill_metadata();
         let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
             Some(crate::tools::ToolSchemaPolicy::root(delegation_active))
         } else {
@@ -1107,6 +1109,7 @@ pub(crate) async fn prepare_turn_request(
             volatile_window,
             context_section,
             system_prompt,
+            skill_metadata,
             native_schema_policy,
             s.active_model_profile(),
             s.vision_model_profile(),
@@ -1176,31 +1179,26 @@ pub(crate) async fn prepare_turn_request(
             || is_model_directed_note(m)
     });
 
-    if let Some(latest_user_prompt) = history_snapshot
+    let skill_hint = if let Some(latest_user_prompt) = history_snapshot
         .iter()
         .rev()
         .find(|message| message.role == "user")
         .map(|message| message.content.as_str())
-        && let Some(hint) = crate::skills::skill_routing_hint(
-            latest_user_prompt,
-            &crate::skills::discover_skills(),
-        )
     {
-        system_prompt.insert_str(0, &hint);
-    }
+        crate::skills::skill_routing_hint(latest_user_prompt, skill_metadata.as_slice())
+    } else {
+        None
+    };
 
     // The base system prompt is kept STATIC across turns (it only depends on
-    // the tool protocol and agent mode, which don't change mid-task). A
-    // per-turn priority skill prefix is prepended only for an explicitly named
-    // available skill; otherwise the provider's automatic prompt cache stays
-    // warm. Turn-varying context (environment delta, files-in-context, task
-    // plan) is appended to the LAST message instead, so it never invalidates
-    // the cached base prompt.
+    // the tool protocol and agent mode, which don't change mid-task). The
+    // priority skill route and other turn-varying context are appended to the
+    // LAST message instead, so they never invalidate the cached system prompt.
     //
     // The static system prompt is served from AppState's PromptCache: it's only
-    // rebuilt (skill scan + MCP schema serialization) when the protocol, agent
-    // mode, or MCP tool set changes, not on every turn. It is read in the
-    // grouped state block above along with the rest of the turn inputs.
+    // rebuilt when the protocol, agent mode, or MCP tool set changes, not on
+    // every turn. Skill metadata is also loaded lazily once by PromptCache and
+    // remains separate from the fresh list_skills/use_skill discovery paths.
     //
     // Build the turn-varying context tail (appended to the last message
     // after the history is assembled, to preserve the cached prefix). The
@@ -1224,6 +1222,7 @@ pub(crate) async fn prepare_turn_request(
         &todos,
         project_memory,
     );
+    prepend_skill_routing_hint(&mut dynamic_context, skill_hint.as_deref());
     let volatile_block =
         build_volatile_context_block(volatile_usage.as_ref(), volatile_quota, volatile_window);
     if !dynamic_context.is_empty() {

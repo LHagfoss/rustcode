@@ -89,7 +89,7 @@ pub fn skill_routing_hint(prompt: &str, skills: &[SkillMetadata]) -> Option<Stri
         .iter()
         .find(|skill| prompt_mentions_skill(prompt, &skill.name))?;
     Some(format!(
-        "\n# Priority skill route\nThe latest user prompt explicitly names available skill `{}`. Call `use_skill` first with the exact name `{}` before any filesystem, web, or exploration tool.\n",
+        "# Priority skill route\nThe latest user prompt explicitly names available skill `{}`. Call `use_skill` first with the exact name `{}` before any filesystem, web, or exploration tool.",
         skill.name, skill.name
     ))
 }

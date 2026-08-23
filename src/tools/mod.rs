@@ -1292,7 +1292,7 @@ pub(crate) fn tool_system_prompt_for_policy(
     p.push_str(
         "\n# Skills\n\
 Skills are discovered on demand so their catalog and instruction bodies stay out of the base prompt. \
-If a priority skill route appears above, follow it; otherwise, at the START of a task that may match a specialized workflow, call `list_skills` first. \
+If a priority skill route appears in the request context, follow it; otherwise, at the START of a task that may match a specialized workflow, call `list_skills` first. \
 Review its names and descriptions, then call `use_skill` with the exact matching name before taking other task actions. \
 `list_skills` returns metadata only; `use_skill` loads the selected SKILL.md and its available files.\n\n",
     );

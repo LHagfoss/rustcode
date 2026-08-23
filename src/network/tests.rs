@@ -3265,6 +3265,32 @@ fn consecutive_turn_provider_payloads_have_identical_historical_prefix() {
 }
 
 #[test]
+fn skill_routing_hint_stays_in_dynamic_tail_and_preserves_static_system_prompt() {
+    let skills = [crate::skills::SkillMetadata {
+        name: "solidtime".to_string(),
+        description: "Solidtime workflow".to_string(),
+        path: std::path::PathBuf::from("/skills/solidtime"),
+    }];
+    let hint = crate::skills::skill_routing_hint("Check Solidtime this week.", &skills)
+        .expect("named skill route");
+    let mut dynamic_context = "# Environment\nworkspace".to_string();
+    prepend_skill_routing_hint(&mut dynamic_context, Some(&hint));
+
+    let mut messages = history::to_messages(
+        &[ChatMessage::new("user", "Check Solidtime this week.")],
+        "static system prompt",
+    );
+    messages::attach_request_context_tail(&mut messages, &dynamic_context);
+
+    assert_eq!(messages[0]["content"], "static system prompt");
+    let tail = messages.last().expect("dynamic context tail")["content"]
+        .as_str()
+        .expect("tail text");
+    assert!(tail.contains("use_skill"));
+    assert!(tail.find("Priority skill route") < tail.find("# Environment"));
+}
+
+#[test]
 fn historical_assistant_reasoning_is_stripped_when_generating_messages() {
     let history = vec![
         ChatMessage::new("user", "Calculate fibonacci"),
