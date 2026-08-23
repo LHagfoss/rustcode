@@ -362,7 +362,7 @@ impl SubagentController {
             name: format!("agent-{}", id.raw()),
             task: task.clone(),
             model,
-            history: vec![ChatMessage::new("user", &task)],
+            history: Arc::new(vec![ChatMessage::new("user", &task)]),
             status: SubAgentStatus::Running,
             active_turn: true,
             parent_id: parent_id.map(SubagentId::raw),
@@ -400,7 +400,7 @@ impl SubagentController {
         }
         agent.status = SubAgentStatus::Running;
         agent.active_turn = true;
-        agent.history.push(ChatMessage::new("user", message.into()));
+        Arc::make_mut(&mut agent.history).push(ChatMessage::new("user", message.into()));
         state.request_redraw();
         Ok(())
     }
@@ -465,7 +465,7 @@ impl SubagentController {
                 id: SubagentId::from_raw(agent.id),
                 name: agent.name.clone(),
                 status: agent.status,
-                history: agent.history.clone(),
+                history: agent.history.as_ref().clone(),
                 active_turn: agent.active_turn,
                 parent_id: agent.parent_id.map(SubagentId::from_raw),
             })
