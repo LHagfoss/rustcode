@@ -722,13 +722,15 @@ pub async fn stream_request(
         .and_then(|t| t.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
-    let payload_bytes = serde_json::to_vec(&payload).map(|v| v.len()).unwrap_or(0);
+    let payload_bytes = serde_json::to_vec(&payload)
+        .map_err(|error| format!("failed to serialize request payload: {error}"))?;
+    let payload_byte_count = payload_bytes.len();
     let verbose_network_logging = { state.lock().await.config.debug_verbose_network_logging };
     dbg_log!(
         "{}",
         request_debug_log_line(
             verbose_network_logging,
-            &request_log_summary(model, message_count, tool_count, payload_bytes),
+            &request_log_summary(model, message_count, tool_count, payload_byte_count),
             &payload,
         )
     );
@@ -751,7 +753,7 @@ pub async fn stream_request(
             "model": model,
             "messages": message_count,
             "tools": tool_count,
-            "payload_bytes": payload_bytes,
+            "payload_bytes": payload_byte_count,
             "tool_schema_tokens": tool_schema_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "total_estimated_prompt_tokens": estimated_prompt_tokens,
@@ -768,7 +770,7 @@ pub async fn stream_request(
             "model": model,
             "messages": message_count,
             "tools": tool_count,
-            "payload_bytes": payload_bytes,
+            "payload_bytes": payload_byte_count,
             "tool_schema_tokens": tool_schema_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "total_estimated_prompt_tokens": estimated_prompt_tokens,
@@ -798,7 +800,10 @@ pub async fn stream_request(
         if cancel_token.is_cancelled() {
             return Err("cancelled".to_string());
         }
-        let mut req = client.post(&resolved_url).json(&payload);
+        let mut req = client
+            .post(&resolved_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(payload_bytes.clone());
         if let Some(ref key) = api_key {
             req = req
                 .header("Authorization", format!("Bearer {key}"))
