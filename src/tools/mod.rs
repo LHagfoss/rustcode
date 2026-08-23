@@ -1176,9 +1176,47 @@ fn select_mcp_tools_for_context(
     (selected, stats)
 }
 
+fn select_mcp_tools_for_context_with_sticky(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+    sticky_names: &[String],
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    let (mut selected, mut stats) = select_mcp_tools_for_context(tools, messages);
+    if sticky_names.is_empty() {
+        return (selected, stats);
+    }
+
+    let mut selected_indices = std::collections::HashSet::with_capacity(selected.len());
+    selected_indices.extend(selected.iter().copied());
+    for name in sticky_names {
+        if selected.len() >= MAX_MCP_NATIVE_SCHEMAS {
+            break;
+        }
+        let Some(index) = tools.iter().position(|(tool_name, _, _)| tool_name == name) else {
+            continue;
+        };
+        if selected_indices.insert(index) {
+            selected.push(index);
+        }
+    }
+    selected.sort_unstable();
+    stats.selected = selected.len();
+    stats.omitted = tools.len().saturating_sub(selected.len());
+    stats.selected_names = selected.iter().map(|index| tools[*index].0.clone()).collect();
+    (selected, stats)
+}
+
 pub(crate) fn native_tools_schema_for_context(
     policy: ToolSchemaPolicy,
     messages: &[Value],
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    native_tools_schema_for_context_with_sticky(policy, messages, &[])
+}
+
+pub(crate) fn native_tools_schema_for_context_with_sticky(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+    sticky_names: &[String],
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
     let mut tools = builtin_native_tools_schema(policy.include_agent_tools);
     // MCP tools are selected from the current request context. The registry is
@@ -1186,7 +1224,8 @@ pub(crate) fn native_tools_schema_for_context(
     // both selection and the provider-facing payload deterministic.
     let stats = if policy.include_mcp_tools {
         let mcp_tools = collect_mcp_tools();
-        let (selected, stats) = select_mcp_tools_for_context(&mcp_tools, messages);
+        let (selected, stats) =
+            select_mcp_tools_for_context_with_sticky(&mcp_tools, messages, sticky_names);
         for index in selected {
             let (name, desc, schema) = &mcp_tools[index];
             tools.push(mcp_schema_value(name, desc, schema));
@@ -2314,6 +2353,50 @@ mod tests {
         assert_eq!(stats.fallback, MCP_DISCOVERY_FALLBACK_COUNT);
         assert_eq!(stats.omitted, mcp.len() - MCP_DISCOVERY_FALLBACK_COUNT);
         assert_eq!(stats.selected_names, vec!["tool_00", "tool_01", "tool_02", "tool_03"]);
+    }
+
+    #[test]
+    fn mcp_schema_selection_retains_sticky_tools_and_adds_newly_relevant_tools() {
+        let mcp = vec![
+            (
+                "search_issues".to_string(),
+                "Search GitHub issues".to_string(),
+                serde_json::json!({"type":"object"}),
+            ),
+            (
+                "weather_forecast".to_string(),
+                "Get a weather forecast".to_string(),
+                serde_json::json!({"type":"object"}),
+            ),
+        ];
+        let messages = vec![serde_json::json!({
+            "role":"user",
+            "content":"Deploy the release"
+        })];
+
+        let (selected, stats) = select_mcp_tools_for_context_with_sticky(
+            &mcp,
+            &messages,
+            &["weather_forecast".to_string()],
+        );
+
+        assert_eq!(selected, vec![0, 1]);
+        assert_eq!(
+            stats.selected_names,
+            vec!["search_issues", "weather_forecast"]
+        );
+
+        let messages = vec![serde_json::json!({
+            "role":"user",
+            "content":"Search issues"
+        })];
+        let (selected, stats) = select_mcp_tools_for_context_with_sticky(
+            &mcp,
+            &messages,
+            &["weather_forecast".to_string()],
+        );
+        assert_eq!(selected, vec![0, 1]);
+        assert_eq!(stats.selected_names, vec!["search_issues", "weather_forecast"]);
     }
 
     #[test]

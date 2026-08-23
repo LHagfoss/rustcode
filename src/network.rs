@@ -1224,13 +1224,17 @@ pub(crate) async fn prepare_turn_request(
     // trimming so its size counts toward the budget.
     attach_request_context_tail(&mut msgs, &dynamic_context);
 
-    let native_tool_schemas = native_schema_policy
-        .map(|policy| crate::tools::native_tools_schema_for_context(policy, &msgs).0)
-        .unwrap_or_default();
-
-    let context_budget = {
-        let s = state.lock().await;
-        s.active_context_budget()
+    let (native_tool_schemas, context_budget) = {
+        let mut s = state.lock().await;
+        let native_tool_schemas = native_schema_policy
+            .map(|policy| {
+                let session_id = s.active_session_id.clone();
+                s.prompt_cache
+                    .native_tool_schemas(policy, &msgs, &session_id)
+                    .0
+            })
+            .unwrap_or_default();
+        (native_tool_schemas, s.active_context_budget())
     };
     let preflight = compaction::calculate_preflight_budget(
         &system_prompt,
