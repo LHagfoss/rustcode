@@ -1,4 +1,4 @@
-use crate::app::ChatMessage;
+use crate::app::{ChatMessage, History};
 use serde::{Deserialize, Serialize};
 use serde_millis;
 use std::collections::HashMap;
@@ -1180,12 +1180,17 @@ const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
 /// (never a runtime worker) performs the serialization and the blocking write.
 struct HistoryWriter {
     /// Newest unwritten snapshot per destination file.
-    pending: Mutex<HashMap<PathBuf, Vec<ChatMessage>>>,
+    pending: Mutex<HashMap<PathBuf, PendingHistoryWrite>>,
     wakeup: Condvar,
     /// Serializes take-snapshot-then-write, so a slow write of an older
     /// snapshot can never land on top of a newer one when the background
     /// thread and an explicit flush run concurrently.
     write_slot: Mutex<()>,
+}
+
+struct PendingHistoryWrite {
+    history: Vec<ChatMessage>,
+    revision: Option<u64>,
 }
 
 fn history_writer() -> &'static HistoryWriter {
@@ -1249,17 +1254,37 @@ fn next_session_id() -> String {
     }
 }
 
-fn queue_history_write(path: PathBuf, history: &[ChatMessage]) {
+fn queue_history_write(
+    path: PathBuf,
+    history: &[ChatMessage],
+    revision: Option<u64>,
+) -> bool {
     let writer = history_writer();
-    lock(&writer.pending).insert(path, history.to_vec());
+    let mut pending = lock(&writer.pending);
+    if revision.is_some()
+        && pending
+            .get(&path)
+            .and_then(|write| write.revision)
+            == revision
+    {
+        return false;
+    }
+    pending.insert(
+        path,
+        PendingHistoryWrite {
+            history: history.to_vec(),
+            revision,
+        },
+    );
     writer.wakeup.notify_all();
+    true
 }
 
 fn drain_history_writes(writer: &HistoryWriter) {
     let _slot = lock(&writer.write_slot);
     let batch = std::mem::take(&mut *lock(&writer.pending));
-    for (path, history) in batch {
-        write_history_file(&path, &history);
+    for (path, pending) in batch {
+        write_history_file(&path, &pending.history);
     }
 }
 
@@ -1456,23 +1481,60 @@ pub fn session_id_has_content(session_id: &str) -> bool {
     false
 }
 
+/// A history input that can expose its immutable messages and, when available,
+/// a mutation revision for queued-write deduplication.
+pub trait HistorySnapshot {
+    fn messages(&self) -> &[ChatMessage];
+    fn revision(&self) -> Option<u64>;
+}
+
+impl HistorySnapshot for History {
+    fn messages(&self) -> &[ChatMessage] {
+        self.as_slice()
+    }
+
+    fn revision(&self) -> Option<u64> {
+        Some(History::revision(self))
+    }
+}
+
+impl HistorySnapshot for Vec<ChatMessage> {
+    fn messages(&self) -> &[ChatMessage] {
+        self
+    }
+
+    fn revision(&self) -> Option<u64> {
+        None
+    }
+}
+
+impl HistorySnapshot for [ChatMessage] {
+    fn messages(&self) -> &[ChatMessage] {
+        self
+    }
+
+    fn revision(&self) -> Option<u64> {
+        None
+    }
+}
+
 /// Archive a chat into the sessions directory. No-op for histories without
 /// a real prompt. Returns the archive path on success.
-pub fn save_history(history: &[ChatMessage]) {
+pub fn save_history<H: HistorySnapshot + ?Sized>(history: &H) {
     match active_session_id() {
         Some(session_id) => save_session_history(&session_id, history),
         None => {
             if let Some(dir) = get_config_dir() {
-                queue_history_write(dir.join(HISTORY_FILE), history);
+                queue_history_write(dir.join(HISTORY_FILE), history.messages(), history.revision());
             }
         }
     }
 }
 
-pub fn save_session_history(session_id: &str, history: &[ChatMessage]) {
+pub fn save_session_history<H: HistorySnapshot + ?Sized>(session_id: &str, history: &H) {
     if let Some(dir) = get_config_dir() {
         let path = dir.join(SESSIONS_DIR).join(session_id).join(HISTORY_FILE);
-        queue_history_write(path, history);
+        queue_history_write(path, history.messages(), history.revision());
     }
 }
 
@@ -2413,7 +2475,7 @@ mod tests {
             let msgs: Vec<ChatMessage> = (0..=i)
                 .map(|n| ChatMessage::new("user", format!("msg {n}")))
                 .collect();
-            queue_history_write(path.clone(), &msgs);
+            queue_history_write(path.clone(), &msgs, None);
         }
         flush_history();
 
@@ -2421,6 +2483,23 @@ mod tests {
         let loaded = load_session_file(&path);
         assert_eq!(loaded.len(), 5);
         assert_eq!(loaded[4].content, "msg 4");
+    }
+
+    #[test]
+    fn revisioned_history_write_skips_an_identical_pending_snapshot() {
+        let dir = temp_dir("history-queue-dedup");
+        let path = dir.join(HISTORY_FILE);
+        let mut history = crate::app::History::default();
+        history.push(ChatMessage::new("user", "same"));
+        let revision = history.revision();
+
+        assert!(queue_history_write(
+            path.clone(),
+            history.as_slice(),
+            Some(revision)
+        ));
+        assert!(!queue_history_write(path, history.as_slice(), Some(revision)));
+        flush_history();
     }
 
     #[test]
