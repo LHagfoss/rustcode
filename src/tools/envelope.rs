@@ -13,6 +13,8 @@ pub struct ToolResultEnvelope {
     pub call_id: String,
     pub tool_name: String,
     pub success: bool,
+    pub pending: bool,
+    pub command: Option<String>,
     pub error_kind: Option<ToolErrorKind>,
     pub retryable: bool,
     pub exit_code: Option<i32>,

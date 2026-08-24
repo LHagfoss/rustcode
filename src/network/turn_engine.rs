@@ -190,6 +190,44 @@ impl TurnContext {
     }
 }
 
+pub(crate) fn take_turn_context_for_prompt(
+    state: &mut AppState,
+    is_wakeup: bool,
+    max_tool_rounds: usize,
+) -> TurnContext {
+    if is_wakeup {
+        state
+            .background_turn_context
+            .take()
+            .map(|context| *context)
+            .unwrap_or_else(|| TurnContext::with_max_tool_rounds(max_tool_rounds))
+    } else {
+        // A real user prompt starts a new logical task. Do not let a stale
+        // background result inherit the previous task's loop or verification
+        // budgets.
+        state.background_turn_context = None;
+        TurnContext::with_max_tool_rounds(max_tool_rounds)
+    }
+}
+
+pub(crate) fn save_turn_context_after_run(
+    state: &mut AppState,
+    context: TurnContext,
+    preserve_for_wakeup: bool,
+) {
+    if preserve_for_wakeup
+        && (!context.task_completed
+            || matches!(
+                context.stop_reason,
+                Some(lifecycle::StopReason::BackgroundPending)
+            ))
+    {
+        state.background_turn_context = Some(Box::new(context));
+    } else {
+        state.background_turn_context = None;
+    }
+}
+
 /// Persist every result that actually completed before cancellation, then
 /// close any remaining native calls with typed cancellation results. Dropping
 /// the completed prefix and marking the whole batch cancelled would lie about
@@ -212,6 +250,27 @@ pub(crate) fn append_cancelled_batch_results(
             crate::tools::ToolErrorKind::Cancelled,
         ));
     }
+}
+
+pub(crate) fn hydrate_explicit_verification_from_history(
+    ledger: &mut verification::VerificationLedger,
+    history: &[ChatMessage],
+    user_prompt_index: usize,
+) {
+    let Some(record) = history
+        .iter()
+        .skip(user_prompt_index.saturating_add(1))
+        .rev()
+        .filter_map(|message| message.tool_result.as_ref())
+        .find(|record| !record.pending && record.command.is_some())
+    else {
+        return;
+    };
+    let Some(command) = record.command.as_deref() else {
+        return;
+    };
+    ledger.record_command(command, record.exit_code);
+    ledger.record_explicit_command(command, record.exit_code);
 }
 
 /// Record a tool-call protocol failure and return whether it is identical to
@@ -945,6 +1004,28 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             let mut s = state.lock().await;
             s.status = AppStatus::Streaming;
             let mut completed = false;
+            let mut background_pending = false;
+            let explicit_verification_user_index = s
+                .history
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, message)| message.role == "user")
+                .map(|(index, _)| index);
+            let explicit_verification_requested = explicit_verification_user_index.is_some_and(
+                |index| {
+                    verification::is_explicit_verification_request(&s.history[index].content)
+                },
+            );
+            if explicit_verification_requested {
+                if let Some(index) = explicit_verification_user_index {
+                    hydrate_explicit_verification_from_history(
+                        &mut ctx.verification,
+                        &s.history,
+                        index,
+                    );
+                }
+            }
             let mut stagnation = loop_detect::LoopStatus::Ok;
             let mut failure_replan = None;
             let mut evidence_recovery = None;
@@ -963,17 +1044,37 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 // history message that answers that exact call.
                 metadata.call_id = answered_call.clone();
                 let content = result.content;
+                let diff_opt = result.diff;
+                let file_preview = result.file_preview;
+                if metadata.pending {
+                    background_pending = true;
+                    s.history.push(tool_result_history_message(
+                        ToolResult {
+                            tool_name: name,
+                            content,
+                            diff: diff_opt,
+                            file_preview,
+                            metadata,
+                        },
+                        answered_call,
+                    ));
+                    continue;
+                }
                 let mut verification_command = false;
-                if call.is_some_and(|call| call.name == "run_command")
+                if (name == "run_command" || metadata.command.is_some())
                     && let Some(command) = call
                         .and_then(|call| call.arguments.get("command"))
                         .and_then(|command| command.as_str())
+                        .or(metadata.command.as_deref())
                 {
                     ctx.verification.record_command(command, metadata.exit_code);
+                    if explicit_verification_requested {
+                        ctx.verification
+                            .record_explicit_command(command, metadata.exit_code);
+                    }
                     verification_command = verification::is_verification_command(command)
                         || loop_detect::is_stable_inspection_command(command);
                 }
-                let diff_opt = result.diff;
                 dbg_log!(
                     "Tool '{}' finished with result length: {} chars",
                     name,
@@ -1132,11 +1233,20 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         tool_name: name,
                         content,
                         diff: diff_opt,
-                        file_preview: result.file_preview,
+                        file_preview,
                         metadata,
                     },
                     answered_call,
                 ));
+            }
+
+            if background_pending {
+                crate::config::save_history(&s.history);
+                s.clear_current_response();
+                drop(s);
+                ctx.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+                ctx.turn_machine.finish_tools_if_executing();
+                return false;
             }
 
             // `record_turn_evidence` models a complete model turn. Record the
@@ -1302,6 +1412,21 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             const MAX_VERIFICATION_BLOCKS: u8 = 2;
             if completed {
                 ctx.stop_reason = Some(lifecycle::StopReason::Completed);
+                if let Some(evidence) = ctx.verification.explicit_last_failure() {
+                    ctx.verification_blocks = ctx.verification_blocks.saturating_add(1);
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "[Finish blocked — the explicitly requested command failed: {} (exit code {:?}). Run it again and inspect its result before reporting completion.]",
+                            evidence.command, evidence.exit_code
+                        ),
+                    ));
+                    crate::config::save_history(&s.history);
+                    s.clear_current_response();
+                    drop(s);
+                    ctx.turn_machine.finish_tools_if_executing();
+                    return true;
+                }
                 let requires_verification = ctx.made_edits
                     && (verification::requires_verification(&ctx.changed_paths)
                         || ctx.verification.last_failure().is_some());
@@ -1570,11 +1695,28 @@ pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
     policy: &Arc<P>,
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
 ) -> TurnContext {
+    let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
+    run_agent_turn_with_context(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        TurnContext::with_max_tool_rounds(max_tool_rounds),
+    )
+    .await
+}
+
+pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<StreamBuffer>>,
+    mut ctx: TurnContext,
+) -> TurnContext {
     let prompt_start_time = std::time::Instant::now();
     let mut turn_lifecycle = lifecycle::TurnLifecycle::new();
-
-    let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
-    let mut ctx = TurnContext::with_max_tool_rounds(max_tool_rounds);
     while run_single_turn(client, state, cancel_token, policy, stream_buffer, &mut ctx).await {}
 
     if ctx.stop_reason.is_none() {
@@ -1725,7 +1867,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
 ) {
     dbg_log!("Orchestrator started");
     loop {
-        let next_prompt = {
+        let (next_prompt, is_wakeup, turn_context) = {
             let mut s = state.lock().await;
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
@@ -1741,12 +1883,15 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             s.recent_read_outputs.clear();
             s.read_file_mtimes.clear();
             let prompt = s.pending_queue.remove(0);
+            let is_wakeup = prompt.starts_with("__task_wakeup__:");
+            let max_tool_rounds = s.config.max_tool_rounds;
+            let turn_context =
+                take_turn_context_for_prompt(&mut s, is_wakeup, max_tool_rounds);
             dbg_log!("Popped prompt from queue: '{}'", prompt);
-            prompt
+            (prompt, is_wakeup, turn_context)
         };
 
         let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
-        let is_wakeup = next_prompt.starts_with("__task_wakeup__:");
 
         let mut is_first_prompt = false;
         if !is_wakeup {
@@ -1761,8 +1906,8 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             spawn_title_generation(&client, &state, next_prompt.clone()).await;
         }
 
-        if let Some(sender) = ui_events.clone() {
-            super::ui_adapter::run_agent_turn_with_events(
+        let completed_context = if let Some(sender) = ui_events.clone() {
+            super::ui_adapter::run_agent_turn_with_events_and_context(
                 &client,
                 &state,
                 &cancel_token,
@@ -1770,11 +1915,29 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
                 &stream_buffer,
                 next_prompt.clone(),
                 sender,
+                turn_context,
             )
-            .await;
+            .await
         } else {
-            run_agent_turn(&client, &state, &cancel_token, &policy, &stream_buffer).await;
-        }
+            run_agent_turn_with_context(
+                &client,
+                &state,
+                &cancel_token,
+                &policy,
+                &stream_buffer,
+                turn_context,
+            )
+            .await
+        };
+
+        let mut s = state.lock().await;
+        let preserve_for_wakeup = is_wakeup
+            || matches!(
+                completed_context.stop_reason,
+                Some(lifecycle::StopReason::BackgroundPending)
+            );
+        save_turn_context_after_run(&mut s, completed_context, preserve_for_wakeup);
+        drop(s);
 
         if cancel_token.is_cancelled() {
             dbg_log!("Cancel token is cancelled, exiting orchestrator loop");
