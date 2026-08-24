@@ -556,7 +556,9 @@ pub fn remember(args: &Value) -> Result<String, String> {
         Ok(format!("Remembered globally: [{category}] {key} = {value}"))
     } else {
         crate::memory::upsert(None, fact)?;
-        Ok(format!("Remembered for this project: [{category}] {key} = {value}"))
+        Ok(format!(
+            "Remembered for this project: [{category}] {key} = {value}"
+        ))
     }
 }
 
@@ -565,10 +567,7 @@ pub fn recall_memory(args: &Value) -> Result<String, String> {
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or("missing required argument 'query'")?;
-    let scope = args
-        .get("scope")
-        .and_then(|v| v.as_str())
-        .unwrap_or("all");
+    let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
 
     let facts = crate::memory::search_facts(None, query, scope);
     if facts.is_empty() {
@@ -608,7 +607,9 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
     }
 
     if total_removed == 0 {
-        Ok(format!("No memory facts found for '{key}' in scope '{scope}'."))
+        Ok(format!(
+            "No memory facts found for '{key}' in scope '{scope}'."
+        ))
     } else {
         Ok(format!("Removed {total_removed} fact(s) matching '{key}'."))
     }
@@ -620,12 +621,9 @@ mod tests {
 
     #[tokio::test]
     async fn async_search_web_requires_query() {
-        let error = search_web_async(
-            &serde_json::json!({}),
-            &reqwest::Client::new(),
-        )
-        .await
-        .expect_err("missing query should fail before any request");
+        let error = search_web_async(&serde_json::json!({}), &reqwest::Client::new())
+            .await
+            .expect_err("missing query should fail before any request");
 
         assert_eq!(error, "missing 'query' argument");
     }

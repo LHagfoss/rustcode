@@ -295,9 +295,8 @@ fn is_read_only_segment(segment: &str) -> bool {
             )
         }),
         Some(
-            "cat" | "date" | "echo" | "false" | "grep" | "head" | "less" | "ls" | "more"
-            | "printf" | "pwd" | "rg" | "stat" | "tail" | "test" | "true" | "type"
-            | "uname" | "which",
+            "cat" | "date" | "echo" | "false" | "grep" | "head" | "less" | "ls" | "more" | "printf"
+            | "pwd" | "rg" | "stat" | "tail" | "test" | "true" | "type" | "uname" | "which",
         ) => true,
         Some("npm") => matches!(
             tokens.get(1..).unwrap_or_default(),
@@ -332,8 +331,7 @@ fn is_short_discovery_command(command: &str) -> bool {
         "find" => {
             let path = arguments.first().copied().unwrap_or("");
             let bounded_depth = arguments.windows(2).any(|window| {
-                window[0] == "-maxdepth"
-                    && window[1].parse::<u8>().is_ok_and(|depth| depth <= 3)
+                window[0] == "-maxdepth" && window[1].parse::<u8>().is_ok_and(|depth| depth <= 3)
             });
             !path.starts_with('/') && (path != "." || bounded_depth)
         }
@@ -672,7 +670,8 @@ fn run_command_output_inner(
                                 truncated: output.stdout.is_truncated()
                                     || output.stderr.is_truncated(),
                                 replayed: false,
-                                error_kind: (!success).then_some(super::ToolErrorKind::CommandFailed),
+                                error_kind: (!success)
+                                    .then_some(super::ToolErrorKind::CommandFailed),
                                 retryable: false,
                             }
                         }
@@ -709,11 +708,7 @@ fn run_command_output_inner(
         });
     }
 
-    let output = run_with_timeout(
-        cmd,
-        Duration::from_millis(timeout_ms.max(1)),
-        progress,
-    )?;
+    let output = run_with_timeout(cmd, Duration::from_millis(timeout_ms.max(1)), progress)?;
     let exit_code = output.status.code().unwrap_or(-1);
 
     let mut result = String::new();
@@ -967,8 +962,16 @@ mod tests {
 
         assert!(output.success);
         let events = events.lock().unwrap();
-        assert!(events.iter().any(|(text, stderr)| !stderr && text.contains("out")));
-        assert!(events.iter().any(|(text, stderr)| *stderr && text.contains("err")));
+        assert!(
+            events
+                .iter()
+                .any(|(text, stderr)| !stderr && text.contains("out"))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|(text, stderr)| *stderr && text.contains("err"))
+        );
     }
 
     #[test]
@@ -1036,7 +1039,11 @@ mod tests {
 
         assert!(!output.success, "starting is not completed success");
         assert_eq!(output.exit_code, None, "the process has not exited yet");
-        assert!(output.content.contains("Status: Pending"), "{}", output.content);
+        assert!(
+            output.content.contains("Status: Pending"),
+            "{}",
+            output.content
+        );
         assert!(output.content.contains(command), "{}", output.content);
     }
 
@@ -1193,7 +1200,10 @@ mod tests {
 
     #[test]
     fn sed_commands_require_confirmation() {
-        for command in ["sed -i 's/old/new/' file.txt", "sed 'w output.txt' input.txt"] {
+        for command in [
+            "sed -i 's/old/new/' file.txt",
+            "sed 'w output.txt' input.txt",
+        ] {
             assert!(
                 command_requires_confirmation(&serde_json::json!({"command": command})),
                 "must confirm potentially mutating sed command: {command}"

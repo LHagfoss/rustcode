@@ -14,8 +14,8 @@ use std::cell::RefCell;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
-    COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP,
-    get_themed_style, highlight_shell_command,
+    COLOR_BG, COLOR_MUTED, COLOR_PRIMARY, COLOR_TEXT, COLOR_TIP, get_themed_style,
+    highlight_shell_command,
 };
 
 const MAX_LIVE_CHILDREN: usize = 8;
@@ -76,10 +76,7 @@ impl TranscriptState {
         self.model.replace_live_text(live_text);
     }
 
-    pub(crate) fn apply_agent_event(
-        &mut self,
-        event: &crate::network::ui_adapter::AgentUiEvent,
-    ) {
+    pub(crate) fn apply_agent_event(&mut self, event: &crate::network::ui_adapter::AgentUiEvent) {
         self.model.apply_agent_event(event);
     }
 
@@ -360,17 +357,10 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             .next()
             .map(|line| line.spans)
             .unwrap_or_default();
-        let mut header = vec![
-            Span::styled(
-                "• ",
-                get_themed_style(
-                    COLOR_MUTED(),
-                    COLOR_BG(),
-                    Modifier::empty(),
-                    show_picker,
-                ),
-            ),
-        ];
+        let mut header = vec![Span::styled(
+            "• ",
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        )];
         header.extend(command_spans);
         let mut lines = vec![Line::from(header)];
 
@@ -403,23 +393,13 @@ pub(super) fn render_live_tool_cell_with_verbosity(
             if omitted_lines > 0 && index == 2 {
                 lines.push(Line::from(Span::styled(
                     format!("    … +{omitted_lines} lines"),
-                    get_themed_style(
-                        COLOR_MUTED(),
-                        COLOR_BG(),
-                        Modifier::ITALIC,
-                        show_picker,
-                    ),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
                 )));
             }
             lines.push(Line::from(vec![
                 Span::styled(
                     if lines.len() == 1 { "  └ " } else { "    " },
-                    get_themed_style(
-                        COLOR_MUTED(),
-                        COLOR_BG(),
-                        Modifier::empty(),
-                        show_picker,
-                    ),
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                 ),
                 Span::styled(
                     truncate_to_width(&text, (width as usize).saturating_sub(4).max(1)),
@@ -435,18 +415,15 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         if call.omitted_output_bytes > 0 {
             lines.push(Line::from(Span::styled(
                 format!("  └ … {} earlier bytes omitted", call.omitted_output_bytes),
-                get_themed_style(
-                    COLOR_MUTED(),
-                    COLOR_BG(),
-                    Modifier::ITALIC,
-                    show_picker,
-                ),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::ITALIC, show_picker),
             )));
         }
         return lines;
     }
 
-    let all_exploration = calls.iter().all(|call| is_exploration_tool(&call.tool_name));
+    let all_exploration = calls
+        .iter()
+        .all(|call| is_exploration_tool(&call.tool_name));
     let all_editing = calls.iter().all(|call| is_editing_tool(&call.tool_name));
     let has_command = calls.iter().any(|call| call.tool_name == "run_command");
     if !all_exploration && !all_editing && !has_command && calls.len() == 1 {
@@ -454,14 +431,13 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         let target = if call.target.is_empty() || call.target == "?" {
             String::new()
         } else {
-            format!(" {}", truncate_to_width(&call.target, (width as usize).saturating_sub(4)))
+            format!(
+                " {}",
+                truncate_to_width(&call.target, (width as usize).saturating_sub(4))
+            )
         };
-        let title_style = get_themed_style(
-            COLOR_PRIMARY(),
-            COLOR_BG(),
-            Modifier::BOLD,
-            show_picker,
-        );
+        let title_style =
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
         return vec![Line::from(vec![
             Span::styled("• ", title_style),
             Span::styled(call.action.clone(), title_style),
@@ -478,12 +454,7 @@ pub(super) fn render_live_tool_cell_with_verbosity(
     } else {
         "Running"
     };
-    let title_style = get_themed_style(
-        COLOR_PRIMARY(),
-        COLOR_BG(),
-        Modifier::BOLD,
-        show_picker,
-    );
+    let title_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
     let mut lines = vec![Line::from(vec![
         Span::styled("• ", title_style),
         Span::styled(label, title_style),
@@ -519,10 +490,11 @@ pub(super) fn render_live_tool_cell_with_verbosity(
                         " $ ",
                         get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
                     ));
-                    let command =
-                        truncate_to_width(&call.target, child_width.saturating_sub(2));
+                    let command = truncate_to_width(&call.target, child_width.saturating_sub(2));
                     if let Some(command_line) =
-                        highlight_shell_command(&command, COLOR_BG(), show_picker).into_iter().next()
+                        highlight_shell_command(&command, COLOR_BG(), show_picker)
+                            .into_iter()
+                            .next()
                     {
                         spans.extend(command_line.spans);
                     }

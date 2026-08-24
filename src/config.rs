@@ -4,7 +4,7 @@ use serde_millis;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{atomic::AtomicU64, atomic::Ordering, Condvar, Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock, atomic::AtomicU64, atomic::Ordering};
 use std::time::Duration;
 
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
@@ -189,15 +189,21 @@ impl ModelProfile {
             let eng = engine.to_ascii_lowercase();
             if matches!(
                 eng.as_str(),
-                "local" | "ollama" | "llama.cpp" | "llama_cpp" | "lmstudio" | "omlx" | "mlx" | "vllm" | "tgi"
+                "local"
+                    | "ollama"
+                    | "llama.cpp"
+                    | "llama_cpp"
+                    | "lmstudio"
+                    | "omlx"
+                    | "mlx"
+                    | "vllm"
+                    | "tgi"
             ) {
                 return true;
             }
         }
         let url_lower = self.url.to_ascii_lowercase();
-        url_lower.contains("ollama")
-            || url_lower.contains(":11434")
-            || url_lower.contains(":1234")
+        url_lower.contains("ollama") || url_lower.contains(":11434") || url_lower.contains(":1234")
     }
 
     pub fn endpoint_url(&self) -> String {
@@ -1026,11 +1032,7 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     apply_toml_config(config, file);
 }
 
-fn preserve_project_overrides(
-    persisted: &mut AppConfig,
-    global: &AppConfig,
-    file: &TomlConfig,
-) {
+fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, file: &TomlConfig) {
     if file.default.is_some() {
         persisted.default = global.default.clone();
     }
@@ -1073,8 +1075,12 @@ fn preserve_project_overrides(
 /// do not copy model profiles, API keys, MCP servers, session state, or other
 /// machine-specific state into a project file.
 pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
-    let workspace = fs::canonicalize(workspace)
-        .map_err(|error| format!("could not resolve workspace {}: {error}", workspace.display()))?;
+    let workspace = fs::canonicalize(workspace).map_err(|error| {
+        format!(
+            "could not resolve workspace {}: {error}",
+            workspace.display()
+        )
+    })?;
     let project_dir = workspace.join(PROJECT_CONFIG_DIR);
     let path = project_dir.join(PROJECT_CONFIG_FILE);
     if path.exists() {
@@ -1113,7 +1119,10 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
 fn ensure_project_gitignore(workspace: &Path) -> Result<(), String> {
     let path = workspace.join(".gitignore");
     let current = fs::read_to_string(&path).unwrap_or_default();
-    if current.lines().any(|line| line.trim() == PROJECT_GITIGNORE_ENTRY) {
+    if current
+        .lines()
+        .any(|line| line.trim() == PROJECT_GITIGNORE_ENTRY)
+    {
         return Ok(());
     }
 
@@ -1123,7 +1132,8 @@ fn ensure_project_gitignore(workspace: &Path) -> Result<(), String> {
     }
     updated.push_str(PROJECT_GITIGNORE_ENTRY);
     updated.push('\n');
-    fs::write(&path, updated).map_err(|error| format!("could not update {}: {error}", path.display()))
+    fs::write(&path, updated)
+        .map_err(|error| format!("could not update {}: {error}", path.display()))
 }
 
 fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -1254,19 +1264,10 @@ fn next_session_id() -> String {
     }
 }
 
-fn queue_history_write(
-    path: PathBuf,
-    history: &[ChatMessage],
-    revision: Option<u64>,
-) -> bool {
+fn queue_history_write(path: PathBuf, history: &[ChatMessage], revision: Option<u64>) -> bool {
     let writer = history_writer();
     let mut pending = lock(&writer.pending);
-    if revision.is_some()
-        && pending
-            .get(&path)
-            .and_then(|write| write.revision)
-            == revision
-    {
+    if revision.is_some() && pending.get(&path).and_then(|write| write.revision) == revision {
         return false;
     }
     pending.insert(
@@ -1401,7 +1402,10 @@ pub(crate) fn session_id_from_path(path: &Path) -> Option<String> {
             .map(|c| c == SESSIONS_DIR)
             .unwrap_or(false)
         {
-            return parent.file_name().and_then(|s| s.to_str()).map(str::to_owned);
+            return parent
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_owned);
         }
     } else if path
         .parent()
@@ -1525,7 +1529,11 @@ pub fn save_history<H: HistorySnapshot + ?Sized>(history: &H) {
         Some(session_id) => save_session_history(&session_id, history),
         None => {
             if let Some(dir) = get_config_dir() {
-                queue_history_write(dir.join(HISTORY_FILE), history.messages(), history.revision());
+                queue_history_write(
+                    dir.join(HISTORY_FILE),
+                    history.messages(),
+                    history.revision(),
+                );
             }
         }
     }
@@ -2108,7 +2116,10 @@ pub fn sync_config_pull() -> Result<(), String> {
             .map_err(|e| format!("Failed to create initial config snapshot: {e}"))?;
         if !commit_out.status.success() {
             let err = String::from_utf8_lossy(&commit_out.stderr);
-            return Err(format!("Failed to create initial config snapshot: {}", err.trim()));
+            return Err(format!(
+                "Failed to create initial config snapshot: {}",
+                err.trim()
+            ));
         }
     }
 
@@ -2364,7 +2375,9 @@ mod tests {
     fn context_budget_scales_without_double_reserving_large_or_small_windows() {
         let mut profile = AppConfig::default().models[0].clone();
         profile.max_tokens = Some(u32::MAX);
-        for window in [1, 32, 64, 128, 256, 512, 4_096, 8_192, 32_768, 128_000, 262_144] {
+        for window in [
+            1, 32, 64, 128, 256, 512, 4_096, 8_192, 32_768, 128_000, 262_144,
+        ] {
             profile.context_window = Some(window);
             profile.enable_thinking = Some(false);
             let budget = profile.context_budget();
@@ -2378,8 +2391,7 @@ mod tests {
                 budget.context_window
             );
             assert!(
-                budget.context_window < 4
-                    || budget.completion_reserve <= budget.context_window / 4
+                budget.context_window < 4 || budget.completion_reserve <= budget.context_window / 4
             );
             if window > 1 {
                 assert!(budget.history_tokens > 0);
@@ -2515,7 +2527,11 @@ mod tests {
             history.as_slice(),
             Some(revision)
         ));
-        assert!(!queue_history_write(path, history.as_slice(), Some(revision)));
+        assert!(!queue_history_write(
+            path,
+            history.as_slice(),
+            Some(revision)
+        ));
         flush_history();
     }
 
@@ -2841,14 +2857,14 @@ mod tests {
         fs::create_dir_all(workspace.join(PROJECT_CONFIG_DIR)).unwrap();
         fs::create_dir_all(root.path().join(PROJECT_CONFIG_DIR)).unwrap();
         fs::write(
-            root.path().join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE),
+            root.path()
+                .join(PROJECT_CONFIG_DIR)
+                .join(PROJECT_CONFIG_FILE),
             "version = 1\n[default]\nbig = \"parent\"\nsmall = \"parent-small\"\n",
         )
         .unwrap();
         fs::write(
-            workspace
-                .join(PROJECT_CONFIG_DIR)
-                .join(PROJECT_CONFIG_FILE),
+            workspace.join(PROJECT_CONFIG_DIR).join(PROJECT_CONFIG_FILE),
             "version = 1\n[default]\nbig = \"child\"\n",
         )
         .unwrap();
@@ -2955,7 +2971,10 @@ mod tests {
         assert_eq!(meta.when, "12:00");
         assert_eq!(meta.message_count, 2);
         assert_eq!(meta.path, history_file);
-        assert_eq!(session_id_from_path(&history_file).as_deref(), Some("12345"));
+        assert_eq!(
+            session_id_from_path(&history_file).as_deref(),
+            Some("12345")
+        );
     }
 
     #[test]

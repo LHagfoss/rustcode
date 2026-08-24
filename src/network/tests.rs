@@ -1,5 +1,5 @@
-use super::*;
 use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prompt};
+use super::*;
 
 #[test]
 fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields() {
@@ -12,8 +12,12 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
     context
         .loop_detector
         .record_failed_tool("edit:readme:1", "edit:README.md");
-    context.loop_detector.check("inspect:README.md", "inspect:README.md");
-    context.loop_detector.check("inspect:README.md", "inspect:README.md");
+    context
+        .loop_detector
+        .check("inspect:README.md", "inspect:README.md");
+    context
+        .loop_detector
+        .check("inspect:README.md", "inspect:README.md");
     let progress_observation = loop_detect::ProgressObservation {
         action: "run_command:markdownlint".to_string(),
         output_fingerprint: 11,
@@ -44,7 +48,10 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
     assert_eq!(resumed.tool_rounds, 4);
     assert_eq!(resumed.failed_mutations, 2);
     assert_eq!(resumed.consecutive_failed_mutations, 2);
-    assert_eq!(resumed.changed_paths.iter().collect::<Vec<_>>(), ["README.md"]);
+    assert_eq!(
+        resumed.changed_paths.iter().collect::<Vec<_>>(),
+        ["README.md"]
+    );
     assert_eq!(
         resumed
             .loop_detector
@@ -352,8 +359,7 @@ async fn gated_json_server(
 
 #[tokio::test]
 async fn gemini_gateway_uses_capability_probe() {
-    let (url, request_accepted, release_response) =
-        gated_json_server(serde_json::json!({})).await;
+    let (url, request_accepted, release_response) = gated_json_server(serde_json::json!({})).await;
     let state = Arc::new(Mutex::new(AppState::new()));
     let probe_state = Arc::clone(&state);
     let task = tokio::spawn(async move {
@@ -1116,7 +1122,9 @@ async fn question_prompt_transitions_invalidate_render_metrics_once() {
         .question_response
         .take()
         .expect("question response channel");
-    response.send("Proceed".to_owned()).expect("question task alive");
+    response
+        .send("Proceed".to_owned())
+        .expect("question task alive");
     task.await.expect("question task should finish");
 
     let s = state.lock().await;
@@ -1898,7 +1906,10 @@ fn project_root_from_relative_file_is_a_real_directory() {
     assert!(root.is_dir());
     assert!(root.join("Cargo.toml").exists());
 
-    let tmp_root = get_tool_project_root("write_to_file", &serde_json::json!({"path": "/tmp/scratch.py"}));
+    let tmp_root = get_tool_project_root(
+        "write_to_file",
+        &serde_json::json!({"path": "/tmp/scratch.py"}),
+    );
     assert!(tmp_root.is_none());
 }
 
@@ -3746,10 +3757,16 @@ fn test_continuation_assistant_message_strips_massive_think_traces() {
         "deep reasoning ".repeat(2000)
     );
     let continuation = format_continuation_assistant_message(&massive_think);
-    assert!(!continuation.contains("<think>"), "Completed think blocks must be stripped from continuation assistant message");
+    assert!(
+        !continuation.contains("<think>"),
+        "Completed think blocks must be stripped from continuation assistant message"
+    );
     assert!(continuation.contains("I will now run the test suite."));
     assert!(continuation.contains("```tool"));
-    assert!(continuation.len() < 500, "Continuation assistant message must be bounded and compact");
+    assert!(
+        continuation.len() < 500,
+        "Continuation assistant message must be bounded and compact"
+    );
 
     // 2. Pure reasoning (no visible text outside think)
     let pure_think = format!("<think>\n{}\n</think>", "planning ".repeat(1500));
@@ -3757,11 +3774,17 @@ fn test_continuation_assistant_message_strips_massive_think_traces() {
     assert_eq!(continuation_pure, "(completed reasoning scratchpad)");
 
     // 3. Unclosed think trace that was cut off mid-thought
-    let cut_off_think = format!("<think>\n{}\nThinking about line 42", "thinking ".repeat(1000));
+    let cut_off_think = format!(
+        "<think>\n{}\nThinking about line 42",
+        "thinking ".repeat(1000)
+    );
     let continuation_cut_off = format_continuation_assistant_message(&cut_off_think);
     assert!(continuation_cut_off.contains("<think>"));
     assert!(continuation_cut_off.contains("Thinking about line 42"));
-    assert!(continuation_cut_off.len() <= 1200, "Unclosed think block tail must be bounded");
+    assert!(
+        continuation_cut_off.len() <= 1200,
+        "Unclosed think block tail must be bounded"
+    );
 }
 
 #[test]
@@ -3810,15 +3833,24 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         "user",
         "Implement feature X. Rule: Never modify files under src/generated/! Always use cargo check."
     ));
-    history.push(ChatMessage::new("assistant", "Understood. I will not touch generated files."));
-
-    // Turn 5: Discovered architecture & failed approach
-    history.push(ChatMessage::new("user", "Check if we can use the old parser."));
     history.push(ChatMessage::new(
         "assistant",
-        "Decision: Found parser in `src/parser/legacy.rs`. It does not support async."
+        "Understood. I will not touch generated files.",
     ));
-    let mut failed_tool = ChatMessage::new("tool", "run_command: cargo test\nerror: compilation failed\nexit code: 1");
+
+    // Turn 5: Discovered architecture & failed approach
+    history.push(ChatMessage::new(
+        "user",
+        "Check if we can use the old parser.",
+    ));
+    history.push(ChatMessage::new(
+        "assistant",
+        "Decision: Found parser in `src/parser/legacy.rs`. It does not support async.",
+    ));
+    let mut failed_tool = ChatMessage::new(
+        "tool",
+        "run_command: cargo test\nerror: compilation failed\nexit code: 1",
+    );
     failed_tool.tool_result = Some(crate::app::ToolResultRecord {
         tool_name: "run_command".to_string(),
         arguments_hash: "hash".to_string(),
@@ -3837,8 +3869,14 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
 
     // Add multiple subsequent turns to trigger compaction
     for i in 6..=35 {
-        history.push(ChatMessage::new("user", format!("Step {i} working on alternative parser")));
-        history.push(ChatMessage::new("assistant", format!("Working on step {i} implementation")));
+        history.push(ChatMessage::new(
+            "user",
+            format!("Step {i} working on alternative parser"),
+        ));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!("Working on step {i} implementation"),
+        ));
     }
 
     // Extract structured session memory
@@ -3846,9 +3884,18 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
     let record = memory.format_record(4000);
 
     // Verify key constraints and facts are preserved
-    assert!(record.contains("Never modify files under src/generated/!"), "User constraint must be captured in memory");
-    assert!(record.contains("src/parser/legacy.rs"), "Modified/inspected file must be captured");
-    assert!(record.contains("Goal: Implement feature X"), "Initial goal must be captured");
+    assert!(
+        record.contains("Never modify files under src/generated/!"),
+        "User constraint must be captured in memory"
+    );
+    assert!(
+        record.contains("src/parser/legacy.rs"),
+        "Modified/inspected file must be captured"
+    );
+    assert!(
+        record.contains("Goal: Implement feature X"),
+        "Initial goal must be captured"
+    );
 
     // Perform structured compaction
     let initial_len = history.len();
@@ -3858,18 +3905,30 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
 
     // Verify the compacted history retains the structured memory block at message 0
     assert_eq!(history[0].role, "system");
-    assert!(history[0].content.contains("Never modify files under src/generated/!"));
+    assert!(
+        history[0]
+            .content
+            .contains("Never modify files under src/generated/!")
+    );
 
     // Simulate another 10 turns and a SECOND compaction pass (Turn 45)
     for i in 36..=45 {
         history.push(ChatMessage::new("user", format!("Follow up step {i}")));
-        history.push(ChatMessage::new("assistant", format!("Follow up step {i} completed")));
+        history.push(ChatMessage::new(
+            "assistant",
+            format!("Follow up step {i} completed"),
+        ));
     }
     let second_compacted = compact_with_structured_memory(&mut history, 10, 4000);
     assert!(second_compacted, "Second compaction should succeed");
 
     // Verify the constraint from Turn 1 is STILL preserved after multiple compaction passes!
-    assert!(history[0].content.contains("Never modify files under src/generated/!"), "Turn 1 constraint must survive multiple compaction passes!");
+    assert!(
+        history[0]
+            .content
+            .contains("Never modify files under src/generated/!"),
+        "Turn 1 constraint must survive multiple compaction passes!"
+    );
 }
 
 #[test]
@@ -3948,7 +4007,10 @@ fn test_preflight_budget_accounts_for_native_tool_schemas_once() {
     );
 
     assert_eq!(without_schema.tool_schema_tokens, 0);
-    assert_eq!(with_schema.tool_schema_tokens, estimate_tool_schema_tokens(&schema));
+    assert_eq!(
+        with_schema.tool_schema_tokens,
+        estimate_tool_schema_tokens(&schema)
+    );
     assert!(with_schema.tool_schema_tokens > 0);
     assert_eq!(
         with_schema.total_estimated_prompt - without_schema.total_estimated_prompt,
@@ -3973,22 +4035,9 @@ fn test_text_protocol_preflight_does_not_double_count_tool_definitions() {
     let history = vec![ChatMessage::new("user", "Use the available tool.")];
     let text_prompt = "You are RustCode.\nTool: inspect_workspace (text protocol)";
 
-    let preflight = calculate_preflight_budget(
-        text_prompt,
-        &[],
-        &history,
-        "",
-        0,
-        &budget,
-    );
-    let incorrectly_double_counted = calculate_preflight_budget(
-        text_prompt,
-        &schema,
-        &history,
-        "",
-        0,
-        &budget,
-    );
+    let preflight = calculate_preflight_budget(text_prompt, &[], &history, "", 0, &budget);
+    let incorrectly_double_counted =
+        calculate_preflight_budget(text_prompt, &schema, &history, "", 0, &budget);
 
     assert_eq!(preflight.tool_schema_tokens, 0);
     assert!(incorrectly_double_counted.total_estimated_prompt > preflight.total_estimated_prompt);
@@ -4041,8 +4090,14 @@ fn test_reasoning_loop_recovery_action_escalation() {
 #[test]
 fn test_reasoning_loop_is_cut_off_behavior() {
     // When finish_reason is "reasoning_loop", is_cut_off must be false so runner returns collected response
-    assert!(!is_cut_off("<think>repetitive thoughts", Some("reasoning_loop")));
-    assert!(!is_cut_off("<think>thoughts</think>", Some("reasoning_loop")));
+    assert!(!is_cut_off(
+        "<think>repetitive thoughts",
+        Some("reasoning_loop")
+    ));
+    assert!(!is_cut_off(
+        "<think>thoughts</think>",
+        Some("reasoning_loop")
+    ));
 }
 
 #[test]
@@ -4077,7 +4132,9 @@ fn test_reasoning_loop_detector_integration_and_resets() {
 
     // 2. Legitimate long reasoning with varied sentences
     for step in 0..50 {
-        let sentence = format!("Analyzing architectural step {step} with specialized component handler_{step}.\n");
+        let sentence = format!(
+            "Analyzing architectural step {step} with specialized component handler_{step}.\n"
+        );
         assert_eq!(
             detector.feed_chunk(&sentence),
             loop_detect::ReasoningLoopStatus::Ok
@@ -4174,7 +4231,9 @@ fn test_adversarial_2_broad_investigation_across_files_does_not_interrupt() {
     ];
 
     for (i, file) in files.iter().enumerate() {
-        let thought = format!("Step {i}: Inspecting module {file} to understand its public API and dependencies.");
+        let thought = format!(
+            "Step {i}: Inspecting module {file} to understand its public API and dependencies."
+        );
         let status = detector.record_turn_evidence(&loop_detect::TurnEvidence {
             reasoning: &thought,
             target_files: &[file],
@@ -4198,10 +4257,18 @@ fn test_adversarial_3_long_advancing_reasoning_does_not_interrupt() {
     let mut detector = loop_detect::ReasoningLoopDetector::default();
     for step in 0..100 {
         let advance = match step % 4 {
-            0 => format!("Phase {step}: Evaluating caching layer invariants in src/cache/storage_{step}.rs.\n\n"),
-            1 => format!("Phase {step}: Analyzing thread pool scheduler policies for runtime_{step}.\n\n"),
-            2 => format!("Phase {step}: Reviewing serialization schema definitions in src/proto/message_{step}.rs.\n\n"),
-            _ => format!("Phase {step}: Verifying cryptographic checksum verification logic in src/crypto/auth_{step}.rs.\n\n"),
+            0 => format!(
+                "Phase {step}: Evaluating caching layer invariants in src/cache/storage_{step}.rs.\n\n"
+            ),
+            1 => format!(
+                "Phase {step}: Analyzing thread pool scheduler policies for runtime_{step}.\n\n"
+            ),
+            2 => format!(
+                "Phase {step}: Reviewing serialization schema definitions in src/proto/message_{step}.rs.\n\n"
+            ),
+            _ => format!(
+                "Phase {step}: Verifying cryptographic checksum verification logic in src/crypto/auth_{step}.rs.\n\n"
+            ),
         };
         let status = detector.feed_chunk(&advance);
         assert_eq!(
@@ -4309,10 +4376,22 @@ fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
 #[test]
 fn test_adversarial_6_bounded_recovery_escalation_prevents_runaway() {
     // Scenario 6: Loop detector fires, recovery loops again -> bounded recovery prevents runaway.
-    assert_eq!(reasoning_loop_recovery_action(0), LoopRecoveryAction::Recover);
-    assert_eq!(reasoning_loop_recovery_action(1), LoopRecoveryAction::ForceFinal);
-    assert_eq!(reasoning_loop_recovery_action(2), LoopRecoveryAction::ForceFinal);
-    assert_eq!(reasoning_loop_recovery_action(u8::MAX), LoopRecoveryAction::ForceFinal);
+    assert_eq!(
+        reasoning_loop_recovery_action(0),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(1),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(2),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(u8::MAX),
+        LoopRecoveryAction::ForceFinal
+    );
     assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("exactly one mutating tool call"));
 }
 
@@ -4388,9 +4467,18 @@ fn test_adversarial_8_readonly_analysis_task_does_not_false_positive() {
     let mut ledger = loop_detect::ProgressLedger::default();
 
     let analysis_steps = [
-        ("src/network/stream_request.rs", "Examining stream_request for SSE chunk parsing and backpressure."),
-        ("src/network/runner.rs", "Checking how runner collects chunks and manages timeouts."),
-        ("src/network/turn_engine.rs", "Synthesizing turn execution lifecycle for final explanation."),
+        (
+            "src/network/stream_request.rs",
+            "Examining stream_request for SSE chunk parsing and backpressure.",
+        ),
+        (
+            "src/network/runner.rs",
+            "Checking how runner collects chunks and manages timeouts.",
+        ),
+        (
+            "src/network/turn_engine.rs",
+            "Synthesizing turn execution lifecycle for final explanation.",
+        ),
     ];
 
     for (file, reasoning) in analysis_steps {
