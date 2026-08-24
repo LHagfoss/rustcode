@@ -47,6 +47,7 @@ tree-sitter-typescript = "0.23.2"
 tree-sitter-javascript = "0.23.1"
 tree-sitter-go = "0.23.4"
 flate2 = "1.0"
+libc = "0.2"
 tar = "0.4"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tempfile = "3.10"

@@ -106,6 +106,7 @@ pub fn is_editing_tool(tool_name: &str) -> bool {
             | "copyfile"
             | "generate_sound_effect"
             | "generate_music"
+            | "render_video"
     )
 }
 
@@ -265,6 +266,7 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
                     "name",
                     "command",
                     "output_path",
+                    "project_path",
                 ],
                 "",
             );
