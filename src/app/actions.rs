@@ -1961,7 +1961,7 @@ fn append_codex_rate_limits(text: &mut String, rate_limits: &serde_json::Value) 
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_token_count, handle_ctrl_c};
+    use super::{handle_ctrl_c, parse_token_count};
 
     async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
