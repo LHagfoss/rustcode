@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub(crate) struct RenderSnapshot {
     revision: u64,
     input_buffer: String,
+    ctrl_c_exit_armed: bool,
     cursor_position: usize,
     history: History,
     history_display_start: usize,
@@ -99,6 +100,7 @@ impl RenderSnapshot {
         Self {
             revision: state.render_revision,
             input_buffer: state.input_buffer.clone(),
+            ctrl_c_exit_armed: state.ctrl_c_exit_armed,
             cursor_position: state.cursor_position,
             history: state.history.snapshot(),
             history_display_start: state.history_display_start,
@@ -171,6 +173,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn input_buffer(&self) -> &str {
         &self.input_buffer
+    }
+    pub(crate) fn ctrl_c_exit_armed(&self) -> bool {
+        self.ctrl_c_exit_armed
     }
     pub(crate) fn cursor_position(&self) -> usize {
         self.cursor_position

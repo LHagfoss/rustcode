@@ -1024,6 +1024,7 @@ impl LiveToolCall {
 
 pub struct AppState {
     pub input_buffer: String,
+    pub ctrl_c_exit_armed: bool,
     pub history: History,
     /// First history index shown in the TUI. The full history remains available
     /// to the model; `/clear` advances this boundary without deleting messages.
@@ -1589,6 +1590,7 @@ impl AppState {
 
         let app = Self {
             input_buffer: String::new(),
+            ctrl_c_exit_armed: false,
             scroll_to_bottom_btn: None,
             hover: HoverTarget::None,
             history,
