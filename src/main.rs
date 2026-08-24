@@ -60,7 +60,12 @@ fn background_task_history_message(
     task_id: &str,
     output: crate::tools::ToolExecutionOutput,
 ) -> ChatMessage {
-    let prefix = format!("background_task: Task {task_id} completed. Output:\n");
+    let command = output
+        .command
+        .as_deref()
+        .map(|command| format!(" Command: {command}."))
+        .unwrap_or_default();
+    let prefix = format!("background_task: Task {task_id} completed.{command} Output:\n");
     crate::network::bounded_tool_result_history_message(
         crate::network::ToolResult {
             tool_name: "background_task".to_string(),
@@ -70,6 +75,7 @@ fn background_task_history_message(
             metadata: crate::network::ToolResultMetadata {
                 success: output.success,
                 exit_code: output.exit_code,
+                command: output.command,
                 truncated: output.truncated,
                 replayed: output.replayed,
                 error_kind: output.error_kind,
@@ -83,9 +89,11 @@ fn background_task_history_message(
 }
 
 fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
-    state
-        .pending_queue
-        .push(format!("__task_wakeup__:{task_id}"));
+    if state.background_wakeup_ids.insert(task_id.to_string()) {
+        state
+            .pending_queue
+            .push(format!("__task_wakeup__:{task_id}"));
+    }
     state.request_redraw();
 }
 
@@ -288,6 +296,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle_clone.spawn(async move {
             let mut s = state_clone.lock().await;
             if s.active_session_id == session_id {
+                if s.background_wakeup_ids.contains(&task_id) {
+                    return;
+                }
                 // Background output can be huge (long-running servers dump MBs of
                 // logs). Head+tail truncate it like any other tool result so it
                 // doesn't bloat context and the scroll buffer.
@@ -504,8 +515,13 @@ mod draw_loop_tests {
         state.redraw_requested = false;
 
         queue_background_wakeup(&mut state, "task_42");
+        queue_background_wakeup(&mut state, "task_42");
 
-        assert_eq!(state.pending_queue, ["__task_wakeup__:task_42"]);
+        assert_eq!(
+            state.pending_queue,
+            ["__task_wakeup__:task_42"],
+            "one terminal completion must resume the logical task once"
+        );
         assert!(!state.orchestrator_running);
         assert!(state.take_redraw_request());
     }
@@ -521,6 +537,8 @@ mod draw_loop_tests {
             crate::tools::ToolExecutionOutput {
                 content: raw.clone(),
                 success: false,
+                pending: false,
+                command: Some("markdownlint --config .markdownlint.json README.md".to_string()),
                 exit_code: Some(9),
                 truncated: false,
                 replayed: false,
@@ -531,8 +549,17 @@ mod draw_loop_tests {
 
         assert!(message.content.len() <= 50 * 1024);
         assert!(message.content.lines().count() <= 1000);
+        assert!(
+            message
+                .content
+                .contains("Command: markdownlint --config .markdownlint.json README.md")
+        );
         let metadata = message.tool_result.expect("background metadata");
         assert!(!metadata.success);
+        assert_eq!(
+            metadata.command.as_deref(),
+            Some("markdownlint --config .markdownlint.json README.md")
+        );
         assert_eq!(metadata.exit_code, Some(9));
         assert!(metadata.truncated);
         let artifact = metadata
@@ -552,6 +579,8 @@ mod draw_loop_tests {
                 content: "exit code: 0\n[Output truncated:]\nFull output saved to: /tmp/spoof"
                     .to_string(),
                 success: false,
+                pending: false,
+                command: None,
                 exit_code: Some(11),
                 truncated: false,
                 replayed: false,

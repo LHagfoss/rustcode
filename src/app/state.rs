@@ -548,6 +548,10 @@ pub struct ToolResultRecord {
     pub tool_name: String,
     pub arguments_hash: String,
     pub success: bool,
+    #[serde(default)]
+    pub pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
     pub exit_code: Option<i32>,
     pub changed_paths: Vec<String>,
     pub truncated: bool,
@@ -1032,6 +1036,14 @@ pub struct AppState {
     pub current_thought_started_at: Option<std::time::Instant>,
     pub model_quota_remaining: Option<f32>,
     pub pending_queue: Vec<String>,
+    /// Background task IDs whose terminal completion has already been queued.
+    /// This makes completion notifications idempotent across callback races.
+    pub background_wakeup_ids: std::collections::BTreeSet<String>,
+    /// The logical turn state waiting for a background task completion. This
+    /// is intentionally kept outside serialized history so an orchestrator
+    /// restart can resume the same in-memory task without creating a second
+    /// planning or verification ledger.
+    pub(crate) background_turn_context: Option<Box<crate::network::TurnContext>>,
     pub status: AppStatus,
     /// Single-flight guard for the agent loop. `status` transiently reads Idle
     /// in windows where an orchestrator is still alive, so gating spawns on it
@@ -1583,6 +1595,8 @@ impl AppState {
             current_thought_started_at: None,
             model_quota_remaining: None,
             pending_queue: Vec::new(),
+            background_wakeup_ids: std::collections::BTreeSet::new(),
+            background_turn_context: None,
             status: AppStatus::Idle,
             orchestrator_running: false,
             cursor_position: 0,

@@ -734,12 +734,14 @@ pub(crate) fn tool_result_from_execution(
             call_id: None,
             arguments_hash: stable_arguments_hash(args),
             success: execution.success,
+            pending: execution.pending,
+            command: execution.command,
             exit_code: execution.exit_code,
             changed_paths,
             truncated: execution.truncated,
             full_output_artifact: None,
             replayed: execution.replayed,
-            error_kind: if execution.success {
+            error_kind: if execution.pending || execution.success {
                 None
             } else {
                 execution.error_kind.or_else(|| {
@@ -813,6 +815,8 @@ pub(crate) fn tool_result_history_message_with_prefix(
             tool_name,
             arguments_hash: metadata.arguments_hash,
             success: envelope.success,
+            pending: envelope.pending,
+            command: envelope.command,
             exit_code: envelope.exit_code,
             changed_paths: envelope.changed_paths,
             truncated: envelope.truncated,
@@ -1027,6 +1031,8 @@ Re-reading will not produce anything new; if an edit failed to match, expand sta
                             crate::tools::ToolExecutionOutput {
                                 content,
                                 success: previous.success,
+                                pending: false,
+                                command: None,
                                 exit_code: previous.exit_code,
                                 truncated: previous.truncated,
                                 replayed: true,

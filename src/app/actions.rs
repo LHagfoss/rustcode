@@ -54,6 +54,7 @@ pub async fn handle_escape(
             s.status = AppStatus::Idle;
         }
     }
+    s.background_turn_context = None;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +74,7 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
         }
         s.pending_tool_confirmation = None;
         s.pending_queue.clear();
+        s.background_turn_context = None;
         s.status = AppStatus::Idle;
         return CtrlCAction::Interrupt;
     }
@@ -83,6 +85,7 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
         }
         s.pending_question = None;
         s.pending_queue.clear();
+        s.background_turn_context = None;
         s.status = AppStatus::Idle;
         return CtrlCAction::Interrupt;
     }
@@ -152,6 +155,7 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
 
     if s.status != AppStatus::Idle || s.orchestrator_running || !s.pending_queue.is_empty() {
         s.pending_queue.clear();
+        s.background_turn_context = None;
         s.clear_live_tool_calls();
         s.status = AppStatus::Idle;
         return CtrlCAction::Interrupt;
@@ -1366,6 +1370,8 @@ pub fn start_new_session(s: &mut AppState) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
     s.pending_queue.clear();
+    s.background_wakeup_ids.clear();
+    s.background_turn_context = None;
     s.clear_current_response();
     s.expanded_thoughts.clear();
     s.current_token_usage = None;
@@ -1523,6 +1529,8 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
     s.pending_queue.clear();
+    s.background_wakeup_ids.clear();
+    s.background_turn_context = None;
     s.clear_current_response();
     s.expanded_thoughts.clear();
     s.current_token_usage = None;
