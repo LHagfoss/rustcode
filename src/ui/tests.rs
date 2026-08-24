@@ -2097,6 +2097,17 @@ fn input_footer_only_advertises_command_palette() {
 }
 
 #[test]
+fn input_footer_prompts_for_second_ctrl_c_when_exit_is_armed() {
+    let mut state = AppState::new();
+    state.ctrl_c_exit_armed = true;
+
+    assert_eq!(
+        format_input_status_text(&state.render_snapshot()),
+        "Auto-Confirm: OFF  Context: 0 (0%)  Tps: 0.0  Press Ctrl+C again to exit"
+    );
+}
+
+#[test]
 fn input_bar_contains_live_status_and_command_hint() {
     let state = AppState::new();
     assert_eq!(
