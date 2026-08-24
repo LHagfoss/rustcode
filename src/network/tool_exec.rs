@@ -505,7 +505,14 @@ pub(crate) async fn confirm_and_execute(
             })
         };
         tokio::pin!(run_fut);
-        let is_audio_generation = matches!(name, "generate_sound_effect" | "generate_music");
+        let is_cancellable_process = matches!(
+            name,
+            "generate_sound_effect"
+                | "generate_music"
+                | "inspect_media"
+                | "validate_video_project"
+                | "render_video"
+        );
         let mut progress_open = true;
         loop {
             tokio::select! {
@@ -521,7 +528,7 @@ pub(crate) async fn confirm_and_execute(
                         progress_open = false;
                     }
                 }
-                _ = cancel_token.cancelled(), if !is_audio_generation => {
+                _ = cancel_token.cancelled(), if !is_cancellable_process => {
                     dbg_log!("Tool execution cancelled during spawn_blocking await (immediate execution)");
                     break crate::tools::ToolExecutionOutput::failure_with_kind(
                         "error: tool execution cancelled by user".to_string(),
@@ -536,6 +543,7 @@ pub(crate) async fn confirm_and_execute(
         let path = if let Some(p) = args
             .get("path")
             .or_else(|| args.get("output_path"))
+            .or_else(|| args.get("project_path"))
             .and_then(|p| p.as_str())
         {
             p.to_string()
@@ -623,8 +631,14 @@ pub(crate) async fn confirm_and_execute(
                     crate::tools::set_active_session_id(None);
                     result
                 });
-                let is_audio_generation =
-                    matches!(name, "generate_sound_effect" | "generate_music");
+                let is_cancellable_process = matches!(
+                    name,
+                    "generate_sound_effect"
+                        | "generate_music"
+                        | "inspect_media"
+                        | "validate_video_project"
+                        | "render_video"
+                );
 
                 tokio::select! {
                     res = run_fut => {
@@ -632,7 +646,7 @@ pub(crate) async fn confirm_and_execute(
                             crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
                         })
                     }
-                    _ = cancel_token.cancelled(), if !is_audio_generation => {
+                    _ = cancel_token.cancelled(), if !is_cancellable_process => {
                         dbg_log!("Tool execution cancelled during spawn_blocking await");
                         crate::tools::ToolExecutionOutput::failure_with_kind(
                             "error: tool execution cancelled by user".to_string(),

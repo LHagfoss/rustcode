@@ -13,6 +13,7 @@ mod exec;
 mod filesystem;
 mod misc;
 mod search;
+mod video;
 
 #[allow(unused_imports)]
 pub use envelope::{ToolCallEnvelope, ToolErrorKind, ToolResultEnvelope};
@@ -651,6 +652,9 @@ pub const TOOLS: &[Tool] = &[
     audio::GENERATE_SOUND_EFFECT,
     audio::GENERATE_MUSIC,
     audio::INSPECT_AUDIO,
+    video::INSPECT_MEDIA,
+    video::VALIDATE_VIDEO_PROJECT,
+    video::RENDER_VIDEO,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {
@@ -1941,6 +1945,22 @@ pub(crate) fn execute_with_metadata_cancellable(
                     audio::AudioErrorKind::GenerationFailed
                         | audio::AudioErrorKind::ModelUnavailable
                         | audio::AudioErrorKind::Cancelled
+                ),
+            ),
+        };
+    }
+    if matches!(
+        name,
+        "inspect_media" | "validate_video_project" | "render_video"
+    ) {
+        return match video::execute_with_cancel(name, args, cancel_token) {
+            Ok(output) => ToolExecutionOutput::success(output),
+            Err(error) => ToolExecutionOutput::failure_with_kind(
+                as_error_message(&error.message),
+                video::map_error_kind(error.kind),
+                matches!(
+                    error.kind,
+                    video::VideoErrorKind::ProcessFailed | video::VideoErrorKind::Cancelled
                 ),
             ),
         };
