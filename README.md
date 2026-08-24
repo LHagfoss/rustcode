@@ -168,6 +168,45 @@ into its own process. The initial native path intentionally accepts and
 inspects WAV output only; music longer than 30 seconds and additional audio
 formats are deferred.
 
+### Native declarative video editing
+
+RustCode can inspect and compose project-local media through external
+`ffprobe` and `ffmpeg` processes. Install FFmpeg through the package manager for
+your platform, then use `inspect_media`, `validate_video_project`, and
+`render_video`. RustCode never accepts raw FFmpeg arguments from the model.
+
+Video edits are stored in a reusable, versioned project file:
+
+```json
+{
+  "version": 1,
+  "output": "output/final.mp4",
+  "video": { "width": 1920, "height": 1080, "fps": 30 },
+  "clips": [
+    { "path": "media/intro.mp4", "trim": { "start": 1.5, "end": 8.0 } },
+    { "path": "media/demo.mp4" }
+  ],
+  "transitions": [
+    { "after_clip": 0, "type": "crossfade", "duration": 0.5 }
+  ],
+  "audio": {
+    "music": {
+      "path": "media/music.wav",
+      "volume": 0.2,
+      "fade_in": 1.0,
+      "fade_out": 2.0
+    },
+    "keep_clip_audio": true,
+    "clip_audio_volume": 1.0
+  }
+}
+```
+
+Only `output` and `clips` are required. Defaults are 1920x1080 at 30 FPS with
+clip audio preserved. Supported transitions are `crossfade`, `fade`,
+`wipe-left`, `wipe-right`, `slide-left`, and `slide-right`. Inputs are
+normalized before composition and output is MP4/H.264 with optional AAC audio.
+
 ## IMPORTANT
 
 If you wanna run `rustcode` using Apple FM you NEED to be on [MacOS 27 and have XCode v27](https://developer.apple.com/videos/play/wwdc2026/334/) for this to work. As this was introduced in the Beta version of MacOS 27.

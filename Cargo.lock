@@ -2922,6 +2922,7 @@ dependencies = [
  "futures-util",
  "globset",
  "ignore",
+ "libc",
  "pulldown-cmark",
  "rand 0.10.2",
  "ratatui",

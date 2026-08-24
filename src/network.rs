@@ -673,6 +673,7 @@ pub(crate) fn is_mutating_tool(name: &str) -> bool {
             | "copy_file"
             | "generate_sound_effect"
             | "generate_music"
+            | "render_video"
             | "spawn_agent"
             | "send_agent"
             | "cancel_agent"
