@@ -10,7 +10,6 @@ pub(crate) enum ComposerAction {
     Handled,
     Submit,
     Paste,
-    Cancel,
     ClearScreen,
     Unhandled,
 }
@@ -48,7 +47,6 @@ impl Composer {
                 ComposerAction::Handled
             }
             KeyAction::Submit => ComposerAction::Submit,
-            KeyAction::Cancel => ComposerAction::Cancel,
             KeyAction::ClearScreen => ComposerAction::ClearScreen,
             KeyAction::Paste => ComposerAction::Paste,
             KeyAction::MoveLeft => {

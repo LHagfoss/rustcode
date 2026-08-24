@@ -20,7 +20,6 @@ pub(crate) enum KeyAction {
     Insert(char),
     Submit,
     InsertNewline,
-    Cancel,
     ClearScreen,
     Paste,
     MoveLeft,
@@ -105,7 +104,7 @@ impl KeyMap {
             KeyCode::Delete if super_key => KeyAction::KillLineStart,
             KeyCode::Delete if alt => KeyAction::DeleteWordForward,
             KeyCode::Delete => KeyAction::DeleteForward,
-            KeyCode::Char('c') | KeyCode::Char('C') if ctrl => KeyAction::Cancel,
+            KeyCode::Char('c') | KeyCode::Char('C') if ctrl => KeyAction::Unhandled,
             KeyCode::Char('l') | KeyCode::Char('L') if ctrl => KeyAction::ClearScreen,
             KeyCode::Char('v') | KeyCode::Char('V') if ctrl || super_key || meta => {
                 KeyAction::Paste
@@ -171,7 +170,7 @@ mod tests {
         );
         assert_eq!(
             map.resolve(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            KeyAction::Cancel
+            KeyAction::Unhandled
         );
         assert_eq!(
             map.resolve(key(KeyCode::Char('p'), KeyModifiers::CONTROL)),
