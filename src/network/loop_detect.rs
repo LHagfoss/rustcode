@@ -14,8 +14,8 @@
 //! to this crate's `(tool_name, args)` model instead of `bash:` strings.
 
 use serde_json::Value;
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 
 /// Search binaries collapsed into a single `search:` category so
@@ -323,9 +323,8 @@ impl ProgressLedger {
             .is_some_and(|hash| remember(&mut self.seen_failures, hash));
 
         let state_hash = observation.state_fingerprint;
-        let state_changed = state_hash.is_some_and(|state| {
-            self.recent_states.back().copied() != Some(state)
-        });
+        let state_changed =
+            state_hash.is_some_and(|state| self.recent_states.back().copied() != Some(state));
         let churn = state_hash.is_some_and(|state| {
             self.recent_states.len() >= 2
                 && self.recent_states.iter().rev().nth(1).copied() == Some(state)
@@ -385,7 +384,6 @@ impl ProgressLedger {
     pub fn no_progress_streak(&self) -> usize {
         self.no_progress_streak
     }
-
 }
 
 fn remember(values: &mut HashSet<u64>, value: u64) -> bool {
@@ -846,10 +844,7 @@ mod tests {
         );
 
         assert_eq!(curl, "cmd:curl:http://localhost:5199");
-        assert_eq!(
-            browser,
-            "cmd:terminal-browser:open http://localhost:5199"
-        );
+        assert_eq!(browser, "cmd:terminal-browser:open http://localhost:5199");
         assert_ne!(curl, browser);
     }
 
@@ -952,10 +947,7 @@ mod tests {
             let assessment = ledger.observe(&search);
             assert_eq!(assessment.reason, ProgressReason::NoNewInformation);
         }
-        assert_eq!(
-            ledger.no_progress_streak(),
-            ProgressLedger::RECOVERY_STREAK
-        );
+        assert_eq!(ledger.no_progress_streak(), ProgressLedger::RECOVERY_STREAK);
     }
 
     #[test]
@@ -1024,7 +1016,8 @@ mod tests {
     #[test]
     fn reasoning_loop_detector_catches_consecutive_repeated_sentences() {
         let mut detector = ReasoningLoopDetector::default();
-        let sentence = "We need to inspect the network module to check the turn engine implementation.\n";
+        let sentence =
+            "We need to inspect the network module to check the turn engine implementation.\n";
         assert_eq!(detector.feed_chunk(sentence), ReasoningLoopStatus::Ok);
         assert_eq!(detector.feed_chunk(sentence), ReasoningLoopStatus::Ok);
         assert!(matches!(
@@ -1186,7 +1179,8 @@ mod tests {
             ReasoningLoopStatus::Ok
         );
 
-        let turn1 = "Turn 1: Checking TokenUsage calculations and prompt metrics in src/app/state.rs.";
+        let turn1 =
+            "Turn 1: Checking TokenUsage calculations and prompt metrics in src/app/state.rs.";
         assert_eq!(
             detector.record_turn_evidence(&TurnEvidence {
                 reasoning: turn1,
@@ -1226,7 +1220,9 @@ mod tests {
         ];
 
         for (idx, file) in files.iter().enumerate() {
-            let reasoning = format!("Step {idx}: Exploring module {file} to map codebase architecture and relationships.");
+            let reasoning = format!(
+                "Step {idx}: Exploring module {file} to map codebase architecture and relationships."
+            );
             assert_eq!(
                 detector.record_turn_evidence(&TurnEvidence {
                     reasoning: &reasoning,
@@ -1416,7 +1412,12 @@ impl ReasoningLoopDetector {
         let plan_hash = if sentences.is_empty() {
             0
         } else {
-            let plan_text = sentences.iter().take(5).cloned().collect::<Vec<_>>().join(" | ");
+            let plan_text = sentences
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | ");
             stable_hash(&plan_text)
         };
 
@@ -1430,14 +1431,23 @@ impl ReasoningLoopDetector {
             let files_overlap = !target_files.is_disjoint(&prev.target_files)
                 || (target_files.is_empty() && prev.target_files.is_empty());
             let sim_threshold = if files_overlap {
-                if evidence.no_progress_streak >= 2 { 0.35 } else { 0.45 }
+                if evidence.no_progress_streak >= 2 {
+                    0.35
+                } else {
+                    0.45
+                }
             } else if evidence.no_progress_streak >= 3 {
                 0.55
             } else {
                 0.65
             };
 
-            if exact_plan || (files_overlap && jaccard >= sim_threshold && words.len() >= 4 && prev.content_words.len() >= 4) {
+            if exact_plan
+                || (files_overlap
+                    && jaccard >= sim_threshold
+                    && words.len() >= 4
+                    && prev.content_words.len() >= 4)
+            {
                 self.consecutive_same_plan_turns += 1;
                 if self.consecutive_same_plan_turns >= 2 {
                     return ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TURN_SAME_PLAN);
@@ -1505,7 +1515,11 @@ impl ReasoningLoopDetector {
     }
 
     /// Record turn reasoning to detect "plan -> inspect -> same plan" cycles across turns.
-    pub fn record_turn_reasoning(&mut self, reasoning: &str, made_progress: bool) -> ReasoningLoopStatus {
+    pub fn record_turn_reasoning(
+        &mut self,
+        reasoning: &str,
+        made_progress: bool,
+    ) -> ReasoningLoopStatus {
         self.record_turn_evidence(&TurnEvidence {
             reasoning,
             target_files: &[],
@@ -1720,24 +1734,191 @@ fn normalize_sentence(s: &str) -> Option<String> {
 /// and removing standard stop words.
 pub fn extract_content_words(text: &str) -> HashSet<String> {
     const STOP_WORDS: &[&str] = &[
-        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
-        "aren't", "as", "at", "be", "because", "been", "before", "being", "below", "between",
-        "both", "but", "by", "can", "can't", "cannot", "could", "couldn't", "did", "didn't", "do",
-        "does", "doesn't", "doing", "don't", "down", "during", "each", "few", "for", "from",
-        "further", "had", "hadn't", "has", "hasn't", "have", "haven't", "having", "he", "he'd",
-        "he'll", "he's", "her", "here", "here's", "hers", "herself", "him", "himself", "his",
-        "how", "how's", "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't",
-        "it", "it's", "its", "itself", "let", "let's", "me", "more", "most", "mustn't", "my",
-        "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other", "ought",
-        "our", "ours", "ourselves", "out", "over", "own", "same", "shan't", "she", "she'd",
-        "she'll", "she's", "should", "shouldn't", "so", "some", "such", "than", "that", "that's",
-        "the", "their", "theirs", "them", "themselves", "then", "there", "there's", "these",
-        "they", "they'd", "they'll", "they're", "they've", "this", "those", "through", "to",
-        "too", "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're",
-        "we've", "were", "weren't", "what", "what's", "when", "when's", "where", "where's",
-        "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't", "would",
-        "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself",
-        "yourselves", "will", "just", "also", "now", "well", "see", "okay", "first", "next",
+        "a",
+        "about",
+        "above",
+        "after",
+        "again",
+        "against",
+        "all",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "aren't",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "below",
+        "between",
+        "both",
+        "but",
+        "by",
+        "can",
+        "can't",
+        "cannot",
+        "could",
+        "couldn't",
+        "did",
+        "didn't",
+        "do",
+        "does",
+        "doesn't",
+        "doing",
+        "don't",
+        "down",
+        "during",
+        "each",
+        "few",
+        "for",
+        "from",
+        "further",
+        "had",
+        "hadn't",
+        "has",
+        "hasn't",
+        "have",
+        "haven't",
+        "having",
+        "he",
+        "he'd",
+        "he'll",
+        "he's",
+        "her",
+        "here",
+        "here's",
+        "hers",
+        "herself",
+        "him",
+        "himself",
+        "his",
+        "how",
+        "how's",
+        "i",
+        "i'd",
+        "i'll",
+        "i'm",
+        "i've",
+        "if",
+        "in",
+        "into",
+        "is",
+        "isn't",
+        "it",
+        "it's",
+        "its",
+        "itself",
+        "let",
+        "let's",
+        "me",
+        "more",
+        "most",
+        "mustn't",
+        "my",
+        "myself",
+        "no",
+        "nor",
+        "not",
+        "of",
+        "off",
+        "on",
+        "once",
+        "only",
+        "or",
+        "other",
+        "ought",
+        "our",
+        "ours",
+        "ourselves",
+        "out",
+        "over",
+        "own",
+        "same",
+        "shan't",
+        "she",
+        "she'd",
+        "she'll",
+        "she's",
+        "should",
+        "shouldn't",
+        "so",
+        "some",
+        "such",
+        "than",
+        "that",
+        "that's",
+        "the",
+        "their",
+        "theirs",
+        "them",
+        "themselves",
+        "then",
+        "there",
+        "there's",
+        "these",
+        "they",
+        "they'd",
+        "they'll",
+        "they're",
+        "they've",
+        "this",
+        "those",
+        "through",
+        "to",
+        "too",
+        "under",
+        "until",
+        "up",
+        "very",
+        "was",
+        "wasn't",
+        "we",
+        "we'd",
+        "we'll",
+        "we're",
+        "we've",
+        "were",
+        "weren't",
+        "what",
+        "what's",
+        "when",
+        "when's",
+        "where",
+        "where's",
+        "which",
+        "while",
+        "who",
+        "who's",
+        "whom",
+        "why",
+        "why's",
+        "with",
+        "won't",
+        "would",
+        "wouldn't",
+        "you",
+        "you'd",
+        "you'll",
+        "you're",
+        "you've",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+        "will",
+        "just",
+        "also",
+        "now",
+        "well",
+        "see",
+        "okay",
+        "first",
+        "next",
     ];
 
     let mut words = HashSet::new();
@@ -1749,13 +1930,11 @@ pub fn extract_content_words(text: &str) -> HashSet<String> {
             .to_lowercase();
         if cleaned.len() >= 3 && !STOP_WORDS.contains(&cleaned.as_str()) {
             let normalized = match cleaned.as_str() {
-                "modify" | "modified" | "modifying" | "alter" | "altered" | "altering"
-                | "edit" | "edited" | "editing" | "update" | "updated" | "updating"
-                | "change" | "changed" | "changing" | "implement" | "implemented"
-                | "implementing" | "patch" | "patching" | "apply" | "applying" | "applied"
-                | "write" | "writing" | "written" | "add" | "adding" | "added" => {
-                    "__edit_action__".to_string()
-                }
+                "modify" | "modified" | "modifying" | "alter" | "altered" | "altering" | "edit"
+                | "edited" | "editing" | "update" | "updated" | "updating" | "change"
+                | "changed" | "changing" | "implement" | "implemented" | "implementing"
+                | "patch" | "patching" | "apply" | "applying" | "applied" | "write" | "writing"
+                | "written" | "add" | "adding" | "added" => "__edit_action__".to_string(),
                 "inspect" | "inspecting" | "inspected" | "examine" | "examining" | "examined"
                 | "check" | "checking" | "checked" | "verify" | "verifying" | "verified"
                 | "view" | "viewing" | "viewed" | "read" | "reading" | "review" | "reviewing"
@@ -1883,5 +2062,7 @@ pub fn detect_hesitation_intent(text: &str) -> bool {
         "let's check",
         "confirm before",
     ];
-    HESITATION_PHRASES.iter().any(|phrase| lower.contains(phrase))
+    HESITATION_PHRASES
+        .iter()
+        .any(|phrase| lower.contains(phrase))
 }

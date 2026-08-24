@@ -300,9 +300,8 @@ pub fn load_global() -> Result<ProjectMemory, String> {
         }
         Err(error) => return Err(format!("could not read global memory: {error}")),
     };
-    let mut memory: ProjectMemory = serde_json::from_str(&raw).map_err(|error| {
-        format!("invalid global memory {}: {error}", path.display())
-    })?;
+    let mut memory: ProjectMemory = serde_json::from_str(&raw)
+        .map_err(|error| format!("invalid global memory {}: {error}", path.display()))?;
     if memory.version != MEMORY_VERSION || memory.identity != "global" {
         return Err("global memory version or identity does not match".to_string());
     }
@@ -386,18 +385,15 @@ pub fn remove_global(key: &str) -> Result<usize, String> {
     Ok(before.saturating_sub(memory.facts.len()))
 }
 
-pub fn search_facts(
-    root: Option<&Path>,
-    query: &str,
-    scope: &str,
-) -> Vec<(String, MemoryFact)> {
+pub fn search_facts(root: Option<&Path>, query: &str, scope: &str) -> Vec<(String, MemoryFact)> {
     let query_words = words(query);
     let mut results = Vec::new();
 
     if scope == "all" || scope == "global" {
         if let Ok(global_mem) = load_global() {
             for fact in global_mem.facts {
-                let haystack = format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
+                let haystack =
+                    format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
                 let score = if query_words.is_empty() {
                     1
                 } else {
@@ -413,7 +409,8 @@ pub fn search_facts(
     if scope == "all" || scope == "project" {
         if let Ok(proj_mem) = load(root) {
             for fact in proj_mem.facts {
-                let haystack = format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
+                let haystack =
+                    format!("{} {} {}", fact.category, fact.key, fact.value).to_lowercase();
                 let score = if query_words.is_empty() {
                     1
                 } else {
@@ -868,7 +865,12 @@ mod tests {
     fn global_memory_lifecycle_and_search() {
         upsert_global(fact("preference", "editor", "kakoune", "user")).unwrap();
         let loaded = load_global().unwrap();
-        assert!(loaded.facts.iter().any(|f| f.key == "editor" && f.value == "kakoune"));
+        assert!(
+            loaded
+                .facts
+                .iter()
+                .any(|f| f.key == "editor" && f.value == "kakoune")
+        );
 
         let results = search_facts(None, "kakoune", "global");
         assert_eq!(results.len(), 1);
@@ -882,7 +884,11 @@ mod tests {
     #[test]
     fn search_facts_multi_scope() {
         let root = tempfile::tempdir().unwrap();
-        upsert(Some(root.path()), fact("build", "package_manager", "pnpm", "user")).unwrap();
+        upsert(
+            Some(root.path()),
+            fact("build", "package_manager", "pnpm", "user"),
+        )
+        .unwrap();
         upsert_global(fact("style", "indent", "4 spaces", "user")).unwrap();
 
         let proj_results = search_facts(Some(root.path()), "pnpm", "project");

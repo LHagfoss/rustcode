@@ -225,12 +225,17 @@ mod tests {
     #[test]
     fn parse_speculative_text_tool_call_extracts_in_flight_fences() {
         let in_flight = "Let me search the codebase:\n```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"AppConfig\"";
-        let (name, args) = parse_speculative_text_tool_call(in_flight).expect("should extract in-flight call");
+        let (name, args) =
+            parse_speculative_text_tool_call(in_flight).expect("should extract in-flight call");
         assert_eq!(name, "grep");
         assert_eq!(args["pattern"], "AppConfig");
 
-        let completed = "Done:\n```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```\nHere are the results:";
-        assert!(parse_speculative_text_tool_call(completed).is_none(), "completed fence is not in-flight");
+        let completed =
+            "Done:\n```tool\n{\"name\": \"grep\", \"arguments\": {}}\n```\nHere are the results:";
+        assert!(
+            parse_speculative_text_tool_call(completed).is_none(),
+            "completed fence is not in-flight"
+        );
     }
 
     #[test]
@@ -284,13 +289,21 @@ mod tests {
         let with_schema = estimate_token_usage_with_tool_schemas(&messages, "reply", &schema)
             .await
             .unwrap();
-        let schema_tokens =
-            crate::network::compaction::estimate_tool_schema_tokens(&schema) as u32;
+        let schema_tokens = crate::network::compaction::estimate_tool_schema_tokens(&schema) as u32;
 
         assert!(schema_tokens > 0);
-        assert_eq!(with_schema.prompt_tokens, without_schema.prompt_tokens + schema_tokens);
-        assert_eq!(with_schema.total_tokens, without_schema.total_tokens + schema_tokens);
-        assert_eq!(with_schema.completion_tokens, without_schema.completion_tokens);
+        assert_eq!(
+            with_schema.prompt_tokens,
+            without_schema.prompt_tokens + schema_tokens
+        );
+        assert_eq!(
+            with_schema.total_tokens,
+            without_schema.total_tokens + schema_tokens
+        );
+        assert_eq!(
+            with_schema.completion_tokens,
+            without_schema.completion_tokens
+        );
     }
 
     #[test]
@@ -551,15 +564,22 @@ pub(crate) fn parse_speculative_arguments(raw: &str) -> serde_json::Value {
 }
 
 /// Speculatively extract tool name and arguments from an in-flight text-fenced tool call (```tool ...).
-pub(crate) fn parse_speculative_text_tool_call(content: &str) -> Option<(String, serde_json::Value)> {
-    let pos = content.rfind("```tool\n").or_else(|| content.rfind("```tool\r\n"))?;
+pub(crate) fn parse_speculative_text_tool_call(
+    content: &str,
+) -> Option<(String, serde_json::Value)> {
+    let pos = content
+        .rfind("```tool\n")
+        .or_else(|| content.rfind("```tool\r\n"))?;
     let tail = &content[pos + 7..];
     if tail.contains("\n```") {
         return None;
     }
     let parsed = parse_speculative_arguments(tail);
     let name = parsed.get("name").and_then(|n| n.as_str())?.to_string();
-    let args = parsed.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+    let args = parsed
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
     Some((name, args))
 }
 
@@ -641,8 +661,7 @@ pub async fn stream_request(
             .models
             .iter()
             .find(|p| {
-                (p.model == model || p.name == model)
-                    && (p.url == url || p.endpoint_url() == url)
+                (p.model == model || p.name == model) && (p.url == url || p.endpoint_url() == url)
             })
             .cloned()
     };
@@ -697,11 +716,8 @@ pub async fn stream_request(
         if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) && allow_tools {
             let session_id = s.active_session_id.clone();
             let (schemas, selection) =
-                s.prompt_cache.native_tool_schemas(
-                    schema_policy,
-                    &aligned_messages,
-                    &session_id,
-                );
+                s.prompt_cache
+                    .native_tool_schemas(schema_policy, &aligned_messages, &session_id);
             (tool_protocol, schemas, selection)
         } else {
             (
@@ -748,14 +764,11 @@ pub async fn stream_request(
     );
 
     let request_start_time = std::time::Instant::now();
-    let estimated_prompt_tokens = estimate_token_usage_with_tool_schemas(
-        &aligned_messages,
-        "",
-        &native_tool_schemas,
-    )
-        .await
-        .map(|u| u.prompt_tokens)
-        .unwrap_or(0);
+    let estimated_prompt_tokens =
+        estimate_token_usage_with_tool_schemas(&aligned_messages, "", &native_tool_schemas)
+            .await
+            .map(|u| u.prompt_tokens)
+            .unwrap_or(0);
     let tool_schema_tokens =
         crate::network::compaction::estimate_tool_schema_tokens(&native_tool_schemas);
 

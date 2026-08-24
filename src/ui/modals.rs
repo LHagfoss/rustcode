@@ -1931,12 +1931,7 @@ pub(super) fn render_subagent_picker_modal(
             crate::app::SubAgentStatus::Failed => "failed",
             crate::app::SubAgentStatus::Cancelled => "cancelled",
         };
-        format!(
-            "{} · {} · {}",
-            agent.name,
-            status,
-            agent.last_message()
-        )
+        format!("{} · {} · {}", agent.name, status, agent.last_message())
     } else {
         "No subagent contexts".to_owned()
     };

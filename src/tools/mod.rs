@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
-mod envelope;
 mod audio;
+mod envelope;
 mod exec;
 mod filesystem;
 mod misc;
@@ -287,10 +287,7 @@ fn validate_value_against_schema(
         "integer" => {
             value.as_i64().is_some()
                 || value.as_u64().is_some()
-                || (string_integers
-                    && value
-                        .as_str()
-                        .is_some_and(|s| s.parse::<u64>().is_ok()))
+                || (string_integers && value.as_str().is_some_and(|s| s.parse::<u64>().is_ok()))
         }
         "number" => value.is_number(),
         _ => true,
@@ -317,13 +314,23 @@ fn validate_value_against_schema(
             && let Some(obj) = value.as_object()
         {
             for (key, val) in obj {
-                validate_value_against_schema(val, ap_schema, &format!("{path}.{key}"), string_integers)?;
+                validate_value_against_schema(
+                    val,
+                    ap_schema,
+                    &format!("{path}.{key}"),
+                    string_integers,
+                )?;
             }
         }
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
             for (key, child) in properties {
                 if let Some(actual) = object.get(key) {
-                    validate_value_against_schema(actual, child, &format!("{path}.{key}"), string_integers)?;
+                    validate_value_against_schema(
+                        actual,
+                        child,
+                        &format!("{path}.{key}"),
+                        string_integers,
+                    )?;
                 }
             }
         }
@@ -332,7 +339,12 @@ fn validate_value_against_schema(
         && let Some(array) = value.as_array()
     {
         for (index, item) in array.iter().enumerate() {
-            validate_value_against_schema(item, items, &format!("{path}[{index}]"), string_integers)?;
+            validate_value_against_schema(
+                item,
+                items,
+                &format!("{path}[{index}]"),
+                string_integers,
+            )?;
         }
     }
     Ok(())
@@ -850,10 +862,7 @@ fn mcp_canonical_name_for_clients(
     format!("{base}__{:016x}", hasher.finish())
 }
 
-fn mcp_raw_name_is_unique(
-    name: &str,
-    clients: &[Arc<crate::mcp::McpClient>],
-) -> bool {
+fn mcp_raw_name_is_unique(name: &str, clients: &[Arc<crate::mcp::McpClient>]) -> bool {
     if TOOLS.iter().any(|tool| tool.name == name)
         || AGENT_TOOL_SPECS.iter().any(|(tool, _, _)| *tool == name)
     {
@@ -894,9 +903,7 @@ fn collect_mcp_tools() -> Vec<(String, String, Value)> {
                                 && schema.get("type").and_then(Value::as_str) == Some("object")
                         })
                         .cloned()
-                        .unwrap_or_else(|| {
-                            serde_json::json!({"type": "object", "properties": {}})
-                        });
+                        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
                     discovered.push((client.name.clone(), name.to_string(), desc, schema));
                 }
             }
@@ -912,7 +919,9 @@ fn collect_mcp_tools() -> Vec<(String, String, Value)> {
     for (server, raw_name, desc, schema) in discovered {
         let qualified = counts.get(&raw_name).copied().unwrap_or(0) > 1
             || TOOLS.iter().any(|tool| tool.name == raw_name)
-            || AGENT_TOOL_SPECS.iter().any(|(name, _, _)| *name == raw_name);
+            || AGENT_TOOL_SPECS
+                .iter()
+                .any(|(name, _, _)| *name == raw_name);
         let name = if qualified {
             mcp_canonical_name_for_clients(&server, &raw_name, &clients_for_names)
         } else {
@@ -1038,10 +1047,10 @@ fn provider_compatible_schema(mut schema: Value) -> Value {
 
 fn context_terms(messages: &[Value]) -> std::collections::HashSet<String> {
     const STOP_WORDS: &[&str] = &[
-        "about", "after", "again", "also", "been", "before", "being", "could", "from",
-        "have", "into", "just", "like", "more", "most", "only", "please", "should", "that",
-        "their", "there", "these", "this", "through", "using", "want", "what", "when", "where",
-        "which", "with", "would", "your",
+        "about", "after", "again", "also", "been", "before", "being", "could", "from", "have",
+        "into", "just", "like", "more", "most", "only", "please", "should", "that", "their",
+        "there", "these", "this", "through", "using", "want", "what", "when", "where", "which",
+        "with", "would", "your",
     ];
     let mut terms = std::collections::HashSet::new();
     for message in messages {
@@ -1086,11 +1095,15 @@ fn tool_name_was_used(name: &str, messages: &[Value]) -> bool {
     })
 }
 
-fn mcp_tool_relevance(name: &str, description: &str, schema: &Value, terms: &std::collections::HashSet<String>) -> usize {
+fn mcp_tool_relevance(
+    name: &str,
+    description: &str,
+    schema: &Value,
+    terms: &std::collections::HashSet<String>,
+) -> usize {
     fn token_matches(candidate: &str, term: &str) -> bool {
         candidate == term
-            || (candidate.len() > 3
-                && candidate.strip_suffix('s') == Some(term))
+            || (candidate.len() > 3 && candidate.strip_suffix('s') == Some(term))
             || (term.len() > 3 && term.strip_suffix('s') == Some(candidate))
     }
     let name_terms: Vec<String> = name
@@ -1111,14 +1124,20 @@ fn mcp_tool_relevance(name: &str, description: &str, schema: &Value, terms: &std
         .collect();
     let mut score = 0;
     for term in terms {
-        if name_terms.iter().any(|candidate| token_matches(candidate, term)) {
+        if name_terms
+            .iter()
+            .any(|candidate| token_matches(candidate, term))
+        {
             score += 8;
         } else if description_terms
             .iter()
             .any(|candidate| token_matches(candidate, term))
         {
             score += 3;
-        } else if schema_terms.iter().any(|candidate| token_matches(candidate, term)) {
+        } else if schema_terms
+            .iter()
+            .any(|candidate| token_matches(candidate, term))
+        {
             score += 1;
         }
     }
@@ -1170,7 +1189,10 @@ fn select_mcp_tools_for_context(
     selected.sort_unstable();
     selected.dedup();
     debug_assert!(selected.len() <= MAX_MCP_NATIVE_SCHEMAS);
-    let selected_names = selected.iter().map(|index| tools[*index].0.clone()).collect();
+    let selected_names = selected
+        .iter()
+        .map(|index| tools[*index].0.clone())
+        .collect();
     let stats = McpSchemaSelectionStats {
         available: tools.len(),
         selected: selected.len(),
@@ -1209,7 +1231,10 @@ fn select_mcp_tools_for_context_with_sticky(
     selected.sort_unstable();
     stats.selected = selected.len();
     stats.omitted = tools.len().saturating_sub(selected.len());
-    stats.selected_names = selected.iter().map(|index| tools[*index].0.clone()).collect();
+    stats.selected_names = selected
+        .iter()
+        .map(|index| tools[*index].0.clone())
+        .collect();
     (selected, stats)
 }
 
@@ -1381,8 +1406,7 @@ Review its names and descriptions, then call `use_skill` with the exact matching
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
-        if t.capabilities.contains(&ToolCapability::AgentDelegation)
-            && !policy.include_agent_tools
+        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools
         {
             continue;
         }
@@ -1930,10 +1954,10 @@ pub(crate) fn execute_with_metadata_cancellable(
                     .iter()
                     .find_map(|t| {
                         let raw = t.get("name").and_then(|n| n.as_str())?;
-                        let canonical =
-                            mcp_canonical_name_for_clients(&client.name, raw, &clients);
-                        (name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients)))
-                            .then_some(raw)
+                        let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
+                        (name == canonical
+                            || (name == raw && mcp_raw_name_is_unique(name, &clients)))
+                        .then_some(raw)
                     })
                     .is_some()
             {
@@ -1945,10 +1969,10 @@ pub(crate) fn execute_with_metadata_cancellable(
                     .iter()
                     .find_map(|tool| {
                         let raw = tool.get("name").and_then(|n| n.as_str())?;
-                        let canonical =
-                            mcp_canonical_name_for_clients(&client.name, raw, &clients);
-                        (name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients)))
-                            .then_some(raw.to_string())
+                        let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
+                        (name == canonical
+                            || (name == raw && mcp_raw_name_is_unique(name, &clients)))
+                        .then_some(raw.to_string())
                     })
                     .unwrap_or(name_owned.clone());
 
@@ -2007,13 +2031,11 @@ pub(crate) fn execute_with_metadata_cancellable(
                             }
                         }
                     }
-                    Err(e) => {
-                        ToolExecutionOutput::failure_with_kind(
-                            format!("error: MCP tool call failed: {e}"),
-                            ToolErrorKind::McpFailed,
-                            true,
-                        )
-                    }
+                    Err(e) => ToolExecutionOutput::failure_with_kind(
+                        format!("error: MCP tool call failed: {e}"),
+                        ToolErrorKind::McpFailed,
+                        true,
+                    ),
                 };
             }
         }
@@ -2096,7 +2118,11 @@ mod tests {
             crate::config::AgentMode::Build,
         );
 
-        assert!(prompt.len() < PRIOR_BYTES * 80 / 100, "{} bytes", prompt.len());
+        assert!(
+            prompt.len() < PRIOR_BYTES * 80 / 100,
+            "{} bytes",
+            prompt.len()
+        );
         assert!(
             crate::network::compaction::estimate_tokens(&prompt) < PRIOR_TOKENS * 80 / 100,
             "{} tokens",
@@ -2248,13 +2274,12 @@ mod tests {
             .iter()
             .find(|tool| tool["function"]["name"] == "generate_sound_effect")
             .expect("sound generation tool is advertised")["function"]["parameters"];
-        assert_eq!(
-            sound_schema["properties"]["duration_seconds"]["minimum"],
-            0
+        assert_eq!(sound_schema["properties"]["duration_seconds"]["minimum"], 0);
+        assert!(
+            sound_schema["properties"]["duration_seconds"]
+                .get("exclusiveMinimum")
+                .is_none()
         );
-        assert!(sound_schema["properties"]["duration_seconds"]
-            .get("exclusiveMinimum")
-            .is_none());
         // Agent tools are included when requested.
         assert!(names.contains(&"spawn_agent"));
         assert!(names.contains(&"todo_write"));
@@ -2302,12 +2327,16 @@ mod tests {
         assert_eq!(compatible["properties"]["duration"]["minimum"], 0);
         assert!(compatible.get("$schema").is_none());
         assert!(compatible.get("$id").is_none());
-        assert!(compatible["properties"]["duration"]
-            .get("exclusiveMinimum")
-            .is_none());
-        assert!(compatible["properties"]["nested"]["items"]
-            .get("$schema")
-            .is_none());
+        assert!(
+            compatible["properties"]["duration"]
+                .get("exclusiveMinimum")
+                .is_none()
+        );
+        assert!(
+            compatible["properties"]["nested"]["items"]
+                .get("$schema")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2338,7 +2367,10 @@ mod tests {
         ];
 
         let (selected, stats) = select_mcp_tools_for_context(&mcp, &messages);
-        let names: Vec<&str> = selected.iter().map(|index| mcp[*index].0.as_str()).collect();
+        let names: Vec<&str> = selected
+            .iter()
+            .map(|index| mcp[*index].0.as_str())
+            .collect();
         assert_eq!(names, vec!["search_issues", "weather_forecast"]);
         assert!(!names.contains(&"deploy_release"));
         assert_eq!(stats.available, 3);
@@ -2365,7 +2397,10 @@ mod tests {
         assert_eq!(selected.len(), MCP_DISCOVERY_FALLBACK_COUNT);
         assert_eq!(stats.fallback, MCP_DISCOVERY_FALLBACK_COUNT);
         assert_eq!(stats.omitted, mcp.len() - MCP_DISCOVERY_FALLBACK_COUNT);
-        assert_eq!(stats.selected_names, vec!["tool_00", "tool_01", "tool_02", "tool_03"]);
+        assert_eq!(
+            stats.selected_names,
+            vec!["tool_00", "tool_01", "tool_02", "tool_03"]
+        );
     }
 
     #[test]
@@ -2409,7 +2444,10 @@ mod tests {
             &["weather_forecast".to_string()],
         );
         assert_eq!(selected, vec![0, 1]);
-        assert_eq!(stats.selected_names, vec!["search_issues", "weather_forecast"]);
+        assert_eq!(
+            stats.selected_names,
+            vec!["search_issues", "weather_forecast"]
+        );
     }
 
     #[test]
@@ -2995,7 +3033,10 @@ mod tests {
             !prompt.contains("executes calls sequentially"),
             "got: {prompt}"
         );
-        assert!(prompt.contains("Several fences are allowed"), "got: {prompt}");
+        assert!(
+            prompt.contains("Several fences are allowed"),
+            "got: {prompt}"
+        );
         assert!(
             prompt.contains("ISSUE INDEPENDENT READS TOGETHER"),
             "got: {prompt}"
@@ -3533,19 +3574,22 @@ mod tests {
             "value": "5433",
             "category": "database",
             "scope": "global"
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(res.contains("Remembered globally"));
 
         let recall_res = (super::misc::RECALL_MEMORY.handler)(&serde_json::json!({
             "query": "test_db_port",
             "scope": "global"
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(recall_res.contains("5433"));
 
         let forget_res = (super::misc::FORGET_MEMORY.handler)(&serde_json::json!({
             "key": "test_db_port",
             "scope": "global"
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(forget_res.contains("Removed"));
     }
 }

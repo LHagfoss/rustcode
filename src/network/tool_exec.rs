@@ -191,7 +191,10 @@ pub(crate) fn get_file_preview(name: &str, args: &serde_json::Value) -> Option<(
     ))
 }
 
-pub(crate) fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> Option<std::path::PathBuf> {
+pub(crate) fn get_tool_project_root(
+    _name: &str,
+    args: &serde_json::Value,
+) -> Option<std::path::PathBuf> {
     let raw_path = if let Some(p) = args.get("path").and_then(|p| p.as_str()) {
         Some(p)
     } else if let Some(s) = args.get("src").and_then(|s| s.as_str()) {
@@ -222,11 +225,7 @@ pub(crate) fn get_tool_project_root(_name: &str, args: &serde_json::Value) -> Op
 
     loop {
         if current.join("Cargo.toml").exists() || current.join("tsconfig.json").exists() {
-            return Some(
-                current
-                    .canonicalize()
-                    .unwrap_or(current),
-            );
+            return Some(current.canonicalize().unwrap_or(current));
         }
         if let Some(parent) = current.parent() {
             current = parent.to_path_buf();
@@ -467,9 +466,9 @@ pub(crate) async fn confirm_and_execute(
             if name_owned == "search_web" {
                 return match crate::tools::search_web_async(&args_owned, &client_for_task).await {
                     Ok(output) => crate::tools::ToolExecutionOutput::success(output),
-                    Err(error) => crate::tools::ToolExecutionOutput::failure(
-                        format!("error: {error}"),
-                    ),
+                    Err(error) => {
+                        crate::tools::ToolExecutionOutput::failure(format!("error: {error}"))
+                    }
                 };
             }
 
@@ -477,9 +476,10 @@ pub(crate) async fn confirm_and_execute(
                 crate::tools::set_active_session_id(Some(session_id));
                 crate::tools::set_active_workspace_root(workspace_root_for_task);
                 let result = if name_owned == "run_command" && live_key_owned.is_some() {
-                    let callback: crate::tools::CommandProgressCallback = Arc::new(move |bytes, stderr| {
-                        let _ = progress_tx.send((bytes.to_vec(), stderr));
-                    });
+                    let callback: crate::tools::CommandProgressCallback =
+                        Arc::new(move |bytes, stderr| {
+                            let _ = progress_tx.send((bytes.to_vec(), stderr));
+                        });
                     crate::tools::run_command_output_with_progress(&args_owned, callback)
                         .unwrap_or_else(|error| {
                             crate::tools::ToolExecutionOutput::failure_with_kind(
@@ -505,10 +505,7 @@ pub(crate) async fn confirm_and_execute(
             })
         };
         tokio::pin!(run_fut);
-        let is_audio_generation = matches!(
-            name,
-            "generate_sound_effect" | "generate_music"
-        );
+        let is_audio_generation = matches!(name, "generate_sound_effect" | "generate_music");
         let mut progress_open = true;
         loop {
             tokio::select! {
@@ -626,10 +623,8 @@ pub(crate) async fn confirm_and_execute(
                     crate::tools::set_active_session_id(None);
                     result
                 });
-                let is_audio_generation = matches!(
-                    name,
-                    "generate_sound_effect" | "generate_music"
-                );
+                let is_audio_generation =
+                    matches!(name, "generate_sound_effect" | "generate_music");
 
                 tokio::select! {
                     res = run_fut => {
@@ -821,9 +816,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
             changed_paths: envelope.changed_paths,
             truncated: envelope.truncated,
             full_output_artifact: envelope.full_output_artifact,
-            error_kind: envelope
-                .error_kind
-                .map(|kind| kind.as_str().to_string()),
+            error_kind: envelope.error_kind.map(|kind| kind.as_str().to_string()),
             retryable: envelope.retryable,
             replayed: envelope.replayed,
         })

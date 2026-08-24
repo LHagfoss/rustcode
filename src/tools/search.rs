@@ -322,7 +322,9 @@ fn try_ripgrep(
                     files_hit += 1;
                 }
                 let line_formatted = format!("  {}: {}\n", num, truncate_line(text));
-                if total_lines >= MAX_GREP_LINES || out.len() + line_formatted.len() >= MAX_GREP_BYTES {
+                if total_lines >= MAX_GREP_LINES
+                    || out.len() + line_formatted.len() >= MAX_GREP_BYTES
+                {
                     let cap_desc = if total_lines >= MAX_GREP_LINES {
                         format!("{MAX_GREP_LINES} lines")
                     } else {
@@ -449,12 +451,10 @@ pub fn grep(args: &Value) -> Result<String, String> {
                     out.push_str(&format!("\n{}:\n", path.display()));
                     wrote_header = true;
                 }
-                let line_formatted = format!(
-                    "  {}: {}\n",
-                    line_number,
-                    truncate_line(line)
-                );
-                if total_lines >= MAX_GREP_LINES || out.len() + line_formatted.len() >= MAX_GREP_BYTES {
+                let line_formatted = format!("  {}: {}\n", line_number, truncate_line(line));
+                if total_lines >= MAX_GREP_LINES
+                    || out.len() + line_formatted.len() >= MAX_GREP_BYTES
+                {
                     let cap_desc = if total_lines >= MAX_GREP_LINES {
                         format!("{MAX_GREP_LINES} lines")
                     } else {
@@ -761,7 +761,10 @@ mod tests {
         }))
         .expect("grep should succeed");
 
-        assert!(res.contains("truncated") && res.contains("32 KB"), "got: {res}");
+        assert!(
+            res.contains("truncated") && res.contains("32 KB"),
+            "got: {res}"
+        );
         assert!(res.contains("matches may be incomplete"), "got: {res}");
     }
 
@@ -782,7 +785,10 @@ mod tests {
 
         // Exactly at the cap there is no truncation notice at all.
         let res = grep_one_file(&path_str, &file, &re, 2).expect("grep should succeed");
-        assert!(res.contains("MATCH one") && res.contains("MATCH two"), "got: {res}");
+        assert!(
+            res.contains("MATCH one") && res.contains("MATCH two"),
+            "got: {res}"
+        );
         assert!(!res.contains("truncated"), "got: {res}");
     }
 }

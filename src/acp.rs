@@ -434,10 +434,8 @@ fn build_session_config_options(state: &crate::app::AppState) -> Vec<SessionConf
         .models
         .iter()
         .map(|profile| {
-            let mut opt = SessionConfigSelectOption::new(
-                profile.name.clone(),
-                profile.name.clone(),
-            );
+            let mut opt =
+                SessionConfigSelectOption::new(profile.name.clone(), profile.name.clone());
             if !profile.model.is_empty() {
                 opt = opt.description(profile.model.clone());
             }
@@ -445,14 +443,9 @@ fn build_session_config_options(state: &crate::app::AppState) -> Vec<SessionConf
         })
         .collect();
 
-    let model_option = SessionConfigOption::select(
-        "model",
-        "Model",
-        current_value,
-        options,
-    )
-    .category(SessionConfigOptionCategory::Model)
-    .description("Model profile");
+    let model_option = SessionConfigOption::select("model", "Model", current_value, options)
+        .category(SessionConfigOptionCategory::Model)
+        .description("Model profile");
 
     vec![model_option]
 }
@@ -527,9 +520,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             turns: Arc::new(SessionTurnState::new()),
                         },
                     );
-                    responder.respond(
-                        NewSessionResponse::new(session_id).config_options(config_options),
-                    )
+                    responder
+                        .respond(NewSessionResponse::new(session_id).config_options(config_options))
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -550,11 +542,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     };
 
                     let mut state = state.lock().await;
-                    let config_options = handle_set_config_option(
-                        &mut state,
-                        &request.config_id,
-                        &request.value,
-                    )?;
+                    let config_options =
+                        handle_set_config_option(&mut state, &request.config_id, &request.value)?;
                     responder.respond(SetSessionConfigOptionResponse::new(config_options))
                 }
             },
@@ -1076,10 +1065,14 @@ mod tests {
 
         // TurnFinished does not duplicate
         let turn_finished = stream.updates(crate::network::AgentUiEvent::TurnFinished {
-            content: "<think>The time is 12:20 PM.</think>The current time is 12:20 PM.".to_string(),
+            content: "<think>The time is 12:20 PM.</think>The current time is 12:20 PM."
+                .to_string(),
             completed: true,
         });
-        assert!(turn_finished.is_empty(), "TurnFinished must not duplicate final answer");
+        assert!(
+            turn_finished.is_empty(),
+            "TurnFinished must not duplicate final answer"
+        );
     }
 
     #[test]

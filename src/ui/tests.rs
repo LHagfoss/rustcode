@@ -185,8 +185,7 @@ fn render_snapshot_preserves_existing_ui_output() {
     for (index, state) in states.into_iter().enumerate() {
         let actual = render_snapshot_to_text(&state, 60, 16);
         assert_eq!(
-            actual,
-            golden_outputs[index],
+            actual, golden_outputs[index],
             "render case {index} diverged"
         );
     }
@@ -662,8 +661,11 @@ fn custom_tools_render_pascalcase_with_param() {
     assert_eq!(label, "UseSkill");
     assert_eq!(arg, "git-feature-workflow");
 
-    let (label, arg) =
-        format_pi_tool_action("complete_task", &serde_json::json!({"result": "done"}), None);
+    let (label, arg) = format_pi_tool_action(
+        "complete_task",
+        &serde_json::json!({"result": "done"}),
+        None,
+    );
     assert_eq!(label, "CompleteTask");
     assert_eq!(arg, "result=\"done\"");
 
@@ -672,11 +674,8 @@ fn custom_tools_render_pascalcase_with_param() {
     assert_eq!(arg, "");
 
     // Built-in aliases are unchanged.
-    let (label, _) = format_pi_tool_action(
-        "run_command",
-        &serde_json::json!({"command": "ls"}),
-        None,
-    );
+    let (label, _) =
+        format_pi_tool_action("run_command", &serde_json::json!({"command": "ls"}), None);
     assert_eq!(label, "Bash");
 }
 

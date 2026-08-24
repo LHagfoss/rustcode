@@ -238,11 +238,7 @@ fn render_finalized_assistant_scrollback(
             chunk
         }
         Some(_) => vec![ratatui::text::Line::from("")],
-        None => crate::ui::render_committed_history_block_snapshot(
-            snapshot,
-            message_index,
-            width,
-        ),
+        None => crate::ui::render_committed_history_block_snapshot(snapshot, message_index, width),
     }
 }
 
@@ -389,21 +385,13 @@ impl AppRuntime {
                 Ok(AppRunControl::Continue)
             }
             AppEvent::ApprovalDecision(decision) => {
-                apply_approval_decision(
-                    &self.app_state,
-                    &mut self.current_cancel_token,
-                    decision,
-                )
-                .await;
+                apply_approval_decision(&self.app_state, &mut self.current_cancel_token, decision)
+                    .await;
                 Ok(AppRunControl::Continue)
             }
             AppEvent::AnswerQuestion(answer) => {
-                apply_question_answer(
-                    &self.app_state,
-                    &mut self.current_cancel_token,
-                    answer,
-                )
-                .await;
+                apply_question_answer(&self.app_state, &mut self.current_cancel_token, answer)
+                    .await;
                 Ok(AppRunControl::Continue)
             }
             AppEvent::UpdateDecision(decision) => {
@@ -518,9 +506,7 @@ impl AppRuntime {
                 };
                 if let Some(latest) = target_version {
                     match run_update_command(&mut terminal_runtime, &client, latest).await {
-                        Ok(()) => println!(
-                            "🎉 Update ran successfully! Please restart rustcode."
-                        ),
+                        Ok(()) => println!("🎉 Update ran successfully! Please restart rustcode."),
                         Err(error) => eprintln!("Update failed: {error}"),
                     }
                     update_exit = true;
@@ -534,7 +520,10 @@ impl AppRuntime {
             // bounds and clear the live area so the active frame redraws cleanly.
             let observed_size = terminal_runtime.terminal().size()?;
             if observed_size != terminal_size {
-                execute!(terminal_runtime.terminal().backend_mut(), crossterm::style::Print("\x1b[3J"))?;
+                execute!(
+                    terminal_runtime.terminal().backend_mut(),
+                    crossterm::style::Print("\x1b[3J")
+                )?;
                 terminal_runtime.terminal().clear_screen()?;
                 terminal_size = observed_size;
                 let history_display_start = app_state.lock().await.history_display_start;
@@ -632,9 +621,7 @@ impl AppRuntime {
                                 .history
                                 .iter()
                                 .find(|m| m.role == "user" && !m.content.starts_with('/'))
-                                .map(|m| {
-                                    m.content.lines().next().unwrap_or("").trim().to_string()
-                                })
+                                .map(|m| m.content.lines().next().unwrap_or("").trim().to_string())
                         });
                     let snapshot = guard.render_snapshot();
                     let activity = crate::app::activity::classify_activity(
@@ -663,8 +650,7 @@ impl AppRuntime {
                         crate::app::activity::terminal_progress_for_activity(activity.kind);
                     let should_send_progress = guard.current_terminal_progress != Some(progress)
                         || (progress != crate::app::activity::TerminalProgress::Hidden
-                            && last_progress_sent.elapsed()
-                                >= std::time::Duration::from_secs(3));
+                            && last_progress_sent.elapsed() >= std::time::Duration::from_secs(3));
                     if should_send_progress {
                         guard.current_terminal_progress = Some(progress);
                     }
@@ -714,8 +700,8 @@ impl AppRuntime {
 
                 let history_len = snapshot.history().len();
                 let history_range = transcript_cursor.pending_history_range(history_len);
-                let stable_lines = stream_commits
-                    .take_ready(!history_range.is_empty() || !response_active);
+                let stable_lines =
+                    stream_commits.take_ready(!history_range.is_empty() || !response_active);
                 if !stable_lines.is_empty() {
                     crate::insert_scrollback_lines(
                         terminal_runtime.terminal(),
@@ -849,13 +835,15 @@ impl AppRuntime {
                     terminal_height,
                 );
                 let mut frame_metrics = None;
-                terminal_runtime.terminal().draw_height(desired_height, |f| {
-                    frame_metrics = Some(ui::render_with_transcript_snapshot(
-                        f,
-                        &snapshot,
-                        &mut transcript_state,
-                    ));
-                })?;
+                terminal_runtime
+                    .terminal()
+                    .draw_height(desired_height, |f| {
+                        frame_metrics = Some(ui::render_with_transcript_snapshot(
+                            f,
+                            &snapshot,
+                            &mut transcript_state,
+                        ));
+                    })?;
                 let (content_height, input_area) =
                     frame_metrics.expect("render_with_transcript_snapshot must run once");
                 let mut guard = app_state.lock().await;
@@ -894,10 +882,12 @@ impl AppRuntime {
                         latest.filter(|_| apply_update_decision(&mut state, decision))
                     };
                     if let Some(update_version) = update_version {
-                        match run_update_command(&mut terminal_runtime, &client, update_version).await {
-                            Ok(()) => println!(
-                                "🎉 Update ran successfully! Please restart rustcode."
-                            ),
+                        match run_update_command(&mut terminal_runtime, &client, update_version)
+                            .await
+                        {
+                            Ok(()) => {
+                                println!("🎉 Update ran successfully! Please restart rustcode.")
+                            }
                             Err(error) => eprintln!("Update failed: {error}"),
                         }
                         update_exit = true;
@@ -918,11 +908,9 @@ impl AppRuntime {
                 | AppEvent::ArchiveSession
                 | AppEvent::DeleteSession(_)) => {
                     let mut state = app_state.lock().await;
-                    if let Err(error) = apply_session_event(
-                        &mut state,
-                        &mut current_cancel_token,
-                        event,
-                    ) {
+                    if let Err(error) =
+                        apply_session_event(&mut state, &mut current_cancel_token, event)
+                    {
                         state.set_notice(error.to_string());
                         state.request_redraw();
                     }
@@ -1529,9 +1517,8 @@ impl AppRuntime {
                                     }
                                 }
                                 KeyCode::Enter => {
-                                    let selected = s
-                                        .subagent_picker_index
-                                        .min(total.saturating_sub(1));
+                                    let selected =
+                                        s.subagent_picker_index.min(total.saturating_sub(1));
                                     let id = if selected == 0 {
                                         0
                                     } else {
@@ -1586,7 +1573,8 @@ impl AppRuntime {
                                             .map(crate::app::events::SessionAction::Id);
                                         s.pending_delete_session_idx = None;
                                         if let Some(action) = action {
-                                            let _ = app_event_sender.send(AppEvent::DeleteSession(action));
+                                            let _ = app_event_sender
+                                                .send(AppEvent::DeleteSession(action));
                                         }
                                     }
                                     KeyCode::Esc | KeyCode::Char('n') => {
@@ -1630,10 +1618,13 @@ impl AppRuntime {
                                     if let Some(action) = s
                                         .history_picker_sessions
                                         .get(idx)
-                                        .and_then(crate::app::session_controller::session_id_from_meta)
+                                        .and_then(
+                                            crate::app::session_controller::session_id_from_meta,
+                                        )
                                         .map(crate::app::events::SessionAction::Id)
                                     {
-                                        let _ = app_event_sender.send(AppEvent::ResumeSession(action));
+                                        let _ =
+                                            app_event_sender.send(AppEvent::ResumeSession(action));
                                     }
                                 }
                                 _ => {}
@@ -2053,7 +2044,9 @@ impl AppRuntime {
                                             "/update" => {
                                                 s.update_check =
                                                     crate::update::UpdateState::Checking;
-                                                s.set_notice("🔍 Checking for a RustCode update...");
+                                                s.set_notice(
+                                                    "🔍 Checking for a RustCode update...",
+                                                );
                                                 crate::app::actions::trigger_update(
                                                     &app_state, &client,
                                                 );
@@ -2112,9 +2105,9 @@ impl AppRuntime {
                                                     tokio_util::sync::CancellationToken::new();
                                             }
                                             "/yolo" => {
-                                                 s.modal_picker_index =
-                                                     if s.auto_confirm { 0 } else { 1 };
-                                                 s.status = crate::app::AppStatus::YoloPicker;
+                                                s.modal_picker_index =
+                                                    if s.auto_confirm { 0 } else { 1 };
+                                                s.status = crate::app::AppStatus::YoloPicker;
                                             }
                                             "/stats" | "/usage" | "/status" => {
                                                 s.history.push(ChatMessage::new(
@@ -2666,17 +2659,17 @@ mod tests {
 
         assert!(!state.publish_render_metrics(revision, 99, input_area));
         assert_eq!(state.conversation_content_height, 7);
-        assert_eq!(state.input_text_area, Some(ratatui::layout::Rect::new(3, 4, 20, 2)));
+        assert_eq!(
+            state.input_text_area,
+            Some(ratatui::layout::Rect::new(3, 4, 20, 2))
+        );
     }
 
     #[tokio::test]
     async fn render_title_cache_is_selected_against_the_current_session() {
         let mut state = AppState::new();
         state.active_session_id = "session-a".to_owned();
-        state.session_title_cache = Some((
-            "session-a".to_owned(),
-            Some("Session A".to_owned()),
-        ));
+        state.session_title_cache = Some(("session-a".to_owned(), Some("Session A".to_owned())));
         let state = std::sync::Arc::new(tokio::sync::Mutex::new(state));
 
         let (session_id, title) = super::session_title_for_render(&state).await;
@@ -2724,7 +2717,11 @@ mod tests {
             "final answer",
             80,
         );
-        assert!(lines.iter().any(|line| line.to_string().contains("final answer")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains("final answer"))
+        );
 
         cursor.commit_stable_stream("final answer");
         let separator = super::render_finalized_assistant_scrollback(
@@ -2762,7 +2759,9 @@ mod tests {
     async fn session_events_are_applied_by_the_runtime_controller() {
         let mut state = AppState::new();
         let old_session = state.active_session_id.clone();
-        state.history.push(crate::app::ChatMessage::new("user", "old"));
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "old"));
         let mut runtime = AppRuntime::for_test(state);
 
         runtime
@@ -2773,22 +2772,26 @@ mod tests {
         let state = runtime.app_state().await;
         assert_ne!(state.active_session_id, old_session);
         assert!(!state.show_history_picker);
-        assert!(state
-            .history
-            .iter()
-            .any(|message| message.content == "Started a new session"));
+        assert!(
+            state
+                .history
+                .iter()
+                .any(|message| message.content == "Started a new session")
+        );
     }
 
     #[tokio::test]
     async fn delete_session_event_rejects_invalid_ids_without_mutation() {
         let mut runtime = AppRuntime::for_test(AppState::new());
 
-        assert!(runtime
-            .handle_event(AppEvent::DeleteSession(SessionAction::Id(
-                "../escape".to_owned(),
-            )))
-            .await
-            .is_err());
+        assert!(
+            runtime
+                .handle_event(AppEvent::DeleteSession(SessionAction::Id(
+                    "../escape".to_owned(),
+                )))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -2913,7 +2916,10 @@ mod tests {
             .await
             .expect("question event should be handled");
 
-        assert_eq!(rx.await.expect("question response"), "User cancelled prompt.");
+        assert_eq!(
+            rx.await.expect("question response"),
+            "User cancelled prompt."
+        );
         let state = runtime.app_state().await;
         assert_eq!(state.status, AppStatus::Idle);
         assert!(previous_token.is_cancelled());

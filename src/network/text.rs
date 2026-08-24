@@ -255,7 +255,8 @@ pub(crate) fn strip_tool_call_syntax(content: &str) -> String {
             let block = &after_tag[..rel_end];
 
             let is_tool = fence == "```tool"
-                || crate::tools::parse_tool_call(block, crate::config::ToolProtocol::Json).is_some();
+                || crate::tools::parse_tool_call(block, crate::config::ToolProtocol::Json)
+                    .is_some();
 
             if is_tool {
                 if rel_end < after_tag.len() {
@@ -523,14 +524,24 @@ mod tests {
 
     #[test]
     fn test_has_intended_tool_call_distinguishes_json_prose_from_tool_calls() {
-        assert!(has_intended_tool_call("```tool\n{\"name\": \"run_command\"}\n```"));
-        assert!(has_intended_tool_call("<tool_call>{\"name\": \"run_command\"}</tool_call>"));
+        assert!(has_intended_tool_call(
+            "```tool\n{\"name\": \"run_command\"}\n```"
+        ));
+        assert!(has_intended_tool_call(
+            "<tool_call>{\"name\": \"run_command\"}</tool_call>"
+        ));
         assert!(has_intended_tool_call("[TOOL_CALLS]run_command[ARGS]{}"));
-        assert!(has_intended_tool_call("<function_call>run_command()</function_call>"));
+        assert!(has_intended_tool_call(
+            "<function_call>run_command()</function_call>"
+        ));
 
         // Regular markdown json blocks should not trigger malformed tool call handling
-        assert!(!has_intended_tool_call("Here is your decrypted savegame:\n```json\n{\"seeds\": 580, \"potatoes\": 2423}\n```"));
-        assert!(!has_intended_tool_call("```json\n{\"key\": \"value\"}\n```"));
+        assert!(!has_intended_tool_call(
+            "Here is your decrypted savegame:\n```json\n{\"seeds\": 580, \"potatoes\": 2423}\n```"
+        ));
+        assert!(!has_intended_tool_call(
+            "```json\n{\"key\": \"value\"}\n```"
+        ));
     }
 
     #[test]

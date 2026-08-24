@@ -134,9 +134,7 @@ pub async fn latest_available_version(client: &reqwest::Client) -> Option<Versio
     latest_tap_version(client).await
 }
 
-async fn fetch_github_latest(
-    client: &reqwest::Client,
-) -> Option<(Version, Option<String>)> {
+async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, Option<String>)> {
     let resp = client
         .get(GITHUB_API_LATEST_RELEASE)
         .header("User-Agent", "rustcode")
@@ -207,10 +205,14 @@ pub async fn run_update(client: &reqwest::Client, expected: Version) -> Result<(
         match brew_result {
             Ok(Ok(())) => return Ok(()),
             Ok(Err(brew_err)) => {
-                eprintln!("Homebrew upgrade failed ({brew_err}), falling back to direct binary update...");
+                eprintln!(
+                    "Homebrew upgrade failed ({brew_err}), falling back to direct binary update..."
+                );
             }
             Err(join_err) => {
-                eprintln!("Homebrew task failed ({join_err}), falling back to direct binary update...");
+                eprintln!(
+                    "Homebrew task failed ({join_err}), falling back to direct binary update..."
+                );
             }
         }
     }
@@ -219,10 +221,7 @@ pub async fn run_update(client: &reqwest::Client, expected: Version) -> Result<(
 }
 
 /// Download matching archive from GitHub Releases and replace the current binary.
-pub async fn run_direct_upgrade(
-    client: &reqwest::Client,
-    expected: Version,
-) -> Result<(), String> {
+pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> Result<(), String> {
     let asset_name = target_asset_name().ok_or_else(|| {
         format!(
             "Unsupported platform: {}/{}",
@@ -231,7 +230,10 @@ pub async fn run_direct_upgrade(
         )
     })?;
 
-    println!("Fetching release download URL for v{}...", format_version(expected));
+    println!(
+        "Fetching release download URL for v{}...",
+        format_version(expected)
+    );
     let _ = std::io::stdout().flush();
 
     let download_url = format!(
@@ -302,13 +304,15 @@ fn extract_from_tar_gz(bytes: &[u8], target: &std::path::Path) -> Result<(), Str
     let gz = GzDecoder::new(bytes);
     let mut archive = Archive::new(gz);
 
-    for entry in archive.entries().map_err(|e| format!("invalid tar archive: {e}"))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("invalid tar archive: {e}"))?
+    {
         let mut entry = entry.map_err(|e| format!("invalid tar entry: {e}"))?;
-        let path = entry.path().map_err(|e| format!("invalid entry path: {e}"))?;
-        let filename = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let path = entry
+            .path()
+            .map_err(|e| format!("invalid entry path: {e}"))?;
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if filename.starts_with("rustcode") && !filename.ends_with(".tar.gz") {
             let mut outfile = std::fs::File::create(target)
@@ -329,7 +333,9 @@ fn extract_from_zip(bytes: &[u8], target: &std::path::Path) -> Result<(), String
     let mut archive = ZipArchive::new(cursor).map_err(|e| format!("invalid zip archive: {e}"))?;
 
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| format!("invalid zip entry: {e}"))?;
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("invalid zip entry: {e}"))?;
         let name = file.name();
         let filename = std::path::Path::new(name)
             .file_name()
@@ -347,7 +353,10 @@ fn extract_from_zip(bytes: &[u8], target: &std::path::Path) -> Result<(), String
     Err("could not find rustcode.exe inside zip archive".to_string())
 }
 
-fn replace_binary(temp_path: &std::path::Path, current_exe: &std::path::Path) -> Result<(), String> {
+fn replace_binary(
+    temp_path: &std::path::Path,
+    current_exe: &std::path::Path,
+) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -412,7 +421,9 @@ pub fn run_brew_upgrade(expected: Version) -> Result<(), String> {
         .status()
         .map_err(|e| format!("failed to run brew (is Homebrew installed?): {e}"))?;
     if !status.success() {
-        return Err(format!("`{BREW_UPGRADE_COMMAND}` failed with status {status}"));
+        return Err(format!(
+            "`{BREW_UPGRADE_COMMAND}` failed with status {status}"
+        ));
     }
 
     let installed = installed_brew_version()?;
@@ -446,10 +457,7 @@ fn installed_brew_version() -> Result<Version, String> {
 }
 
 fn installed_brew_version_from_output(output: &str) -> Option<Version> {
-    output
-        .split_whitespace()
-        .filter_map(parse_semver)
-        .max()
+    output.split_whitespace().filter_map(parse_semver).max()
 }
 
 #[cfg(test)]
@@ -528,4 +536,3 @@ mod tests {
         assert!(target_asset_name().is_some());
     }
 }
-

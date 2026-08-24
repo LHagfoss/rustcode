@@ -129,12 +129,35 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
     };
     let name_lower = name.to_ascii_lowercase();
     let (action, target) = match name_lower.as_str() {
-        "view_file" | "viewfile" | "read_file" | "readfile" => {
-            ("Read", value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"))
-        }
+        "view_file" | "viewfile" | "read_file" | "readfile" => (
+            "Read",
+            value(
+                &[
+                    "TargetFile",
+                    "target_file",
+                    "AbsolutePath",
+                    "absolute_path",
+                    "path",
+                    "file",
+                    "filePath",
+                    "filepath",
+                ],
+                "?",
+            ),
+        ),
         "list_directory" | "list_dir" | "listdir" | "glob" => (
             "List",
-            value(&["DirectoryPath", "directory_path", "SearchPath", "search_path", "path", "pattern"], "."),
+            value(
+                &[
+                    "DirectoryPath",
+                    "directory_path",
+                    "SearchPath",
+                    "search_path",
+                    "path",
+                    "pattern",
+                ],
+                ".",
+            ),
         ),
         "grep" | "grep_search" | "grepsearch" => {
             let query = value(&["Query", "query", "pattern"], "?");
@@ -153,21 +176,69 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
                 ),
             );
         }
-        "find_symbol" | "findsymbol" | "codebase_search" | "codebasesearch" | "codebase_symbol" | "codebasesymbol" | "search_web" | "searchweb" => {
+        "find_symbol" | "findsymbol" | "codebase_search" | "codebasesearch" | "codebase_symbol"
+        | "codebasesymbol" | "search_web" | "searchweb" => {
             ("Search", value(&["query", "Query"], "?"))
         }
-        "run_command" | "runcommand" | "execute_command" | "bash" => {
-            ("Bash", value(&["CommandLine", "command_line", "command"], "?"))
-        }
-        "replace_file_content" | "replacefilecontent" | "multi_replace_file_content" | "multireplacefilecontent" | "edit_file" | "editfile" | "patch_file" | "patchfile" => {
-            ("Edit", value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"))
-        }
-        "write_to_file" | "writetofile" | "write_file" | "writefile" | "create_file" | "createfile" => {
-            ("Write", value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"))
-        }
+        "run_command" | "runcommand" | "execute_command" | "bash" => (
+            "Bash",
+            value(&["CommandLine", "command_line", "command"], "?"),
+        ),
+        "replace_file_content"
+        | "replacefilecontent"
+        | "multi_replace_file_content"
+        | "multireplacefilecontent"
+        | "edit_file"
+        | "editfile"
+        | "patch_file"
+        | "patchfile" => (
+            "Edit",
+            value(
+                &[
+                    "TargetFile",
+                    "target_file",
+                    "AbsolutePath",
+                    "absolute_path",
+                    "path",
+                    "file",
+                    "filePath",
+                    "filepath",
+                ],
+                "?",
+            ),
+        ),
+        "write_to_file" | "writetofile" | "write_file" | "writefile" | "create_file"
+        | "createfile" => (
+            "Write",
+            value(
+                &[
+                    "TargetFile",
+                    "target_file",
+                    "AbsolutePath",
+                    "absolute_path",
+                    "path",
+                    "file",
+                    "filePath",
+                    "filepath",
+                ],
+                "?",
+            ),
+        ),
         "delete_file" | "deletefile" => (
             "Delete",
-            value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath"], "?"),
+            value(
+                &[
+                    "TargetFile",
+                    "target_file",
+                    "AbsolutePath",
+                    "absolute_path",
+                    "path",
+                    "file",
+                    "filePath",
+                    "filepath",
+                ],
+                "?",
+            ),
         ),
         "move_file" | "movefile" | "copy_file" | "copyfile" => {
             let src = value(&["src", "source", "from"], "?");
@@ -179,7 +250,24 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
         }
         "get_project_map" | "getprojectmap" => ("Read", "project map".to_string()),
         _ => {
-            let target = value(&["TargetFile", "target_file", "AbsolutePath", "absolute_path", "path", "file", "filePath", "filepath", "target", "query", "name", "command", "output_path"], "");
+            let target = value(
+                &[
+                    "TargetFile",
+                    "target_file",
+                    "AbsolutePath",
+                    "absolute_path",
+                    "path",
+                    "file",
+                    "filePath",
+                    "filepath",
+                    "target",
+                    "query",
+                    "name",
+                    "command",
+                    "output_path",
+                ],
+                "",
+            );
             return (to_pascal_action(name), compact_target(&target));
         }
     };
@@ -525,7 +613,11 @@ mod tests {
             &serde_json::json!({"command": "cargo test --lib"}),
         );
         let activity = classify_live_tools(&[LiveToolCall::new(
-            "call-1", None, "run_command", action, target,
+            "call-1",
+            None,
+            "run_command",
+            action,
+            target,
         )])
         .expect("live activity");
 
@@ -580,7 +672,10 @@ mod tests {
             terminal_progress_for_activity(ActivityKind::ActionRequired),
             TerminalProgress::Paused
         );
-        assert_eq!(TerminalProgress::Paused.osc_sequence(), "\x1b]9;4;4;100\x07");
+        assert_eq!(
+            TerminalProgress::Paused.osc_sequence(),
+            "\x1b]9;4;4;100\x07"
+        );
         assert_eq!(TerminalProgress::Error.osc_sequence(), "\x1b]9;4;2;100\x07");
     }
 }

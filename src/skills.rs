@@ -335,10 +335,7 @@ mod tests {
         scan_skill_dir(&base, &mut skills);
         assert_eq!(skills[0].name, "large-skill");
         assert_eq!(skills[0].description, "Metadata only");
-        assert!(read_frontmatter(&skill_dir.join("SKILL.md"))
-            .unwrap()
-            .len()
-            < 1000);
+        assert!(read_frontmatter(&skill_dir.join("SKILL.md")).unwrap().len() < 1000);
     }
 
     #[test]

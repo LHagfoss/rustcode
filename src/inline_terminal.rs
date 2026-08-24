@@ -98,10 +98,7 @@ where
     }
 
     pub fn clear(&mut self) -> Result<(), B::Error> {
-        let clear_y = self
-            .clear_from_y
-            .take()
-            .unwrap_or(self.viewport_area.y);
+        let clear_y = self.clear_from_y.take().unwrap_or(self.viewport_area.y);
         if !self.viewport_area.is_empty() || clear_y < self.screen_size.height {
             self.backend
                 .set_cursor_position(Position::new(0, clear_y))?;
@@ -464,9 +461,11 @@ mod tests {
     fn autoresize_clears_and_redraws_even_when_requested_height_is_unchanged() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = InlineTerminal::new(backend).unwrap();
-        terminal.draw_height(6, |f| {
-            f.render_widget(ratatui::widgets::Paragraph::new("Hello"), f.area());
-        }).unwrap();
+        terminal
+            .draw_height(6, |f| {
+                f.render_widget(ratatui::widgets::Paragraph::new("Hello"), f.area());
+            })
+            .unwrap();
 
         // Resize width
         terminal.backend_mut().resize(100, 24);
@@ -475,9 +474,11 @@ mod tests {
         assert!(terminal.needs_clear);
 
         // draw_height with same height 6 should clear and redraw without diff artifacts
-        terminal.draw_height(6, |f| {
-            f.render_widget(ratatui::widgets::Paragraph::new("World"), f.area());
-        }).unwrap();
+        terminal
+            .draw_height(6, |f| {
+                f.render_widget(ratatui::widgets::Paragraph::new("World"), f.area());
+            })
+            .unwrap();
         assert!(!terminal.needs_clear);
     }
 
@@ -516,12 +517,20 @@ mod tests {
     fn insert_before_omits_trailing_empty_spaces() {
         let backend = TestBackend::new(200, 30);
         let mut terminal = InlineTerminal::new(backend).unwrap();
-        terminal.insert_before(1, |buf| {
-            buf.set_string(0, 0, "Hello", ratatui::style::Style::default());
-        }).unwrap();
+        terminal
+            .insert_before(1, |buf| {
+                buf.set_string(0, 0, "Hello", ratatui::style::Style::default());
+            })
+            .unwrap();
         // Check that the backend only received the 5 characters, not 200 spaces
         let rendered_line = terminal.backend().buffer();
         // Row 0 should start with "Hello" and the rest should be empty/unwritten in TestBackend
-        assert_eq!(&rendered_line.content[0..5].iter().map(|c| c.symbol()).collect::<String>(), "Hello");
+        assert_eq!(
+            &rendered_line.content[0..5]
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>(),
+            "Hello"
+        );
     }
 }

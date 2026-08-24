@@ -152,9 +152,7 @@ impl ContextSnapshot {
     /// available after history compaction or a resumed session.
     pub fn project_instructions(&self) -> Option<String> {
         self.agent_doc.as_ref().map(|doc| {
-            format!(
-                "# Project instructions (AGENTS.md/CLAUDE.md — authoritative)\n\n{doc}"
-            )
+            format!("# Project instructions (AGENTS.md/CLAUDE.md — authoritative)\n\n{doc}")
         })
     }
 }
@@ -377,10 +375,12 @@ mod tests {
         std::fs::write(dir.path().join("AGENTS.md"), "workspace-only rule").unwrap();
         let snapshot = ContextSnapshot::capture_at(dir.path());
         assert_eq!(snapshot.cwd, dir.path().to_string_lossy());
-        assert!(snapshot
-            .project_instructions()
-            .unwrap()
-            .contains("workspace-only rule"));
+        assert!(
+            snapshot
+                .project_instructions()
+                .unwrap()
+                .contains("workspace-only rule")
+        );
         assert!(environment_context_at(dir.path()).contains("workspace-only rule"));
     }
 

@@ -202,8 +202,7 @@ impl SessionController {
             }
             SessionAction::Id(id) => {
                 validate_session_id(&id)?;
-                crate::config::session_meta_by_id(&id)
-                    .ok_or(SessionError::SessionNotFound(id))
+                crate::config::session_meta_by_id(&id).ok_or(SessionError::SessionNotFound(id))
             }
         }
     }

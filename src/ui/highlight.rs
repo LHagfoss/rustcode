@@ -823,12 +823,7 @@ pub(super) fn render_unified_diff<'a>(
                 ),
                 Span::styled(
                     raw.to_string(),
-                    get_themed_style(
-                        COLOR_SECONDARY(),
-                        COLOR_BG(),
-                        Modifier::BOLD,
-                        show_picker,
-                    ),
+                    get_themed_style(COLOR_SECONDARY(), COLOR_BG(), Modifier::BOLD, show_picker),
                 ),
             ]));
             continue;

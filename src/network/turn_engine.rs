@@ -18,9 +18,8 @@ use super::tool_exec::{execute_tool_batch, get_tool_project_root, tool_result_hi
 use super::verification;
 use super::{
     EMPTY_RESPONSE_RECOVERY_PROMPT, FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction,
-    MAX_REASONING_RECOVERY_ROUNDS,
-    REASONING_LOOP_RECOVERY_PROMPT, accumulate_tokens_used, active_todo_checkpoint,
-    cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
+    MAX_REASONING_RECOVERY_ROUNDS, REASONING_LOOP_RECOVERY_PROMPT, accumulate_tokens_used,
+    active_todo_checkpoint, cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
     completion_block_message, completion_claims_unapplied_work, failure_replan_message,
     fetch_model_quota, is_mutating_tool, loop_recovery_action, mutation_made_progress,
     prepare_turn_request, probe_function_calling, push_or_replace_loop_warning,
@@ -561,10 +560,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 }),
             );
             let mut s = state.lock().await;
-            s.history.push(ChatMessage::new(
-                "system",
-                EMPTY_RESPONSE_RECOVERY_PROMPT,
-            ));
+            s.history
+                .push(ChatMessage::new("system", EMPTY_RESPONSE_RECOVERY_PROMPT));
             s.current_token_usage = None;
             s.clear_current_response();
             s.status = AppStatus::Streaming;
@@ -606,10 +603,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 ctx.final_content_persisted = true;
-                s.history.push(ChatMessage::new(
-                    "system",
-                    REASONING_LOOP_RECOVERY_PROMPT,
-                ));
+                s.history
+                    .push(ChatMessage::new("system", REASONING_LOOP_RECOVERY_PROMPT));
                 crate::config::save_history(&s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;
@@ -1012,11 +1007,10 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 .rev()
                 .find(|(_, message)| message.role == "user")
                 .map(|(index, _)| index);
-            let explicit_verification_requested = explicit_verification_user_index.is_some_and(
-                |index| {
+            let explicit_verification_requested =
+                explicit_verification_user_index.is_some_and(|index| {
                     verification::is_explicit_verification_request(&s.history[index].content)
-                },
-            );
+                });
             if explicit_verification_requested {
                 if let Some(index) = explicit_verification_user_index {
                     hydrate_explicit_verification_from_history(
@@ -1133,8 +1127,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 let no_result = loop_detect::stagnation_key(&content) == "grep:no-matches";
                 let search_result = loop_detect::is_search_tool(&name)
                     || call.is_some_and(|call| {
-                        let (_, category) =
-                            loop_detect::signatures(&call.name, &call.arguments);
+                        let (_, category) = loop_detect::signatures(&call.name, &call.arguments);
                         category.starts_with("search:")
                     });
                 let changed_workspace = mutation_progress && metadata.success;
@@ -1162,8 +1155,9 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         loop_detect::stagnation_key(&content)
                     ))
                 });
-                let assessment = ctx.progress_ledger.observe(
-                    &loop_detect::ProgressObservation {
+                let assessment = ctx
+                    .progress_ledger
+                    .observe(&loop_detect::ProgressObservation {
                         action,
                         output_fingerprint,
                         state_fingerprint,
@@ -1176,8 +1170,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                         read_only: loop_detect::is_read_only(&name),
                         replayed: metadata.replayed,
                         success: metadata.success,
-                    },
-                );
+                    });
                 let target_file = call.and_then(|c| {
                     c.arguments
                         .get("path")
@@ -1207,11 +1200,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     && (assessment.reason == loop_detect::ProgressReason::Churn
                         || assessment.streak >= loop_detect::ProgressLedger::RECOVERY_STREAK)
                 {
-                    evidence_recovery = Some((
-                        assessment.reason,
-                        assessment.streak,
-                        name.clone(),
-                    ));
+                    evidence_recovery = Some((assessment.reason, assessment.streak, name.clone()));
                 }
                 if !assessment.suppress_stagnation {
                     match ctx
@@ -1258,16 +1247,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>();
-                let cross_turn_status = ctx.reasoning_loop_detector.record_turn_evidence(
-                    &loop_detect::TurnEvidence {
-                        reasoning: &ctx.final_content,
-                        target_files: &target_file_refs,
-                        made_progress: cross_turn_made_progress,
-                        had_edits: cross_turn_had_edits,
-                        tool_count: cross_turn_tool_count,
-                        no_progress_streak: ctx.progress_ledger.no_progress_streak(),
-                    },
-                );
+                let cross_turn_status =
+                    ctx.reasoning_loop_detector
+                        .record_turn_evidence(&loop_detect::TurnEvidence {
+                            reasoning: &ctx.final_content,
+                            target_files: &target_file_refs,
+                            made_progress: cross_turn_made_progress,
+                            had_edits: cross_turn_had_edits,
+                            tool_count: cross_turn_tool_count,
+                            no_progress_streak: ctx.progress_ledger.no_progress_streak(),
+                        });
                 if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = cross_turn_status {
                     ctx.reasoning_loops_detected += 1;
                     dbg_log!("Cross-turn reasoning loop detected: {reason}");
@@ -1311,15 +1300,18 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                 let (reason, streak, action) = evidence_recovery.unwrap_or((
                     loop_detect::ProgressReason::NoNewInformation,
                     match stagnation {
-                        loop_detect::LoopStatus::Warning(n)
-                        | loop_detect::LoopStatus::Abort(n) => n,
+                        loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) => {
+                            n
+                        }
                         loop_detect::LoopStatus::Ok => 0,
                     },
                     "repeated tool output".to_string(),
                 ));
                 let evidence = format!(
                     "[Evidence-based recovery: signal={} streak={} action={}]. Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command.",
-                    reason.label(), streak, action
+                    reason.label(),
+                    streak,
+                    action
                 );
                 match loop_recovery_action(ctx.loop_recovery_attempts) {
                     LoopRecoveryAction::Recover => {
@@ -1459,11 +1451,12 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
                     ctx.turn_machine.finish_tools_if_executing();
                     return true;
                 }
-                let mut build_status = if ctx.made_edits && verification::requires_verification(&ctx.changed_paths) {
-                    "pending"
-                } else {
-                    "not run (no workspace code edits detected)"
-                };
+                let mut build_status =
+                    if ctx.made_edits && verification::requires_verification(&ctx.changed_paths) {
+                        "pending"
+                    } else {
+                        "not run (no workspace code edits detected)"
+                    };
                 if ctx.made_edits && verification::requires_verification(&ctx.changed_paths) {
                     {
                         let mut s = state.lock().await;
@@ -1733,8 +1726,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     if !turn_lifecycle.mark_finalized() {
         return ctx;
     }
-    let had_final_content =
-        !ctx.final_content_persisted && !ctx.final_content.trim().is_empty();
+    let had_final_content = !ctx.final_content_persisted && !ctx.final_content.trim().is_empty();
     let final_transcript = lifecycle::final_transcript_content(
         ctx.task_completed,
         &ctx.final_content,
@@ -1885,8 +1877,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             let prompt = s.pending_queue.remove(0);
             let is_wakeup = prompt.starts_with("__task_wakeup__:");
             let max_tool_rounds = s.config.max_tool_rounds;
-            let turn_context =
-                take_turn_context_for_prompt(&mut s, is_wakeup, max_tool_rounds);
+            let turn_context = take_turn_context_for_prompt(&mut s, is_wakeup, max_tool_rounds);
             dbg_log!("Popped prompt from queue: '{}'", prompt);
             (prompt, is_wakeup, turn_context)
         };

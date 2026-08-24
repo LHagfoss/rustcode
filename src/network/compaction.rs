@@ -227,7 +227,9 @@ impl StructuredSessionMemory {
                 if message.content.starts_with(STRUCTURED_MEMORY_MARKER)
                     || message.content.starts_with(SUMMARY_MARKER)
                     || message.content.starts_with("[Structured Session Memory]")
-                    || message.content.starts_with("[Deterministic context record]")
+                    || message
+                        .content
+                        .starts_with("[Deterministic context record]")
                 {
                     memory.merge_from_text(&message.content);
                 } else if !message.content.starts_with('[') {
@@ -310,14 +312,20 @@ impl StructuredSessionMemory {
                 if let Some((name, body)) = message.content.split_once(": ") {
                     if matches!(name, "view_file" | "read_file") {
                         if let Some(first_line) = body.lines().next() {
-                            if let Some(path) = first_line.strip_prefix("[File: ").and_then(|s| s.split(']').next()) {
+                            if let Some(path) = first_line
+                                .strip_prefix("[File: ")
+                                .and_then(|s| s.split(']').next())
+                            {
                                 if !memory.inspected_files.iter().any(|f| f == path) {
                                     memory.inspected_files.push(path.to_string());
                                 }
                             }
                         }
                     }
-                    if body.contains("error:") || body.contains("exit code: 1") || body.contains("FAILED") {
+                    if body.contains("error:")
+                        || body.contains("exit code: 1")
+                        || body.contains("FAILED")
+                    {
                         let snippet = compact_context_line(body, 200);
                         if !snippet.is_empty() && !memory.failures_and_errors.contains(&snippet) {
                             memory.failures_and_errors.push(snippet);
@@ -329,8 +337,10 @@ impl StructuredSessionMemory {
             if message.role == "assistant" {
                 for call in &message.tool_calls {
                     if call.name == "run_command"
-                        && let Ok(arguments) = serde_json::from_str::<serde_json::Value>(&call.arguments)
-                        && let Some(command) = arguments.get("command").and_then(|value| value.as_str())
+                        && let Ok(arguments) =
+                            serde_json::from_str::<serde_json::Value>(&call.arguments)
+                        && let Some(command) =
+                            arguments.get("command").and_then(|value| value.as_str())
                     {
                         let v = compact_context_line(command, 240);
                         if !v.is_empty() && !memory.verification_state.contains(&v) {
@@ -366,7 +376,9 @@ impl StructuredSessionMemory {
                 if self.current_task.is_none() {
                     self.current_task = Some(task.to_string());
                 }
-            } else if let Some(constraints) = trimmed.strip_prefix("Project instructions/constraints: ") {
+            } else if let Some(constraints) =
+                trimmed.strip_prefix("Project instructions/constraints: ")
+            {
                 for c in constraints.split("; ") {
                     if !self.user_constraints.iter().any(|existing| existing == c) {
                         self.user_constraints.push(c.to_string());
@@ -380,7 +392,11 @@ impl StructuredSessionMemory {
                 }
             } else if let Some(failures) = trimmed.strip_prefix("Failures/unresolved work: ") {
                 for fail in failures.split("; ") {
-                    if !self.failures_and_errors.iter().any(|existing| existing == fail) {
+                    if !self
+                        .failures_and_errors
+                        .iter()
+                        .any(|existing| existing == fail)
+                    {
                         self.failures_and_errors.push(fail.to_string());
                     }
                 }
@@ -396,7 +412,9 @@ impl StructuredSessionMemory {
                         self.key_architecture.push(a.to_string());
                     }
                 }
-            } else if let Some(decisions) = trimmed.strip_prefix("Architecture/decisions/next steps: ") {
+            } else if let Some(decisions) =
+                trimmed.strip_prefix("Architecture/decisions/next steps: ")
+            {
                 for d in decisions.split("; ") {
                     if !self.decisions.iter().any(|existing| existing == d) {
                         self.decisions.push(d.to_string());
@@ -432,34 +450,79 @@ impl StructuredSessionMemory {
         }
         if !self.user_constraints.is_empty() {
             out.push_str("Project instructions/constraints: ");
-            out.push_str(&self.user_constraints.iter().take(12).cloned().collect::<Vec<_>>().join("; "));
+            out.push_str(
+                &self
+                    .user_constraints
+                    .iter()
+                    .take(12)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
             out.push('\n');
         }
         if !self.modified_files.is_empty() {
             out.push_str(&format!(
                 "Modified files: {}\n",
-                self.modified_files.iter().take(20).cloned().collect::<Vec<_>>().join(", ")
+                self.modified_files
+                    .iter()
+                    .take(20)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         if !self.failures_and_errors.is_empty() {
             out.push_str("Failures/unresolved work: ");
-            out.push_str(&self.failures_and_errors.iter().rev().take(8).cloned().collect::<Vec<_>>().join("; "));
+            out.push_str(
+                &self
+                    .failures_and_errors
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
             out.push('\n');
         }
         if !self.verification_state.is_empty() {
             out.push_str(&format!(
                 "Verification state: {}\n",
-                self.verification_state.iter().rev().take(6).cloned().collect::<Vec<_>>().join("; ")
+                self.verification_state
+                    .iter()
+                    .rev()
+                    .take(6)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
             ));
         }
         if !self.key_architecture.is_empty() {
             out.push_str("Key architecture: ");
-            out.push_str(&self.key_architecture.iter().take(8).cloned().collect::<Vec<_>>().join("; "));
+            out.push_str(
+                &self
+                    .key_architecture
+                    .iter()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
             out.push('\n');
         }
         if !self.decisions.is_empty() {
             out.push_str("Architecture/decisions/next steps: ");
-            out.push_str(&self.decisions.iter().rev().take(8).cloned().collect::<Vec<_>>().join("; "));
+            out.push_str(
+                &self
+                    .decisions
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
             out.push('\n');
         }
         out.chars().take(max_chars).collect()
@@ -602,8 +665,7 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
             // wiped mid-read — the amnesia that made the agent re-read forever.
             // NOTE: still a fixed cap; if you run a small-context model as the
             // main model, lower this to fit its window.
-            if total_tool_tokens > threshold
-            {
+            if total_tool_tokens > threshold {
                 let valuable = has_failure_or_diagnostic(&m.content);
                 if let Some(pos) = m.content.find(": ") {
                     let tool_name = &m.content[..pos];
@@ -613,7 +675,10 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
                             tool_name
                         )
                     } else {
-                        format!("{}: [Old tool result content cleared to save context]", tool_name)
+                        format!(
+                            "{}: [Old tool result content cleared to save context]",
+                            tool_name
+                        )
                     };
                 } else {
                     m.content = if valuable {
@@ -794,10 +859,7 @@ pub async fn maybe_compact_with_local_policy(
     // 2. Count the post-prune history once. `history` is not touched again
     //    until compaction actually runs, so the same per-message counts serve
     //    both the budget check and the keep-suffix walk below.
-    let per_message: Vec<usize> = history
-        .iter()
-        .map(estimate_message_tokens)
-        .collect();
+    let per_message: Vec<usize> = history.iter().map(estimate_message_tokens).collect();
     let total_tokens: usize = per_message.iter().sum();
     // Cancellation still permits the deterministic local pruning above, but
     // must never report a completed compaction or start a summarizer request.
@@ -1051,14 +1113,12 @@ async fn force_compact_internal(
     };
 
     let tail: Vec<ChatMessage> = history[summarize_count..].to_vec();
-    let task_in_tail = pinned_task.as_ref().is_some_and(|task| {
-        tail.iter().any(|m| m.role == "user" && &m.content == task)
-    });
+    let task_in_tail = pinned_task
+        .as_ref()
+        .is_some_and(|task| tail.iter().any(|m| m.role == "user" && &m.content == task));
     let marker_in_tail = pinned_task.as_ref().is_some_and(|task| {
-        tail.iter().any(|m| {
-            m.role == "system"
-                && m.content == format!("{ORIGINAL_TASK_MARKER}\n{task}")
-        })
+        tail.iter()
+            .any(|m| m.role == "system" && m.content == format!("{ORIGINAL_TASK_MARKER}\n{task}"))
     });
 
     // Replace the summarized range with a single summary message.
@@ -1113,14 +1173,21 @@ fn render_summary_message(message: &ChatMessage) -> String {
         content.push_str("... [truncated]");
     }
     if let Some(record) = &message.tool_result {
-        let error = record
-            .error_kind
-            .as_deref()
-            .unwrap_or(if record.success { "none" } else { "unknown" });
+        let error =
+            record
+                .error_kind
+                .as_deref()
+                .unwrap_or(if record.success { "none" } else { "unknown" });
         let paths = if record.changed_paths.is_empty() {
             "none".to_string()
         } else {
-            record.changed_paths.iter().take(16).cloned().collect::<Vec<_>>().join(", ")
+            record
+                .changed_paths
+                .iter()
+                .take(16)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         content.push_str(&format!(
             "\n[execution metadata: success={}, error_kind={}, retryable={}, exit_code={:?}, truncated={}, replayed={}, changed_paths={paths}]",
@@ -1518,7 +1585,8 @@ mod tests {
 
     #[test]
     fn prune_old_tool_outputs_does_not_count_already_stubbed_results() {
-        let stub = "run_command: [Tool output truncated: 2000 tokens pruned to maintain context window]";
+        let stub =
+            "run_command: [Tool output truncated: 2000 tokens pruned to maintain context window]";
         let recent = "grep: recent match";
         let mut history = vec![tool_msg(stub), tool_msg(recent)];
         let threshold = estimate_message_tokens(&history[1]) + 1;
@@ -1561,7 +1629,9 @@ mod tests {
             tool_msg("view_file: [File: src/a.rs, Lines 1 to 1 of 1]\n1: same"),
             tool_msg("view_file: [File: src/b.rs, Lines 1 to 1 of 1]\n1: same"),
             tool_msg("view_file: error: cannot read 'src/c.rs'"),
-            tool_msg("view_file: [File: src/d.rs, Lines 1 to 1 of 2]\n1: same\n[Truncated: lines 2-2 of 2]"),
+            tool_msg(
+                "view_file: [File: src/d.rs, Lines 1 to 1 of 2]\n1: same\n[Truncated: lines 2-2 of 2]",
+            ),
         ];
         history.push(ChatMessage::new("user", "keep recent"));
         assert_eq!(prune_duplicate_tool_results(&mut history, 1), 1);
@@ -1795,7 +1865,10 @@ mod tests {
     async fn explicit_local_model_hint_skips_summary_request() {
         let mut history = vec![ChatMessage::new("user", "keep this task")];
         history.extend((0..20).map(|index| {
-            ChatMessage::new("assistant", format!("fact {index}: {}", "detail ".repeat(120)))
+            ChatMessage::new(
+                "assistant",
+                format!("fact {index}: {}", "detail ".repeat(120)),
+            )
         }));
 
         let compacted = maybe_compact_with_local_policy(
@@ -1810,9 +1883,11 @@ mod tests {
         .await;
 
         assert!(compacted);
-        assert!(!history
-            .iter()
-            .any(|message| message.content.starts_with(SUMMARY_MARKER)));
+        assert!(
+            !history
+                .iter()
+                .any(|message| message.content.starts_with(SUMMARY_MARKER))
+        );
     }
 
     #[tokio::test]
@@ -1864,15 +1939,9 @@ mod tests {
             (0..13).map(|index| ChatMessage::new("assistant", format!("new fact {index}"))),
         );
 
-        force_compact(
-            &reqwest::Client::new(),
-            &url,
-            "model",
-            &mut history,
-            None,
-        )
-        .await
-        .expect("incremental compaction should succeed");
+        force_compact(&reqwest::Client::new(), &url, "model", &mut history, None)
+            .await
+            .expect("incremental compaction should succeed");
 
         assert!(history.iter().any(|message| {
             message.content == format!("{ORIGINAL_TASK_MARKER}\noriginal objective")

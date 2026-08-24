@@ -123,10 +123,7 @@ fn unfinished_fence_start(text: &str) -> Option<usize> {
             if let Some((open_marker, open_length, _)) = open {
                 // A closing fence must use the same marker, be at least as
                 // long as its opener, and have no info text.
-                if marker == open_marker
-                    && marker_length >= open_length
-                    && rest.trim().is_empty()
-                {
+                if marker == open_marker && marker_length >= open_length && rest.trim().is_empty() {
                     open = None;
                 }
                 // Fence-like lines inside an open block are content; they
@@ -253,9 +250,9 @@ fn stream_holdback_start(text: &str) -> Option<usize> {
         unfinished_fence_start(text),
         unfinished_table_start(text),
     ]
-        .into_iter()
-        .flatten()
-        .min()
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 /// Return the source boundary before the final top-level Markdown block.
@@ -382,7 +379,10 @@ mod tests {
         let before_close = "intro\n~~~rust\nlet value = 1;\n";
 
         assert_eq!(cursor.pending_stable_source(before_close), "intro\n");
-        assert_eq!(super::mutable_stream_text(before_close), "~~~rust\nlet value = 1;\n");
+        assert_eq!(
+            super::mutable_stream_text(before_close),
+            "~~~rust\nlet value = 1;\n"
+        );
         cursor.commit_stable_stream("intro\n");
 
         let after_close = "intro\n~~~rust\nlet value = 1;\n~~~\nAfter";

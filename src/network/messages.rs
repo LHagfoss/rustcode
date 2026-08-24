@@ -68,7 +68,13 @@ pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_toke
     let mut token_prefix: Vec<u32> = Vec::with_capacity(message_tokens.len() + 1);
     token_prefix.push(0);
     for tokens in &message_tokens {
-        token_prefix.push(token_prefix.last().copied().unwrap_or(0).saturating_add(*tokens));
+        token_prefix.push(
+            token_prefix
+                .last()
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(*tokens),
+        );
     }
 
     let first_boundary = boundaries[0];
@@ -86,9 +92,8 @@ pub(crate) fn trim_msgs_to_budget(msgs: &mut Vec<serde_json::Value>, budget_toke
         let start = pair[0];
         let end = pair[1];
         dropped += end - start;
-        removed_tokens = removed_tokens.saturating_add(
-            token_prefix[end].saturating_sub(token_prefix[start]),
-        );
+        removed_tokens =
+            removed_tokens.saturating_add(token_prefix[end].saturating_sub(token_prefix[start]));
         remove_end = end;
         if total.saturating_sub(removed_tokens) <= budget_tokens {
             break;

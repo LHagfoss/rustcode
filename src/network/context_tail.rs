@@ -123,7 +123,10 @@ pub(crate) fn build_dynamic_context_tail_with_memory(
         context_section,
     )];
     if let Some(project_memory) = project_memory {
-        fragments.push(history::ContextFragment::new("project memory", project_memory));
+        fragments.push(history::ContextFragment::new(
+            "project memory",
+            project_memory,
+        ));
     }
     if !read_files.is_empty() || !todos.is_empty() {
         if let Some(map) = build_repo_map_fragment() {

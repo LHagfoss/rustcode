@@ -169,7 +169,9 @@ pub(crate) fn requires_verification(changed_paths: &std::collections::BTreeSet<S
     }
     // Conservative default-to-verify: any file that is not explicitly confirmed
     // to be documentation or a non-code asset requires verification.
-    changed_paths.iter().any(|path| !is_documentation_or_asset(path))
+    changed_paths
+        .iter()
+        .any(|path| !is_documentation_or_asset(path))
 }
 
 fn is_documentation_or_asset(path: &str) -> bool {
