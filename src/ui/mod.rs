@@ -1006,6 +1006,14 @@ fn input_footer_hint_text() -> &'static str {
     "Ctrl+P commands"
 }
 
+fn input_footer_exit_text(state: &RenderSnapshot) -> &'static str {
+    if state.ctrl_c_exit_armed() {
+        "Press Ctrl+C again to exit"
+    } else {
+        input_footer_hint_text()
+    }
+}
+
 fn context_usage(state: &RenderSnapshot) -> (u32, Option<u32>) {
     if let Some(usage) = &state.current_token_usage() {
         return (usage.total_tokens, usage.cached_tokens);
@@ -1040,7 +1048,7 @@ fn format_input_status_text(state: &RenderSnapshot) -> String {
         status.push(format!("Quota: {quota:.0}%"));
     }
 
-    status.push(input_footer_hint_text().to_string());
+    status.push(input_footer_exit_text(state).to_string());
     status.join("  ")
 }
 
