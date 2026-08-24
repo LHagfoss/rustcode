@@ -969,12 +969,15 @@ impl AppRuntime {
                         }
 
                         if is_ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
-                            if crate::app::handle_ctrl_c(&app_state, &mut current_cancel_token)
-                                .await
-                            {
+                            if crate::app::handle_ctrl_c(&app_state).await {
                                 break;
                             }
                             continue;
+                        }
+
+                        {
+                            let mut s = app_state.lock().await;
+                            s.ctrl_c_exit_armed = false;
                         }
 
                         {
@@ -2197,7 +2200,7 @@ impl AppRuntime {
                                 needs_redraw = true;
                                 continue;
                             }
-                            ui::ComposerAction::Cancel | ui::ComposerAction::Unhandled => {}
+                            ui::ComposerAction::Unhandled => {}
                         }
 
                         match key.code {
