@@ -1,0 +1,39 @@
+name: CI
+
+on:
+    pull_request:
+        branches: [main]
+    workflow_dispatch:
+
+env:
+    CARGO_TERM_COLOR: always
+
+permissions:
+    contents: read
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v4
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: rustfmt
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+
+            - name: Check formatting
+              run: cargo fmt --all -- --check
+
+            - name: Run tests
+              # These tests depend on user-installed skills or runner-specific
+              # ripgrep output. Keep them in the local suite, but exclude them
+              # from the clean-runner gate until they have portable fixtures.
+              run: >-
+                  cargo test --
+                  --skip control_plane_tool_does_not_stall_while_reading_workspace_root
+                  --skip grep_stops_at_byte_cap_for_large_matching_lines
