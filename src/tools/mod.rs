@@ -41,6 +41,8 @@ pub struct ToolCall {
 pub(crate) struct ToolExecutionOutput {
     pub(crate) content: String,
     pub(crate) success: bool,
+    pub(crate) pending: bool,
+    pub(crate) command: Option<String>,
     pub(crate) exit_code: Option<i32>,
     pub(crate) truncated: bool,
     /// True when the harness served a bounded cached read instead of running
@@ -55,6 +57,8 @@ impl ToolExecutionOutput {
         Self {
             content,
             success: true,
+            pending: false,
+            command: None,
             exit_code: None,
             truncated: false,
             replayed: false,
@@ -67,6 +71,8 @@ impl ToolExecutionOutput {
         Self {
             content,
             success: false,
+            pending: false,
+            command: None,
             exit_code: None,
             truncated: false,
             replayed: false,
@@ -1979,6 +1985,8 @@ pub(crate) fn execute_with_metadata_cancellable(
                             ToolExecutionOutput {
                                 content: text_parts.join("\n"),
                                 success,
+                                pending: false,
+                                command: None,
                                 exit_code: None,
                                 truncated: false,
                                 replayed: false,
@@ -1989,6 +1997,8 @@ pub(crate) fn execute_with_metadata_cancellable(
                             ToolExecutionOutput {
                                 content: serde_json::to_string_pretty(&val).unwrap_or_default(),
                                 success,
+                                pending: false,
+                                command: None,
                                 exit_code: None,
                                 truncated: false,
                                 replayed: false,
@@ -2024,6 +2034,8 @@ pub(crate) fn execute_with_metadata_cancellable(
             Ok(output) => ToolExecutionOutput {
                 content: output.content,
                 success: true,
+                pending: false,
+                command: None,
                 exit_code: None,
                 truncated: output.truncated,
                 replayed: false,

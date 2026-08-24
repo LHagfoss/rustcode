@@ -107,6 +107,8 @@ fn history_tool_result_event(message: &ChatMessage) -> Option<AgentUiEvent> {
         diff: message.diff.clone(),
         file_preview: message.file_preview.clone(),
         metadata: ToolResultMetadata {
+            pending: record.pending,
+            command: record.command.clone(),
             call_id: Some(id.clone()),
             arguments_hash: record.arguments_hash.clone(),
             success: record.success,
@@ -247,13 +249,38 @@ pub(crate) async fn run_agent_turn_with_events<P: TurnPolicy + 'static>(
     prompt: String,
     sender: AgentUiEventSender,
 ) -> super::TurnContext {
-    sender.send(AgentUiEvent::PromptStarted { prompt });
-    let mut turn = Box::pin(super::turn_engine::run_agent_turn(
+    let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
+    run_agent_turn_with_events_and_context(
         client,
         state,
         cancel_token,
         policy,
         stream_buffer,
+        prompt,
+        sender,
+        super::TurnContext::with_max_tool_rounds(max_tool_rounds),
+    )
+    .await
+}
+
+pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<super::stream::StreamBuffer>>,
+    prompt: String,
+    sender: AgentUiEventSender,
+    context: super::TurnContext,
+) -> super::TurnContext {
+    sender.send(AgentUiEvent::PromptStarted { prompt });
+    let mut turn = Box::pin(super::turn_engine::run_agent_turn_with_context(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        context,
     ));
     let mut previous_response = ResponseDeltaTracker::default();
     let mut previous_history_len = 0;

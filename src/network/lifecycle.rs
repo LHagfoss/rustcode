@@ -3,6 +3,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StopReason {
     Completed,
+    BackgroundPending,
     Cancelled,
     RecoveryFailed,
     LoopEscalation,
@@ -15,6 +16,7 @@ impl fmt::Display for StopReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Completed => f.write_str("completed"),
+            Self::BackgroundPending => f.write_str("background_pending"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::RecoveryFailed => f.write_str("recovery_failed"),
             Self::LoopEscalation => f.write_str("loop_escalation"),
@@ -56,6 +58,8 @@ pub(crate) fn final_transcript_content(
     reason: &StopReason,
 ) -> Option<String> {
     if task_completed {
+        None
+    } else if matches!(reason, StopReason::BackgroundPending) {
         None
     } else if content_already_persisted || content.trim().is_empty() {
         Some(format!("[harness: turn stopped — {reason}]"))

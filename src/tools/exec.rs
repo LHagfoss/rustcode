@@ -296,10 +296,51 @@ fn is_read_only_segment(segment: &str) -> bool {
         }),
         Some(
             "cat" | "date" | "echo" | "false" | "grep" | "head" | "less" | "ls" | "more"
-            | "printf" | "pwd" | "rg" | "tail" | "test" | "true" | "type" | "uname"
-            | "which",
+            | "printf" | "pwd" | "rg" | "stat" | "tail" | "test" | "true" | "type"
+            | "uname" | "which",
         ) => true,
+        Some("npm") => matches!(
+            tokens.get(1..).unwrap_or_default(),
+            ["config", "get", key] if !key.starts_with('-')
+        ),
         _ => false,
+    }
+}
+
+/// Return whether a command is small enough to run inline even when the model
+/// requests background execution. This is deliberately narrower than the
+/// read-only authorization classifier: a read-only command can still walk a
+/// large tree or produce unbounded output.
+fn is_short_discovery_command(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty()
+        || command
+            .chars()
+            .any(|character| matches!(character, ';' | '\n' | '|' | '&' | '<' | '>' | '`' | '$'))
+    {
+        return false;
+    }
+
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty() || tokens.len() > 8 || !is_read_only_segment(command) {
+        return false;
+    }
+
+    let binary = tokens[0].rsplit(['/', '\\']).next().unwrap_or(tokens[0]);
+    let arguments = &tokens[1..];
+    match binary {
+        "find" => {
+            let path = arguments.first().copied().unwrap_or("");
+            let bounded_depth = arguments.windows(2).any(|window| {
+                window[0] == "-maxdepth"
+                    && window[1].parse::<u8>().is_ok_and(|depth| depth <= 3)
+            });
+            !path.starts_with('/') && (path != "." || bounded_depth)
+        }
+        "ls" | "rg" | "stat" => !arguments
+            .iter()
+            .any(|argument| *argument == "/" || argument.starts_with('/')),
+        _ => true,
     }
 }
 
@@ -537,7 +578,8 @@ fn run_command_output_inner(
     let run_in_bg = args
         .get("background")
         .and_then(parse_json_bool)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        && !is_short_discovery_command(command_str);
     if run_in_bg {
         let session_id = get_active_session_id().unwrap_or_default();
         let cmd_str = command_str.to_string();
@@ -552,6 +594,8 @@ fn run_command_output_inner(
         let resolved_cwd_clone = resolved_cwd.clone();
         let env_clone = env.cloned();
         let task_id_clone = task_id.clone();
+        let command_for_thread = cmd_str.clone();
+        let command_for_output = cmd_str.clone();
 
         if let Ok(mut tasks) = get_background_tasks().lock() {
             tasks.insert(
@@ -569,11 +613,11 @@ fn run_command_output_inner(
         std::thread::spawn(move || {
             let mut cmd = if cfg!(target_os = "windows") {
                 let mut c = std::process::Command::new("cmd");
-                c.args(["/C", &cmd_str]);
+                c.args(["/C", &command_for_thread]);
                 c
             } else {
                 let mut c = std::process::Command::new("sh");
-                c.args(["-c", &cmd_str]);
+                c.args(["-c", &command_for_thread]);
                 c
             };
 
@@ -593,7 +637,7 @@ fn run_command_output_inner(
                 }
             }
 
-            let output = match cmd.spawn() {
+            let mut output = match cmd.spawn() {
                 Ok(child) => {
                     if let Some(pid) = Some(child.id())
                         && let Ok(mut tasks) = get_background_tasks().lock()
@@ -622,6 +666,8 @@ fn run_command_output_inner(
                             super::ToolExecutionOutput {
                                 content: full,
                                 success,
+                                pending: false,
+                                command: Some(command_for_output.clone()),
                                 exit_code,
                                 truncated: output.stdout.is_truncated()
                                     || output.stderr.is_truncated(),
@@ -637,6 +683,7 @@ fn run_command_output_inner(
                 }
                 Err(e) => super::ToolExecutionOutput::failure(format!("failed to spawn: {e}")),
             };
+            output.command = Some(command_for_thread);
 
             if let Ok(mut tasks) = get_background_tasks().lock() {
                 tasks.remove(&task_id_clone);
@@ -649,9 +696,11 @@ fn run_command_output_inner(
 
         return Ok(super::ToolExecutionOutput {
             content: format!(
-                "Task started in background. Task ID: {task_id}. Status: Running. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion."
+                "Task started in background. Task ID: {task_id}. Status: Pending. Command: {cmd_str}. You will be notified automatically with the full output when it completes — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion."
             ),
-            success: true,
+            success: false,
+            pending: true,
+            command: Some(cmd_str),
             exit_code: None,
             truncated: false,
             replayed: false,
@@ -695,6 +744,8 @@ fn run_command_output_inner(
     Ok(super::ToolExecutionOutput {
         content: result.trim_end().to_string(),
         success: !failed,
+        pending: false,
+        command: None,
         exit_code: Some(exit_code),
         truncated,
         replayed: false,
@@ -972,6 +1023,94 @@ mod tests {
             .expect("true should return a structured command result");
         assert!(passed.success);
         assert_eq!(passed.error_kind, None);
+    }
+
+    #[test]
+    fn background_command_start_is_pending_and_names_command() {
+        let command = "sleep 1; printf background-output";
+        let output = run_command_output(&serde_json::json!({
+            "command": command,
+            "background": true,
+        }))
+        .expect("background command should be accepted");
+
+        assert!(!output.success, "starting is not completed success");
+        assert_eq!(output.exit_code, None, "the process has not exited yet");
+        assert!(output.content.contains("Status: Pending"), "{}", output.content);
+        assert!(output.content.contains(command), "{}", output.content);
+    }
+
+    #[test]
+    fn short_discovery_commands_ignore_background_request() {
+        for command in [
+            "printf synchronous-output",
+            "pwd",
+            "test -e Cargo.toml",
+            "ls src",
+            "stat Cargo.toml",
+            "find src -name exec.rs -type f",
+        ] {
+            let output = run_command_output(&serde_json::json!({
+                "command": command,
+                "background": true,
+            }))
+            .expect("short discovery command should execute");
+
+            assert!(!output.pending, "short command was backgrounded: {command}");
+            assert!(output.exit_code.is_some(), "missing exit code: {command}");
+            assert_eq!(output.command, None, "sync command metadata: {command}");
+        }
+    }
+
+    #[test]
+    fn background_request_is_preserved_for_long_or_mutating_commands() {
+        let command = "sleep 1";
+        let output = run_command_output(&serde_json::json!({
+            "command": command,
+            "background": true,
+        }))
+        .expect("long command should be accepted");
+
+        assert!(output.pending, "command was forced synchronous: {command}");
+        assert_eq!(output.command.as_deref(), Some(command));
+    }
+
+    #[test]
+    fn npm_prefix_discovery_is_classified_as_read_only() {
+        assert!(command_confirmation_scope("npm config get prefix").is_none());
+    }
+
+    #[test]
+    fn short_discovery_classifier_is_conservative() {
+        for command in [
+            "which markdownlint",
+            "command -v markdownlint",
+            "type markdownlint",
+            "npm config get prefix",
+            "find . -maxdepth 2 -type f",
+            "rg --files src",
+            "ls src",
+            "stat Cargo.toml",
+        ] {
+            assert!(
+                super::is_short_discovery_command(command),
+                "expected short discovery command: {command}"
+            );
+        }
+
+        for command in [
+            "find / -type f",
+            "rg TODO /",
+            "ls /",
+            "npm install",
+            "cargo test",
+            "printf output > result.txt",
+        ] {
+            assert!(
+                !super::is_short_discovery_command(command),
+                "must remain background-capable: {command}"
+            );
+        }
     }
 
     #[test]

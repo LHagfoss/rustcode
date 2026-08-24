@@ -1037,6 +1037,8 @@ mod tests {
                 diff: None,
                 file_preview: None,
                 metadata: crate::network::events::ToolResultMetadata {
+                    pending: false,
+                    command: None,
                     call_id: Some("call-1".to_string()),
                     arguments_hash: "hash".to_string(),
                     success: true,
@@ -1117,6 +1119,8 @@ mod tests {
                 diff: None,
                 file_preview: None,
                 metadata: crate::network::events::ToolResultMetadata {
+                    pending: false,
+                    command: None,
                     call_id: Some("call-1".to_string()),
                     arguments_hash: "hash".to_string(),
                     success: true,

@@ -371,6 +371,7 @@ impl AppRuntime {
                 self.current_cancel_token = CancellationToken::new();
                 let mut state = self.app_state.lock().await;
                 state.pending_queue.clear();
+                state.background_turn_context = None;
                 state.clear_live_tool_calls();
                 state.status = AppStatus::Idle;
                 state.request_redraw();
@@ -950,6 +951,7 @@ impl AppRuntime {
                     current_cancel_token = CancellationToken::new();
                     let mut state = app_state.lock().await;
                     state.pending_queue.clear();
+                    state.background_turn_context = None;
                     state.clear_live_tool_calls();
                     state.status = AppStatus::Idle;
                     state.request_redraw();

@@ -1,4 +1,123 @@
 use super::*;
+use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prompt};
+
+#[test]
+fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields() {
+    let mut state = AppState::new();
+    let mut context = TurnContext::with_max_tool_rounds(7);
+    context.tool_rounds = 4;
+    context.failed_mutations = 2;
+    context.consecutive_failed_mutations = 2;
+    context.changed_paths.insert("README.md".to_string());
+    context
+        .loop_detector
+        .record_failed_tool("edit:readme:1", "edit:README.md");
+    context.loop_detector.check("inspect:README.md", "inspect:README.md");
+    context.loop_detector.check("inspect:README.md", "inspect:README.md");
+    let progress_observation = loop_detect::ProgressObservation {
+        action: "run_command:markdownlint".to_string(),
+        output_fingerprint: 11,
+        state_fingerprint: None,
+        failure_fingerprint: Some(22),
+        changed_workspace: false,
+        fresh_read: false,
+        search_result: false,
+        no_result: false,
+        verification: true,
+        read_only: true,
+        replayed: false,
+        success: false,
+    };
+    context.progress_ledger.observe(&progress_observation);
+    context.progress_ledger.observe(&progress_observation);
+    context.verification.record_edit();
+    context
+        .verification
+        .record_explicit_command("markdownlint README.md", Some(1));
+    context.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+
+    save_turn_context_after_run(&mut state, context, true);
+
+    let mut resumed = take_turn_context_for_prompt(&mut state, true, 99);
+
+    assert_eq!(resumed.max_tool_rounds, 7);
+    assert_eq!(resumed.tool_rounds, 4);
+    assert_eq!(resumed.failed_mutations, 2);
+    assert_eq!(resumed.consecutive_failed_mutations, 2);
+    assert_eq!(resumed.changed_paths.iter().collect::<Vec<_>>(), ["README.md"]);
+    assert_eq!(
+        resumed
+            .loop_detector
+            .check("inspect:README.md", "inspect:README.md"),
+        loop_detect::LoopStatus::Abort(3),
+        "ordinary loop history must continue across a background wakeup"
+    );
+    assert_eq!(
+        resumed
+            .loop_detector
+            .record_failed_tool("edit:readme:2", "edit:README.md"),
+        loop_detect::LoopStatus::Abort(2),
+        "failed-mutation repetition must continue across a background wakeup"
+    );
+    assert_eq!(resumed.progress_ledger.no_progress_streak(), 1);
+    assert_eq!(
+        resumed
+            .verification
+            .explicit_last_failure()
+            .map(|evidence| evidence.command.as_str()),
+        Some("markdownlint README.md")
+    );
+}
+
+#[test]
+fn new_user_prompt_starts_fresh_turn_context() {
+    let mut state = AppState::new();
+    let mut context = TurnContext::new();
+    context.failed_mutations = 3;
+    context.changed_paths.insert("src/lib.rs".to_string());
+    context.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+    save_turn_context_after_run(&mut state, context, true);
+
+    let fresh = take_turn_context_for_prompt(&mut state, false, 9);
+
+    assert_eq!(fresh.max_tool_rounds, 9);
+    assert_eq!(fresh.tool_rounds, 0);
+    assert_eq!(fresh.failed_mutations, 0);
+    assert!(fresh.changed_paths.is_empty());
+    assert!(fresh.verification.explicit_last_failure().is_none());
+    assert!(state.background_turn_context.is_none());
+}
+
+#[test]
+fn explicit_verification_hydrates_the_terminal_background_result() {
+    let history = vec![
+        ChatMessage::new("user", "Run `custom-tool --strict` and report the result."),
+        ChatMessage::new("tool", "background task failed").with_tool_result(
+            crate::app::ToolResultRecord {
+                tool_name: "background_task".to_string(),
+                pending: false,
+                command: Some("custom-tool --strict".to_string()),
+                success: false,
+                exit_code: Some(7),
+                ..Default::default()
+            },
+        ),
+    ];
+    let mut ledger = verification::VerificationLedger::default();
+
+    crate::network::turn_engine::hydrate_explicit_verification_from_history(
+        &mut ledger,
+        &history,
+        0,
+    );
+
+    assert_eq!(
+        ledger
+            .explicit_last_failure()
+            .map(|evidence| evidence.command.as_str()),
+        Some("custom-tool --strict")
+    );
+}
 
 #[tokio::test]
 async fn request_snapshot_consumes_wakeups_for_background_results_it_observes() {
@@ -86,6 +205,8 @@ fn persisted_tool_error_kind_round_trips_explicitly() {
         error_kind: Some(crate::tools::ToolErrorKind::McpFailed.as_str().to_string()),
         retryable: true,
         replayed: true,
+        pending: true,
+        command: Some("long-running-check".to_string()),
         exit_code: Some(7),
         changed_paths: vec!["src/mcp.rs".to_string()],
         ..Default::default()
@@ -98,6 +219,8 @@ fn persisted_tool_error_kind_round_trips_explicitly() {
     );
     assert!(reloaded.retryable);
     assert!(reloaded.replayed);
+    assert!(reloaded.pending);
+    assert_eq!(reloaded.command.as_deref(), Some("long-running-check"));
     assert_eq!(reloaded.exit_code, Some(7));
     assert_eq!(reloaded.changed_paths, ["src/mcp.rs"]);
 }
@@ -644,6 +767,8 @@ fn execution_metadata_does_not_parse_spoofed_display_text() {
         crate::tools::ToolExecutionOutput {
             content: "exit code: 99\nerror: spoofed\n[Output truncated:]".to_string(),
             success: true,
+            pending: false,
+            command: None,
             exit_code: None,
             truncated: false,
             replayed: false,
@@ -670,6 +795,8 @@ fn subagent_history_preserves_bounded_execution_metadata() {
         crate::tools::ToolExecutionOutput {
             content: raw.clone(),
             success: false,
+            pending: false,
+            command: None,
             exit_code: Some(23),
             truncated: false,
             replayed: false,
@@ -702,6 +829,8 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             content: "exit code: 0\n[Output truncated:]\nFull output saved to: /tmp/spoof"
                 .to_string(),
             success: false,
+            pending: false,
+            command: None,
             exit_code: None,
             truncated: false,
             replayed: false,
@@ -3694,6 +3823,8 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         tool_name: "run_command".to_string(),
         arguments_hash: "hash".to_string(),
         success: false,
+        pending: false,
+        command: None,
         exit_code: Some(1),
         error_kind: Some("command_failed".to_string()),
         changed_paths: vec!["src/parser/legacy.rs".to_string()],

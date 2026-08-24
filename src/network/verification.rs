@@ -5,6 +5,7 @@ pub(crate) enum VerificationKind {
     Format,
     Lint,
     Build,
+    Command,
 }
 
 impl VerificationKind {
@@ -15,6 +16,7 @@ impl VerificationKind {
             Self::Format => "format",
             Self::Lint => "lint",
             Self::Build => "build",
+            Self::Command => "command",
         }
     }
 }
@@ -31,6 +33,7 @@ pub(crate) struct VerificationEvidence {
 pub(crate) struct VerificationLedger {
     generation: u64,
     last: Option<VerificationEvidence>,
+    explicit_last: Option<VerificationEvidence>,
 }
 
 impl VerificationLedger {
@@ -42,12 +45,14 @@ impl VerificationLedger {
         let Some(kind) = classify_command(command) else {
             return;
         };
-        self.last = Some(VerificationEvidence {
-            command: command.trim().to_string(),
-            kind,
-            exit_code,
-            generation: self.generation,
-        });
+        self.last = Some(self.evidence(command, kind, exit_code));
+    }
+
+    pub(crate) fn record_explicit_command(&mut self, command: &str, exit_code: Option<i32>) {
+        let kind = classify_command(command).unwrap_or(VerificationKind::Command);
+        let evidence = self.evidence(command, kind, exit_code);
+        self.last = Some(evidence.clone());
+        self.explicit_last = Some(evidence);
     }
 
     pub(crate) fn has_fresh_successful_verification(&self) -> bool {
@@ -58,6 +63,12 @@ impl VerificationLedger {
 
     pub(crate) fn last_failure(&self) -> Option<&VerificationEvidence> {
         self.last.as_ref().filter(|evidence| {
+            evidence.generation == self.generation && evidence.exit_code != Some(0)
+        })
+    }
+
+    pub(crate) fn explicit_last_failure(&self) -> Option<&VerificationEvidence> {
+        self.explicit_last.as_ref().filter(|evidence| {
             evidence.generation == self.generation && evidence.exit_code != Some(0)
         })
     }
@@ -73,6 +84,20 @@ impl VerificationLedger {
                     .map_or_else(|| "unknown".to_string(), |code| code.to_string())
             ),
             None => "none recorded".to_string(),
+        }
+    }
+
+    fn evidence(
+        &self,
+        command: &str,
+        kind: VerificationKind,
+        exit_code: Option<i32>,
+    ) -> VerificationEvidence {
+        VerificationEvidence {
+            command: command.trim().to_string(),
+            kind,
+            exit_code,
+            generation: self.generation,
         }
     }
 }
@@ -101,6 +126,41 @@ fn classify_command(command: &str) -> Option<VerificationKind> {
 
 pub(crate) fn is_verification_command(command: &str) -> bool {
     classify_command(command).is_some()
+}
+
+pub(crate) fn is_explicit_verification_request(prompt: &str) -> bool {
+    let normalized = prompt.to_ascii_lowercase();
+    if [
+        "don't run",
+        "do not run",
+        "without running",
+        "don't execute",
+        "do not execute",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+    {
+        return false;
+    }
+
+    let asks_to_run = ["run ", "rerun", "re-run", "execute "]
+        .iter()
+        .any(|phrase| normalized.contains(phrase));
+    let asks_for_check = [
+        "command",
+        "check",
+        "test",
+        "lint",
+        "build",
+        "format",
+        "verification",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    let has_inline_command = normalized.contains('`');
+
+    (asks_for_check || has_inline_command)
+        && (asks_to_run || normalized.trim_start().starts_with("check "))
 }
 
 pub(crate) fn requires_verification(changed_paths: &std::collections::BTreeSet<String>) -> bool {
@@ -201,7 +261,51 @@ fn is_documentation_or_asset(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{VerificationLedger, requires_verification};
+    use super::{VerificationLedger, is_explicit_verification_request, requires_verification};
+
+    #[test]
+    fn explicit_arbitrary_command_failure_is_authoritative() {
+        assert!(is_explicit_verification_request(
+            "Please run `markdownlint --config .markdownlint.json README.md` and report whether it passes."
+        ));
+
+        let mut ledger = VerificationLedger::default();
+        ledger.record_explicit_command(
+            "markdownlint --config .markdownlint.json README.md",
+            Some(1),
+        );
+
+        assert_eq!(
+            ledger
+                .explicit_last_failure()
+                .map(|evidence| evidence.command.as_str()),
+            Some("markdownlint --config .markdownlint.json README.md")
+        );
+    }
+
+    #[test]
+    fn incidental_unknown_command_failure_is_not_authoritative_verification() {
+        let mut ledger = VerificationLedger::default();
+        ledger.record_command("which markdownlint", Some(1));
+
+        assert!(ledger.explicit_last_failure().is_none());
+    }
+
+    #[test]
+    fn explicit_verification_request_is_detected_without_a_command_allowlist() {
+        assert!(is_explicit_verification_request(
+            "Run the custom repository check and tell me if it passes."
+        ));
+        assert!(is_explicit_verification_request(
+            "Please run `custom-tool --strict` and report the result."
+        ));
+        assert!(is_explicit_verification_request(
+            "Rerun the check after editing."
+        ));
+        assert!(!is_explicit_verification_request(
+            "Investigate the documentation issue and explain what you find."
+        ));
+    }
 
     #[test]
     fn verification_becomes_stale_after_a_later_edit() {
