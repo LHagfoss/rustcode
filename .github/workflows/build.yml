@@ -12,7 +12,30 @@ env:
     CARGO_TERM_COLOR: always
 
 jobs:
+    verify-tag:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out repository history
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Verify tagged commit is on main
+              shell: bash
+              run: |
+                  if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+                      exit 0
+                  fi
+
+                  git fetch origin main --no-tags
+                  if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
+                      echo "Tag commit $GITHUB_SHA is not reachable from origin/main."
+                      echo "Publish tags only after merging the release PR."
+                      exit 1
+                  fi
+
     build:
+        needs: verify-tag
         runs-on: ${{ matrix.os }}
         strategy:
             fail-fast: false
