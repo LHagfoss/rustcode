@@ -112,10 +112,7 @@ fn push_wrapped(lines: &mut Vec<Line<'static>>, spans: Vec<Span<'static>>, width
     push_wrapped_with_continuation(lines, spans, width, None);
 }
 
-pub(super) fn wrap_styled_spans(
-    spans: Vec<Span<'static>>,
-    width: usize,
-) -> Vec<Line<'static>> {
+pub(super) fn wrap_styled_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     push_wrapped(&mut lines, spans, width);
     lines
@@ -142,10 +139,7 @@ impl MarkdownTableCell {
     }
 
     fn width(&self) -> usize {
-        self.spans
-            .iter()
-            .map(|span| span.content.width())
-            .sum()
+        self.spans.iter().map(|span| span.content.width()).sum()
     }
 }
 
@@ -177,7 +171,11 @@ fn push_table_wrapped_text(
         if let Some(last) = lines.last_mut()
             && last.last().is_some_and(|span| span.style == style)
         {
-            last.last_mut().expect("last span exists").content.to_mut().push(character);
+            last.last_mut()
+                .expect("last span exists")
+                .content
+                .to_mut()
+                .push(character);
         } else {
             lines
                 .last_mut()
@@ -421,8 +419,7 @@ pub(super) fn unwrap_markdown_table_fences(content: &str) -> std::borrow::Cow<'_
 fn is_table_dash(character: char) -> bool {
     matches!(
         character,
-        '-'
-            | '\u{2010}'
+        '-' | '\u{2010}'
             | '\u{2011}'
             | '\u{2012}'
             | '\u{2013}'
@@ -542,7 +539,10 @@ fn sanitize_markdown(content: &str) -> std::borrow::Cow<'_, str> {
         // Normalize bullet character to '- ' so pulldown_cmark parses list items
         let trimmed_start = line.trim_start();
         let bullet_prefixes = ["• ", "•", "· ", "·", "● ", "●"];
-        if let Some(matched_prefix) = bullet_prefixes.iter().find(|&&p| trimmed_start.starts_with(p)) {
+        if let Some(matched_prefix) = bullet_prefixes
+            .iter()
+            .find(|&&p| trimmed_start.starts_with(p))
+        {
             let indent_len = line.len() - trimmed_start.len();
             let indent = &line[..indent_len];
             let rest = trimmed_start[matched_prefix.len()..].trim_start();
@@ -582,12 +582,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 .map(|prefix| {
                     Span::styled(
                         prefix.to_owned(),
-                        get_themed_style(
-                            COLOR_MUTED(),
-                            COLOR_BG(),
-                            Modifier::empty(),
-                            show_picker,
-                        ),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                     )
                 })
                 .or_else(|| {
@@ -603,12 +598,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                         )
                     })
                 });
-            push_wrapped_with_continuation(
-                lines,
-                std::mem::take(paragraph),
-                width,
-                continuation,
-            );
+            push_wrapped_with_continuation(lines, std::mem::take(paragraph), width, continuation);
         }
     };
     let flush_table = |lines: &mut Vec<Line<'static>>,
@@ -647,11 +637,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                             ),
                         )];
                         value_spans.extend(cell.spans.clone());
-                        push_wrapped(
-                            lines,
-                            value_spans,
-                            width,
-                        );
+                        push_wrapped(lines, value_spans, width);
                     }
                     if row_index + 1 < body_rows.len() {
                         lines.push(Line::from(""));
@@ -724,15 +710,9 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 for i in 0..cols {
                     let w = col_widths[i];
                     let spans = cell_lines[i].get(line_idx).cloned().unwrap_or_default();
-                    let visible_width: usize = spans
-                        .iter()
-                        .map(|span| span.content.width())
-                        .sum();
+                    let visible_width: usize = spans.iter().map(|span| span.content.width()).sum();
                     let remaining = w.saturating_sub(visible_width);
-                    let alignment = alignments
-                        .get(i)
-                        .copied()
-                        .unwrap_or(Alignment::None);
+                    let alignment = alignments.get(i).copied().unwrap_or(Alignment::None);
                     let left_padding = match alignment {
                         Alignment::Center => remaining / 2,
                         Alignment::Right => remaining,
@@ -742,7 +722,8 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     row_spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING + left_padding)));
                     row_spans.extend(spans.into_iter().map(|mut span| {
                         if *is_header {
-                            span.style = span.style.fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
+                            span.style =
+                                span.style.fg(COLOR_PRIMARY()).add_modifier(Modifier::BOLD);
                         }
                         span
                     }));
@@ -797,10 +778,12 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                     let level = heading.unwrap_or(HeadingLevel::H3);
                     let style = heading_style(level, show_picker);
                     let mut text = vec![Span::styled(heading_marker(level), style)];
-                    text.extend(std::mem::take(&mut paragraph)
-                        .into_iter()
-                        .map(|s| Span::styled(s.content.into_owned(), style))
-                        .collect::<Vec<_>>());
+                    text.extend(
+                        std::mem::take(&mut paragraph)
+                            .into_iter()
+                            .map(|s| Span::styled(s.content.into_owned(), style))
+                            .collect::<Vec<_>>(),
+                    );
                     lines.push(Line::from(text));
                 }
                 heading = None;
@@ -863,12 +846,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
                 if !quote_prefix.is_empty() {
                     paragraph.push(Span::styled(
                         quote_prefix,
-                        get_themed_style(
-                            COLOR_MUTED(),
-                            COLOR_BG(),
-                            Modifier::empty(),
-                            show_picker,
-                        ),
+                        get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
                     ));
                 }
                 paragraph.push(Span::styled(
@@ -1115,9 +1093,7 @@ fn render_markdown_uncached(content: &str, width: usize, show_picker: bool) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        COLOR_PRIMARY, MarkdownCache, cache_key, render_cache, render_markdown,
-    };
+    use super::{COLOR_PRIMARY, MarkdownCache, cache_key, render_cache, render_markdown};
     use ratatui::style::Modifier;
     use ratatui::text::Line;
 
@@ -1152,7 +1128,10 @@ mod tests {
             .find(|span| span.content.contains("code"))
             .expect("code table cell should be rendered");
         assert_eq!(bold.style.add_modifier(Modifier::BOLD), bold.style);
-        assert_ne!(bold.style, code.style, "inline code should retain its style");
+        assert_ne!(
+            bold.style, code.style,
+            "inline code should retain its style"
+        );
     }
 
     #[test]
@@ -1169,18 +1148,18 @@ mod tests {
             .iter()
             .find(|line| line.contains('a') && line.contains('b') && line.contains('c'))
             .expect("table body");
-        assert!(
-            header.contains("Left") && header.contains("Center") && header.contains("Right")
-        );
+        assert!(header.contains("Left") && header.contains("Center") && header.contains("Right"));
         assert!(
             body.starts_with(" a"),
             "cells should have readable padding: {body:?}"
         );
-        assert!(lines[0]
-            .spans
-            .iter()
-            .filter(|span| span.content.contains("Left") || span.content.contains("Center"))
-            .all(|span| span.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .filter(|span| span.content.contains("Left") || span.content.contains("Center"))
+                .all(|span| span.style.add_modifier.contains(Modifier::BOLD))
+        );
     }
 
     #[test]
@@ -1208,8 +1187,16 @@ mod tests {
             .position(|line| line.contains("Commit"))
             .expect("table should render with a header");
 
-        assert!(rendered[table_index..].iter().any(|line| line.contains("3d6a1a5")));
-        assert!(rendered[table_index..].iter().any(|line| line.contains("764fe6b")));
+        assert!(
+            rendered[table_index..]
+                .iter()
+                .any(|line| line.contains("3d6a1a5"))
+        );
+        assert!(
+            rendered[table_index..]
+                .iter()
+                .any(|line| line.contains("764fe6b"))
+        );
         assert!(
             rendered[..table_index]
                 .iter()
@@ -1260,17 +1247,17 @@ mod tests {
             "| rustcode | a terminal coding agent with a readable narrow table layout |"
         );
         let lines = render_markdown(md, 28, false, false);
-        let rendered = lines
-            .iter()
-            .map(Line::to_string)
-            .collect::<Vec<_>>();
+        let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
 
         assert!(
             rendered.iter().any(|line| line.contains("Name: rustcode")),
             "unexpected narrow table rendering: {rendered:?}"
         );
         assert!(rendered.iter().any(|line| line.contains("Purpose:")));
-        assert!(rendered.len() > 3, "the long value should wrap: {rendered:?}");
+        assert!(
+            rendered.len() > 3,
+            "the long value should wrap: {rendered:?}"
+        );
         assert!(
             rendered.iter().all(|line| !line.contains('┌')),
             "narrow tables must not use a cramped grid: {rendered:?}"
@@ -1415,9 +1402,11 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>();
 
-        assert!(rendered
-            .iter()
-            .any(|line| line.contains("Tool") && line.contains("Purpose")));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Tool") && line.contains("Purpose"))
+        );
         assert!(rendered.iter().any(|line| line.contains("grep")));
         assert!(rendered.iter().all(|line| !line.contains("```")));
     }
@@ -1459,7 +1448,10 @@ mod tests {
         // 1 heading + 3 bullet lines = 4 non-empty lines
         assert_eq!(non_empty.len(), 4);
         // Ensure all 3 bullet lines have bullet marker
-        let bullet_count = lines.iter().filter(|line| line.to_string().starts_with("- ")).count();
+        let bullet_count = lines
+            .iter()
+            .filter(|line| line.to_string().starts_with("- "))
+            .count();
         assert_eq!(bullet_count, 3);
     }
 

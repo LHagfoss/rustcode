@@ -93,10 +93,10 @@ fn route_ctrl_c(s: &mut AppState) -> CtrlCAction {
     if matches!(
         s.status,
         AppStatus::VerbosityPicker
-        | AppStatus::ThinkingPicker
-        | AppStatus::EffortPicker
-        | AppStatus::ProtocolPicker
-        | AppStatus::YoloPicker
+            | AppStatus::ThinkingPicker
+            | AppStatus::EffortPicker
+            | AppStatus::ProtocolPicker
+            | AppStatus::YoloPicker
     ) {
         s.close_modal_status();
         return CtrlCAction::Handled;
@@ -237,8 +237,7 @@ pub async fn handle_enter(
                 match tokens.get(1).copied() {
                     None => check_memory_usage(&mut s),
                     Some(_) => {
-                        if let Some(message) =
-                            crate::memory::command(root.as_deref(), &tokens[1..])
+                        if let Some(message) = crate::memory::command(root.as_deref(), &tokens[1..])
                         {
                             s.history.push(ChatMessage::new("system", message));
                         }
@@ -246,8 +245,7 @@ pub async fn handle_enter(
                 }
             }
             "/clear" => {
-                let _ = crate::app::session_controller::SessionController::default()
-                    .clear(&mut s);
+                let _ = crate::app::session_controller::SessionController::default().clear(&mut s);
             }
             "/summarize" => {
                 // summarize_session locks the state itself and runs a full
@@ -384,14 +382,16 @@ pub async fn handle_enter(
                 if let Err(error) = crate::app::session_controller::SessionController::default()
                     .fork(&mut s, crate::app::events::SessionAction::Latest)
                 {
-                    s.history.push(ChatMessage::new("system", error.to_string()));
+                    s.history
+                        .push(ChatMessage::new("system", error.to_string()));
                 }
             }
             "/archive" => {
-                if let Err(error) = crate::app::session_controller::SessionController::default()
-                    .archive(&mut s)
+                if let Err(error) =
+                    crate::app::session_controller::SessionController::default().archive(&mut s)
                 {
-                    s.history.push(ChatMessage::new("system", error.to_string()));
+                    s.history
+                        .push(ChatMessage::new("system", error.to_string()));
                 }
             }
             "/agents" => {
@@ -424,31 +424,29 @@ pub async fn handle_enter(
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
-            "/yolo" => {
-                match tokens.get(1) {
-                    None => {
-                        s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
-                        s.status = AppStatus::YoloPicker;
-                    }
-                    Some(&"on") | Some(&"enable") | Some(&"enabled") | Some(&"true") => {
-                        s.auto_confirm = true;
-                        s.set_notice("YOLO mode enabled");
-                    }
-                    Some(&"off") | Some(&"disable") | Some(&"disabled") | Some(&"false") => {
-                        s.auto_confirm = false;
-                        s.set_notice("YOLO mode disabled");
-                    }
-                    Some(&"toggle") => {
-                        toggle_auto_confirm(&mut s);
-                    }
-                    _ => {
-                        s.history.push(ChatMessage::new(
-                            "system",
-                            "Invalid option. Use 'on', 'off', 'enable', 'disable', or 'toggle'.",
-                        ));
-                    }
+            "/yolo" => match tokens.get(1) {
+                None => {
+                    s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
+                    s.status = AppStatus::YoloPicker;
                 }
-            }
+                Some(&"on") | Some(&"enable") | Some(&"enabled") | Some(&"true") => {
+                    s.auto_confirm = true;
+                    s.set_notice("YOLO mode enabled");
+                }
+                Some(&"off") | Some(&"disable") | Some(&"disabled") | Some(&"false") => {
+                    s.auto_confirm = false;
+                    s.set_notice("YOLO mode disabled");
+                }
+                Some(&"toggle") => {
+                    toggle_auto_confirm(&mut s);
+                }
+                _ => {
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        "Invalid option. Use 'on', 'off', 'enable', 'disable', or 'toggle'.",
+                    ));
+                }
+            },
             "/verbosity" => {
                 use crate::app::state::Verbosity;
                 let label = |v: &Verbosity| match v {
@@ -1163,10 +1161,10 @@ pub async fn handle_enter(
 
     if let Some(selected_id) = s.selected_subagent_id {
         let id = crate::app::SubagentId::from_raw(selected_id);
-        if let Err(error) =
-            crate::app::SubagentController.send_input(&mut s, id, raw_input.clone())
+        if let Err(error) = crate::app::SubagentController.send_input(&mut s, id, raw_input.clone())
         {
-            s.history.push(ChatMessage::new("system", error.to_string()));
+            s.history
+                .push(ChatMessage::new("system", error.to_string()));
             s.request_redraw();
             s.input_buffer.clear();
             s.cursor_position = 0;
@@ -1358,7 +1356,11 @@ pub fn check_memory_usage(s: &mut AppState) {
 
 pub fn toggle_auto_confirm(s: &mut AppState) {
     s.auto_confirm = !s.auto_confirm;
-    let status = if s.auto_confirm { "enabled" } else { "disabled" };
+    let status = if s.auto_confirm {
+        "enabled"
+    } else {
+        "disabled"
+    };
     s.set_notice(format!("YOLO mode {status}"));
 }
 
@@ -1538,8 +1540,10 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     s.history_index = None;
     s.temp_input.clear();
     s.status = AppStatus::Idle;
-    s.history
-        .push(ChatMessage::new("system", format!("Resumed session \"{}\"", meta.title)));
+    s.history.push(ChatMessage::new(
+        "system",
+        format!("Resumed session \"{}\"", meta.title),
+    ));
     crate::config::save_session_history(&s.active_session_id, &s.history);
     true
 }
@@ -1859,34 +1863,34 @@ pub fn trigger_sync(state: &Arc<Mutex<AppState>>, subcommand: Option<String>, ar
             s.set_notice("🔄 Syncing config repository...");
         }
 
-        let result = tokio::task::spawn_blocking(move || match subcommand.as_deref() {
-            Some("pull") => {
-                crate::config::sync_config_pull().map(|_| "Config pull complete! 📥".to_string())
-            }
-            Some("push") => {
-                crate::config::sync_config_push().map(|_| "Config push complete! 💾".to_string())
-            }
-            Some("init") => {
-                if let Some(url) = arg {
-                    crate::config::init_sync_repo(&url)
-                        .map(|_| "Sync repository initialized! 🚀".to_string())
-                } else {
-                    Err("Usage: /sync init <remote-git-url>".to_string())
+        let result =
+            tokio::task::spawn_blocking(move || match subcommand.as_deref() {
+                Some("pull") => crate::config::sync_config_pull()
+                    .map(|_| "Config pull complete! 📥".to_string()),
+                Some("push") => crate::config::sync_config_push()
+                    .map(|_| "Config push complete! 💾".to_string()),
+                Some("init") => {
+                    if let Some(url) = arg {
+                        crate::config::init_sync_repo(&url)
+                            .map(|_| "Sync repository initialized! 🚀".to_string())
+                    } else {
+                        Err("Usage: /sync init <remote-git-url>".to_string())
+                    }
                 }
-            }
-            _ => {
-                crate::config::sync_config_pull()?;
-                crate::config::sync_config_push()?;
-                Ok("Config sync complete! 🚀".to_string())
-            }
-        })
-        .await;
+                _ => {
+                    crate::config::sync_config_pull()?;
+                    crate::config::sync_config_push()?;
+                    Ok("Config sync complete! 🚀".to_string())
+                }
+            })
+            .await;
 
         let mut s = state_clone.lock().await;
         match result {
             Ok(Ok(msg)) => {
                 s.set_notice(format!("✅ {msg}"));
-                s.history.push(ChatMessage::new("system", format!("✅ {msg}")));
+                s.history
+                    .push(ChatMessage::new("system", format!("✅ {msg}")));
             }
             Ok(Err(err)) => {
                 s.set_warning_notice(format!("❌ {err}"));
@@ -2105,7 +2109,10 @@ mod tests {
         state.cursor_position = state.input_buffer.len();
         assert_eq!(route_ctrl_c(&mut state), CtrlCAction::Handled);
         assert!(state.input_buffer.is_empty());
-        assert_eq!(state.input_history.last().map(String::as_str), Some("recover this draft"));
+        assert_eq!(
+            state.input_history.last().map(String::as_str),
+            Some("recover this draft")
+        );
 
         assert_eq!(route_ctrl_c(&mut state), CtrlCAction::Exit);
     }
@@ -2179,8 +2186,13 @@ mod tests {
     fn start_new_session_clears_history_and_starts_fresh() {
         let mut state = crate::app::AppState::new();
         let initial_session_id = state.active_session_id.clone();
-        state.history.push(crate::app::ChatMessage::new("user", "hello old chat"));
-        state.history.push(crate::app::ChatMessage::new("assistant", "response old chat"));
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "hello old chat"));
+        state.history.push(crate::app::ChatMessage::new(
+            "assistant",
+            "response old chat",
+        ));
 
         super::start_new_session(&mut state);
 

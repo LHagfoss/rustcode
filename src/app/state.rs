@@ -928,7 +928,10 @@ impl PromptCache {
         policy: crate::tools::ToolSchemaPolicy,
         messages: &[serde_json::Value],
         session_id: &str,
-    ) -> (Vec<serde_json::Value>, crate::tools::McpSchemaSelectionStats) {
+    ) -> (
+        Vec<serde_json::Value>,
+        crate::tools::McpSchemaSelectionStats,
+    ) {
         let generation = crate::mcp::mcp_generation();
         if self.mcp_selection_generation != generation
             || self.mcp_selection_policy != Some(policy)
@@ -1310,8 +1313,7 @@ impl AppState {
         generation: u64,
         title: Option<String>,
     ) -> bool {
-        if self.active_session_id != session_id
-            || self.session_title_cache_generation != generation
+        if self.active_session_id != session_id || self.session_title_cache_generation != generation
         {
             return false;
         }
@@ -1408,7 +1410,8 @@ impl AppState {
                         Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
                         None => call.provider_call_id.is_none() && call.tool_name == tool_name,
                     }
-            }) {
+            })
+        {
             call.action = action;
             call.target = target;
             call.execution_started = true;
@@ -1456,7 +1459,8 @@ impl AppState {
                         Some(call_id) => call.provider_call_id.as_deref() == Some(call_id),
                         None => call.provider_call_id.is_none() && call.tool_name == tool_name,
                     }
-            }) {
+            })
+        {
             call.action = action;
             call.target = target;
             self.request_redraw();
@@ -1506,13 +1510,16 @@ impl AppState {
             });
         }
 
-        let mut retained = call.output.iter().map(|chunk| chunk.text.len()).sum::<usize>();
+        let mut retained = call
+            .output
+            .iter()
+            .map(|chunk| chunk.text.len())
+            .sum::<usize>();
         while retained > MAX_LIVE_TOOL_OUTPUT_BYTES && call.output.len() > 1 {
             if let Some(removed) = call.output.pop_front() {
                 retained = retained.saturating_sub(removed.text.len());
-                call.omitted_output_bytes = call
-                    .omitted_output_bytes
-                    .saturating_add(removed.text.len());
+                call.omitted_output_bytes =
+                    call.omitted_output_bytes.saturating_add(removed.text.len());
             }
         }
         if retained > MAX_LIVE_TOOL_OUTPUT_BYTES
@@ -2176,8 +2183,7 @@ impl AppState {
             return protocol;
         }
         let detected_support = self.function_calling_support.get(url).copied();
-        if crate::config::provider_supports_function_calling(url)
-            || detected_support == Some(true)
+        if crate::config::provider_supports_function_calling(url) || detected_support == Some(true)
         {
             return crate::config::ToolProtocol::ApiNative;
         }
@@ -2629,7 +2635,10 @@ mod live_tool_tests {
 
         assert_ne!(first, second);
         assert!(first.contains("provider-call-7"));
-        assert_eq!(state.live_tool_calls[0].provider_call_id.as_deref(), Some("provider-call-7"));
+        assert_eq!(
+            state.live_tool_calls[0].provider_call_id.as_deref(),
+            Some("provider-call-7")
+        );
     }
 
     #[test]
@@ -2637,7 +2646,11 @@ mod live_tool_tests {
         let mut state = AppState::new();
 
         // 1. Initial stream chunk with only tool name
-        state.update_speculative_live_tool_call(Some("call-99"), "replace_file_content", &serde_json::json!({}));
+        state.update_speculative_live_tool_call(
+            Some("call-99"),
+            "replace_file_content",
+            &serde_json::json!({}),
+        );
         assert_eq!(state.live_tool_calls.len(), 1);
         assert_eq!(state.live_tool_calls[0].action, "Edit");
         assert_eq!(state.live_tool_calls[0].target, "?");
@@ -2666,11 +2679,8 @@ mod live_tool_tests {
         );
         let speculative_key = state.live_tool_calls[0].key.clone();
 
-        let execution_key = state.begin_live_tool_call(
-            Some("call-99"),
-            "get_time",
-            &serde_json::json!({}),
-        );
+        let execution_key =
+            state.begin_live_tool_call(Some("call-99"), "get_time", &serde_json::json!({}));
 
         assert_eq!(execution_key, speculative_key);
         assert_eq!(state.live_tool_calls.len(), 1);
@@ -2680,7 +2690,9 @@ mod live_tool_tests {
     #[test]
     fn cleanup_removes_all_live_calls_without_touching_history() {
         let mut state = AppState::new();
-        state.history.push(super::ChatMessage::new("user", "keep me"));
+        state
+            .history
+            .push(super::ChatMessage::new("user", "keep me"));
         let history = state.history.clone();
         let arguments = serde_json::json!({});
         state.begin_live_tool_call(None, "grep", &arguments);

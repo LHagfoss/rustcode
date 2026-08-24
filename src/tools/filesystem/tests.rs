@@ -1147,7 +1147,11 @@ fn start_line_alone_anchors_nonunique_target() {
 fn replace_file_content_fuzzy_matches_trailing_whitespace_and_indentation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("indent.rs");
-    std::fs::write(&file, "fn test() {\n    let value = 42;   \n    println!(\"{value}\");\n}\n").expect("write");
+    std::fs::write(
+        &file,
+        "fn test() {\n    let value = 42;   \n    println!(\"{value}\");\n}\n",
+    )
+    .expect("write");
     let path = file.to_string_lossy().to_string();
 
     // Model target has different indentation and no trailing spaces
@@ -1167,7 +1171,11 @@ fn replace_file_content_fuzzy_matches_trailing_whitespace_and_indentation() {
 fn replace_file_content_normalises_unicode_smart_quotes_and_dashes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("doc.md");
-    std::fs::write(&file, "# Title — Overview\n\nUse “smart” quotes and ‘single’ quotes.\n").expect("write");
+    std::fs::write(
+        &file,
+        "# Title — Overview\n\nUse “smart” quotes and ‘single’ quotes.\n",
+    )
+    .expect("write");
     let path = file.to_string_lossy().to_string();
 
     // Model emits ASCII quotes and plain dash
@@ -1197,7 +1205,10 @@ fn write_to_file_defaults_to_overwrite_true() {
     }))
     .expect("write_to_file without explicit overwrite should succeed");
     assert!(result.contains("wrote"), "got: {result}");
-    assert_eq!(std::fs::read_to_string(&file).expect("read"), "new content\n");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read"),
+        "new content\n"
+    );
 
     // overwrite explicitly false -> should return error
     let err = write_to_file_tool(&serde_json::json!({
@@ -1243,7 +1254,10 @@ fn replace_file_content_schema_declares_every_handler_alias() {
         "newString",
         "newText",
     ] {
-        assert!(root.get(alias).is_some(), "schema missing root alias {alias}");
+        assert!(
+            root.get(alias).is_some(),
+            "schema missing root alias {alias}"
+        );
         assert!(
             items.get(alias).is_some(),
             "schema missing edits[] item alias {alias}"
@@ -1251,7 +1265,11 @@ fn replace_file_content_schema_declares_every_handler_alias() {
     }
     // edits[] items must not require old_string/new_string specifically: any
     // alias pair is valid for the handler.
-    assert!(schema["properties"]["edits"]["items"].get("required").is_none());
+    assert!(
+        schema["properties"]["edits"]["items"]
+            .get("required")
+            .is_none()
+    );
 }
 
 #[test]
@@ -1271,7 +1289,10 @@ fn unrelated_missing_target_is_not_falsely_reported_as_already_applied() {
     }))
     .expect_err("unrelated missing target must error");
 
-    assert!(err.contains("target_content not found") || err.contains("not found in"), "got: {err}");
+    assert!(
+        err.contains("target_content not found") || err.contains("not found in"),
+        "got: {err}"
+    );
 }
 
 #[test]

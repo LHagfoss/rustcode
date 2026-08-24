@@ -7,13 +7,12 @@ use super::messages::{inject_system_reminder, trim_msgs_to_budget};
 use super::runner;
 use super::stream_request::stream_request;
 use super::text::{
-    continuation_nudge_for_category, format_continuation_assistant_message,
-    strip_leading_think,
+    continuation_nudge_for_category, format_continuation_assistant_message, strip_leading_think,
 };
 use super::{
-    StreamBuffer, compact_history_to_budget, confirm_and_execute,
-    final_tool_diff, is_read_only_tool, push_status_line,
-    subagent_tool_history_message, tool_result_precludes_preview_fallback,
+    StreamBuffer, compact_history_to_budget, confirm_and_execute, final_tool_diff,
+    is_read_only_tool, push_status_line, subagent_tool_history_message,
+    tool_result_precludes_preview_fallback,
 };
 
 pub(crate) async fn set_subagent_status(
@@ -139,12 +138,7 @@ pub(crate) async fn run_subagent(
                         s.active_context_budget().history_tokens,
                     )
                 });
-            (
-                api_base_url,
-                model_name,
-                budget,
-                s.workspace_root.clone(),
-            )
+            (api_base_url, model_name, budget, s.workspace_root.clone())
         };
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
@@ -293,7 +287,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     call_id.as_ref().map(|id| crate::app::ToolCallRef {
                         id: id.clone(),
                         name: call.name.clone(),
-                        arguments: serde_json::to_string(&call.arguments).unwrap_or_else(|_| "null".to_string()),
+                        arguments: serde_json::to_string(&call.arguments)
+                            .unwrap_or_else(|_| "null".to_string()),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -308,20 +303,16 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             for (index, (tool_call, call_id)) in parsed_calls.iter().enumerate() {
                 let name = &tool_call.name;
                 let args = &tool_call.arguments;
-                if let Err(reason) = crate::tools::validate_tool_calls(std::slice::from_ref(tool_call))
+                if let Err(reason) =
+                    crate::tools::validate_tool_calls(std::slice::from_ref(tool_call))
                 {
                     let execution = crate::tools::ToolExecutionOutput::failure_with_kind(
                         format!("error: tool call rejected before execution: {reason}"),
                         crate::tools::ToolErrorKind::Validation,
                         false,
                     );
-                    let message = subagent_tool_history_message(
-                        name,
-                        args,
-                        execution,
-                        None,
-                        call_id.clone(),
-                    );
+                    let message =
+                        subagent_tool_history_message(name, args, execution, None, call_id.clone());
                     let mut s = state.lock().await;
                     if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                         Arc::make_mut(&mut a.history).push(message);
@@ -337,19 +328,15 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                         crate::tools::ToolErrorKind::Internal,
                         false,
                     );
-                    let message = subagent_tool_history_message(
-                        name,
-                        args,
-                        execution,
-                        None,
-                        call_id.clone(),
-                    );
+                    let message =
+                        subagent_tool_history_message(name, args, execution, None, call_id.clone());
                     let mut s = state.lock().await;
                     if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                         Arc::make_mut(&mut a.history).push(message);
                         for (remaining_call, remaining_id) in parsed_calls.iter().skip(index + 1) {
                             let skipped = crate::tools::ToolExecutionOutput::failure_with_kind(
-                                "error: tool call was not run because the subagent loop stopped".to_string(),
+                                "error: tool call was not run because the subagent loop stopped"
+                                    .to_string(),
                                 crate::tools::ToolErrorKind::Internal,
                                 false,
                             );
@@ -384,7 +371,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                                 || path.starts_with(&format!("{}/", allowed.trim_end_matches('/')))
                         })
                     });
-                let (execution, diff_opt, _user_wait) = if !write_access && !is_read_only_tool(name) {
+                let (execution, diff_opt, _user_wait) = if !write_access && !is_read_only_tool(name)
+                {
                     (
                         crate::tools::ToolExecutionOutput::failure_with_kind(
                             "error: subagents are read-only by default; request write_access with allowed_paths explicitly".to_string(),
@@ -397,7 +385,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 } else if write_access && path_outside_contract {
                     (
                         crate::tools::ToolExecutionOutput::failure_with_kind(
-                            "error: requested path is outside the subagent allowed_paths contract".to_string(),
+                            "error: requested path is outside the subagent allowed_paths contract"
+                                .to_string(),
                             crate::tools::ToolErrorKind::PermissionDenied,
                             false,
                         ),
@@ -444,7 +433,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     )
                     .await
                 };
-                let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content) {
+                let preview_fallback = if tool_result_precludes_preview_fallback(&execution.content)
+                {
                     None
                 } else {
                     diff_opt
@@ -466,7 +456,8 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                         for (remaining_call, remaining_id) in parsed_calls.iter().skip(index + 1) {
                             let cancelled = crate::tools::ToolExecutionOutput::failure_with_kind(
-                                "error: tool call was not run because the subagent was cancelled".to_string(),
+                                "error: tool call was not run because the subagent was cancelled"
+                                    .to_string(),
                                 crate::tools::ToolErrorKind::Cancelled,
                                 false,
                             );
@@ -523,8 +514,7 @@ async fn project_subagent_completion(
             && agent.history.last().map(|message| message.content.as_str())
                 != Some(completion.output.as_str())
         {
-            Arc::make_mut(&mut agent.history)
-                .push(ChatMessage::new("system", &completion.output));
+            Arc::make_mut(&mut agent.history).push(ChatMessage::new("system", &completion.output));
         }
         agent.review_manifest = review_manifest;
     }

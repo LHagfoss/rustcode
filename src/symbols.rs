@@ -118,35 +118,45 @@ impl SupportedLanguage {
 
     pub fn query_str(&self) -> &'static str {
         match self {
-            Self::Rust => r#"
+            Self::Rust => {
+                r#"
                 (function_item name: (identifier) @name) @function
                 (struct_item name: (type_identifier) @name) @struct
                 (enum_item name: (type_identifier) @name) @enum
                 (trait_item name: (type_identifier) @name) @trait
                 (impl_item type: (_) @name) @impl
                 (mod_item name: (identifier) @name) @module
-            "#,
-            Self::Python => r#"
+            "#
+            }
+            Self::Python => {
+                r#"
                 (function_definition name: (identifier) @name) @function
                 (class_definition name: (identifier) @name) @class
-            "#,
-            Self::TypeScript | Self::Tsx => r#"
+            "#
+            }
+            Self::TypeScript | Self::Tsx => {
+                r#"
                 (function_declaration name: (identifier) @name) @function
                 (class_declaration name: (type_identifier) @name) @class
                 (interface_declaration name: (type_identifier) @name) @interface
                 (type_alias_declaration name: (type_identifier) @name) @type
                 (method_definition name: (property_identifier) @name) @method
-            "#,
-            Self::JavaScript => r#"
+            "#
+            }
+            Self::JavaScript => {
+                r#"
                 (function_declaration name: (identifier) @name) @function
                 (class_declaration name: (identifier) @name) @class
                 (method_definition name: (property_identifier) @name) @method
-            "#,
-            Self::Go => r#"
+            "#
+            }
+            Self::Go => {
+                r#"
                 (function_declaration name: (identifier) @name) @function
                 (method_declaration name: (field_identifier) @name) @method
                 (type_spec name: (type_identifier) @name) @type
-            "#,
+            "#
+            }
         }
     }
 }
@@ -261,11 +271,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
             params![&root_str, &rel_path],
         );
 
-        let Some(name_capture_idx) = query
-            .capture_names()
-            .iter()
-            .position(|r| *r == "name")
-        else {
+        let Some(name_capture_idx) = query.capture_names().iter().position(|r| *r == "name") else {
             continue;
         };
 
@@ -515,13 +521,19 @@ func HandleRequest(r *Router) error {
 
         // Check Python symbols
         let py_results = find_symbol(&dir, "AuthManager").unwrap();
-        assert!(!py_results.is_empty(), "should find AuthManager python class");
+        assert!(
+            !py_results.is_empty(),
+            "should find AuthManager python class"
+        );
         let py_class = py_results.iter().find(|s| s.kind == "class").unwrap();
         assert_eq!(py_class.name, "AuthManager");
         assert_eq!(py_class.path, "service.py");
 
         let py_fn = find_symbol(&dir, "authenticate_user").unwrap();
-        assert!(!py_fn.is_empty(), "should find authenticate_user python function");
+        assert!(
+            !py_fn.is_empty(),
+            "should find authenticate_user python function"
+        );
 
         // Check TypeScript symbols
         let ts_iface = find_symbol(&dir, "UserSession").unwrap();
@@ -547,8 +559,14 @@ func HandleRequest(r *Router) error {
         assert!(map.contains("service.py:"), "map should contain service.py");
         assert!(map.contains("client.ts:"), "map should contain client.ts");
         assert!(map.contains("handler.go:"), "map should contain handler.go");
-        assert!(map.contains("AuthManager [class]"), "map should contain AuthManager");
-        assert!(map.contains("UserSession [interface]"), "map should contain UserSession");
+        assert!(
+            map.contains("AuthManager [class]"),
+            "map should contain AuthManager"
+        );
+        assert!(
+            map.contains("UserSession [interface]"),
+            "map should contain UserSession"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

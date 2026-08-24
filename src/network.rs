@@ -59,8 +59,8 @@ pub(crate) use tool_exec::{
 #[path = "network/turn_engine.rs"]
 pub(crate) mod turn_engine;
 pub(crate) use turn_engine::ToolFenceCounter;
-pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn};
 pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
+pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn};
 
 #[path = "network/lifecycle.rs"]
 pub(crate) mod lifecycle;
@@ -442,9 +442,9 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
     let mut suffix_messages = 0usize;
     let mut suffix_start = history.len();
     for index in (0..history.len()).rev() {
-        let message_tokens = u32::try_from(
-            crate::network::compaction::estimate_message_tokens(&history[index]),
-        )
+        let message_tokens = u32::try_from(crate::network::compaction::estimate_message_tokens(
+            &history[index],
+        ))
         .unwrap_or(u32::MAX);
         if suffix_messages < crate::network::compaction::KEEP_RECENT_TURNS
             || suffix_tokens.saturating_add(message_tokens) <= keep_target
@@ -466,8 +466,7 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
     let boundary = (0..=suffix_start)
         .rev()
         .find(|&index| {
-            history[index].role == "user"
-                && !history[index].content.starts_with("<tool_result>")
+            history[index].role == "user" && !history[index].content.starts_with("<tool_result>")
         })
         .unwrap_or(suffix_start);
     if boundary == 0 {
@@ -478,10 +477,7 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
         .saturating_mul(3)
         .min(DETERMINISTIC_RECORD_MAX_CHARS as u32) as usize;
     let record = deterministic_context_record(&history[..boundary], record_limit);
-    history.splice(
-        0..boundary,
-        [ChatMessage::new("system", record)],
-    );
+    history.splice(0..boundary, [ChatMessage::new("system", record)]);
     true
 }
 
@@ -934,14 +930,7 @@ pub(crate) async fn prepare_turn_request(
     // under a short lock, compact the owned copy with the lock released, then
     // re-acquire and merge the result back in.
     {
-        let (
-            api_url,
-            model_name,
-            budget,
-            local_model,
-            active_session_id,
-            captured_history,
-        ) = {
+        let (api_url, model_name, budget, local_model, active_session_id, captured_history) = {
             let s = state.lock().await;
             let local_model = s
                 .active_model_profile()

@@ -342,9 +342,11 @@ mod tests {
     fn command_completion_stays_active_while_arguments_are_present() {
         assert_eq!(command_token("/model --fast"), Some("/model"));
         assert_eq!(command_token("/mo --fast"), Some("/mo"));
-        assert!(filtered_commands("/model --fast")
-            .iter()
-            .any(|command| command.name == "/model"));
+        assert!(
+            filtered_commands("/model --fast")
+                .iter()
+                .any(|command| command.name == "/model")
+        );
         assert!(command_token("plain text").is_none());
     }
 

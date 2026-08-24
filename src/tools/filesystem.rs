@@ -679,7 +679,11 @@ fn preserve_mixed_line_endings(
         .saturating_sub(prefix_len)
         .min(normalized_edited.len().saturating_sub(prefix_len));
     let mut suffix_len = 0;
-    for (left, right) in normalized_original.chars().rev().zip(normalized_edited.chars().rev()) {
+    for (left, right) in normalized_original
+        .chars()
+        .rev()
+        .zip(normalized_edited.chars().rev())
+    {
         let width = left.len_utf8();
         if left != right || suffix_len + width > max_suffix_len {
             break;
@@ -1092,12 +1096,9 @@ fn find_fuzzy_span(content: &str, target: &str) -> Option<(usize, usize)> {
     let mut unicode_matches = Vec::new();
     for i in 0..=(n_content - n_target) {
         let window = &content_lines[i..i + n_target];
-        let matches_unicode = window
-            .iter()
-            .zip(target_lines.iter())
-            .all(|(c, t)| {
-                normalise_unicode_punctuation(c).trim() == normalise_unicode_punctuation(t).trim()
-            });
+        let matches_unicode = window.iter().zip(target_lines.iter()).all(|(c, t)| {
+            normalise_unicode_punctuation(c).trim() == normalise_unicode_punctuation(t).trim()
+        });
         if matches_unicode {
             unicode_matches.push((i, i + n_target));
         }

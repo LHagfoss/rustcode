@@ -10,20 +10,42 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum AgentUiEvent {
-    PromptStarted { prompt: String },
+    PromptStarted {
+        prompt: String,
+    },
     SubagentUpdated {
         id: u32,
         status: crate::app::SubAgentStatus,
         active_turn: bool,
     },
-    TextDelta { text: String },
-    ToolStarted { name: String, id: String },
-    ApprovalRequested { calls: Vec<ToolCall> },
-    ToolFinished { id: String, result: ToolResult },
-    TurnRecovered { message: String },
-    TurnFinished { content: String, completed: bool },
-    Cancelled { completed_tool_ids: Vec<String> },
-    Error { message: String, retryable: bool },
+    TextDelta {
+        text: String,
+    },
+    ToolStarted {
+        name: String,
+        id: String,
+    },
+    ApprovalRequested {
+        calls: Vec<ToolCall>,
+    },
+    ToolFinished {
+        id: String,
+        result: ToolResult,
+    },
+    TurnRecovered {
+        message: String,
+    },
+    TurnFinished {
+        content: String,
+        completed: bool,
+    },
+    Cancelled {
+        completed_tool_ids: Vec<String>,
+    },
+    Error {
+        message: String,
+        retryable: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -461,10 +483,7 @@ mod tests {
             "snapshot tracking must not retain the response Arc"
         );
 
-        state
-            .lock()
-            .await
-            .append_current_response(" + more");
+        state.lock().await.append_current_response(" + more");
         publish_snapshot(
             &state,
             &sender,
