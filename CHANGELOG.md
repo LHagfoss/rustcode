@@ -1,3 +1,9 @@
+## [v0.35.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.4) - 2026-08-24
+
+### CI & Reliability
+- **CI:** Run Rust checks on pull requests to catch formatting and test regressions before merge ([#810](https://github.com/LHagfoss/rustcode/pull/810), [`cb97534`](https://github.com/LHagfoss/rustcode/commit/cb97534))
+- **Agent Tasks:** Preserve background task outcomes so completed work is not lost ([#808](https://github.com/LHagfoss/rustcode/pull/808), [`500d650`](https://github.com/LHagfoss/rustcode/commit/500d650))
+
 ## [v0.35.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.3) - 2026-08-23
 
 ### Tests & Release Hygiene
