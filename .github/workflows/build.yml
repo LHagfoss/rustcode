@@ -23,7 +23,7 @@ jobs:
             - name: Verify tagged commit is on main
               shell: bash
               run: |
-                  if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+                  if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$GITHUB_REF" != refs/tags/v* ]]; then
                       exit 0
                   fi
 
