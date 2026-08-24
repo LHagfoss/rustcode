@@ -441,9 +441,32 @@ fn safe_relative(
     Ok((absolute, value.replace('\\', "/")))
 }
 
+fn executable_candidates(name: &str, pathext: Option<&str>) -> Vec<OsString> {
+    let mut candidates = vec![OsString::from(name)];
+    if Path::new(name).extension().is_none() {
+        if let Some(pathext) = pathext {
+            candidates.extend(pathext.split(';').filter_map(|extension| {
+                let extension = extension.trim();
+                (!extension.is_empty())
+                    .then(|| OsString::from(format!("{name}{}", extension.to_ascii_lowercase())))
+            }));
+        }
+    }
+    candidates
+}
+
 fn executable(name: &str) -> Option<PathBuf> {
+    let pathext = if cfg!(windows) {
+        Some(std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into()))
+    } else {
+        None
+    };
     std::env::split_paths(&crate::network::augmented_path())
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| {
+            executable_candidates(name, pathext.as_deref())
+                .into_iter()
+                .map(move |candidate| dir.join(candidate))
+        })
         .find(|path| path.is_file())
 }
 
@@ -799,6 +822,18 @@ fn inspect_inputs(
         .collect()
 }
 
+fn validate_media_paths(project: &VideoProject) -> Result<(), VideoError> {
+    if let Some(music) = &project.audio.music {
+        safe_relative(&music.path, true, false).map_err(|error| {
+            VideoError::new(
+                error.kind,
+                format!("background music file is invalid: {}", error.message),
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn number(value: f64) -> String {
     format!("{value:.6}")
         .trim_end_matches('0')
@@ -997,6 +1032,7 @@ fn validate_project(
     runner: &dyn ProcessRunner,
 ) -> Result<String, VideoError> {
     let (project, _) = load_project(args)?;
+    validate_media_paths(&project)?;
     let ffprobe = executable("ffprobe").ok_or_else(|| {
         VideoError::new(
             VideoErrorKind::MissingDependency,
@@ -1014,6 +1050,7 @@ fn render_project(
     runner: &dyn ProcessRunner,
 ) -> Result<String, VideoError> {
     let (project, _) = load_project(args)?;
+    validate_media_paths(&project)?;
     if Path::new(&project.output)
         .extension()
         .and_then(|v| v.to_str())
@@ -1309,6 +1346,46 @@ mod tests {
         assert!(safe_relative("../outside.mp4", false, false).is_err());
         assert!(safe_relative("media/../../outside.mp4", false, false).is_err());
         super::super::set_active_workspace_root(None);
+    }
+
+    #[test]
+    fn executable_candidates_include_windows_extensions() {
+        let candidates = executable_candidates("ffmpeg", Some(".COM;.EXE;.BAT"));
+        assert_eq!(
+            candidates,
+            vec![
+                OsString::from("ffmpeg"),
+                OsString::from("ffmpeg.com"),
+                OsString::from("ffmpeg.exe"),
+                OsString::from("ffmpeg.bat"),
+            ]
+        );
+    }
+
+    #[test]
+    fn validation_rejects_missing_music_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        super::super::set_active_workspace_root(Some(dir.path().to_path_buf()));
+        let mut value = project();
+        value.audio.music = Some(Music {
+            path: "media/missing.wav".into(),
+            volume: 1.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+        });
+        fs::write(
+            dir.path().join("video-project.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        let error = validate_project(
+            &serde_json::json!({"project_path":"video-project.json"}),
+            None,
+            &SystemProcessRunner,
+        )
+        .unwrap_err();
+        super::super::set_active_workspace_root(None);
+        assert!(error.message.contains("music"));
     }
 
     #[test]
