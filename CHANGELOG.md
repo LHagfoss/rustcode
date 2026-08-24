@@ -1,3 +1,8 @@
+## [v0.36.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.36.0) - 2026-08-24
+
+### Features
+- **Native Video Editing:** Add declarative tools for inspecting media, validating video projects, and rendering video through project-local FFmpeg processes ([#815](https://github.com/LHagfoss/rustcode/pull/815), [`fecef33`](https://github.com/LHagfoss/rustcode/commit/fecef33))
+
 ## [v0.35.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.35.4) - 2026-08-24
 
 ### CI & Reliability
