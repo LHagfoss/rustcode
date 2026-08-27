@@ -956,61 +956,11 @@ fn count_input_lines(input_buffer: &str, inner_width: usize) -> u16 {
         .len() as u16
 }
 
-fn current_tps(state: &RenderSnapshot) -> f64 {
-    if *state.status() == AppStatus::Streaming
-        && let Some(ref tracker) = state.stream_tracker()
-    {
-        return tracker.snapshot().0;
-    }
-    0.0
-}
-
-fn format_tps_value(tps: f64) -> String {
-    format!("{tps:.1}")
-}
-
-fn format_tps_info(tps: f64) -> String {
-    format!("Tps: {}", format_tps_value(tps))
-}
-
 fn format_token_count(tokens: u32) -> String {
     if tokens >= 1000 {
         format!("{:.1}K", tokens as f32 / 1000.0)
     } else {
         tokens.to_string()
-    }
-}
-
-fn format_context_info(
-    total_tokens: u32,
-    context_window: u32,
-    cached_tokens: Option<u32>,
-) -> String {
-    let pct = if context_window == 0 {
-        0.0
-    } else {
-        ((total_tokens as f32 / context_window as f32) * 100.0).min(100.0)
-    };
-    let cached = cached_tokens
-        .filter(|cached| *cached > 0)
-        .map(|cached| format!(" ({} cached)", format_token_count(cached)))
-        .unwrap_or_default();
-    format!(
-        "Context: {}{} ({pct:.0}%)",
-        format_token_count(total_tokens),
-        cached,
-    )
-}
-
-fn input_footer_hint_text() -> &'static str {
-    "Ctrl+P commands"
-}
-
-fn input_footer_exit_text(state: &RenderSnapshot) -> &'static str {
-    if state.ctrl_c_exit_armed() {
-        "Press Ctrl+C again to exit"
-    } else {
-        input_footer_hint_text()
     }
 }
 
@@ -1034,22 +984,6 @@ fn context_usage(state: &RenderSnapshot) -> (u32, Option<u32>) {
         .map(|message| message.content.len())
         .sum();
     ((chars / 4) as u32, None)
-}
-
-fn format_input_status_text(state: &RenderSnapshot) -> String {
-    let (total_tokens, cached_tokens) = context_usage(state);
-    let mut status = vec![
-        format!("Auto-Confirm: {}", state.auto_confirm_status_text()),
-        format_context_info(total_tokens, state.active_context_window(), cached_tokens),
-        format_tps_info(current_tps(state)),
-    ];
-
-    if let Some(quota) = state.model_quota_remaining() {
-        status.push(format!("Quota: {quota:.0}%"));
-    }
-
-    status.push(input_footer_exit_text(state).to_string());
-    status.join("  ")
 }
 
 fn activity_status_label(state: &RenderSnapshot) -> String {
@@ -1445,18 +1379,28 @@ fn render_composer_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &Re
     } else {
         format!("  {} · {}", state.model_name(), location)
     };
-    let right = format!("{remaining}% context left  ");
+    let (right, right_style) = if state.ctrl_c_exit_armed() {
+        (
+            "⚠ Press Ctrl+C again to exit  ".to_owned(),
+            get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
+        )
+    } else {
+        (
+            format!("{remaining}% context left  "),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
+        )
+    };
     let left = fit_to_width(
         &left_content,
         (area.width as usize).saturating_sub(right.width()),
     );
     let padding = (area.width as usize).saturating_sub(left.width() + right.width());
-    let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
+    let left_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(left, style),
+            Span::styled(left, left_style),
             Span::styled(" ".repeat(padding), Style::default().bg(COLOR_BG())),
-            Span::styled(right, style),
+            Span::styled(right, right_style),
         ]))
         .style(Style::default().bg(COLOR_BG())),
         area,
