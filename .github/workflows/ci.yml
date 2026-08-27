@@ -52,9 +52,6 @@ jobs:
             - name: Check shell installer syntax
               run: bash -n install.sh
 
-            - name: Check tests compile
-              run: cargo check --tests --locked
-
             - name: Clippy correctness gate
               # The codebase has an established warning baseline. Keep those
               # warnings visible locally while denying only correctness lints.
@@ -142,9 +139,6 @@ jobs:
 
             - name: Check formatting
               run: cargo fmt --all -- --check
-
-            - name: Check tests compile
-              run: cargo check --tests --locked
 
             - name: Compile all Windows tests
               if: runner.os == 'Windows'
