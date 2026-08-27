@@ -1,5 +1,41 @@
 use super::*;
 
+pub(super) fn background_terminal_list(session_id: &str) -> String {
+    let tasks = crate::tools::background_task_snapshots(session_id);
+    if tasks.is_empty() {
+        return "No background terminals are running.".to_string();
+    }
+
+    let mut text = format!(
+        "{} background terminal{} running:",
+        tasks.len(),
+        if tasks.len() == 1 { "" } else { "s" }
+    );
+    for task in tasks {
+        let pid = task
+            .child_pid
+            .map(|pid| pid.to_string())
+            .unwrap_or_else(|| "starting".to_string());
+        text.push_str(&format!(
+            "\n  • {} · {} · PID {} · {}",
+            task.id,
+            crate::app::status::format_elapsed_compact(task.start_time.elapsed().as_secs()),
+            pid,
+            task.command
+        ));
+    }
+    text
+}
+
+pub(super) fn stop_background_terminals(session_id: &str) -> String {
+    let stopped = crate::tools::stop_background_tasks(session_id);
+    match stopped {
+        0 => "No background terminals are running.".to_string(),
+        1 => "Stopped 1 background terminal.".to_string(),
+        count => format!("Stopped {count} background terminals."),
+    }
+}
+
 /// Max transcript characters sent to the summarizer. Beyond this we keep the
 /// most recent content so a long session still summarizes without blowing the
 /// model's context.
@@ -203,6 +239,8 @@ pub fn build_help_text() -> String {
                 ("/sync", "Sync config, skills, and themes with Git"),
                 ("/copy", "Copy last assistant reply to clipboard"),
                 ("/memory", "Inspect or update bounded project memory"),
+                ("/ps", "Show running background terminals"),
+                ("/stop", "Stop all running background terminals"),
                 ("/changelog", "Show recent changelog updates"),
             ],
         ),

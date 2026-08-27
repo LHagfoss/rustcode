@@ -600,6 +600,7 @@ fn run_command_output_inner(
                 task_id.clone(),
                 BackgroundTaskInfo {
                     id: task_id.clone(),
+                    session_id: session_id.clone(),
                     command: cmd_str.clone(),
                     start_time: std::time::Instant::now(),
                     child_pid: None,
@@ -636,12 +637,16 @@ fn run_command_output_inner(
             }
 
             let mut output = match cmd.spawn() {
-                Ok(child) => {
+                Ok(mut child) => {
                     if let Some(pid) = Some(child.id())
                         && let Ok(mut tasks) = get_background_tasks().lock()
                         && let Some(info) = tasks.get_mut(&task_id_clone)
                     {
                         info.child_pid = Some(pid);
+                    }
+
+                    if super::background_task_cancelled(&task_id_clone) {
+                        let _ = child.kill();
                     }
 
                     match wait_with_bounded_output(child) {
@@ -688,7 +693,8 @@ fn run_command_output_inner(
                 tasks.remove(&task_id_clone);
             }
 
-            if let Some(cb) = WAKEUP_CALLBACK.get() {
+            let cancelled = super::take_background_task_cancelled(&task_id_clone);
+            if !cancelled && let Some(cb) = WAKEUP_CALLBACK.get() {
                 cb(session_id, task_id_clone, output);
             }
         });
@@ -809,15 +815,9 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 .ok_or("missing 'task_id' argument for kill action")?;
 
             if let Some(info) = tasks.remove(task_id) {
+                super::mark_background_task_cancelled(task_id);
                 if let Some(pid) = info.child_pid {
-                    #[cfg(target_os = "windows")]
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/F", "/PID", &pid.to_string()])
-                        .output();
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .output();
+                    terminate_background_pid(pid);
                 }
                 Ok(format!("Task '{task_id}' terminated successfully."))
             } else {
@@ -828,6 +828,44 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
             "Unknown action '{action}'. Supported actions: list, status, kill."
         )),
     }
+}
+
+fn terminate_background_pid(pid: u32) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .output();
+    #[cfg(not(target_os = "windows"))]
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output();
+}
+
+pub(crate) fn stop_background_tasks(session_id: &str) -> usize {
+    let stopped = {
+        let Ok(mut tasks) = get_background_tasks().lock() else {
+            return 0;
+        };
+        let task_ids = tasks
+            .iter()
+            .filter(|(_, task)| task.session_id == session_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for task_id in &task_ids {
+            super::mark_background_task_cancelled(task_id);
+        }
+        task_ids
+            .into_iter()
+            .filter_map(|id| tasks.remove(&id).map(|task| (id, task.child_pid)))
+            .collect::<Vec<_>>()
+    };
+
+    for (_, child_pid) in &stopped {
+        if let Some(pid) = child_pid {
+            terminate_background_pid(*pid);
+        }
+    }
+    stopped.len()
 }
 
 fn spawn_output_reader<R: Read + Send + 'static>(

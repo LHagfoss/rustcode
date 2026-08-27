@@ -95,4 +95,5 @@ pub use session::*;
 
 #[cfg(test)]
 use commands::append_codex_rate_limits;
+use commands::{background_terminal_list, stop_background_terminals};
 use session::{history_matches_snapshot, report_stale_compaction, try_merge_compacted_history};
