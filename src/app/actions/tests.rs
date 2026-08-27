@@ -24,6 +24,48 @@ fn parse_token_count_plain_and_k_suffix() {
     assert_eq!(parse_token_count(""), None);
 }
 
+#[test]
+fn background_terminal_commands_list_and_stop_the_active_session_only() {
+    let session_id = "actions-background-session";
+    let other_session_id = "actions-background-other";
+    let task_id = "actions-background-task".to_string();
+    let other_task_id = "actions-background-other-task".to_string();
+    let mut tasks = crate::tools::get_background_tasks().lock().unwrap();
+    for (id, session) in [(&task_id, session_id), (&other_task_id, other_session_id)] {
+        tasks.insert(
+            id.clone(),
+            crate::tools::BackgroundTaskInfo {
+                id: id.clone(),
+                session_id: session.to_string(),
+                command: format!("cargo test --package {session}"),
+                start_time: std::time::Instant::now(),
+                child_pid: None,
+                cancel_sender: None,
+            },
+        );
+    }
+    drop(tasks);
+
+    let listed = super::background_terminal_list(session_id);
+    assert!(listed.contains("1 background terminal running"));
+    assert!(listed.contains(&task_id));
+    assert!(!listed.contains(&other_task_id));
+
+    assert_eq!(
+        super::stop_background_terminals(session_id),
+        "Stopped 1 background terminal."
+    );
+    let tasks = crate::tools::get_background_tasks().lock().unwrap();
+    assert!(!tasks.contains_key(&task_id));
+    assert!(tasks.contains_key(&other_task_id));
+    drop(tasks);
+    crate::tools::get_background_tasks()
+        .lock()
+        .unwrap()
+        .remove(&other_task_id);
+    assert!(crate::tools::take_background_task_cancelled(&task_id));
+}
+
 #[tokio::test]
 async fn ctrl_c_requires_a_second_press_to_exit_without_cancelling() {
     use std::sync::Arc;

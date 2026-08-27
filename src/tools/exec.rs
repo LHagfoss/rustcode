@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use std::io::Read;
 use std::process::{Child, ExitStatus, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,8 @@ pub(crate) use super::parse_json_number;
 pub(crate) use super::{BackgroundTaskInfo, WAKEUP_CALLBACK};
 
 use super::{Tool, ToolCapability, ToolSafety};
+
+static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn run_command_schema() -> Value {
     serde_json::json!({
@@ -582,11 +585,12 @@ fn run_command_output_inner(
         let session_id = get_active_session_id().unwrap_or_default();
         let cmd_str = command_str.to_string();
         let task_id = format!(
-            "task_{}",
+            "task_{}_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or(std::time::Duration::from_secs(0))
-                .as_millis()
+                .as_millis(),
+            BACKGROUND_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         );
 
         let resolved_cwd_clone = resolved_cwd.clone();
@@ -600,6 +604,7 @@ fn run_command_output_inner(
                 task_id.clone(),
                 BackgroundTaskInfo {
                     id: task_id.clone(),
+                    session_id: session_id.clone(),
                     command: cmd_str.clone(),
                     start_time: std::time::Instant::now(),
                     child_pid: None,
@@ -616,6 +621,11 @@ fn run_command_output_inner(
             } else {
                 let mut c = std::process::Command::new("sh");
                 c.args(["-c", &command_for_thread]);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    c.process_group(0);
+                }
                 c
             };
 
@@ -642,6 +652,10 @@ fn run_command_output_inner(
                         && let Some(info) = tasks.get_mut(&task_id_clone)
                     {
                         info.child_pid = Some(pid);
+                    }
+
+                    if super::background_task_cancelled(&task_id_clone) {
+                        terminate_background_pid(child.id());
                     }
 
                     match wait_with_bounded_output(child) {
@@ -688,7 +702,8 @@ fn run_command_output_inner(
                 tasks.remove(&task_id_clone);
             }
 
-            if let Some(cb) = WAKEUP_CALLBACK.get() {
+            let cancelled = super::take_background_task_cancelled(&task_id_clone);
+            if !cancelled && let Some(cb) = WAKEUP_CALLBACK.get() {
                 cb(session_id, task_id_clone, output);
             }
         });
@@ -809,15 +824,13 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 .ok_or("missing 'task_id' argument for kill action")?;
 
             if let Some(info) = tasks.remove(task_id) {
-                if let Some(pid) = info.child_pid {
-                    #[cfg(target_os = "windows")]
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/F", "/PID", &pid.to_string()])
-                        .output();
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .output();
+                super::mark_background_task_cancelled(task_id);
+                if let Some(pid) = info.child_pid
+                    && !terminate_background_pid(pid)
+                {
+                    super::clear_background_task_cancelled(task_id);
+                    tasks.insert(task_id.to_owned(), info);
+                    return Err(format!("Failed to terminate task '{task_id}'."));
                 }
                 Ok(format!("Task '{task_id}' terminated successfully."))
             } else {
@@ -828,6 +841,75 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
             "Unknown action '{action}'. Supported actions: list, status, kill."
         )),
     }
+}
+
+fn terminate_background_pid(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // Background commands get their own process group at spawn time, so a
+        // negative PID terminates the shell and every descendant holding its
+        // stdout/stderr pipes.
+        let Ok(process_group) = i32::try_from(pid) else {
+            return false;
+        };
+        if process_group <= 0 {
+            return false;
+        }
+        return unsafe { libc::kill(-process_group, libc::SIGKILL) == 0 };
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .status()
+            .is_ok_and(|status| status.success());
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BackgroundStopResult {
+    pub stopped: usize,
+    pub failed: usize,
+}
+
+pub(crate) fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
+    let candidates = {
+        let Ok(mut tasks) = get_background_tasks().lock() else {
+            return BackgroundStopResult {
+                stopped: 0,
+                failed: 1,
+            };
+        };
+        let task_ids = tasks
+            .iter()
+            .filter(|(_, task)| task.session_id == session_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for task_id in &task_ids {
+            super::mark_background_task_cancelled(task_id);
+        }
+        task_ids
+            .into_iter()
+            .filter_map(|id| tasks.remove(&id).map(|task| (id, task)))
+            .collect::<Vec<_>>()
+    };
+
+    let mut result = BackgroundStopResult::default();
+    for (task_id, task) in candidates {
+        let terminated = task.child_pid.is_none_or(terminate_background_pid);
+        if terminated {
+            result.stopped += 1;
+        } else {
+            result.failed += 1;
+            super::clear_background_task_cancelled(&task_id);
+            if let Ok(mut tasks) = get_background_tasks().lock() {
+                tasks.insert(task_id, task);
+            }
+        }
+    }
+    result
 }
 
 fn spawn_output_reader<R: Read + Send + 'static>(
@@ -938,11 +1020,32 @@ fn format_bounded_output(output: &BoundedOutput) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::terminate_background_pid;
     use super::{
         command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
         has_interactive_sudo, reject_broad_git_stage, run_command, run_command_output,
         run_command_output_with_progress,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn background_termination_kills_the_command_process_group() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["-c", "sleep 30 & wait"])
+            .process_group(0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut child = command.spawn().expect("spawn process group");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        assert!(terminate_background_pid(child.id()));
+        let status = child.wait().expect("reap terminated shell");
+        assert!(!status.success());
+    }
 
     #[test]
     fn run_command_reports_stdout_and_stderr_while_running() {

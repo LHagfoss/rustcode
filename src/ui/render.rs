@@ -24,7 +24,8 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
 
 pub(super) fn live_surface_padding(state: &RenderSnapshot) -> (u16, u16) {
     let active = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
-        || !state.running_tools().is_empty();
+        || !state.running_tools().is_empty()
+        || !state.background_tasks().is_empty();
     (u16::from(!active), 1)
 }
 

@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
@@ -55,7 +55,7 @@ pub use envelope::{ToolCallEnvelope, ToolErrorKind, ToolResultEnvelope};
 
 pub(crate) use exec::{
     CommandProgressCallback, command_confirmation_preview, command_requires_confirmation,
-    run_command_output_with_progress,
+    run_command_output_with_progress, stop_background_tasks,
 };
 
 pub(crate) use filesystem::edit_target_and_replacement;
@@ -390,15 +390,90 @@ fn validate_value_against_schema(
 #[allow(dead_code)]
 pub struct BackgroundTaskInfo {
     pub id: String,
+    pub session_id: String,
     pub command: String,
     pub start_time: Instant,
     pub child_pid: Option<u32>,
     pub cancel_sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct BackgroundTaskSnapshot {
+    pub id: String,
+    pub command: String,
+    pub start_time: Instant,
+    pub child_pid: Option<u32>,
+}
+
 pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTaskInfo>> {
     static TASKS: OnceLock<StdMutex<HashMap<String, BackgroundTaskInfo>>> = OnceLock::new();
     TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+pub(crate) fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskSnapshot> {
+    let Ok(tasks) = get_background_tasks().lock() else {
+        return Vec::new();
+    };
+    let mut snapshots = tasks
+        .values()
+        .filter(|task| task.session_id == session_id)
+        .map(|task| BackgroundTaskSnapshot {
+            id: task.id.clone(),
+            command: task.command.clone(),
+            start_time: task.start_time,
+            child_pid: task.child_pid,
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by_key(|task| task.start_time);
+    snapshots
+}
+
+pub(crate) fn background_command_label(command: &str, max_chars: usize) -> String {
+    let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let mut label = normalized
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    label.push('…');
+    label
+}
+
+pub(crate) fn has_background_tasks(session_id: &str) -> bool {
+    get_background_tasks()
+        .lock()
+        .is_ok_and(|tasks| tasks.values().any(|task| task.session_id == session_id))
+}
+
+fn cancelled_background_tasks() -> &'static StdMutex<HashSet<String>> {
+    static TASKS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
+    TASKS.get_or_init(|| StdMutex::new(HashSet::new()))
+}
+
+pub(crate) fn mark_background_task_cancelled(task_id: &str) {
+    if let Ok(mut tasks) = cancelled_background_tasks().lock() {
+        tasks.insert(task_id.to_owned());
+    }
+}
+
+pub(crate) fn background_task_cancelled(task_id: &str) -> bool {
+    cancelled_background_tasks()
+        .lock()
+        .is_ok_and(|tasks| tasks.contains(task_id))
+}
+
+pub(crate) fn take_background_task_cancelled(task_id: &str) -> bool {
+    cancelled_background_tasks()
+        .lock()
+        .is_ok_and(|mut tasks| tasks.remove(task_id))
+}
+
+pub(crate) fn clear_background_task_cancelled(task_id: &str) {
+    if let Ok(mut tasks) = cancelled_background_tasks().lock() {
+        tasks.remove(task_id);
+    }
 }
 
 type WakeupCallback = Box<dyn Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static>;
