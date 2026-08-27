@@ -17,7 +17,10 @@ pub(crate) struct InteractivePolicy;
 impl TurnPolicy for InteractivePolicy {
     async fn should_approve(&self, state: &Arc<Mutex<AppState>>, tool_calls: &[ToolCall]) -> bool {
         let mut confirmations = Vec::new();
-        let auto_confirm = { state.lock().await.auto_confirm };
+        let (auto_confirm, workspace_root) = {
+            let state = state.lock().await;
+            (state.auto_confirm, state.workspace_root.clone())
+        };
 
         if !auto_confirm {
             for call in tool_calls {
@@ -48,7 +51,18 @@ impl TurnPolicy for InteractivePolicy {
                     };
 
                     let diff_opt = crate::network::get_diff_preview(&call.name, &call.arguments);
-                    let (preview, content_bytes) = if call.name == "run_command" {
+                    let render_preview = (call.name == "render_video")
+                        .then(|| {
+                            tools::render_confirmation_preview(
+                                &call.arguments,
+                                workspace_root.as_deref(),
+                            )
+                        })
+                        .flatten();
+                    let (preview, content_bytes) = if let Some(preview) = render_preview {
+                        let content_bytes = preview.len();
+                        (preview, content_bytes)
+                    } else if call.name == "run_command" {
                         let command = call
                             .arguments
                             .get("command")
