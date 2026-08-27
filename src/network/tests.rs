@@ -790,6 +790,23 @@ fn execution_metadata_does_not_parse_spoofed_display_text() {
 }
 
 #[test]
+fn failed_mutation_does_not_claim_requested_path_changed() {
+    let result = tool_result_from_execution(
+        "generate_sound_effect",
+        &serde_json::json!({"output_path": "public/sounds/projectile_shot.wav"}),
+        crate::tools::ToolExecutionOutput::failure_with_kind(
+            "error: audio backend was terminated".to_string(),
+            crate::tools::ToolErrorKind::CommandFailed,
+            false,
+        ),
+        None,
+    );
+
+    assert!(!result.metadata.success);
+    assert!(result.metadata.changed_paths.is_empty());
+}
+
+#[test]
 fn subagent_history_preserves_bounded_execution_metadata() {
     let raw = (1..=2000)
         .map(|line| format!("subagent line {line}"))
