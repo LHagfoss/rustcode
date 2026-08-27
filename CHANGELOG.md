@@ -1,3 +1,20 @@
+## [v0.38.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.38.0) - 2026-08-27
+
+### Features
+- **Background Terminals:** Show live background-terminal status and commands in the footer, with `/ps` to inspect tasks and `/stop` to terminate them ([#834](https://github.com/LHagfoss/rustcode/pull/834), [`6918f36`](https://github.com/LHagfoss/rustcode/commit/6918f36))
+
+### Fixes
+- **UI:** Move the Ctrl+C exit confirmation to the left side of the footer while preserving context usage on the right ([#835](https://github.com/LHagfoss/rustcode/pull/835), [`9254083`](https://github.com/LHagfoss/rustcode/commit/9254083))
+
+### Refactoring
+- **UI:** Split the main rendering module into focused components ([#830](https://github.com/LHagfoss/rustcode/pull/830), [`d18a7b`](https://github.com/LHagfoss/rustcode/commit/d18a7b))
+- **UI:** Split modal rendering into focused modal families ([#831](https://github.com/LHagfoss/rustcode/pull/831), [`8df4b77`](https://github.com/LHagfoss/rustcode/commit/8df4b77))
+- **App:** Split action handlers by responsibility ([#832](https://github.com/LHagfoss/rustcode/pull/832), [`087339f`](https://github.com/LHagfoss/rustcode/commit/087339f))
+- **App:** Split state models and tests into focused modules ([#833](https://github.com/LHagfoss/rustcode/pull/833), [`8763898`](https://github.com/LHagfoss/rustcode/commit/8763898))
+
+### CI & Release
+- **CI:** Avoid compiling the full test suite twice in the required Linux job ([#829](https://github.com/LHagfoss/rustcode/pull/829), [`7ea4f25`](https://github.com/LHagfoss/rustcode/commit/7ea4f25))
+
 ## [v0.37.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.37.0) - 2026-08-27
 
 ### Features
