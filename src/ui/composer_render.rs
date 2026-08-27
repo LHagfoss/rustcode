@@ -135,7 +135,7 @@ pub(super) fn context_usage(state: &RenderSnapshot) -> (u32, Option<u32>) {
 }
 
 pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
-    if *state.status() == AppStatus::Idle && !state.background_tasks().is_empty() {
+    if *state.status() == AppStatus::Idle && state.waiting_for_background_terminal() {
         return "Waiting for background terminal".to_string();
     }
     let base_activity = classify_activity(&state.status(), &state.running_tools());
@@ -169,12 +169,28 @@ pub(super) fn background_terminal_summary(count: usize) -> String {
 }
 
 pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'static>> {
+    const MAX_VISIBLE_COMMANDS: usize = 3;
     let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
-    state
+    let mut lines = state
         .background_tasks()
         .iter()
-        .map(|task| Line::from(Span::styled(format!("  └ {}", task.command), style)))
-        .collect()
+        .take(MAX_VISIBLE_COMMANDS)
+        .map(|task| {
+            let command = crate::tools::background_command_label(&task.command, 240);
+            Line::from(Span::styled(format!("  └ {command}"), style))
+        })
+        .collect::<Vec<_>>();
+    let omitted = state
+        .background_tasks()
+        .len()
+        .saturating_sub(MAX_VISIBLE_COMMANDS);
+    if omitted > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  └ … {omitted} more (/ps to view)"),
+            style,
+        )));
+    }
+    lines
 }
 
 pub(super) fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
@@ -248,7 +264,7 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     let base_activity = classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == ActivityKind::ActionRequired {
         base_activity
-    } else if *state.status() == AppStatus::Idle && !state.background_tasks().is_empty() {
+    } else if *state.status() == AppStatus::Idle && state.waiting_for_background_terminal() {
         ActivitySnapshot {
             kind: ActivityKind::Working,
             label: "Waiting for background terminal".to_string(),
@@ -322,17 +338,17 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     }
 
     let background_started = state.background_tasks().first().map(|task| task.start_time);
-    let started = if *state.status() == AppStatus::Idle {
+    let started = if state.waiting_for_background_terminal() {
         background_started
     } else {
-        state.generation_start_time().or(background_started)
+        state.generation_start_time()
     };
     let interruptible = matches!(
         activity.kind,
         ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool
-    ) || !state.background_tasks().is_empty();
+    );
 
-    if !state.background_tasks().is_empty() {
+    if state.waiting_for_background_terminal() {
         if let Some(started) = started {
             spans.push(Span::styled(
                 format!(" ({} · ", fmt_elapsed_compact(started.elapsed().as_secs())),
@@ -358,7 +374,7 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         ));
     }
 
-    if interruptible && state.background_tasks().is_empty() {
+    if interruptible && !state.waiting_for_background_terminal() {
         spans.push(Span::styled(
             " · esc ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),

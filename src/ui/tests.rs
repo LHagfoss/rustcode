@@ -2114,7 +2114,10 @@ fn activity_status_labels_idle_and_working_states() {
 
 #[test]
 fn background_terminal_activity_shows_management_hints_and_command() {
-    let state = AppState::new();
+    let mut state = AppState::new();
+    state.background_turn_context = Some(Box::new(
+        crate::network::TurnContext::with_max_tool_rounds(1),
+    ));
     let session_id = state.active_session_id.clone();
     let task_id = "ui-background-footer".to_string();
     crate::tools::get_background_tasks().lock().unwrap().insert(
@@ -2129,6 +2132,8 @@ fn background_terminal_activity_shows_management_hints_and_command() {
         },
     );
     let snapshot = state.render_snapshot();
+    state.background_turn_context = None;
+    let neutral_snapshot = state.render_snapshot();
     crate::tools::get_background_tasks()
         .lock()
         .unwrap()
@@ -2139,6 +2144,11 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     assert!(status.contains("esc to interrupt"));
     assert!(status.contains("1 background terminal running"));
     assert!(status.contains("/ps to view · /stop to close"));
+    let neutral_status = super::activity_status_line(&neutral_snapshot, false).to_string();
+    assert!(neutral_status.contains("Idle"));
+    assert!(neutral_status.contains("1 background terminal running"));
+    assert!(!neutral_status.contains("Waiting for background terminal"));
+    assert!(!neutral_status.contains("esc to interrupt"));
 
     let commands = super::background_command_lines(&snapshot);
     assert_eq!(commands.len(), 1);
@@ -2153,6 +2163,10 @@ fn background_terminal_activity_shows_management_hints_and_command() {
     assert_eq!(
         super::background_terminal_summary(2),
         "2 background terminals running · /ps to view · /stop to close"
+    );
+    assert_eq!(
+        crate::tools::background_command_label("cargo\n test\t--locked", 80),
+        "cargo test --locked"
     );
 }
 

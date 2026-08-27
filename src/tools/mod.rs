@@ -428,6 +428,19 @@ pub(crate) fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskS
     snapshots
 }
 
+pub(crate) fn background_command_label(command: &str, max_chars: usize) -> String {
+    let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let mut label = normalized
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    label.push('…');
+    label
+}
+
 pub(crate) fn has_background_tasks(session_id: &str) -> bool {
     get_background_tasks()
         .lock()
@@ -455,6 +468,12 @@ pub(crate) fn take_background_task_cancelled(task_id: &str) -> bool {
     cancelled_background_tasks()
         .lock()
         .is_ok_and(|mut tasks| tasks.remove(task_id))
+}
+
+pub(crate) fn clear_background_task_cancelled(task_id: &str) {
+    if let Ok(mut tasks) = cancelled_background_tasks().lock() {
+        tasks.remove(task_id);
+    }
 }
 
 type WakeupCallback = Box<dyn Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static>;

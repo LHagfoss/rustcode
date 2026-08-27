@@ -11,7 +11,9 @@ pub(super) fn background_terminal_list(session_id: &str) -> String {
         tasks.len(),
         if tasks.len() == 1 { "" } else { "s" }
     );
-    for task in tasks {
+    const MAX_LISTED_TASKS: usize = 20;
+    let omitted = tasks.len().saturating_sub(MAX_LISTED_TASKS);
+    for task in tasks.into_iter().take(MAX_LISTED_TASKS) {
         let pid = task
             .child_pid
             .map(|pid| pid.to_string())
@@ -21,18 +23,25 @@ pub(super) fn background_terminal_list(session_id: &str) -> String {
             task.id,
             crate::app::status::format_elapsed_compact(task.start_time.elapsed().as_secs()),
             pid,
-            task.command
+            crate::tools::background_command_label(&task.command, 500)
         ));
+    }
+    if omitted > 0 {
+        text.push_str(&format!("\n  … {omitted} more background terminals"));
     }
     text
 }
 
 pub(super) fn stop_background_terminals(session_id: &str) -> String {
-    let stopped = crate::tools::stop_background_tasks(session_id);
-    match stopped {
-        0 => "No background terminals are running.".to_string(),
-        1 => "Stopped 1 background terminal.".to_string(),
-        count => format!("Stopped {count} background terminals."),
+    let result = crate::tools::stop_background_tasks(session_id);
+    match (result.stopped, result.failed) {
+        (0, 0) => "No background terminals are running.".to_string(),
+        (1, 0) => "Stopped 1 background terminal.".to_string(),
+        (stopped, 0) => format!("Stopped {stopped} background terminals."),
+        (0, failed) => format!("Failed to stop {failed} background terminal(s)."),
+        (stopped, failed) => format!(
+            "Stopped {stopped} background terminal(s); failed to stop {failed}. Use /ps to inspect the remaining tasks."
+        ),
     }
 }
 

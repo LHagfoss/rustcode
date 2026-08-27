@@ -59,6 +59,7 @@ pub(crate) struct RenderSnapshot {
     pending_question: Option<PendingQuestion>,
     running_tools: Vec<String>,
     background_tasks: Vec<crate::tools::BackgroundTaskSnapshot>,
+    waiting_for_background_terminal: bool,
     live_tool_calls: Arc<Vec<LiveToolCall>>,
     stream_tracker: Option<StreamTracker>,
     auto_confirm: bool,
@@ -151,6 +152,7 @@ impl RenderSnapshot {
             pending_question: state.pending_question.clone(),
             running_tools: state.running_tools.clone(),
             background_tasks: crate::tools::background_task_snapshots(&state.active_session_id),
+            waiting_for_background_terminal: state.background_turn_context.is_some(),
             live_tool_calls: Arc::clone(&state.live_tool_calls),
             stream_tracker: state.stream_tracker.clone(),
             auto_confirm: state.auto_confirm,
@@ -251,6 +253,9 @@ impl RenderSnapshot {
     }
     pub(crate) fn background_tasks(&self) -> &[crate::tools::BackgroundTaskSnapshot] {
         &self.background_tasks
+    }
+    pub(crate) fn waiting_for_background_terminal(&self) -> bool {
+        self.waiting_for_background_terminal && !self.background_tasks.is_empty()
     }
     pub(crate) fn live_tool_calls(&self) -> &[LiveToolCall] {
         &self.live_tool_calls
