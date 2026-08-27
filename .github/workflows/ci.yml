@@ -5,6 +5,10 @@ on:
         branches: [main]
     workflow_dispatch:
 
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
 env:
     CARGO_TERM_COLOR: always
 
@@ -13,10 +17,14 @@ permissions:
 
 jobs:
     test:
-        runs-on: ubuntu-latest
+        # Keep this context name stable: main branch protection requires `test`.
+        name: test
+        runs-on: ubuntu-24.04
+        env:
+            RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
         steps:
             - name: Check out repository
-              uses: actions/checkout@v4
+              uses: actions/checkout@v7
 
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@stable
@@ -25,15 +33,114 @@ jobs:
 
             - name: Rust Cache
               uses: Swatinem/rust-cache@v2
+              with:
+                  key: linux
+
+            - name: Install FFmpeg
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install --no-install-recommends -y ffmpeg
+
+            - name: Verify FFmpeg tools
+              run: |
+                  ffmpeg -version
+                  ffprobe -version
 
             - name: Check formatting
               run: cargo fmt --all -- --check
+
+            - name: Check tests compile
+              run: cargo check --tests --locked
+
+            - name: Clippy correctness gate
+              # The codebase has an established warning baseline. Keep those
+              # warnings visible locally while denying only correctness lints.
+              run: cargo clippy --all-targets --locked -- -A warnings -D clippy::correctness
 
             - name: Run tests
               # These tests depend on user-installed skills or runner-specific
               # ripgrep output. Keep them in the local suite, but exclude them
               # from the clean-runner gate until they have portable fixtures.
               run: >-
-                  cargo test --
+                  cargo test --locked --
                   --skip control_plane_tool_does_not_stall_while_reading_workspace_root
                   --skip grep_stops_at_byte_cap_for_large_matching_lines
+
+    portability:
+        name: ${{ matrix.name }} portability coverage
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: macOS
+                      os: macos-latest
+                      cache_key: macos
+                    - name: Windows
+                      os: windows-latest
+                      cache_key: windows
+        env:
+            RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: rustfmt
+
+            - name: Rust Cache
+              uses: Swatinem/rust-cache@v2
+              with:
+                  key: ${{ matrix.cache_key }}
+
+            - name: Install FFmpeg (macOS)
+              if: runner.os == 'macOS'
+              shell: bash
+              run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+
+            - name: Install FFmpeg (Windows)
+              if: runner.os == 'Windows'
+              shell: powershell
+              run: choco install ffmpeg -y --no-progress
+
+            - name: Verify FFmpeg tools (Unix)
+              if: runner.os != 'Windows'
+              shell: bash
+              run: |
+                  ffmpeg -version
+                  ffprobe -version
+
+            - name: Verify FFmpeg tools (Windows)
+              if: runner.os == 'Windows'
+              shell: powershell
+              run: |
+                  ffmpeg -version
+                  ffprobe -version
+
+            - name: Check formatting
+              run: cargo fmt --all -- --check
+
+            - name: Check tests compile
+              run: cargo check --tests --locked
+
+            - name: Compile all Windows tests
+              if: runner.os == 'Windows'
+              run: cargo test --no-run --locked
+
+            - name: Run full macOS test suite
+              if: runner.os == 'macOS'
+              # Keep the same two clean-runner skips as the Linux quality job.
+              run: >-
+                  cargo test --locked --
+                  --skip control_plane_tool_does_not_stall_while_reading_workspace_root
+                  --skip grep_stops_at_byte_cap_for_large_matching_lines
+
+            - name: Run focused Windows video integration tests
+              if: runner.os == 'Windows'
+              # The broader Windows suite contains Unix-only shell tests, but
+              # these self-contained FFmpeg tests exercise Windows rendering.
+              run: |
+                  cargo test --locked tools::video::tests::renders_tiny_crossfade_when_ffmpeg_is_available -- --exact --nocapture
+                  cargo test --locked tools::video::tests::renders_short_clip_audio_to_full_timeline_when_ffmpeg_is_available -- --exact --nocapture
