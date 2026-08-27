@@ -615,28 +615,29 @@ pub(super) fn render_composer_footer(
     let window = state.active_context_window().max(1);
     let remaining = crate::app::status::context_remaining_percent(used, window);
     let location = footer_location(state);
-    let left_content = if let Some(agent) = state.selected_subagent() {
-        format!("  {} · {} · {}", agent.name(), state.model_name(), location)
-    } else {
-        format!("  {} · {}", state.model_name(), location)
-    };
-    let (right, right_style) = if state.ctrl_c_exit_armed() {
+    let (left_content, left_style) = if state.ctrl_c_exit_armed() {
         (
-            "⚠ Press Ctrl+C again to exit  ".to_owned(),
+            "  ⚠ Press Ctrl+C again to exit".to_owned(),
             get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
+        )
+    } else if let Some(agent) = state.selected_subagent() {
+        (
+            format!("  {} · {} · {}", agent.name(), state.model_name(), location),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         )
     } else {
         (
-            format!("{remaining}% context left  "),
+            format!("  {} · {}", state.model_name(), location),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         )
     };
+    let right = format!("{remaining}% context left  ");
+    let right_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     let left = fit_to_width(
         &left_content,
         (area.width as usize).saturating_sub(right.width()),
     );
     let padding = (area.width as usize).saturating_sub(left.width() + right.width());
-    let left_style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(left, left_style),

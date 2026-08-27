@@ -3122,7 +3122,18 @@ fn armed_ctrl_c_is_visible_in_the_production_composer_footer() {
     let rendered = render_state_to_text(&mut state, 100, 12);
 
     assert!(rendered.contains("⚠ Press Ctrl+C again to exit"));
-    assert!(!rendered.contains("context left"));
+    let footer = rendered
+        .lines()
+        .find(|line| line.contains("Press Ctrl+C again to exit"))
+        .expect("exit warning should be rendered in the composer footer");
+    assert!(
+        footer.starts_with("  ⚠ Press Ctrl+C again to exit"),
+        "exit warning should be left-aligned: {footer:?}"
+    );
+    assert!(
+        footer.ends_with("100% context left  "),
+        "context usage should remain right-aligned: {footer:?}"
+    );
 
     // The warning is clipped safely, rather than causing a layout overflow,
     // on terminals narrower than the complete message.
