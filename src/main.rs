@@ -2,6 +2,7 @@
 mod logger;
 mod acp;
 mod app;
+mod atomic_file;
 mod cli;
 mod clipboard;
 mod config;

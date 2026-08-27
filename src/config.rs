@@ -1,4 +1,5 @@
 use crate::app::{ChatMessage, History};
+use crate::atomic_file::replace_file;
 use serde::{Deserialize, Serialize};
 use serde_millis;
 use std::collections::HashMap;
@@ -1150,32 +1151,11 @@ fn write_config_file(path: &Path, contents: &str) -> std::io::Result<()> {
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
     }
 
-    match fs::rename(&temporary, path) {
-        Ok(()) => Ok(()),
-        Err(_) if cfg!(windows) => {
-            // Windows does not replace an existing file with rename. Keep the
-            // old file until the new file is ready, then replace it.
-            let backup = path.with_file_name(format!(".{file_name}.bak-{}", std::process::id()));
-            if path.exists() {
-                fs::rename(path, &backup)?;
-            }
-            match fs::rename(&temporary, path) {
-                Ok(()) => {
-                    let _ = fs::remove_file(backup);
-                    Ok(())
-                }
-                Err(error) => {
-                    let _ = fs::rename(&backup, path);
-                    let _ = fs::remove_file(&temporary);
-                    Err(error)
-                }
-            }
-        }
-        Err(error) => {
-            let _ = fs::remove_file(&temporary);
-            Err(error)
-        }
+    let result = replace_file(&temporary, path);
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
+    result
 }
 
 /// How long the writer thread waits after the first queued change before it
