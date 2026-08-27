@@ -892,7 +892,7 @@ fn compile_ffmpeg(
         filters.push(format!("[{index}:v]trim=start={}:duration={},setpts=PTS-STARTPTS,scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={},format=yuv420p[v{index}]", number(start), number(*duration), project.video.width, project.video.height, project.video.width, project.video.height, number(project.video.fps)));
         if project.audio.keep_clip_audio {
             if metadata[index].has_audio {
-                filters.push(format!("[{index}:a]atrim=start={}:duration={},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume={}[a{index}]", number(start), number(*duration), number(project.audio.clip_audio_volume)));
+                filters.push(format!("[{index}:a]atrim=start={}:duration={},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume={},apad,atrim=duration={}[a{index}]", number(start), number(*duration), number(project.audio.clip_audio_volume), number(*duration)));
             } else {
                 filters.push(format!(
                     "anullsrc=r=48000:cl=stereo,atrim=duration={}[a{index}]",
@@ -1382,6 +1382,7 @@ mod tests {
         assert!(joined.contains("xfade=transition=wipeleft:duration=0.5:offset=9.5"));
         assert!(joined.contains("scale=1920:1080"));
         assert!(joined.contains("anullsrc"));
+        assert!(joined.contains("volume=1,apad,atrim=duration=10[a0]"));
         assert!(joined.contains("volume=0.2"));
         assert!(joined.contains("afade=t=out:st=27.5:d=2"));
         super::super::set_active_workspace_root(None);
@@ -1551,5 +1552,86 @@ mod tests {
         assert_eq!(result["status"], "rendered");
         assert_eq!(result["resolution"]["width"], 64);
         assert!(dir.path().join("output/final.mp4").is_file());
+    }
+
+    #[test]
+    fn renders_short_clip_audio_to_full_timeline_when_ffmpeg_is_available() {
+        let (Some(ffmpeg), Some(ffprobe)) = (executable("ffmpeg"), executable("ffprobe")) else {
+            return;
+        };
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("media")).unwrap();
+        for (name, color) in [("a.mp4", "red"), ("b.mp4", "blue")] {
+            let status = Command::new(&ffmpeg)
+                .args([
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    &format!("color=c={color}:s=64x64:d=1:r=10"),
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=0.2",
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "1:a",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-t",
+                    "1",
+                ])
+                .arg(dir.path().join("media").join(name))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        fs::write(
+            dir.path().join("video-project.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "output":"output/final.mp4",
+                "video":{"width":64,"height":64,"fps":10},
+                "clips":[{"path":"media/a.mp4"},{"path":"media/b.mp4"}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output = dir.path().join("output/final.mp4");
+        super::super::set_active_workspace_root(Some(dir.path().to_path_buf()));
+        render_project(
+            &serde_json::json!({"project_path":"video-project.json"}),
+            None,
+            &SystemProcessRunner,
+        )
+        .unwrap();
+        super::super::set_active_workspace_root(None);
+
+        let probe = Command::new(ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(output)
+            .output()
+            .unwrap();
+        assert!(probe.status.success());
+        let duration: f64 = String::from_utf8_lossy(&probe.stdout)
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(duration >= 1.8, "audio duration was only {duration}s");
     }
 }
