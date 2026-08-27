@@ -1118,7 +1118,7 @@ fn render_project(
             let _ = fs::remove_file(&temporary);
             e
         })?;
-    fs::rename(&temporary, &output).map_err(|e| {
+    crate::atomic_file::replace_file(&temporary, &output).map_err(|e| {
         let _ = fs::remove_file(&temporary);
         VideoError::new(
             VideoErrorKind::ProcessFailed,

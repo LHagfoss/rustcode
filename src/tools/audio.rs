@@ -585,7 +585,7 @@ fn generate_with_selected_backend(
             ));
         }
     };
-    if let Err(error) = fs::rename(&temporary, &output) {
+    if let Err(error) = crate::atomic_file::replace_file(&temporary, &output) {
         let _ = fs::remove_file(&temporary);
         return Err(AudioError::new(
             AudioErrorKind::GenerationFailed,
