@@ -544,7 +544,11 @@ impl AppRuntime {
 
             let (response_active, background_redraw) = {
                 let mut s = app_state.lock().await;
-                (s.status_state().is_active(), s.take_redraw_request())
+                let background_active = crate::tools::has_background_tasks(&s.active_session_id);
+                (
+                    s.status_state().is_active() || background_active,
+                    s.take_redraw_request(),
+                )
             };
             needs_redraw |= background_redraw;
             while let Ok(agent_event) = agent_ui_event_receiver.try_recv() {

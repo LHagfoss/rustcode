@@ -135,6 +135,9 @@ pub(super) fn context_usage(state: &RenderSnapshot) -> (u32, Option<u32>) {
 }
 
 pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
+    if *state.status() == AppStatus::Idle && state.waiting_for_background_terminal() {
+        return "Waiting for background terminal".to_string();
+    }
     let base_activity = classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == ActivityKind::ActionRequired {
         base_activity
@@ -154,6 +157,40 @@ pub(super) fn activity_status_label(state: &RenderSnapshot) -> String {
         return "Thinking".to_string();
     }
     "Working".to_string()
+}
+
+pub(super) fn background_terminal_summary(count: usize) -> String {
+    let terminal = if count == 1 {
+        "1 background terminal running".to_string()
+    } else {
+        format!("{count} background terminals running")
+    };
+    format!("{terminal} · /ps to view · /stop to close")
+}
+
+pub(super) fn background_command_lines(state: &RenderSnapshot) -> Vec<Line<'static>> {
+    const MAX_VISIBLE_COMMANDS: usize = 3;
+    let style = get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false);
+    let mut lines = state
+        .background_tasks()
+        .iter()
+        .take(MAX_VISIBLE_COMMANDS)
+        .map(|task| {
+            let command = crate::tools::background_command_label(&task.command, 240);
+            Line::from(Span::styled(format!("  └ {command}"), style))
+        })
+        .collect::<Vec<_>>();
+    let omitted = state
+        .background_tasks()
+        .len()
+        .saturating_sub(MAX_VISIBLE_COMMANDS);
+    if omitted > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  └ … {omitted} more (/ps to view)"),
+            style,
+        )));
+    }
+    lines
 }
 
 pub(super) fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
@@ -227,6 +264,13 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     let base_activity = classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == ActivityKind::ActionRequired {
         base_activity
+    } else if *state.status() == AppStatus::Idle && state.waiting_for_background_terminal() {
+        ActivitySnapshot {
+            kind: ActivityKind::Working,
+            label: "Waiting for background terminal".to_string(),
+            detail: None,
+            animated: true,
+        }
     } else {
         classify_live_tools(&state.live_tool_calls()).unwrap_or(base_activity)
     };
@@ -293,10 +337,36 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         }
     }
 
-    if matches!(
+    let background_started = state.background_tasks().first().map(|task| task.start_time);
+    let started = if state.waiting_for_background_terminal() {
+        background_started
+    } else {
+        state.generation_start_time()
+    };
+    let interruptible = matches!(
+        activity.kind,
+        ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool
+    );
+
+    if state.waiting_for_background_terminal() {
+        if let Some(started) = started {
+            spans.push(Span::styled(
+                format!(" ({} · ", fmt_elapsed_compact(started.elapsed().as_secs())),
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+            spans.push(Span::styled(
+                "esc to interrupt",
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+            ));
+            spans.push(Span::styled(
+                ")",
+                get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+            ));
+        }
+    } else if matches!(
         activity.kind,
         ActivityKind::Working | ActivityKind::RunningTool
-    ) && let Some(started) = state.generation_start_time()
+    ) && let Some(started) = started
     {
         spans.push(Span::styled(
             format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
@@ -304,10 +374,7 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         ));
     }
 
-    if matches!(
-        activity.kind,
-        ActivityKind::Queued | ActivityKind::Working | ActivityKind::RunningTool
-    ) {
+    if interruptible && !state.waiting_for_background_terminal() {
         spans.push(Span::styled(
             " · esc ",
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
@@ -315,6 +382,16 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
         spans.push(Span::styled(
             "interrupt",
             get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::BOLD, show_picker),
+        ));
+    }
+
+    if !state.background_tasks().is_empty() {
+        spans.push(Span::styled(
+            format!(
+                " · {}",
+                background_terminal_summary(state.background_tasks().len())
+            ),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }
 

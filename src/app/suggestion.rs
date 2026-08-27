@@ -105,6 +105,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Show or set current tool protocol (json only)",
     },
     CommandInfo {
+        name: "/ps",
+        desc: "Show running background terminals",
+    },
+    CommandInfo {
         name: "/quit",
         desc: "Exit the app",
     },
@@ -127,6 +131,10 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "/stats",
         desc: "Show token usage and context statistics",
+    },
+    CommandInfo {
+        name: "/stop",
+        desc: "Stop all running background terminals",
     },
     CommandInfo {
         name: "/status",

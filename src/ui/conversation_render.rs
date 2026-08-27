@@ -45,6 +45,7 @@ pub(crate) fn render_live_tail_with_transcript(
         && matches!(state.status(), AppStatus::Idle)
         && state.running_tools().is_empty()
         && state.live_tool_calls().is_empty()
+        && state.background_tasks().is_empty()
     {
         return build_claude_startup_banner_snapshot(state, width as usize, height as usize);
     }
@@ -122,12 +123,14 @@ pub(crate) fn render_live_tail_with_transcript(
     }
 
     let activity_visible = matches!(state.status(), AppStatus::Streaming | AppStatus::Queued)
-        || !state.running_tools().is_empty();
+        || !state.running_tools().is_empty()
+        || !state.background_tasks().is_empty();
     if activity_visible {
         if lines.last().is_some_and(|l| !l.spans.is_empty()) {
             lines.push(Line::from(""));
         }
         lines.push(activity_status_line(state, false));
+        lines.extend(background_command_lines(state));
         lines.push(Line::from(""));
     }
 

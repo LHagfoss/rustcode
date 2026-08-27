@@ -58,7 +58,9 @@ use modals::{
 };
 use tool_result::render_tool_result;
 
-use crate::app::activity::{ActivityKind, classify_activity, classify_live_tools};
+use crate::app::activity::{
+    ActivityKind, ActivitySnapshot, classify_activity, classify_live_tools,
+};
 use crate::app::{AppState, AppStatus, ChatMessage};
 use crate::inline_terminal::Frame;
 use ratatui::{

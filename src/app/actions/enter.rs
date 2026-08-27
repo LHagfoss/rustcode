@@ -240,6 +240,15 @@ pub async fn handle_enter(
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
             }
+            "/ps" => {
+                let text = background_terminal_list(&s.active_session_id);
+                s.history.push(ChatMessage::new("system", text));
+            }
+            "/stop" => {
+                let text = stop_background_terminals(&s.active_session_id);
+                s.history.push(ChatMessage::new("system", text));
+                s.request_redraw();
+            }
             "/yolo" => match tokens.get(1) {
                 None => {
                     s.modal_picker_index = if s.auto_confirm { 0 } else { 1 };
