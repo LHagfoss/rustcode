@@ -25,6 +25,7 @@ pub(crate) use exec::{
 
 pub(crate) use filesystem::edit_target_and_replacement;
 pub(crate) use misc::search_web_async;
+pub(crate) use video::render_confirmation_preview;
 
 /// A parsed tool request emitted by a model.
 #[derive(Debug, Clone, PartialEq)]
@@ -1953,17 +1954,7 @@ pub(crate) fn execute_with_metadata_cancellable(
         name,
         "inspect_media" | "validate_video_project" | "render_video"
     ) {
-        return match video::execute_with_cancel(name, args, cancel_token) {
-            Ok(output) => ToolExecutionOutput::success(output),
-            Err(error) => ToolExecutionOutput::failure_with_kind(
-                as_error_message(&error.message),
-                video::map_error_kind(error.kind),
-                matches!(
-                    error.kind,
-                    video::VideoErrorKind::ProcessFailed | video::VideoErrorKind::Cancelled
-                ),
-            ),
-        };
+        return execute_video_with_progress(name, args, cancel_token, None);
     }
     if let Ok(reg) = crate::mcp::get_mcp_registry().lock() {
         let mut clients = reg.values().cloned().collect::<Vec<_>>();
@@ -2104,6 +2095,25 @@ pub(crate) fn execute_with_metadata_cancellable(
             ),
             ToolErrorKind::UnavailableDependency,
             false,
+        ),
+    }
+}
+
+pub(crate) fn execute_video_with_progress(
+    name: &str,
+    args: &Value,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    progress: Option<CommandProgressCallback>,
+) -> ToolExecutionOutput {
+    match video::execute_with_cancel_and_progress(name, args, cancel_token, progress) {
+        Ok(output) => ToolExecutionOutput::success(output),
+        Err(error) => ToolExecutionOutput::failure_with_kind(
+            as_error_message(&error.message),
+            video::map_error_kind(error.kind),
+            matches!(
+                error.kind,
+                video::VideoErrorKind::ProcessFailed | video::VideoErrorKind::Cancelled
+            ),
         ),
     }
 }

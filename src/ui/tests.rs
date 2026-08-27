@@ -2291,6 +2291,29 @@ fn live_audio_generation_cell_shows_editing_heading_and_output_path() {
 }
 
 #[test]
+fn live_video_render_cell_shows_progress() {
+    let mut call = crate::app::LiveToolCall::new(
+        "local:1",
+        None,
+        "render_video",
+        "RenderVideo",
+        "video-project.json",
+    );
+    call.output.push_back(crate::app::LiveToolOutputChunk {
+        stderr: true,
+        text: "render progress: 42% (2.1s/5.0s)\n".to_owned(),
+    });
+
+    let rendered = super::history_cell::render_live_tool_cell(&[call], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rendered[0], "• Rendering video-project.json");
+    assert!(rendered[1].contains("render progress: 42% (2.1s/5.0s)"));
+}
+
+#[test]
 fn live_batched_edits_with_casing_aliases_group_under_editing_without_actions() {
     let calls = vec![
         crate::app::LiveToolCall::new(

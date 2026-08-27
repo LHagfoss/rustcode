@@ -488,6 +488,17 @@ pub(crate) async fn confirm_and_execute(
                                 true,
                             )
                         })
+                } else if name_owned == "render_video" && live_key_owned.is_some() {
+                    let callback: crate::tools::CommandProgressCallback =
+                        Arc::new(move |bytes, stderr| {
+                            let _ = progress_tx.send((bytes.to_vec(), stderr));
+                        });
+                    crate::tools::execute_video_with_progress(
+                        &name_owned,
+                        &args_owned,
+                        Some(cancel_token_for_task),
+                        Some(callback),
+                    )
                 } else {
                     crate::tools::execute_with_metadata_cancellable(
                         &name_owned,
@@ -557,7 +568,13 @@ pub(crate) async fn confirm_and_execute(
         } else {
             "?".to_string()
         };
-        let (preview, content_bytes) = if let Some(ref d) = diff_opt {
+        let render_preview = (name == "render_video")
+            .then(|| crate::tools::render_confirmation_preview(args, workspace_root.as_deref()))
+            .flatten();
+        let (preview, content_bytes) = if let Some(preview) = render_preview {
+            let content_bytes = preview.len();
+            (preview, content_bytes)
+        } else if let Some(ref d) = diff_opt {
             (d.clone(), d.len())
         } else {
             if name == "run_command" {
@@ -619,14 +636,29 @@ pub(crate) async fn confirm_and_execute(
                 let session_id = { state.lock().await.active_session_id.clone() };
                 let workspace_root_for_task = workspace_root.clone();
                 let cancel_token_for_task = cancel_token.clone();
+                let live_key_for_task = live_key.map(str::to_owned);
+                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
                 let run_fut = tokio::task::spawn_blocking(move || {
                     crate::tools::set_active_session_id(Some(session_id));
                     crate::tools::set_active_workspace_root(workspace_root_for_task);
-                    let result = crate::tools::execute_with_metadata_cancellable(
-                        &name_owned,
-                        &args_owned,
-                        Some(cancel_token_for_task),
-                    );
+                    let result = if name_owned == "render_video" && live_key_for_task.is_some() {
+                        let callback: crate::tools::CommandProgressCallback =
+                            Arc::new(move |bytes, stderr| {
+                                let _ = progress_tx.send((bytes.to_vec(), stderr));
+                            });
+                        crate::tools::execute_video_with_progress(
+                            &name_owned,
+                            &args_owned,
+                            Some(cancel_token_for_task),
+                            Some(callback),
+                        )
+                    } else {
+                        crate::tools::execute_with_metadata_cancellable(
+                            &name_owned,
+                            &args_owned,
+                            Some(cancel_token_for_task),
+                        )
+                    };
                     crate::tools::set_active_workspace_root(None);
                     crate::tools::set_active_session_id(None);
                     result
@@ -640,19 +672,32 @@ pub(crate) async fn confirm_and_execute(
                         | "render_video"
                 );
 
-                tokio::select! {
-                    res = run_fut => {
-                        res.unwrap_or_else(|e| {
-                            crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
-                        })
-                    }
-                    _ = cancel_token.cancelled(), if !is_cancellable_process => {
-                        dbg_log!("Tool execution cancelled during spawn_blocking await");
-                        crate::tools::ToolExecutionOutput::failure_with_kind(
-                            "error: tool execution cancelled by user".to_string(),
-                            crate::tools::ToolErrorKind::Cancelled,
-                            true,
-                        )
+                tokio::pin!(run_fut);
+                let mut progress_open = true;
+                loop {
+                    tokio::select! {
+                        res = &mut run_fut => {
+                            break res.unwrap_or_else(|e| {
+                                crate::tools::ToolExecutionOutput::failure(format!("tool panicked: {e}"))
+                            });
+                        }
+                        event = progress_rx.recv(), if progress_open => {
+                            if let Some((bytes, stderr)) = event {
+                                if let Some(key) = live_key {
+                                    state.lock().await.append_live_tool_output(key, &bytes, stderr);
+                                }
+                            } else {
+                                progress_open = false;
+                            }
+                        }
+                        _ = cancel_token.cancelled(), if !is_cancellable_process => {
+                            dbg_log!("Tool execution cancelled during spawn_blocking await");
+                            break crate::tools::ToolExecutionOutput::failure_with_kind(
+                                "error: tool execution cancelled by user".to_string(),
+                                crate::tools::ToolErrorKind::Cancelled,
+                                true,
+                            );
+                        }
                     }
                 }
             }
