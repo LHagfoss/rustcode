@@ -834,6 +834,26 @@ fn validate_media_paths(project: &VideoProject) -> Result<(), VideoError> {
     Ok(())
 }
 
+fn inspect_project_media(
+    project: &VideoProject,
+    cancel: Option<&CancellationToken>,
+    runner: &dyn ProcessRunner,
+    ffprobe: &Path,
+) -> Result<Vec<MediaMetadata>, VideoError> {
+    let metadata = inspect_inputs(project, cancel, runner, ffprobe)?;
+    if let Some(music) = &project.audio.music {
+        let (path, relative) = safe_relative(&music.path, true, false)?;
+        let music_meta = inspect_path(&path, relative, cancel, runner, ffprobe)?;
+        if !music_meta.has_audio {
+            return Err(VideoError::new(
+                VideoErrorKind::InvalidArguments,
+                "background music file has no audio stream",
+            ));
+        }
+    }
+    Ok(metadata)
+}
+
 fn number(value: f64) -> String {
     format!("{value:.6}")
         .trim_end_matches('0')
@@ -1039,7 +1059,7 @@ fn validate_project(
             "ffprobe is unavailable; install FFmpeg and ensure ffprobe is on PATH",
         )
     })?;
-    let metadata = inspect_inputs(&project, cancel, runner, &ffprobe)?;
+    let metadata = inspect_project_media(&project, cancel, runner, &ffprobe)?;
     let (timeline, warnings) = validate(&project, &metadata)?;
     Ok(serde_json::json!({"valid":true,"duration_seconds":timeline.total,"resolution":{"width":project.video.width,"height":project.video.height},"fps":project.video.fps,"warnings":warnings}).to_string())
 }
@@ -1073,17 +1093,7 @@ fn render_project(
             "ffmpeg is unavailable; install FFmpeg and ensure ffmpeg is on PATH",
         )
     })?;
-    let metadata = inspect_inputs(&project, cancel, runner, &ffprobe)?;
-    if let Some(music) = &project.audio.music {
-        let (path, relative) = safe_relative(&music.path, true, false)?;
-        let music_meta = inspect_path(&path, relative, cancel, runner, &ffprobe)?;
-        if !music_meta.has_audio {
-            return Err(VideoError::new(
-                VideoErrorKind::InvalidArguments,
-                "background music file has no audio stream",
-            ));
-        }
-    }
+    let metadata = inspect_project_media(&project, cancel, runner, &ffprobe)?;
     let (timeline, warnings) = validate(&project, &metadata)?;
     let (output, relative) = safe_relative(&project.output, false, true)?;
     let temporary = temp_output(&output);
@@ -1156,6 +1166,44 @@ pub(crate) fn map_error_kind(kind: VideoErrorKind) -> super::ToolErrorKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+
+    fn exit_status(code: i32) -> ExitStatus {
+        #[cfg(unix)]
+        {
+            ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            ExitStatus::from_raw(code as u32)
+        }
+    }
+
+    struct ProbeRunner;
+
+    impl ProcessRunner for ProbeRunner {
+        fn run(
+            &self,
+            _program: &Path,
+            args: &[OsString],
+            _cancel: Option<&CancellationToken>,
+        ) -> Result<ProcessOutput, VideoError> {
+            let path = args.last().unwrap().to_string_lossy();
+            let stdout = if path.ends_with("music.wav") {
+                r#"{"streams":[{"codec_type":"video"}],"format":{"duration":"1"}}"#
+            } else {
+                r#"{"streams":[{"codec_type":"video"},{"codec_type":"audio"}],"format":{"duration":"1"}}"#
+            };
+            Ok(ProcessOutput {
+                status: exit_status(0),
+                stdout: stdout.into(),
+                stderr: String::new(),
+            })
+        }
+    }
 
     fn metadata(duration: f64, audio: bool) -> MediaMetadata {
         MediaMetadata {
@@ -1363,7 +1411,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_missing_music_file() {
+    fn validation_rejects_missing_music_file_before_dependency_lookup() {
         let dir = tempfile::TempDir::new().unwrap();
         super::super::set_active_workspace_root(Some(dir.path().to_path_buf()));
         let mut value = project();
@@ -1386,6 +1434,28 @@ mod tests {
         .unwrap_err();
         super::super::set_active_workspace_root(None);
         assert!(error.message.contains("music"));
+    }
+
+    #[test]
+    fn project_media_preflight_rejects_music_without_audio() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("media")).unwrap();
+        for name in ["a.mp4", "b.mp4", "c.mp4", "music.wav"] {
+            fs::write(dir.path().join("media").join(name), b"media").unwrap();
+        }
+        let mut value = project();
+        value.audio.music = Some(Music {
+            path: "media/music.wav".into(),
+            volume: 1.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+        });
+        super::super::set_active_workspace_root(Some(dir.path().to_path_buf()));
+        let error =
+            inspect_project_media(&value, None, &ProbeRunner, Path::new("ffprobe")).unwrap_err();
+        super::super::set_active_workspace_root(None);
+        assert_eq!(error.kind, VideoErrorKind::InvalidArguments);
+        assert_eq!(error.message, "background music file has no audio stream");
     }
 
     #[test]
