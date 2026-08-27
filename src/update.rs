@@ -7,6 +7,7 @@
 //! atomic in-place binary replacement.
 
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::process::Command;
 use std::sync::LazyLock;
@@ -17,6 +18,7 @@ pub const BREW_UPGRADE_COMMAND: &str = "brew upgrade rustcode";
 const GITHUB_REPO: &str = "LHagfoss/rustcode";
 const GITHUB_API_LATEST_RELEASE: &str =
     "https://api.github.com/repos/LHagfoss/rustcode/releases/latest";
+const SHA256_MANIFEST_NAME: &str = "SHA256SUMS";
 
 /// Fallback formula URLs in the tap repo.
 const FORMULA_URLS: [&str; 2] = [
@@ -114,13 +116,14 @@ pub fn is_brew_install() -> bool {
 
 /// Expected asset name for the current platform/architecture.
 pub fn target_asset_name() -> Option<&'static str> {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
+    target_asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
+}
 
+fn target_asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("linux", "x86_64") => Some("rustcode-linux-x86_64.tar.gz"),
         ("macos", "aarch64") => Some("rustcode-macos-aarch64.tar.gz"),
-        ("macos", "x86_64") => Some("rustcode-macos-aarch64.tar.gz"),
+        ("macos", "x86_64") => Some("rustcode-macos-x86_64.tar.gz"),
         ("windows", "x86_64") => Some("rustcode-windows-x86_64.zip"),
         _ => None,
     }
@@ -134,7 +137,7 @@ pub async fn latest_available_version(client: &reqwest::Client) -> Option<Versio
     latest_tap_version(client).await
 }
 
-async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, Option<String>)> {
+async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, String)> {
     let resp = client
         .get(GITHUB_API_LATEST_RELEASE)
         .header("User-Agent", "rustcode")
@@ -146,13 +149,12 @@ async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, Optio
     if resp.status().is_success() {
         let release = resp.json::<GithubRelease>().await.ok()?;
         let version = parse_semver(&release.tag_name)?;
-        let download_url = target_asset_name().and_then(|target_name| {
-            release
-                .assets
-                .into_iter()
-                .find(|a| a.name == target_name)
-                .map(|a| a.browser_download_url)
-        });
+        let target_name = target_asset_name()?;
+        let download_url = release
+            .assets
+            .into_iter()
+            .find(|a| a.name == target_name)
+            .map(|a| a.browser_download_url)?;
         return Some((version, download_url));
     }
     None
@@ -263,6 +265,30 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
         .await
         .map_err(|e| format!("failed to read response bytes: {e}"))?;
 
+    println!("Verifying {asset_name} against {SHA256_MANIFEST_NAME}...");
+    let _ = std::io::stdout().flush();
+    let manifest_url = format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/v{}/{SHA256_MANIFEST_NAME}",
+        format_version(expected)
+    );
+    let manifest_resp = client
+        .get(&manifest_url)
+        .header("User-Agent", "rustcode")
+        .send()
+        .await
+        .map_err(|e| format!("failed to download checksum manifest from {manifest_url}: {e}"))?;
+    if !manifest_resp.status().is_success() {
+        return Err(format!(
+            "checksum manifest download failed with HTTP {} from {manifest_url}",
+            manifest_resp.status()
+        ));
+    }
+    let manifest = manifest_resp
+        .text()
+        .await
+        .map_err(|e| format!("failed to read checksum manifest: {e}"))?;
+    verify_checksum_manifest(&manifest, asset_name, &bytes)?;
+
     println!("Extracting binary...");
     let _ = std::io::stdout().flush();
 
@@ -295,6 +321,49 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
     replace_binary(&temp_path, &current_exe)?;
 
     Ok(())
+}
+
+fn verify_checksum_manifest(manifest: &str, asset_name: &str, bytes: &[u8]) -> Result<(), String> {
+    let expected = checksum_for_asset(manifest, asset_name)?;
+    let actual = format!("{:x}", Sha256::digest(bytes));
+    if expected != actual {
+        return Err(format!(
+            "SHA-256 mismatch for {asset_name}: expected {expected}, got {actual}"
+        ));
+    }
+    Ok(())
+}
+
+fn checksum_for_asset(manifest: &str, asset_name: &str) -> Result<String, String> {
+    let mut found = None;
+    for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        let filename = fields[1].strip_prefix('*').unwrap_or(fields[1]);
+        if filename != asset_name {
+            continue;
+        }
+        if fields.len() != 2 {
+            return Err(format!(
+                "SHA256SUMS contains a malformed entry for {asset_name}"
+            ));
+        }
+        let checksum = fields[0].to_ascii_lowercase();
+        if checksum.len() != 64 || !checksum.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!(
+                "SHA256SUMS contains a malformed checksum for {asset_name}"
+            ));
+        }
+        if found.is_some() {
+            return Err(format!(
+                "SHA256SUMS contains duplicate entries for {asset_name}"
+            ));
+        }
+        found = Some(checksum);
+    }
+    found.ok_or_else(|| format!("SHA256SUMS has no entry for {asset_name}"))
 }
 
 fn extract_from_tar_gz(bytes: &[u8], target: &std::path::Path) -> Result<(), String> {
@@ -534,5 +603,78 @@ mod tests {
     #[test]
     fn target_asset_detection() {
         assert!(target_asset_name().is_some());
+    }
+
+    #[test]
+    fn target_asset_mapping_covers_supported_platforms() {
+        assert_eq!(
+            target_asset_name_for("linux", "x86_64"),
+            Some("rustcode-linux-x86_64.tar.gz")
+        );
+        assert_eq!(
+            target_asset_name_for("macos", "aarch64"),
+            Some("rustcode-macos-aarch64.tar.gz")
+        );
+        assert_eq!(
+            target_asset_name_for("macos", "x86_64"),
+            Some("rustcode-macos-x86_64.tar.gz")
+        );
+        assert_eq!(
+            target_asset_name_for("windows", "x86_64"),
+            Some("rustcode-windows-x86_64.zip")
+        );
+        assert_eq!(target_asset_name_for("windows", "aarch64"), None);
+    }
+
+    #[test]
+    fn checksum_manifest_accepts_exact_asset_and_binary_marker() {
+        let bytes = b"rustcode";
+        let checksum = format!("{:x}", Sha256::digest(bytes));
+        let manifest = format!("{checksum}  rustcode-linux-x86_64.tar.gz\n");
+        assert!(verify_checksum_manifest(&manifest, "rustcode-linux-x86_64.tar.gz", bytes).is_ok());
+
+        let marked = format!("{checksum} *rustcode-linux-x86_64.tar.gz\n");
+        assert!(verify_checksum_manifest(&marked, "rustcode-linux-x86_64.tar.gz", bytes).is_ok());
+    }
+
+    #[test]
+    fn checksum_manifest_rejects_missing_malformed_duplicate_and_mismatch() {
+        let bytes = b"rustcode";
+        let checksum = format!("{:x}", Sha256::digest(bytes));
+        assert!(
+            checksum_for_asset("", "rustcode-linux-x86_64.tar.gz")
+                .unwrap_err()
+                .contains("no entry")
+        );
+        assert!(
+            checksum_for_asset(
+                "not-a-checksum  rustcode-linux-x86_64.tar.gz",
+                "rustcode-linux-x86_64.tar.gz"
+            )
+            .unwrap_err()
+            .contains("malformed")
+        );
+        assert!(
+            checksum_for_asset(
+                &format!("{checksum}  rustcode-linux-x86_64.tar.gz trailing"),
+                "rustcode-linux-x86_64.tar.gz"
+            )
+            .unwrap_err()
+            .contains("malformed")
+        );
+        let duplicate = format!(
+            "{checksum}  rustcode-linux-x86_64.tar.gz\n{checksum}  rustcode-linux-x86_64.tar.gz"
+        );
+        assert!(
+            checksum_for_asset(&duplicate, "rustcode-linux-x86_64.tar.gz")
+                .unwrap_err()
+                .contains("duplicate")
+        );
+        let mismatch = format!("{checksum}  rustcode-linux-x86_64.tar.gz\n");
+        assert!(
+            verify_checksum_manifest(&mismatch, "rustcode-linux-x86_64.tar.gz", b"different")
+                .unwrap_err()
+                .contains("mismatch")
+        );
     }
 }

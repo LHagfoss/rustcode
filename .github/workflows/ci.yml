@@ -49,6 +49,9 @@ jobs:
             - name: Check formatting
               run: cargo fmt --all -- --check
 
+            - name: Check shell installer syntax
+              run: bash -n install.sh
+
             - name: Check tests compile
               run: cargo check --tests --locked
 
@@ -84,6 +87,24 @@ jobs:
         steps:
             - name: Check out repository
               uses: actions/checkout@v7
+
+            - name: Check PowerShell installer syntax
+              if: runner.os == 'Windows'
+              shell: pwsh
+              run: |
+                  $tokens = $null
+                  $errors = $null
+                  $path = Join-Path $PWD "install.ps1"
+                  $null = [System.Management.Automation.Language.Parser]::ParseFile(
+                      $path,
+                      [ref]$tokens,
+                      [ref]$errors
+                  )
+                  if ($errors.Count -gt 0) {
+                      $errors | ForEach-Object { Write-Error $_.Message }
+                      exit 1
+                  }
+                  Write-Output "PowerShell syntax OK"
 
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@stable

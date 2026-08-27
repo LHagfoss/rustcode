@@ -16,7 +16,7 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Check out repository history
-              uses: actions/checkout@v4
+              uses: actions/checkout@v7
               with:
                   fetch-depth: 0
 
@@ -47,19 +47,15 @@ jobs:
                     - os: macos-latest
                       target: aarch64-apple-darwin
                       name: rustcode-macos-aarch64
+                    - os: macos-15-intel
+                      target: x86_64-apple-darwin
+                      name: rustcode-macos-x86_64
                     - os: windows-latest
                       target: x86_64-pc-windows-msvc
                       name: rustcode-windows-x86_64
 
         steps:
-            - name: Disable Windows Defender
-              if: runner.os == 'Windows'
-              shell: powershell
-              run: |
-                  Set-MpPreference -DisableRealtimeMonitoring $true -DisableArchiveScanning $true -DisableBehaviorMonitoring $true -DisableScriptScanning $true
-                  Set-MpPreference -ExclusionPath "C:\", "D:\"
-
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
 
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@stable
@@ -99,7 +95,7 @@ jobs:
                   Compress-Archive -Path "${{ matrix.name }}.exe" -DestinationPath "${{ matrix.name }}.zip"
 
             - name: Upload artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: ${{ matrix.name }}
                   path: |
@@ -112,12 +108,28 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Download artifacts
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   # Removed the trailing slash to correctly flatten files
                   # when using merge-multiple: true
                   path: artifacts
                   merge-multiple: true
+
+            - name: Generate SHA256 manifest
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cd artifacts
+                  files=(
+                      rustcode-linux-x86_64.tar.gz
+                      rustcode-macos-aarch64.tar.gz
+                      rustcode-macos-x86_64.tar.gz
+                      rustcode-windows-x86_64.zip
+                  )
+                  for file in "${files[@]}"; do
+                      test -f "$file"
+                  done
+                  sha256sum "${files[@]}" | LC_ALL=C sort -k2,2 > SHA256SUMS
 
             - name: Create GitHub Release
               id: create_release
@@ -125,6 +137,7 @@ jobs:
               with:
                   # Targets only the archives inside the root artifacts directory
                   files: |
+                      artifacts/SHA256SUMS
                       artifacts/*.tar.gz
                       artifacts/*.zip
                   generate_release_notes: true
@@ -135,9 +148,13 @@ jobs:
                   TAG: ${{ github.ref_name }}
                   GH_USER: "lhagfoss"
               run: |
-                  # 1. Calculate the SHA256 hash (Now correctly maps to the root of artifacts)
-                  SHA256=$(sha256sum artifacts/rustcode-macos-aarch64.tar.gz | awk '{print $1}')
-                  echo "Computed SHA256: $SHA256"
+                  # 1. Read the platform-specific hashes from the published manifest.
+                  ARM_SHA256=$(awk '$2 == "rustcode-macos-aarch64.tar.gz" {print $1}' artifacts/SHA256SUMS)
+                  INTEL_SHA256=$(awk '$2 == "rustcode-macos-x86_64.tar.gz" {print $1}' artifacts/SHA256SUMS)
+                  test -n "$ARM_SHA256"
+                  test -n "$INTEL_SHA256"
+                  echo "Computed ARM64 SHA256: $ARM_SHA256"
+                  echo "Computed Intel SHA256: $INTEL_SHA256"
 
                   # 2. Clone your tap repository
                   git clone "https://x-access-token:${TAP_TOKEN}@github.com/${GH_USER}/homebrew-tap.git" tap-repo
@@ -151,12 +168,24 @@ jobs:
                   class Rustcode < Formula
                       desc "Local LLM Agent Harness"
                       homepage "https://github.com/${GH_USER}/rustcode"
-                      url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
-                      sha256 "${SHA256}"
+                      on_arm do
+                          url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
+                          sha256 "${ARM_SHA256}"
+                      end
+
+                      on_intel do
+                          url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-x86_64.tar.gz"
+                          sha256 "${INTEL_SHA256}"
+                      end
+
                       version "${TAG/v/}"
 
                       def install
-                      bin.install "rustcode-macos-aarch64" => "rustcode"
+                          if Hardware::CPU.arm?
+                              bin.install "rustcode-macos-aarch64" => "rustcode"
+                          else
+                              bin.install "rustcode-macos-x86_64" => "rustcode"
+                          end
                       end
                   end
                   EOF
