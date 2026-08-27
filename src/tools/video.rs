@@ -1887,7 +1887,19 @@ mod tests {
 
     #[test]
     fn renders_tiny_crossfade_when_ffmpeg_is_available() {
-        let (Some(ffmpeg), Some(_)) = (executable("ffmpeg"), executable("ffprobe")) else {
+        let require_ffmpeg = std::env::var_os("RUSTCODE_REQUIRE_FFMPEG_TESTS").is_some();
+        let Some(ffmpeg) = executable("ffmpeg") else {
+            assert!(
+                !require_ffmpeg,
+                "ffmpeg is required for this integration test"
+            );
+            return;
+        };
+        let Some(_ffprobe) = executable("ffprobe") else {
+            assert!(
+                !require_ffmpeg,
+                "ffprobe is required for this integration test"
+            );
             return;
         };
         let dir = tempfile::TempDir::new().unwrap();
@@ -1941,7 +1953,19 @@ mod tests {
 
     #[test]
     fn renders_short_clip_audio_to_full_timeline_when_ffmpeg_is_available() {
-        let (Some(ffmpeg), Some(ffprobe)) = (executable("ffmpeg"), executable("ffprobe")) else {
+        let require_ffmpeg = std::env::var_os("RUSTCODE_REQUIRE_FFMPEG_TESTS").is_some();
+        let Some(ffmpeg) = executable("ffmpeg") else {
+            assert!(
+                !require_ffmpeg,
+                "ffmpeg is required for this integration test"
+            );
+            return;
+        };
+        let Some(ffprobe) = executable("ffprobe") else {
+            assert!(
+                !require_ffmpeg,
+                "ffprobe is required for this integration test"
+            );
             return;
         };
         let dir = tempfile::TempDir::new().unwrap();

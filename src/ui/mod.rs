@@ -56,8 +56,11 @@ use ratatui::{
 };
 use render_snapshot::RenderSnapshot;
 use std::hash::{Hash, Hasher};
+#[cfg(not(test))]
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(test))]
+use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn safe_byte_index(s: &str, byte_pos: usize) -> usize {
@@ -1016,6 +1019,7 @@ fn blend_rgb(c1: (u8, u8, u8), c2: (u8, u8, u8), factor: f32) -> (u8, u8, u8) {
     (r, g, b)
 }
 
+#[cfg(not(test))]
 static SHIMMER_START: OnceLock<Instant> = OnceLock::new();
 
 fn shimmer_rgb(color: Color, fallback: (u8, u8, u8)) -> (u8, u8, u8) {
@@ -1063,6 +1067,9 @@ fn shimmer_spans_at(text: &str, elapsed: Duration) -> Vec<Span<'static>> {
 }
 
 fn shimmer_spans(text: &str, _show_picker: bool) -> Vec<Span<'static>> {
+    #[cfg(test)]
+    let elapsed = Duration::ZERO;
+    #[cfg(not(test))]
     let elapsed = SHIMMER_START.get_or_init(Instant::now).elapsed();
     shimmer_spans_at(text, elapsed)
 }
