@@ -100,7 +100,7 @@ impl RenderSnapshot {
         Self {
             revision: state.render_revision,
             input_buffer: state.input_buffer.clone(),
-            ctrl_c_exit_armed: state.ctrl_c_exit_armed,
+            ctrl_c_exit_armed: state.ctrl_c_exit_armed(),
             cursor_position: state.cursor_position,
             history: state.history.snapshot(),
             history_display_start: state.history_display_start,

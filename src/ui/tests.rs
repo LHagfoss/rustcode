@@ -2086,34 +2086,8 @@ fn footer_animation_pulse_center_reaches_both_edges() {
 }
 
 #[test]
-fn compact_status_formats_empty_context_and_idle_tps() {
-    assert_eq!(format_context_info(0, 0, None), "Context: 0 (0%)");
-    assert_eq!(format_tps_info(0.0), "Tps: 0.0");
-}
-
-#[test]
-fn input_footer_only_advertises_command_palette() {
-    assert_eq!(input_footer_hint_text(), "Ctrl+P commands");
-}
-
-#[test]
-fn input_footer_prompts_for_second_ctrl_c_when_exit_is_armed() {
-    let mut state = AppState::new();
-    state.ctrl_c_exit_armed = true;
-
-    assert_eq!(
-        format_input_status_text(&state.render_snapshot()),
-        "Auto-Confirm: OFF  Context: 0 (0%)  Tps: 0.0  Press Ctrl+C again to exit"
-    );
-}
-
-#[test]
-fn input_bar_contains_live_status_and_command_hint() {
+fn activity_status_labels_idle_and_working_states() {
     let state = AppState::new();
-    assert_eq!(
-        format_input_status_text(&state.render_snapshot()),
-        "Auto-Confirm: OFF  Context: 0 (0%)  Tps: 0.0  Ctrl+P commands"
-    );
     assert_eq!(activity_status_label(&state.render_snapshot()), "Idle");
     assert_eq!(
         activity_status_line(&state.render_snapshot(), false)
@@ -3079,6 +3053,23 @@ fn empty_composer_has_painted_padding_and_external_model_footer() {
     assert_eq!(buffer[(0, prompt_row + 1)].bg, COLOR_PANEL());
     assert_eq!(buffer[(0, footer_row)].bg, COLOR_BG());
     assert_eq!(buffer[(99, prompt_row)].bg, COLOR_PANEL());
+}
+
+#[test]
+fn armed_ctrl_c_is_visible_in_the_production_composer_footer() {
+    let mut state = AppState::new();
+    state.ctrl_c_exit_deadline =
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+
+    let rendered = render_state_to_text(&mut state, 100, 12);
+
+    assert!(rendered.contains("⚠ Press Ctrl+C again to exit"));
+    assert!(!rendered.contains("context left"));
+
+    // The warning is clipped safely, rather than causing a layout overflow,
+    // on terminals narrower than the complete message.
+    let narrow = render_state_to_text(&mut state, 24, 12);
+    assert!(narrow.contains('⚠'));
 }
 
 #[test]

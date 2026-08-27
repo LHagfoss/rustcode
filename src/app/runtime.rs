@@ -467,6 +467,13 @@ impl AppRuntime {
         let mut last_progress_sent = std::time::Instant::now();
         let composer = ui::Composer::new();
         loop {
+            {
+                let mut state = app_state.lock().await;
+                if state.expire_ctrl_c_exit_arming(std::time::Instant::now()) {
+                    needs_redraw = true;
+                }
+            }
+
             let update_version = {
                 let mut state = app_state.lock().await;
                 if state.update_requested {
@@ -951,6 +958,18 @@ impl AppRuntime {
                         let is_ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                         let is_cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
 
+                        if is_ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                            if crate::app::handle_ctrl_c(&app_state).await {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        {
+                            let mut s = app_state.lock().await;
+                            s.clear_ctrl_c_exit_arming();
+                        }
+
                         if (is_ctrl || is_cmd)
                             && (key.code == KeyCode::Char('k') || key.code == KeyCode::Char('K'))
                         {
@@ -966,18 +985,6 @@ impl AppRuntime {
                             s.request_clear_screen();
                             needs_redraw = true;
                             continue;
-                        }
-
-                        if is_ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
-                            if crate::app::handle_ctrl_c(&app_state).await {
-                                break;
-                            }
-                            continue;
-                        }
-
-                        {
-                            let mut s = app_state.lock().await;
-                            s.ctrl_c_exit_armed = false;
                         }
 
                         {
