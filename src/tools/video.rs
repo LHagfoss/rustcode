@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
@@ -349,11 +350,23 @@ fn terminate_child(child: &mut std::process::Child) {
 
 fn read_bounded<R: Read + Send + 'static>(mut stream: R) -> thread::JoinHandle<String> {
     thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stream.read_to_end(&mut bytes);
-        if bytes.len() > MAX_PROCESS_OUTPUT {
-            bytes = bytes.split_off(bytes.len() - MAX_PROCESS_OUTPUT);
+        let mut bytes = VecDeque::with_capacity(MAX_PROCESS_OUTPUT);
+        let mut chunk = [0u8; 4096];
+        loop {
+            let read = match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => read,
+            };
+            let excess = bytes
+                .len()
+                .saturating_add(read)
+                .saturating_sub(MAX_PROCESS_OUTPUT);
+            if excess > 0 {
+                bytes.drain(..excess);
+            }
+            bytes.extend(&chunk[..read]);
         }
+        let bytes: Vec<_> = bytes.into_iter().collect();
         String::from_utf8_lossy(&bytes).trim().to_string()
     })
 }
@@ -1226,6 +1239,42 @@ mod tests {
 
     fn project() -> VideoProject {
         serde_json::from_value(serde_json::json!({"output":"output/final.mp4","clips":[{"path":"media/a.mp4"},{"path":"media/b.mp4"},{"path":"media/c.mp4"}]})).unwrap()
+    }
+
+    #[test]
+    fn process_output_capture_is_bounded_and_keeps_the_tail() {
+        let mut input = b"HEAD_MARKER".to_vec();
+        input.extend(std::iter::repeat_n(b'x', MAX_PROCESS_OUTPUT * 4));
+        input.extend_from_slice(b"TAIL_MARKER");
+
+        let output = read_bounded(std::io::Cursor::new(input)).join().unwrap();
+
+        assert!(output.len() <= MAX_PROCESS_OUTPUT);
+        assert!(output.ends_with("TAIL_MARKER"));
+    }
+
+    #[test]
+    fn process_output_capture_keeps_small_output_intact() {
+        let output = read_bounded(std::io::Cursor::new(br#"{"streams":[]}"#.to_vec()))
+            .join()
+            .unwrap();
+
+        assert_eq!(output, r#"{"streams":[]}"#);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_runner_drains_large_output_before_waiting() {
+        let output = SystemProcessRunner
+            .run(
+                Path::new("/bin/sh"),
+                &["-c".into(), "head -c 200000 /dev/zero".into()],
+                None,
+            )
+            .unwrap();
+
+        assert!(output.status.success());
+        assert!(output.stdout.len() <= MAX_PROCESS_OUTPUT);
     }
 
     #[test]
