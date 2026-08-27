@@ -90,6 +90,7 @@ pub(crate) enum AudioErrorKind {
     MissingBackend,
     BackendUnavailable,
     ModelUnavailable,
+    BackendTerminated,
     GenerationFailed,
     Cancelled,
     InvalidAudio,
@@ -188,6 +189,18 @@ impl AudioGenerationBackend for MusicgenBackend {
 struct ProcessOutput {
     status: ExitStatus,
     stderr: String,
+}
+
+#[cfg(unix)]
+fn process_was_signal_terminated(status: &ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+
+    status.signal().is_some()
+}
+
+#[cfg(not(unix))]
+fn process_was_signal_terminated(_status: &ExitStatus) -> bool {
+    false
 }
 
 trait ProcessRunner {
@@ -557,7 +570,9 @@ fn generate_with_selected_backend(
         } else {
             format!(" Backend output: {}", process.stderr)
         };
-        let kind = if process.stderr.to_ascii_lowercase().contains("model") {
+        let kind = if process_was_signal_terminated(&process.status) {
+            AudioErrorKind::BackendTerminated
+        } else if process.stderr.to_ascii_lowercase().contains("model") {
             AudioErrorKind::ModelUnavailable
         } else {
             AudioErrorKind::GenerationFailed
@@ -718,12 +733,22 @@ pub(crate) fn map_error_kind(kind: AudioErrorKind) -> super::ToolErrorKind {
         | AudioErrorKind::MissingBackend
         | AudioErrorKind::BackendUnavailable
         | AudioErrorKind::ModelUnavailable => super::ToolErrorKind::UnavailableDependency,
+        AudioErrorKind::BackendTerminated => super::ToolErrorKind::CommandFailed,
         AudioErrorKind::InvalidPath => super::ToolErrorKind::InvalidArguments,
         AudioErrorKind::Cancelled => super::ToolErrorKind::Cancelled,
         AudioErrorKind::GenerationFailed | AudioErrorKind::InvalidAudio => {
             super::ToolErrorKind::CommandFailed
         }
     }
+}
+
+pub(crate) fn is_retryable_error(kind: AudioErrorKind) -> bool {
+    matches!(
+        kind,
+        AudioErrorKind::GenerationFailed
+            | AudioErrorKind::ModelUnavailable
+            | AudioErrorKind::Cancelled
+    )
 }
 
 #[cfg(test)]
@@ -912,6 +937,36 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.kind, AudioErrorKind::Cancelled);
         assert!(!output.exists());
+        super::super::set_active_workspace_root(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_terminated_backend_is_not_retryable() {
+        let dir = TempDir::new().unwrap();
+        super::super::set_active_workspace_root(Some(dir.path().to_path_buf()));
+        let (output, relative) = project_path("assets/audio/killed.wav").unwrap();
+        let killed = MockRunner {
+            status: ExitStatus::from_raw(9),
+            output: None,
+            cancel: false,
+        };
+        let error = generate_with_selected_backend(
+            GenerationKind::Sfx,
+            "short pew",
+            0.25,
+            output,
+            relative,
+            None,
+            &killed,
+            &MlxSpeechBackend,
+            Path::new("mock"),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, AudioErrorKind::BackendTerminated);
+        assert!(!is_retryable_error(error.kind));
+        assert_eq!(map_error_kind(error.kind), super::super::ToolErrorKind::CommandFailed);
         super::super::set_active_workspace_root(None);
     }
 
