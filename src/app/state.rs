@@ -1024,7 +1024,8 @@ impl LiveToolCall {
 
 pub struct AppState {
     pub input_buffer: String,
-    pub ctrl_c_exit_armed: bool,
+    /// Deadline through which a second Ctrl+C confirms application exit.
+    pub ctrl_c_exit_deadline: Option<std::time::Instant>,
     pub history: History,
     /// First history index shown in the TUI. The full history remains available
     /// to the model; `/clear` advances this boundary without deleting messages.
@@ -1337,6 +1338,34 @@ impl AppState {
         self.render_revision = self.render_revision.wrapping_add(1);
     }
 
+    /// Clear the pending Ctrl+C exit confirmation, invalidating the footer
+    /// snapshot only when the confirmation was actually armed.
+    pub fn clear_ctrl_c_exit_arming(&mut self) {
+        if self.ctrl_c_exit_deadline.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
+    /// Expire a pending Ctrl+C exit confirmation and request the redraw that
+    /// removes its footer warning. Returns whether an armed deadline expired.
+    pub fn expire_ctrl_c_exit_arming(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .ctrl_c_exit_deadline
+            .is_some_and(|deadline| deadline <= now)
+        {
+            self.ctrl_c_exit_deadline = None;
+            self.request_redraw();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn ctrl_c_exit_armed(&self) -> bool {
+        self.ctrl_c_exit_deadline
+            .is_some_and(|deadline| deadline > std::time::Instant::now())
+    }
+
     /// Clear the render-visible response buffer and invalidate in-flight layout metrics.
     pub(crate) fn clear_current_response(&mut self) {
         let changed = !self.current_response.is_empty();
@@ -1590,7 +1619,7 @@ impl AppState {
 
         let app = Self {
             input_buffer: String::new(),
-            ctrl_c_exit_armed: false,
+            ctrl_c_exit_deadline: None,
             scroll_to_bottom_btn: None,
             hover: HoverTarget::None,
             history,
@@ -2261,6 +2290,35 @@ mod protocol_tests {
         assert_eq!(notices[0].content, "Custom warning");
         assert_eq!(notices[1].role, "system");
         assert_eq!(notices[1].content, "Execution error occurred");
+        assert!(state.redraw_requested);
+    }
+
+    #[test]
+    fn expired_ctrl_c_arming_is_cleared_and_requests_a_redraw() {
+        let mut state = AppState::new();
+        state.ctrl_c_exit_deadline =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        state.redraw_requested = false;
+        let revision = state.render_revision;
+
+        assert!(state.expire_ctrl_c_exit_arming(std::time::Instant::now()));
+        assert!(state.ctrl_c_exit_deadline.is_none());
+        assert!(state.redraw_requested);
+        assert_ne!(state.render_revision, revision);
+        assert!(!state.expire_ctrl_c_exit_arming(std::time::Instant::now()));
+    }
+
+    #[test]
+    fn clearing_ctrl_c_arming_requests_a_redraw_only_when_armed() {
+        let mut state = AppState::new();
+        state.redraw_requested = false;
+        state.clear_ctrl_c_exit_arming();
+        assert!(!state.redraw_requested);
+
+        state.ctrl_c_exit_deadline =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+        state.clear_ctrl_c_exit_arming();
+        assert!(state.ctrl_c_exit_deadline.is_none());
         assert!(state.redraw_requested);
     }
 

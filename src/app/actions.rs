@@ -1,9 +1,11 @@
 use crate::app::{AppState, AppStatus, ChatMessage};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use sysinfo::{Pid, System};
 use tokio::sync::Mutex;
 
 const CHANGELOG_CONTENT: &str = include_str!("../../CHANGELOG.md");
+pub(crate) const CTRL_C_EXIT_CONFIRMATION_WINDOW: Duration = Duration::from_secs(2);
 
 pub fn build_latest_changelog() -> String {
     let mut out = String::new();
@@ -38,7 +40,7 @@ pub async fn handle_escape(
     cancel_token: &mut tokio_util::sync::CancellationToken,
 ) {
     let mut s = state.lock().await;
-    s.ctrl_c_exit_armed = false;
+    s.clear_ctrl_c_exit_arming();
     s.reset_suggestion_cycle();
     s.input_buffer.clear();
     s.cursor_position = 0;
@@ -63,10 +65,14 @@ pub async fn handle_escape(
 /// Esc remains the cancellation key for those interactions.
 pub async fn handle_ctrl_c(state: &Arc<Mutex<AppState>>) -> bool {
     let mut s = state.lock().await;
-    if s.ctrl_c_exit_armed {
+    let now = Instant::now();
+    if s.ctrl_c_exit_deadline
+        .is_some_and(|deadline| deadline > now)
+    {
+        s.ctrl_c_exit_deadline = None;
         true
     } else {
-        s.ctrl_c_exit_armed = true;
+        s.ctrl_c_exit_deadline = Some(now + CTRL_C_EXIT_CONFIRMATION_WINDOW);
         s.request_redraw();
         false
     }
@@ -1997,10 +2003,24 @@ mod tests {
         let state = Arc::new(Mutex::new(app));
 
         assert!(!handle_ctrl_c(&state).await);
-        assert!(state.lock().await.ctrl_c_exit_armed);
+        assert!(state.lock().await.ctrl_c_exit_deadline.is_some());
         assert_eq!(state.lock().await.status, crate::app::AppStatus::Streaming);
 
         assert!(handle_ctrl_c(&state).await);
+    }
+
+    #[tokio::test]
+    async fn expired_ctrl_c_requires_a_fresh_second_press() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        use tokio::sync::Mutex;
+
+        let mut app = crate::app::AppState::new();
+        app.ctrl_c_exit_deadline = Some(Instant::now() - Duration::from_secs(1));
+        let state = Arc::new(Mutex::new(app));
+
+        assert!(!handle_ctrl_c(&state).await);
+        assert!(state.lock().await.ctrl_c_exit_deadline.is_some());
     }
 
     #[test]
