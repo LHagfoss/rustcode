@@ -1,3 +1,24 @@
+## [v0.37.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.37.0) - 2026-08-27
+
+### Features
+- **Video:** Show the render plan and live progress while rendering video projects ([#821](https://github.com/LHagfoss/rustcode/pull/821), [`41a28a9`](https://github.com/LHagfoss/rustcode/commit/41a28a9))
+
+### Fixes
+- **Video:** Pad short clip audio so rendered clips keep their declared duration ([#818](https://github.com/LHagfoss/rustcode/pull/818), [`55e3057`](https://github.com/LHagfoss/rustcode/commit/55e3057))
+- **Video:** Share project media preflight across render steps to avoid redundant checks ([#817](https://github.com/LHagfoss/rustcode/pull/817), [`9062448`](https://github.com/LHagfoss/rustcode/commit/9062448))
+- **Video:** Bound FFmpeg process output capture to prevent unbounded memory growth ([#820](https://github.com/LHagfoss/rustcode/pull/820), [`2110cd8`](https://github.com/LHagfoss/rustcode/commit/2110cd8))
+- **UI:** Time out the double Ctrl-C exit confirmation so a stuck terminal can always exit ([#822](https://github.com/LHagfoss/rustcode/pull/822), [`2370511`](https://github.com/LHagfoss/rustcode/commit/2370511))
+- **IO:** Share the atomic output replacement path across writers ([#819](https://github.com/LHagfoss/rustcode/pull/819), [`71496e4`](https://github.com/LHagfoss/rustcode/commit/71496e4))
+
+### Refactoring
+- **Tools:** Split tool schema parsing from dispatch for clearer ownership ([#827](https://github.com/LHagfoss/rustcode/pull/827), [`7d2932b`](https://github.com/LHagfoss/rustcode/commit/7d2932b))
+- **Network:** Split request loop detection into dedicated modules ([#826](https://github.com/LHagfoss/rustcode/pull/826), [`575d5cd`](https://github.com/LHagfoss/rustcode/commit/575d5cd))
+- **Config:** Split session persistence into its own module ([#825](https://github.com/LHagfoss/rustcode/pull/825), [`b88f3ea`](https://github.com/LHagfoss/rustcode/commit/b88f3ea))
+
+### CI & Release
+- **CI:** Add cross-platform pull request coverage ([#823](https://github.com/LHagfoss/rustcode/pull/823), [`5087e81`](https://github.com/LHagfoss/rustcode/commit/5087e81))
+- **Release:** Verify platform artifacts before publishing ([#824](https://github.com/LHagfoss/rustcode/pull/824), [`b12e16f`](https://github.com/LHagfoss/rustcode/commit/b12e16f))
+
 ## [v0.36.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.36.0) - 2026-08-24
 
 ### Features
