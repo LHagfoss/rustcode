@@ -18,12 +18,20 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod advanced_settings;
 mod confirmation;
 mod context;
 mod navigation;
 mod question;
 mod settings;
 
+#[cfg(test)]
+mod tests;
+
+pub(in crate::ui) use advanced_settings::{
+    render_effort_picker_modal, render_protocol_picker_modal, render_thinking_picker_modal,
+    render_update_prompt_modal,
+};
 pub(in crate::ui) use confirmation::{question_height, render_tool_confirmation_modal};
 pub(super) use context::calculate_context_breakdown;
 pub(in crate::ui) use context::{render_context_modal, render_theme_picker_modal};
@@ -34,10 +42,7 @@ pub(in crate::ui) use navigation::{
 };
 pub(in crate::ui) use question::render_question_modal;
 use question::textwrap_simple;
-pub(in crate::ui) use settings::{
-    render_effort_picker_modal, render_protocol_picker_modal, render_thinking_picker_modal,
-    render_update_prompt_modal, render_verbosity_picker_modal, render_yolo_picker_modal,
-};
+pub(in crate::ui) use settings::{render_verbosity_picker_modal, render_yolo_picker_modal};
 
 pub(crate) fn approval_event_for_key(key: KeyEvent, selected: usize) -> Option<AppEvent> {
     let decision = match key.code {
