@@ -966,7 +966,10 @@ mod tests {
 
         assert_eq!(error.kind, AudioErrorKind::BackendTerminated);
         assert!(!is_retryable_error(error.kind));
-        assert_eq!(map_error_kind(error.kind), super::super::ToolErrorKind::CommandFailed);
+        assert_eq!(
+            map_error_kind(error.kind),
+            super::super::ToolErrorKind::CommandFailed
+        );
         super::super::set_active_workspace_root(None);
     }
 
