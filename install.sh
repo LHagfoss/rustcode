@@ -29,6 +29,37 @@ error() {
     exit 1
 }
 
+download() {
+    local url="$1"
+    local destination="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$destination"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$destination" "$url"
+    else
+        error "Neither curl nor wget was found."
+    fi
+}
+
+# v0.36.0 predates the published SHA256SUMS asset. Keep this exact, one-release
+# migration mapping so existing installers remain verifiable until the next tag.
+legacy_checksum() {
+    case "$1:$2" in
+        "v0.36.0:rustcode-linux-x86_64.tar.gz")
+            echo "3b469813d0c144bc9a20851116f60f3e8c0b9de4bdadb4a69c6cbc294962edb2"
+            ;;
+        "v0.36.0:rustcode-macos-aarch64.tar.gz")
+            echo "ee34d580ebe45be9d0bd53265e1dd27cb4709a30378e7234dd44c9256af46568"
+            ;;
+        "v0.36.0:rustcode-windows-x86_64.zip")
+            echo "dea6a42383dea5f04baa36f78e373b7faf0db303c084882e3dbb3d8d5d4a3786"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # Detect OS
 OS="$(uname -s)"
 case "$OS" in
@@ -59,7 +90,11 @@ esac
 
 # Match GitHub Release asset name
 if [ "$TARGET_OS" = "macos" ]; then
-    ASSET_NAME="rustcode-macos-aarch64.tar.gz"
+    if [ "$TARGET_ARCH" = "aarch64" ]; then
+        ASSET_NAME="rustcode-macos-aarch64.tar.gz"
+    else
+        ASSET_NAME="rustcode-macos-x86_64.tar.gz"
+    fi
 elif [ "$TARGET_OS" = "linux" ]; then
     if [ "$TARGET_ARCH" = "x86_64" ]; then
         ASSET_NAME="rustcode-linux-x86_64.tar.gz"
@@ -80,6 +115,8 @@ if command -v curl >/dev/null 2>&1; then
     fi
 elif command -v wget >/dev/null 2>&1; then
     LATEST_TAG=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+else
+    error "Neither curl nor wget was found."
 fi
 
 if [ -z "$LATEST_TAG" ]; then
@@ -96,12 +133,50 @@ cleanup() {
 trap cleanup EXIT
 
 ARCHIVE_PATH="${TMP_DIR}/${ASSET_NAME}"
-if command -v curl >/dev/null 2>&1; then
-    curl -fSL "$DOWNLOAD_URL" -o "$ARCHIVE_PATH"
-elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$ARCHIVE_PATH" "$DOWNLOAD_URL"
+download "$DOWNLOAD_URL" "$ARCHIVE_PATH"
+
+MANIFEST_NAME="SHA256SUMS"
+MANIFEST_PATH="${TMP_DIR}/${MANIFEST_NAME}"
+MANIFEST_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${MANIFEST_NAME}"
+info "Verifying ${ASSET_NAME} against ${MANIFEST_NAME}..."
+if ! download "$MANIFEST_URL" "$MANIFEST_PATH"; then
+    if EXPECTED_SHA256="$(legacy_checksum "$LATEST_TAG" "$ASSET_NAME")"; then
+        warn "${MANIFEST_NAME} is unavailable for ${LATEST_TAG}; using the embedded official one-release migration checksum."
+    else
+        error "Could not download ${MANIFEST_NAME} for ${LATEST_TAG}; refusing to install an unverified archive."
+    fi
 else
-    error "Neither curl nor wget was found."
+    EXPECTED_SHA256="$(awk -v asset="$ASSET_NAME" '
+        {
+            filename = $2
+            sub(/^\*/, "", filename)
+            if (filename == asset) {
+                if (NF != 2) {
+                    malformed = 1
+                    next
+                }
+                count++
+                checksum = tolower($1)
+            }
+        }
+        END {
+            if (malformed || count != 1 || checksum !~ /^[0-9a-f]{64}$/) {
+                exit 1
+            }
+            print checksum
+        }
+    ' "$MANIFEST_PATH")" || error "SHA256SUMS has no single valid entry for ${ASSET_NAME}."
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_SHA256="$(sha256sum "$ARCHIVE_PATH" | awk '{print tolower($1)}')"
+elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_SHA256="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print tolower($1)}')"
+else
+    error "Neither sha256sum nor shasum was found; refusing to install an unverified archive."
+fi
+if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
+    error "SHA-256 mismatch for ${ASSET_NAME}; refusing to install the archive."
 fi
 
 info "Extracting archive..."

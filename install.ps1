@@ -29,7 +29,9 @@ function Write-Err ($Message) {
 
 Write-Info "Checking system architecture..."
 $Arch = $env:PROCESSOR_ARCHITECTURE
-if ($Arch -ne "AMD64" -and $Arch -ne "ARM64") {
+if ($Arch -eq "ARM64") {
+    Write-Warn "Windows ARM64 detected; using the x86_64 RustCode binary through Windows emulation."
+} elseif ($Arch -ne "AMD64") {
     Write-Warn "Detected architecture $Arch. RustCode provides x86_64 binaries for Windows."
 }
 
@@ -67,6 +69,65 @@ try {
     $ZipPath = Join-Path $TempDir $AssetName
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath -UseBasicParsing
+
+    $ManifestName = "SHA256SUMS"
+    $ManifestPath = Join-Path $TempDir $ManifestName
+    $ManifestUrl = "https://github.com/$Repo/releases/download/$LatestTag/$ManifestName"
+    Write-Info "Verifying $AssetName against $ManifestName..."
+    $ManifestDownloaded = $true
+    try {
+        Invoke-WebRequest -Uri $ManifestUrl -OutFile $ManifestPath -UseBasicParsing
+    } catch {
+        $ManifestDownloaded = $false
+    }
+
+    if (-not $ManifestDownloaded) {
+        # v0.36.0 predates the published SHA256SUMS asset. Keep this exact,
+        # one-release mapping so existing installers remain verifiable.
+        if ($LatestTag -eq "v0.36.0") {
+            switch ($AssetName) {
+                "rustcode-windows-x86_64.zip" {
+                    $ExpectedHash = "dea6a42383dea5f04baa36f78e373b7faf0db303c084882e3dbb3d8d5d4a3786"
+                }
+                default {
+                    Write-Err "$ManifestName is unavailable for $LatestTag and no embedded checksum exists for $AssetName."
+                }
+            }
+            Write-Warn "$ManifestName is unavailable for $LatestTag; using the embedded official one-release migration checksum."
+        } else {
+            Write-Err "Could not download $ManifestName for $LatestTag; refusing to install an unverified archive."
+        }
+    } else {
+        $ManifestEntries = @(
+            Get-Content -Path $ManifestPath | ForEach-Object {
+                $Parts = $_.Trim() -split '\s+'
+                if ($Parts.Count -lt 2) {
+                    return
+                }
+                $Name = $Parts[1].TrimStart('*')
+                if ($Name -ceq $AssetName) {
+                    [PSCustomObject]@{
+                        FieldCount = $Parts.Count
+                        Hash = $Parts[0]
+                    }
+                }
+            }
+        )
+        if ($ManifestEntries.Count -ne 1) {
+            Write-Err "$ManifestName has no single valid entry for $AssetName."
+        }
+        if ($ManifestEntries[0].FieldCount -ne 2) {
+            Write-Err "$ManifestName contains a malformed entry for $AssetName."
+        }
+        $ExpectedHash = $ManifestEntries[0].Hash.ToLowerInvariant()
+    }
+    if ($ExpectedHash -notmatch '^[0-9a-f]{64}$') {
+        Write-Err "$ManifestName contains a malformed checksum for $AssetName."
+    }
+    $ActualHash = (Get-FileHash -Algorithm SHA256 -Path $ZipPath).Hash.ToLowerInvariant()
+    if ($ActualHash -cne $ExpectedHash) {
+        Write-Err "SHA-256 mismatch for $AssetName; refusing to install the archive."
+    }
 
     Write-Info "Extracting archive..."
     Expand-Archive -Path $ZipPath -DestinationPath $TempDir -Force
