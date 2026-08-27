@@ -39,12 +39,7 @@ pub(crate) fn execute_with_metadata_cancellable(
             Err(error) => ToolExecutionOutput::failure_with_kind(
                 as_error_message(&error.message),
                 audio::map_error_kind(error.kind),
-                matches!(
-                    error.kind,
-                    audio::AudioErrorKind::GenerationFailed
-                        | audio::AudioErrorKind::ModelUnavailable
-                        | audio::AudioErrorKind::Cancelled
-                ),
+                audio::is_retryable_error(error.kind),
             ),
         };
     }
