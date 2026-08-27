@@ -770,7 +770,7 @@ pub(crate) fn tool_result_from_execution(
     execution: crate::tools::ToolExecutionOutput,
     diff: Option<String>,
 ) -> ToolResult {
-    let changed_paths = if is_mutating_tool(tool_name) {
+    let changed_paths = if is_mutating_tool(tool_name) && execution.success {
         args.get("path")
             .or_else(|| args.get("output_path"))
             .and_then(|value| value.as_str())
