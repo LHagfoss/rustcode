@@ -421,6 +421,47 @@ pub(super) fn render_live_tool_cell_with_verbosity(
         return lines;
     }
 
+    if calls.len() == 1 && calls[0].tool_name == "render_video" {
+        let call = &calls[0];
+        let title_style =
+            get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, show_picker);
+        let mut lines = vec![Line::from(vec![
+            Span::styled("• ", title_style),
+            Span::styled("Rendering", title_style),
+            Span::styled(
+                if call.target.is_empty() || call.target == "?" {
+                    String::new()
+                } else {
+                    format!(
+                        " {}",
+                        truncate_to_width(&call.target, (width as usize).saturating_sub(14))
+                    )
+                },
+                get_themed_style(COLOR_TEXT(), COLOR_BG(), Modifier::empty(), show_picker),
+            ),
+        ])];
+        if !matches!(verbosity, Verbosity::High)
+            && let Some(progress) = call
+                .output
+                .iter()
+                .flat_map(|chunk| chunk.text.lines())
+                .filter(|line| !line.trim().is_empty())
+                .next_back()
+        {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  └ ",
+                    get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+                Span::styled(
+                    truncate_to_width(progress.trim(), (width as usize).saturating_sub(4)),
+                    get_themed_style(COLOR_TIP(), COLOR_BG(), Modifier::empty(), show_picker),
+                ),
+            ]));
+        }
+        return lines;
+    }
+
     let all_exploration = calls
         .iter()
         .all(|call| is_exploration_tool(&call.tool_name));

@@ -11,9 +11,13 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 
-use super::{Tool, ToolCapability, ToolSafety};
+use super::{CommandProgressCallback, Tool, ToolCapability, ToolSafety};
 
 const MAX_PROCESS_OUTPUT: usize = 32 * 1024;
+const MAX_VIDEO_WIDTH: u32 = 8192;
+const MAX_VIDEO_HEIGHT: u32 = 8192;
+const MAX_VIDEO_PIXELS: u64 = 33_177_600;
+const MAX_VIDEO_DURATION_SECONDS: f64 = 3_600.0;
 
 fn inspect_schema() -> Value {
     serde_json::json!({
@@ -280,6 +284,17 @@ trait ProcessRunner {
         args: &[OsString],
         cancel: Option<&CancellationToken>,
     ) -> Result<ProcessOutput, VideoError>;
+
+    fn run_with_progress(
+        &self,
+        program: &Path,
+        args: &[OsString],
+        cancel: Option<&CancellationToken>,
+        _progress: Option<&CommandProgressCallback>,
+        _total_seconds: Option<f64>,
+    ) -> Result<ProcessOutput, VideoError> {
+        self.run(program, args, cancel)
+    }
 }
 
 struct SystemProcessRunner;
@@ -290,6 +305,30 @@ impl ProcessRunner for SystemProcessRunner {
         program: &Path,
         args: &[OsString],
         cancel: Option<&CancellationToken>,
+    ) -> Result<ProcessOutput, VideoError> {
+        self.run_internal(program, args, cancel, None, None)
+    }
+
+    fn run_with_progress(
+        &self,
+        program: &Path,
+        args: &[OsString],
+        cancel: Option<&CancellationToken>,
+        progress: Option<&CommandProgressCallback>,
+        total_seconds: Option<f64>,
+    ) -> Result<ProcessOutput, VideoError> {
+        self.run_internal(program, args, cancel, progress, total_seconds)
+    }
+}
+
+impl SystemProcessRunner {
+    fn run_internal(
+        &self,
+        program: &Path,
+        args: &[OsString],
+        cancel: Option<&CancellationToken>,
+        progress: Option<&CommandProgressCallback>,
+        total_seconds: Option<f64>,
     ) -> Result<ProcessOutput, VideoError> {
         let mut command = Command::new(program);
         command
@@ -306,7 +345,10 @@ impl ProcessRunner for SystemProcessRunner {
             VideoError::new(VideoErrorKind::MissingDependency, format!("could not start '{}': {error}. Install FFmpeg and ensure ffmpeg and ffprobe are on PATH", program.display()))
         })?;
         let stdout = child.stdout.take().map(read_bounded);
-        let stderr = child.stderr.take().map(read_bounded);
+        let stderr = child.stderr.take().map(|stream| match progress {
+            Some(callback) => read_bounded_with_progress(stream, total_seconds, callback.clone()),
+            None => read_bounded(stream),
+        });
         loop {
             if cancel.is_some_and(CancellationToken::is_cancelled) {
                 terminate_child(&mut child);
@@ -369,6 +411,115 @@ fn read_bounded<R: Read + Send + 'static>(mut stream: R) -> thread::JoinHandle<S
         let bytes: Vec<_> = bytes.into_iter().collect();
         String::from_utf8_lossy(&bytes).trim().to_string()
     })
+}
+
+fn read_bounded_with_progress<R: Read + Send + 'static>(
+    mut stream: R,
+    total_seconds: Option<f64>,
+    callback: CommandProgressCallback,
+) -> thread::JoinHandle<String> {
+    thread::spawn(move || {
+        let mut bytes = VecDeque::with_capacity(MAX_PROCESS_OUTPUT);
+        let mut parser = FfmpegProgressParser::new(total_seconds);
+        let mut chunk = [0u8; 4096];
+        loop {
+            let read = match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => read,
+            };
+            let excess = bytes
+                .len()
+                .saturating_add(read)
+                .saturating_sub(MAX_PROCESS_OUTPUT);
+            if excess > 0 {
+                bytes.drain(..excess);
+            }
+            bytes.extend(&chunk[..read]);
+            parser.feed(&chunk[..read], &callback);
+        }
+        let bytes: Vec<_> = bytes.into_iter().collect();
+        String::from_utf8_lossy(&bytes).trim().to_string()
+    })
+}
+
+struct FfmpegProgressParser {
+    pending: Vec<u8>,
+    total_seconds: Option<f64>,
+    out_time_seconds: f64,
+    last_percent: Option<u8>,
+}
+
+impl FfmpegProgressParser {
+    fn new(total_seconds: Option<f64>) -> Self {
+        Self {
+            pending: Vec::new(),
+            total_seconds,
+            out_time_seconds: 0.0,
+            last_percent: None,
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8], callback: &CommandProgressCallback) {
+        self.pending.extend_from_slice(bytes);
+        if self.pending.len() > 8192 {
+            let excess = self.pending.len() - 8192;
+            self.pending.drain(..excess);
+        }
+        while let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<_> = self.pending.drain(..=newline).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim();
+            if let Some(value) = line.strip_prefix("out_time_us=") {
+                self.out_time_seconds = value
+                    .parse::<f64>()
+                    .ok()
+                    .map_or(self.out_time_seconds, |value| value / 1_000_000.0);
+            } else if let Some(value) = line.strip_prefix("out_time_ms=") {
+                self.out_time_seconds = value
+                    .parse::<f64>()
+                    .ok()
+                    .map_or(self.out_time_seconds, |value| value / 1_000_000.0);
+            } else if let Some(value) = line.strip_prefix("out_time=")
+                && let Some(seconds) = parse_progress_timestamp(value)
+            {
+                self.out_time_seconds = seconds;
+            } else if line == "progress=end" {
+                self.emit(100, callback);
+            } else if line == "progress=continue" {
+                let percent = self
+                    .total_seconds
+                    .filter(|total| total.is_finite() && *total > 0.0)
+                    .map_or(0, |total| {
+                        (self.out_time_seconds / total * 100.0)
+                            .round()
+                            .clamp(0.0, 100.0) as u8
+                    });
+                self.emit(percent, callback);
+            }
+        }
+    }
+
+    fn emit(&mut self, percent: u8, callback: &CommandProgressCallback) {
+        if self.last_percent == Some(percent) {
+            return;
+        }
+        self.last_percent = Some(percent);
+        let total = self.total_seconds.unwrap_or_default();
+        let message = format!(
+            "render progress: {percent}% ({:.1}s/{total:.1}s)\n",
+            self.out_time_seconds.max(0.0)
+        );
+        callback(message.as_bytes(), true);
+    }
+}
+
+fn parse_progress_timestamp(value: &str) -> Option<f64> {
+    let mut parts = value.split(':');
+    let hours = parts.next()?.parse::<f64>().ok()?;
+    let minutes = parts.next()?.parse::<f64>().ok()?;
+    let seconds = parts.next()?.parse::<f64>().ok()?;
+    (hours >= 0.0 && minutes >= 0.0 && seconds >= 0.0)
+        .then_some(hours * 3600.0 + minutes * 60.0 + seconds)
 }
 
 fn workspace_root() -> PathBuf {
@@ -638,6 +789,18 @@ fn validate(
             "video width and height must be positive even numbers for H.264 output",
         ));
     }
+    if project.video.width > MAX_VIDEO_WIDTH || project.video.height > MAX_VIDEO_HEIGHT {
+        return Err(VideoError::new(
+            VideoErrorKind::InvalidArguments,
+            format!("video dimensions must be no more than {MAX_VIDEO_WIDTH}x{MAX_VIDEO_HEIGHT}"),
+        ));
+    }
+    if u64::from(project.video.width) * u64::from(project.video.height) > MAX_VIDEO_PIXELS {
+        return Err(VideoError::new(
+            VideoErrorKind::InvalidArguments,
+            format!("video resolution must not exceed {MAX_VIDEO_PIXELS} pixels"),
+        ));
+    }
     if !project.video.fps.is_finite() || project.video.fps <= 0.0 || project.video.fps > 240.0 {
         return Err(VideoError::new(
             VideoErrorKind::InvalidArguments,
@@ -748,6 +911,14 @@ fn validate(
             .values()
             .map(|(_, duration)| duration)
             .sum::<f64>();
+    if !total.is_finite() || total <= 0.0 || total > MAX_VIDEO_DURATION_SECONDS {
+        return Err(VideoError::new(
+            VideoErrorKind::InvalidArguments,
+            format!(
+                "video timeline duration must be greater than 0 and no more than {MAX_VIDEO_DURATION_SECONDS:.0} seconds"
+            ),
+        ));
+    }
     let mut warnings = Vec::new();
     if project.audio.keep_clip_audio && metadata.iter().any(|m| !m.has_audio) {
         warnings.push(
@@ -819,6 +990,54 @@ fn load_project(args: &Value) -> Result<(VideoProject, PathBuf), VideoError> {
     Ok((project, path))
 }
 
+/// Build a lightweight confirmation preview without probing media or creating
+/// output directories. Media durations are shown only when every clip has an
+/// explicit trim range.
+pub(crate) fn render_confirmation_preview(
+    args: &Value,
+    root_override: Option<&Path>,
+) -> Option<String> {
+    let raw_path = args.get("project_path").and_then(Value::as_str)?;
+    let relative_path = normalized_relative(raw_path).ok()?;
+    let root = root_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(workspace_root);
+    let project_path = root.join(relative_path);
+    let bytes = fs::read(&project_path).ok()?;
+    let project: VideoProject = serde_json::from_slice(&bytes).ok()?;
+    let output = normalized_relative(&project.output).ok()?;
+    let duration = requested_duration(&project)
+        .map(|duration| format!("{duration:.1}s"))
+        .unwrap_or_else(|| "unavailable until media validation".into());
+
+    Some(format!(
+        "Project: {}\nOutput: {}\nClips: {}\nResolution: {}x{} @ {} FPS\nDuration: {duration}",
+        project_path.display(),
+        root.join(output).display(),
+        project.clips.len(),
+        project.video.width,
+        project.video.height,
+        number(project.video.fps),
+    ))
+}
+
+fn requested_duration(project: &VideoProject) -> Option<f64> {
+    let durations = project.clips.iter().map(|clip| {
+        let trim = clip.trim.as_ref()?;
+        let start = trim.start.unwrap_or(0.0);
+        let end = trim.end?;
+        (start.is_finite() && end.is_finite() && end > start).then_some(end - start)
+    });
+    let durations: Vec<f64> = durations.collect::<Option<_>>()?;
+    let transition_duration = project
+        .transitions
+        .iter()
+        .map(|transition| transition.duration)
+        .sum::<f64>();
+    let total = durations.into_iter().sum::<f64>() - transition_duration;
+    (total.is_finite() && total > 0.0).then_some(total)
+}
+
 fn inspect_inputs(
     project: &VideoProject,
     cancel: Option<&CancellationToken>,
@@ -885,6 +1104,8 @@ fn compile_ffmpeg(
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
+        "-progress".into(),
+        "pipe:2".into(),
     ];
     for clip in &project.clips {
         let (path, _) = safe_relative(&clip.path, true, false)?;
@@ -1081,6 +1302,7 @@ fn render_project(
     args: &Value,
     cancel: Option<&CancellationToken>,
     runner: &dyn ProcessRunner,
+    progress: Option<&CommandProgressCallback>,
 ) -> Result<String, VideoError> {
     let (project, _) = load_project(args)?;
     validate_media_paths(&project)?;
@@ -1111,7 +1333,8 @@ fn render_project(
     let (output, relative) = safe_relative(&project.output, false, true)?;
     let temporary = temp_output(&output);
     let command = compile_ffmpeg(&project, &timeline, &metadata, &temporary)?;
-    let result = runner.run(&ffmpeg, &command, cancel);
+    let result =
+        runner.run_with_progress(&ffmpeg, &command, cancel, progress, Some(timeline.total));
     let process = match result {
         Ok(v) => v,
         Err(e) => {
@@ -1146,10 +1369,24 @@ pub(crate) fn execute_with_cancel(
     args: &Value,
     cancel: Option<CancellationToken>,
 ) -> Result<String, VideoError> {
+    execute_with_cancel_and_progress(name, args, cancel, None)
+}
+
+pub(crate) fn execute_with_cancel_and_progress(
+    name: &str,
+    args: &Value,
+    cancel: Option<CancellationToken>,
+    progress: Option<CommandProgressCallback>,
+) -> Result<String, VideoError> {
     match name {
         "inspect_media" => inspect_media(args, cancel.as_ref(), &SystemProcessRunner),
         "validate_video_project" => validate_project(args, cancel.as_ref(), &SystemProcessRunner),
-        "render_video" => render_project(args, cancel.as_ref(), &SystemProcessRunner),
+        "render_video" => render_project(
+            args,
+            cancel.as_ref(),
+            &SystemProcessRunner,
+            progress.as_ref(),
+        ),
         _ => Err(VideoError::new(
             VideoErrorKind::InvalidArguments,
             "unknown video tool",
@@ -1242,6 +1479,79 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_preview_reports_resolved_render_details() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let project_path = dir.path().join("video-project.json");
+        fs::write(
+            &project_path,
+            serde_json::json!({
+                "output":"output/final.mp4",
+                "video":{"width":1280,"height":720,"fps":24},
+                "clips":[
+                    {"path":"media/a.mp4","trim":{"start":1,"end":5}},
+                    {"path":"media/b.mp4","trim":{"start":0,"end":3}}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let preview = render_confirmation_preview(
+            &serde_json::json!({"project_path":"video-project.json"}),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        assert!(preview.contains("Project: "));
+        assert!(preview.contains("Output: "));
+        assert!(preview.contains("Clips: 2"));
+        assert!(preview.contains("Resolution: 1280x720 @ 24 FPS"));
+        assert!(preview.contains("Duration: 7.0s"));
+    }
+
+    #[test]
+    fn validation_rejects_excessive_dimensions_and_duration() {
+        let mut value = project();
+        value.video.width = MAX_VIDEO_WIDTH + 2;
+        let error = validate(
+            &value,
+            &[
+                metadata(10.0, true),
+                metadata(10.0, true),
+                metadata(10.0, true),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.message.contains("dimensions"));
+
+        let mut value = project();
+        value.video.width = MAX_VIDEO_WIDTH;
+        value.video.height = MAX_VIDEO_HEIGHT;
+        let error = validate(
+            &value,
+            &[
+                metadata(10.0, true),
+                metadata(10.0, true),
+                metadata(10.0, true),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.message.contains("pixels"));
+
+        let value = project();
+        let error = validate(
+            &value,
+            &[
+                metadata(MAX_VIDEO_DURATION_SECONDS + 1.0, true),
+                metadata(10.0, true),
+                metadata(10.0, true),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.message.contains("timeline duration"));
+    }
+
+    #[test]
     fn process_output_capture_is_bounded_and_keeps_the_tail() {
         let mut input = b"HEAD_MARKER".to_vec();
         input.extend(std::iter::repeat_n(b'x', MAX_PROCESS_OUTPUT * 4));
@@ -1275,6 +1585,31 @@ mod tests {
 
         assert!(output.status.success());
         assert!(output.stdout.len() <= MAX_PROCESS_OUTPUT);
+    }
+
+    #[test]
+    fn ffmpeg_progress_parser_emits_stable_percentage_updates() {
+        let messages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = messages.clone();
+        let callback: CommandProgressCallback = std::sync::Arc::new(move |bytes, _| {
+            captured
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(bytes).into_owned());
+        });
+        let mut parser = FfmpegProgressParser::new(Some(2.0));
+        parser.feed(b"out_time_us=500000\nprogress=cont", &callback);
+        parser.feed(b"inue\nout_time_us=500000\nprogress=continue\n", &callback);
+        parser.feed(
+            b"out_time=00:00:01.500\nprogress=continue\nprogress=end\n",
+            &callback,
+        );
+
+        let messages = messages.lock().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert!(messages[0].contains("25%"));
+        assert!(messages[1].contains("75%"));
+        assert!(messages[2].contains("100%"));
     }
 
     #[test]
@@ -1594,6 +1929,7 @@ mod tests {
             &serde_json::json!({"project_path":"video-project.json"}),
             None,
             &SystemProcessRunner,
+            None,
         )
         .unwrap();
         super::super::set_active_workspace_root(None);
@@ -1658,6 +1994,7 @@ mod tests {
             &serde_json::json!({"project_path":"video-project.json"}),
             None,
             &SystemProcessRunner,
+            None,
         )
         .unwrap();
         super::super::set_active_workspace_root(None);
