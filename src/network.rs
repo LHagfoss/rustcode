@@ -1044,7 +1044,6 @@ pub(crate) async fn prepare_turn_request(
         native_schema_policy,
         active_profile,
         vision_profile,
-        mut image_cache,
     ) = {
         let mut s = state.lock().await;
         let history_snapshot = s.history.clone();
@@ -1108,7 +1107,6 @@ pub(crate) async fn prepare_turn_request(
             native_schema_policy,
             s.active_model_profile(),
             s.vision_model_profile(),
-            s.image_analysis_cache.clone(),
         )
     };
 
@@ -1125,10 +1123,7 @@ pub(crate) async fn prepare_turn_request(
 
     compact_history_to_budget(history_snapshot.as_mut_vec(), budget_token_limit).await;
 
-    if history_snapshot
-        .iter()
-        .any(|m| m.role == "user" && m.content.contains("![image](file://"))
-    {
+    if image_fallback::has_image_markers(&history_snapshot) {
         let active_profile = active_profile.ok_or_else(|| {
             "image analysis failed: active model profile is not configured".to_string()
         })?;
@@ -1138,8 +1133,12 @@ pub(crate) async fn prepare_turn_request(
             })?;
             let request_client = client.clone();
             let request_cancel = cancel_token.clone();
-            history_snapshot = image_fallback::prepare_history_for_model(
-                &history_snapshot,
+            let mut image_cache = {
+                let mut guard = state.lock().await;
+                std::mem::take(&mut guard.image_analysis_cache)
+            };
+            let preprocessing = image_fallback::preprocess_history_with(
+                history_snapshot.as_mut_vec(),
                 &active_profile,
                 &vision_profile,
                 &mut image_cache,
@@ -1158,14 +1157,14 @@ pub(crate) async fn prepare_turn_request(
                     }
                 },
             )
-            .await?
-            .into();
+            .await;
             let mut guard = state.lock().await;
-            guard.image_analysis_cache.extend(image_cache);
+            image_fallback::extend_bounded_cache(&mut guard.image_analysis_cache, image_cache);
             let session_id = guard.active_session_id.clone();
             let current_cache = guard.image_analysis_cache.clone();
             drop(guard);
             crate::config::save_session_image_cache(&session_id, &current_cache);
+            preprocessing?;
         }
     }
 

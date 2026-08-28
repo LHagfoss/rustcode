@@ -6,6 +6,32 @@ use std::future::Future;
 use tokio_util::sync::CancellationToken;
 
 const IMAGE_MARKER: &str = "![image](file://";
+pub(crate) const MAX_IMAGE_ANALYSIS_CACHE_ENTRIES: usize = 128;
+
+pub(crate) fn has_image_markers(history: &[ChatMessage]) -> bool {
+    history
+        .iter()
+        .any(|message| message.role == "user" && message.content.contains(IMAGE_MARKER))
+}
+
+pub(crate) fn extend_bounded_cache(
+    cache: &mut HashMap<String, String>,
+    additions: HashMap<String, String>,
+) {
+    while cache.len() > MAX_IMAGE_ANALYSIS_CACHE_ENTRIES {
+        if let Some(evicted) = cache.keys().next().cloned() {
+            cache.remove(&evicted);
+        }
+    }
+    for (key, value) in additions {
+        if !cache.contains_key(&key) && cache.len() >= MAX_IMAGE_ANALYSIS_CACHE_ENTRIES {
+            if let Some(evicted) = cache.keys().next().cloned() {
+                cache.remove(&evicted);
+            }
+        }
+        cache.insert(key, value);
+    }
+}
 
 pub async fn preprocess_history_with<F, Fut>(
     history: &mut [ChatMessage],
@@ -21,15 +47,17 @@ where
     if active_profile.image_input_supported() == Some(true) {
         return Ok(());
     }
+    if !has_image_markers(history) {
+        return Ok(());
+    }
 
-    let mut rewritten = Vec::with_capacity(history.len());
+    let mut rewritten = Vec::new();
     let mut pending_cache = HashMap::new();
     let mut image_number = 0usize;
 
     for (msg_idx, message) in history.iter().enumerate() {
         let is_latest = msg_idx == history.len() - 1;
         if message.role != "user" || !message.content.contains(IMAGE_MARKER) {
-            rewritten.push(message.content.clone());
             continue;
         }
 
@@ -96,37 +124,14 @@ where
             remaining = &after_marker[end + 1..];
         }
         output.push_str(remaining);
-        rewritten.push(output);
+        rewritten.push((msg_idx, output));
     }
 
-    cache.extend(pending_cache);
-    for (message, content) in history.iter_mut().zip(rewritten) {
-        message.content = content;
+    extend_bounded_cache(cache, pending_cache);
+    for (message_index, content) in rewritten {
+        history[message_index].content = content;
     }
     Ok(())
-}
-
-pub async fn prepare_history_for_model<F, Fut>(
-    history: &[ChatMessage],
-    active_profile: &ModelProfile,
-    vision_profile: &ModelProfile,
-    cache: &mut HashMap<String, String>,
-    request: F,
-) -> Result<Vec<ChatMessage>, String>
-where
-    F: FnMut(&ModelProfile, Vec<u8>) -> Fut,
-    Fut: Future<Output = Result<String, String>>,
-{
-    let mut prepared = history.to_vec();
-    preprocess_history_with(
-        &mut prepared,
-        active_profile,
-        vision_profile,
-        cache,
-        request,
-    )
-    .await?;
-    Ok(prepared)
 }
 
 fn image_hash(bytes: &[u8]) -> String {
@@ -229,6 +234,18 @@ mod tests {
         format!("![image](file://{})", path.display())
     }
 
+    #[test]
+    fn image_analysis_cache_is_bounded() {
+        let mut cache = HashMap::new();
+        for index in 0..(MAX_IMAGE_ANALYSIS_CACHE_ENTRIES + 10) {
+            extend_bounded_cache(
+                &mut cache,
+                HashMap::from([(format!("hash-{index}"), format!("analysis-{index}"))]),
+            );
+        }
+        assert_eq!(cache.len(), MAX_IMAGE_ANALYSIS_CACHE_ENTRIES);
+    }
+
     #[tokio::test]
     async fn vision_capable_model_keeps_native_image_marker() {
         let dir = tempdir().unwrap();
@@ -299,8 +316,9 @@ mod tests {
         let source = vec![ChatMessage::new("user", format!("Look at {marker}"))];
         let mut cache = HashMap::new();
 
-        let prepared = prepare_history_for_model(
-            &source,
+        let mut prepared = source.clone();
+        preprocess_history_with(
+            &mut prepared,
             &profile(Some(false)),
             &profile(Some(true)),
             &mut cache,

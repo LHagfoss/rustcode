@@ -1,4 +1,4 @@
-use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker};
+use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker, TokenUsage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -78,7 +78,7 @@ pub struct TurnContext {
     pub compile_cache: Option<(std::path::PathBuf, Option<String>)>,
     pub finish_gate_retries: u32,
     pub turn_machine: events::TurnMachine,
-    pub last_sent_messages: Vec<serde_json::Value>,
+    pub last_token_usage: Option<TokenUsage>,
     pub final_content: String,
     pub final_content_persisted: bool,
     pub streamed_call_ids: Vec<String>,
@@ -105,6 +105,26 @@ pub struct TurnContext {
     pub changed_paths: std::collections::BTreeSet<String>,
     pub phase_checkpoint: Option<String>,
     pub stop_reason: Option<lifecycle::StopReason>,
+}
+
+fn messages_for_response_continuation<'a>(
+    base: &'a [serde_json::Value],
+    previous: &str,
+) -> std::borrow::Cow<'a, [serde_json::Value]> {
+    if previous.is_empty() {
+        return std::borrow::Cow::Borrowed(base);
+    }
+    let mut messages = Vec::with_capacity(base.len() + 2);
+    messages.extend(base.iter().cloned());
+    messages.push(serde_json::json!({
+        "role": "assistant",
+        "content": format_continuation_assistant_message(previous),
+    }));
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": continuation_nudge_for_category(previous, None),
+    }));
+    std::borrow::Cow::Owned(messages)
 }
 
 impl TurnContext {
@@ -135,7 +155,7 @@ impl TurnContext {
             compile_cache: None,
             finish_gate_retries: 0,
             turn_machine: events::TurnMachine::new(),
-            last_sent_messages: Vec::new(),
+            last_token_usage: None,
             final_content: String::new(),
             final_content_persisted: false,
             streamed_call_ids: Vec::new(),
@@ -388,14 +408,15 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         api_base_url,
         model_name
     );
-    ctx.last_sent_messages = msgs.clone();
+    ctx.last_token_usage = None;
+    let request_msgs: Arc<[serde_json::Value]> = msgs.into();
+    let token_estimate_messages = Arc::clone(&request_msgs);
     let request_client = client.clone();
     let request_state = Arc::clone(state);
     let request_cancel = cancel_token.clone();
     let request_buffer = Arc::clone(stream_buffer);
     let request_api_url = api_base_url.clone();
     let request_model = model_name.clone();
-    let request_msgs = msgs.clone();
     let request_allow_tools = !ctx.force_final;
     let request_disable_thinking = ctx.force_final || ctx.reasoning_recovery_attempts > 0;
     let request_schema_policy = {
@@ -403,34 +424,23 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         crate::tools::ToolSchemaPolicy::root(s.delegation_active)
     };
     let collected_response = match runner::collect_response(move |previous| {
-        let mut current_msgs = request_msgs.clone();
-        if !previous.is_empty() {
-            let continuation_assistant = format_continuation_assistant_message(&previous);
-            let nudge = continuation_nudge_for_category(&previous, None);
-            current_msgs.push(serde_json::json!({
-                "role": "assistant",
-                "content": continuation_assistant
-            }));
-            current_msgs.push(serde_json::json!({
-                "role": "user",
-                "content": nudge
-            }));
-        }
         let request_client = request_client.clone();
         let request_state = Arc::clone(&request_state);
         let request_cancel = request_cancel.clone();
         let request_buffer = Arc::clone(&request_buffer);
         let request_api_url = request_api_url.clone();
         let request_model = request_model.clone();
+        let request_msgs = Arc::clone(&request_msgs);
         async move {
             request_buffer.lock().await.reset();
+            let current_msgs = messages_for_response_continuation(&request_msgs, &previous);
             let finish_reason = stream_request(
                 &request_client,
                 request_state.clone(),
                 request_cancel,
                 &request_api_url,
                 &request_model,
-                &current_msgs,
+                current_msgs.into_owned(),
                 Arc::clone(&request_buffer),
                 false,
                 request_allow_tools,
@@ -500,12 +510,13 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
             s.current_token_usage.clone()
         } else {
             drop(s);
-            let est = estimate_token_usage(&ctx.last_sent_messages, &accumulated_content).await;
+            let est = estimate_token_usage(&token_estimate_messages, &accumulated_content).await;
             let mut s = state.lock().await;
             s.current_token_usage = est.clone();
             est
         }
     };
+    ctx.last_token_usage = turn_token_usage.clone();
 
     {
         let mut s = state.lock().await;
@@ -1785,10 +1796,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
                 s.current_token_usage.clone()
             } else {
                 drop(s);
-                dbg_log!("Estimating token usage...");
-                let est = estimate_token_usage(&ctx.last_sent_messages, &ctx.final_content).await;
-                dbg_log!("Token usage estimation result: {:?}", est);
-                est
+                ctx.last_token_usage.clone()
             }
         };
 
@@ -1941,8 +1949,29 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::reasoning_loop_final_response;
+    use super::{messages_for_response_continuation, reasoning_loop_final_response};
     use crate::network::EMPTY_RESPONSE_RECOVERY_PROMPT;
+
+    #[test]
+    fn continuation_reuses_base_then_appends_provider_visible_delta() {
+        let base = vec![
+            serde_json::json!({"role": "system", "content": "rules"}),
+            serde_json::json!({"role": "user", "content": "question"}),
+        ];
+        let initial = messages_for_response_continuation(&base, "");
+        assert!(matches!(initial, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(initial.as_ref(), base.as_slice());
+
+        let continued = messages_for_response_continuation(&base, "partial answer");
+        assert_eq!(&continued[..base.len()], base.as_slice());
+        assert_eq!(continued[base.len()]["role"], "assistant");
+        assert_eq!(continued[base.len() + 1]["role"], "user");
+        assert_eq!(
+            base.len(),
+            2,
+            "continuation must not mutate the shared base"
+        );
+    }
 
     #[test]
     fn exhausted_reasoning_loop_uses_a_concise_terminal_response() {

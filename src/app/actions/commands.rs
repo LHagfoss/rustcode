@@ -141,7 +141,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
         cancel_token,
         &api_base_url,
         &model_name,
-        &messages,
+        messages,
         Arc::clone(&stream_buffer),
         true, // quiet: don't stream into the main chat view; we post the result
         false,
