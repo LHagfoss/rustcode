@@ -29,7 +29,7 @@ fn view_file_range_shifting_shares_category() {
     );
     assert_ne!(e1, e2, "exact signatures should differ by range");
     assert_eq!(c1, c2, "same region should collapse to one category");
-    assert_eq!(c1, "view_file:src/network.rs#0");
+    assert_eq!(c1, "read:src/network.rs#0");
 }
 
 #[test]
@@ -179,6 +179,64 @@ fn read_only_repeats_warn_not_abort() {
         last = d.check_tool("view_file", &e, &c);
     }
     assert!(matches!(last, LoopStatus::Warning(_)), "got {last:?}");
+}
+
+#[test]
+fn equivalent_native_and_shell_reads_abort_after_three() {
+    let mut detector = LoopDetector::new(8);
+    let calls = [
+        (
+            "view_file",
+            json!({"path": "/tmp/project/src/engine.ts", "start_line": 1, "end_line": 120}),
+        ),
+        (
+            "run_command",
+            json!({"command": "sed -n '1,120p' /tmp/project/src/engine.ts"}),
+        ),
+        (
+            "run_command",
+            json!({"command": "awk 'NR>=1 && NR<=120' /tmp/project/src/engine.ts"}),
+        ),
+    ];
+
+    let mut statuses = Vec::new();
+    for (name, args) in calls {
+        let (exact, category) = signatures(name, &args);
+        assert_eq!(category, "read:/tmp/project/src/engine.ts#0");
+        statuses.push(detector.check_tool(name, &exact, &category));
+    }
+    assert_eq!(
+        statuses,
+        [LoopStatus::Ok, LoopStatus::Ok, LoopStatus::Abort(3)]
+    );
+}
+
+#[test]
+fn distinct_read_regions_and_workspace_progress_reset_cross_tool_guard() {
+    let mut detector = LoopDetector::new(8);
+    for command in [
+        "sed -n '1,120p' src/engine.ts",
+        "sed -n '250,350p' src/engine.ts",
+        "cat src/other.ts",
+    ] {
+        let (exact, category) = signatures("run_command", &json!({"command": command}));
+        assert_eq!(
+            detector.check_tool("run_command", &exact, &category),
+            LoopStatus::Ok
+        );
+    }
+
+    let args = json!({"path": "src/engine.ts", "start_line": 1, "end_line": 120});
+    let (exact, category) = signatures("view_file", &args);
+    assert_eq!(
+        detector.check_tool("view_file", &exact, &category),
+        LoopStatus::Ok
+    );
+    detector.reset();
+    assert_eq!(
+        detector.check_tool("view_file", &exact, &category),
+        LoopStatus::Ok
+    );
 }
 
 #[test]
