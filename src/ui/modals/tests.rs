@@ -350,6 +350,7 @@ fn effort_picker_renders_options() {
 fn history_picker_renders_borderless_full_width_options() {
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
     let mut state = AppState::new();
+    state.show_history_picker = true;
     state.history_picker_sessions = vec![crate::config::SessionMeta {
         path: std::path::PathBuf::from("/tmp/test-1.json"),
         title: "Build a polished browser tower-defense game with canvas".to_string(),
