@@ -28,6 +28,34 @@ pub(crate) struct RenderSnapshot {
     api_base_url: String,
     cwd_and_branch: String,
     home_path: Option<String>,
+    overlay: OverlaySnapshot,
+    generation_start_time: Option<std::time::Instant>,
+    pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
+    pending_question: Option<PendingQuestion>,
+    running_tools: Vec<String>,
+    background_tasks: Vec<crate::tools::BackgroundTaskSnapshot>,
+    waiting_for_background_terminal: bool,
+    live_tool_calls: Arc<Vec<LiveToolCall>>,
+    stream_tracker: Option<StreamTracker>,
+    auto_confirm: bool,
+    verbosity: Verbosity,
+    delegation_active: bool,
+    modal_open: bool,
+    last_copy_text: Option<(String, std::time::Instant)>,
+    expanded_thoughts: std::collections::HashSet<usize>,
+    agent_mode: crate::config::AgentMode,
+    subagents: Vec<SubAgentSnapshot>,
+    selected_subagent_id: Option<u32>,
+    active_context_window: u32,
+    active_model_profile: Option<crate::config::ModelProfile>,
+    active_tool_protocol: crate::config::ToolProtocol,
+    command_suggestion: Option<String>,
+    selected_subagent: Option<SelectedSubagentSnapshot>,
+}
+
+/// Data used exclusively by modal overlays. Large collections and editable
+/// buffers are captured only while their owning overlay is visible.
+struct OverlaySnapshot {
     show_model_picker: bool,
     model_picker_index: usize,
     modal_picker_index: usize,
@@ -52,41 +80,71 @@ pub(crate) struct RenderSnapshot {
     show_mcp_config: bool,
     mcp_picker_index: usize,
     mcp_edit_state: Option<McpEditState>,
-    generation_start_time: Option<std::time::Instant>,
-    pending_tool_confirmation: Option<Vec<ToolConfirmation>>,
     modal_scroll_row: u16,
     tool_confirmation_selected: usize,
-    pending_question: Option<PendingQuestion>,
-    running_tools: Vec<String>,
-    background_tasks: Vec<crate::tools::BackgroundTaskSnapshot>,
-    waiting_for_background_terminal: bool,
-    live_tool_calls: Arc<Vec<LiveToolCall>>,
-    stream_tracker: Option<StreamTracker>,
-    auto_confirm: bool,
-    verbosity: Verbosity,
-    delegation_active: bool,
-    modal_open: bool,
-    last_copy_text: Option<(String, std::time::Instant)>,
-    expanded_thoughts: std::collections::HashSet<usize>,
-    agent_mode: crate::config::AgentMode,
-    subagents: Vec<SubAgentSnapshot>,
-    selected_subagent_id: Option<u32>,
-    active_context_window: u32,
-    active_model_profile: Option<crate::config::ModelProfile>,
-    active_tool_protocol: crate::config::ToolProtocol,
-    command_suggestion: Option<String>,
-    selected_subagent: Option<SelectedSubagentSnapshot>,
+}
+
+impl OverlaySnapshot {
+    fn new(state: &crate::app::AppState) -> Self {
+        Self {
+            show_model_picker: state.show_model_picker,
+            model_picker_index: state.model_picker_index,
+            modal_picker_index: state.modal_picker_index,
+            model_picker_search: state
+                .show_model_picker
+                .then(|| state.model_picker_search.clone())
+                .unwrap_or_default(),
+            show_theme_picker: state.show_theme_picker,
+            theme_picker_index: state.theme_picker_index,
+            theme_picker_initial: state
+                .show_theme_picker
+                .then(|| state.theme_picker_initial.clone())
+                .unwrap_or_default(),
+            show_command_picker: state.show_command_picker,
+            command_picker_index: state.command_picker_index,
+            command_picker_search: state
+                .show_command_picker
+                .then(|| state.command_picker_search.clone())
+                .unwrap_or_default(),
+            show_history_picker: state.show_history_picker,
+            history_picker_index: state.history_picker_index,
+            history_picker_sessions: state
+                .show_history_picker
+                .then(|| state.history_picker_sessions.clone())
+                .unwrap_or_default(),
+            history_picker_truncated: state.history_picker_truncated,
+            pending_delete_session_idx: state.pending_delete_session_idx,
+            show_subagent_picker: state.show_subagent_picker,
+            subagent_picker_index: state.subagent_picker_index,
+            show_context_modal: state.show_context_modal,
+            show_update_prompt: state.show_update_prompt,
+            update_check: state.update_check,
+            update_prompt_index: state.update_prompt_index,
+            show_mcp_config: state.show_mcp_config,
+            mcp_picker_index: state.mcp_picker_index,
+            mcp_edit_state: state
+                .show_mcp_config
+                .then(|| state.mcp_edit_state.clone())
+                .flatten(),
+            modal_scroll_row: state.modal_scroll_row,
+            tool_confirmation_selected: state.tool_confirmation_selected,
+        }
+    }
 }
 
 #[allow(dead_code)]
 impl RenderSnapshot {
     pub(crate) fn new(state: &crate::app::AppState) -> Self {
-        let capture_details = state.show_context_modal || state.show_subagent_picker;
-        let subagents = state
-            .subagents
-            .iter()
-            .map(|agent| SubAgentSnapshot::new(agent, capture_details))
-            .collect::<Vec<_>>();
+        let capture_subagents = state.show_context_modal || state.show_subagent_picker;
+        let subagents = capture_subagents
+            .then(|| {
+                state
+                    .subagents
+                    .iter()
+                    .map(SubAgentSnapshot::new)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let selected_subagent = state.selected_subagent_id.and_then(|id| {
             let agent = state.subagents.iter().find(|agent| agent.id == id)?;
             Some(SelectedSubagentSnapshot {
@@ -121,34 +179,9 @@ impl RenderSnapshot {
             api_base_url: state.api_base_url.clone(),
             cwd_and_branch: state.cwd_and_branch.clone(),
             home_path: std::env::var("HOME").ok(),
-            show_model_picker: state.show_model_picker,
-            model_picker_index: state.model_picker_index,
-            modal_picker_index: state.modal_picker_index,
-            model_picker_search: state.model_picker_search.clone(),
-            show_theme_picker: state.show_theme_picker,
-            theme_picker_index: state.theme_picker_index,
-            theme_picker_initial: state.theme_picker_initial.clone(),
-            show_command_picker: state.show_command_picker,
-            command_picker_index: state.command_picker_index,
-            command_picker_search: state.command_picker_search.clone(),
-            show_history_picker: state.show_history_picker,
-            history_picker_index: state.history_picker_index,
-            history_picker_sessions: state.history_picker_sessions.clone(),
-            history_picker_truncated: state.history_picker_truncated,
-            pending_delete_session_idx: state.pending_delete_session_idx,
-            show_subagent_picker: state.show_subagent_picker,
-            subagent_picker_index: state.subagent_picker_index,
-            show_context_modal: state.show_context_modal,
-            show_update_prompt: state.show_update_prompt,
-            update_check: state.update_check,
-            update_prompt_index: state.update_prompt_index,
-            show_mcp_config: state.show_mcp_config,
-            mcp_picker_index: state.mcp_picker_index,
-            mcp_edit_state: state.mcp_edit_state.clone(),
+            overlay: OverlaySnapshot::new(state),
             generation_start_time: state.generation_start_time,
             pending_tool_confirmation: state.pending_tool_confirmation.clone(),
-            modal_scroll_row: state.modal_scroll_row,
-            tool_confirmation_selected: state.tool_confirmation_selected,
             pending_question: state.pending_question.clone(),
             running_tools: state.running_tools.clone(),
             background_tasks: crate::tools::background_task_snapshots(&state.active_session_id),
@@ -267,85 +300,85 @@ impl RenderSnapshot {
         self.pending_question.as_ref()
     }
     pub(crate) fn show_model_picker(&self) -> bool {
-        self.show_model_picker
+        self.overlay.show_model_picker
     }
     pub(crate) fn model_picker_index(&self) -> usize {
-        self.model_picker_index
+        self.overlay.model_picker_index
     }
     pub(crate) fn modal_picker_index(&self) -> usize {
-        self.modal_picker_index
+        self.overlay.modal_picker_index
     }
     pub(crate) fn model_picker_search(&self) -> &str {
-        &self.model_picker_search
+        &self.overlay.model_picker_search
     }
     pub(crate) fn show_theme_picker(&self) -> bool {
-        self.show_theme_picker
+        self.overlay.show_theme_picker
     }
     pub(crate) fn theme_picker_index(&self) -> usize {
-        self.theme_picker_index
+        self.overlay.theme_picker_index
     }
     pub(crate) fn theme_picker_initial(&self) -> &str {
-        &self.theme_picker_initial
+        &self.overlay.theme_picker_initial
     }
     pub(crate) fn show_command_picker(&self) -> bool {
-        self.show_command_picker
+        self.overlay.show_command_picker
     }
     pub(crate) fn command_picker_index(&self) -> usize {
-        self.command_picker_index
+        self.overlay.command_picker_index
     }
     pub(crate) fn command_picker_search(&self) -> &str {
-        &self.command_picker_search
+        &self.overlay.command_picker_search
     }
     pub(crate) fn show_history_picker(&self) -> bool {
-        self.show_history_picker
+        self.overlay.show_history_picker
     }
     pub(crate) fn history_picker_index(&self) -> usize {
-        self.history_picker_index
+        self.overlay.history_picker_index
     }
     pub(crate) fn history_picker_sessions(&self) -> &[crate::config::SessionMeta] {
-        &self.history_picker_sessions
+        &self.overlay.history_picker_sessions
     }
     pub(crate) fn history_picker_truncated(&self) -> bool {
-        self.history_picker_truncated
+        self.overlay.history_picker_truncated
     }
     pub(crate) fn pending_delete_session_idx(&self) -> Option<usize> {
-        self.pending_delete_session_idx
+        self.overlay.pending_delete_session_idx
     }
     pub(crate) fn show_subagent_picker(&self) -> bool {
-        self.show_subagent_picker
+        self.overlay.show_subagent_picker
     }
     pub(crate) fn subagent_picker_index(&self) -> usize {
-        self.subagent_picker_index
+        self.overlay.subagent_picker_index
     }
     pub(crate) fn show_context_modal(&self) -> bool {
-        self.show_context_modal
+        self.overlay.show_context_modal
     }
     pub(crate) fn show_update_prompt(&self) -> bool {
-        self.show_update_prompt
+        self.overlay.show_update_prompt
     }
     pub(crate) fn update_check(&self) -> crate::update::UpdateState {
-        self.update_check
+        self.overlay.update_check
     }
     pub(crate) fn update_prompt_index(&self) -> usize {
-        self.update_prompt_index
+        self.overlay.update_prompt_index
     }
     pub(crate) fn show_mcp_config(&self) -> bool {
-        self.show_mcp_config
+        self.overlay.show_mcp_config
     }
     pub(crate) fn mcp_picker_index(&self) -> usize {
-        self.mcp_picker_index
+        self.overlay.mcp_picker_index
     }
     pub(crate) fn mcp_edit_state(&self) -> Option<&McpEditState> {
-        self.mcp_edit_state.as_ref()
+        self.overlay.mcp_edit_state.as_ref()
     }
     pub(crate) fn generation_start_time(&self) -> Option<std::time::Instant> {
         self.generation_start_time
     }
     pub(crate) fn modal_scroll_row(&self) -> u16 {
-        self.modal_scroll_row
+        self.overlay.modal_scroll_row
     }
     pub(crate) fn tool_confirmation_selected(&self) -> usize {
-        self.tool_confirmation_selected
+        self.overlay.tool_confirmation_selected
     }
     pub(crate) fn stream_tracker(&self) -> Option<&StreamTracker> {
         self.stream_tracker.as_ref()
@@ -415,31 +448,26 @@ pub(crate) struct SubAgentSnapshot {
 }
 
 impl SubAgentSnapshot {
-    fn new(agent: &SubAgent, capture_details: bool) -> Self {
-        let (history_tokens, last_message) = if capture_details {
-            let last_message = agent
-                .history
-                .last()
-                .map(|message| {
-                    message
-                        .content
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .chars()
-                        .take(48)
-                        .collect()
-                })
-                .unwrap_or_default();
-            let history_tokens = agent
-                .history
-                .iter()
-                .map(crate::network::compaction::estimate_message_tokens)
-                .sum();
-            (history_tokens, last_message)
-        } else {
-            (0, String::new())
-        };
+    fn new(agent: &SubAgent) -> Self {
+        let last_message = agent
+            .history
+            .last()
+            .map(|message| {
+                message
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(48)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let history_tokens = agent
+            .history
+            .iter()
+            .map(crate::network::compaction::estimate_message_tokens)
+            .sum();
         Self {
             id: agent.id,
             name: agent.name.clone(),
@@ -764,8 +792,71 @@ mod tests {
 
         let snapshot = state.render_snapshot();
 
-        assert_eq!(snapshot.subagents()[0].history_tokens(), 0);
-        assert_eq!(snapshot.subagents()[0].last_message(), "");
+        assert!(snapshot.subagents().is_empty());
+    }
+
+    #[test]
+    fn render_snapshot_omits_inactive_overlay_payloads() {
+        let mut state = AppState::new();
+        state
+            .history_picker_sessions
+            .push(crate::config::SessionMeta {
+                path: std::path::PathBuf::from("session.json"),
+                title: "A session title".to_owned(),
+                message_count: 3,
+                when: "now".to_owned(),
+            });
+        state.mcp_edit_state = Some(crate::app::McpEditState {
+            is_add: true,
+            edit_index: None,
+            name_input: "server".to_owned(),
+            command_input: "command".to_owned(),
+            args_input: "--flag".to_owned(),
+            active_field: 0,
+            cursor_pos: 0,
+        });
+
+        let snapshot = state.render_snapshot();
+
+        assert!(snapshot.history_picker_sessions().is_empty());
+        assert!(snapshot.mcp_edit_state().is_none());
+    }
+
+    #[test]
+    fn render_snapshot_captures_active_overlay_payloads() {
+        let mut state = AppState::new();
+        state.show_history_picker = true;
+        state.show_mcp_config = true;
+        state
+            .history_picker_sessions
+            .push(crate::config::SessionMeta {
+                path: std::path::PathBuf::from("session.json"),
+                title: "A session title".to_owned(),
+                message_count: 3,
+                when: "now".to_owned(),
+            });
+        state.mcp_edit_state = Some(crate::app::McpEditState {
+            is_add: true,
+            edit_index: None,
+            name_input: "server".to_owned(),
+            command_input: "command".to_owned(),
+            args_input: "--flag".to_owned(),
+            active_field: 0,
+            cursor_pos: 0,
+        });
+
+        let snapshot = state.render_snapshot();
+
+        assert_eq!(
+            snapshot.history_picker_sessions()[0].title,
+            "A session title"
+        );
+        assert_eq!(
+            snapshot
+                .mcp_edit_state()
+                .map(|edit| edit.name_input.as_str()),
+            Some("server")
+        );
     }
 
     #[test]
