@@ -347,8 +347,8 @@ pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'stat
         });
     } else {
         sender.send(AgentUiEvent::TurnFinished {
-            content: context.final_content.clone(),
-            completed: context.task_completed,
+            content: context.response.final_content.clone(),
+            completed: context.lifecycle.task_completed,
         });
     }
     context

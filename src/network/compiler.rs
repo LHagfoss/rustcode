@@ -264,18 +264,18 @@ pub(crate) fn update_compiler_diagnostic_streak(
 ) {
     match fingerprint {
         Some(fingerprint)
-            if ctx.last_compiler_diagnostic_fingerprint.as_deref()
+            if ctx.compiler.last_diagnostic_fingerprint.as_deref()
                 == Some(fingerprint.as_str()) =>
         {
-            ctx.consecutive_compiler_diagnostics += 1;
+            ctx.compiler.consecutive_diagnostics += 1;
         }
         Some(fingerprint) => {
-            ctx.last_compiler_diagnostic_fingerprint = Some(fingerprint);
-            ctx.consecutive_compiler_diagnostics = 1;
+            ctx.compiler.last_diagnostic_fingerprint = Some(fingerprint);
+            ctx.compiler.consecutive_diagnostics = 1;
         }
         None => {
-            ctx.last_compiler_diagnostic_fingerprint = None;
-            ctx.consecutive_compiler_diagnostics = 0;
+            ctx.compiler.last_diagnostic_fingerprint = None;
+            ctx.compiler.consecutive_diagnostics = 0;
         }
     }
 }

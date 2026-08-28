@@ -7,7 +7,47 @@ use tokio_util::io::StreamReader;
 
 use super::retry;
 use super::stream::StreamBuffer;
-use super::{ToolFenceCounter, align_alternating_messages, count_tokens, parse_sse_line};
+use super::{align_alternating_messages, count_tokens, parse_sse_line};
+
+/// Tracks streamed tool-fence markers, including markers split across chunks.
+#[derive(Default)]
+struct ToolFenceCounter {
+    seen: usize,
+    tail: String,
+}
+
+impl ToolFenceCounter {
+    const MARKER: &'static str = "```tool";
+
+    fn push(&mut self, chunk: &str) -> usize {
+        if chunk.is_empty() {
+            return self.seen;
+        }
+        let mut window = std::mem::take(&mut self.tail);
+        window.push_str(chunk);
+        self.seen += window.matches(Self::MARKER).count();
+        let carry = Self::MARKER.len() - 1;
+        let mut kept: Vec<char> = window.chars().rev().take(carry).collect();
+        kept.reverse();
+        self.tail = kept.into_iter().collect();
+        self.seen
+    }
+}
+
+#[cfg(test)]
+mod fence_counter_tests {
+    use super::ToolFenceCounter;
+
+    #[test]
+    fn survives_chunk_boundaries() {
+        let mut counter = ToolFenceCounter::default();
+        assert_eq!(counter.push("some text ``"), 0);
+        assert_eq!(counter.push("`to"), 0);
+        assert_eq!(counter.push("ol\n{\"name\": \"grep\"}"), 1);
+        assert_eq!(counter.push("```tool\n{}\n```\n```tool\n{}"), 3);
+        assert_eq!(counter.push(" and then I will check the results"), 3);
+    }
+}
 
 fn apply_profile_generation_options(
     payload: &mut serde_json::Value,
