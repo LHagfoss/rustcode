@@ -1,3 +1,19 @@
+## [v0.39.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.39.0) - 2026-08-28
+
+### Features
+- **ACP:** Restructure the Agent Client Protocol server around explicit session state, permissions, and model configuration boundaries ([#840](https://github.com/LHagfoss/rustcode/pull/840), [`61e78ff`](https://github.com/LHagfoss/rustcode/commit/61e78ff))
+- **Streaming UI:** Show live response decode speed while a model is generating ([#848](https://github.com/LHagfoss/rustcode/pull/848), [`8512828`](https://github.com/LHagfoss/rustcode/commit/8512828))
+
+### Fixes
+- **Session History:** Make `/history` session selection replace the active transcript, clear session-specific UI and subagent state, and reject late streaming updates from the previous session ([#849](https://github.com/LHagfoss/rustcode/pull/849), [`4443cec`](https://github.com/LHagfoss/rustcode/commit/4443cec))
+- **UI State:** Omit inactive overlay payloads from render snapshots so closed pickers cannot retain stale presentation state ([#842](https://github.com/LHagfoss/rustcode/pull/842), [`2000be7`](https://github.com/LHagfoss/rustcode/commit/2000be7))
+
+### Performance
+- **Provider Requests:** Reduce allocation amplification while constructing provider request payloads ([#841](https://github.com/LHagfoss/rustcode/pull/841), [`636fbb5`](https://github.com/LHagfoss/rustcode/commit/636fbb5))
+
+### Refactoring
+- **Runtime:** Split turn execution, application runtime, context compaction, command authorization, and tool execution support into focused ownership boundaries ([#843](https://github.com/LHagfoss/rustcode/pull/843), [#844](https://github.com/LHagfoss/rustcode/pull/844), [#845](https://github.com/LHagfoss/rustcode/pull/845), [#846](https://github.com/LHagfoss/rustcode/pull/846), [#847](https://github.com/LHagfoss/rustcode/pull/847))
+
 ## [v0.38.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.38.1) - 2026-08-28
 
 ### Fixes
