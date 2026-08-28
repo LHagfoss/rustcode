@@ -1,0 +1,580 @@
+use super::memory::compact_with_structured_memory;
+use super::prune::{
+    DEFAULT_PRUNE_TOKEN_THRESHOLD, KEEP_RECENT_TURNS, LAST_COMPACTION_RECLAIMED,
+    prune_duplicate_tool_results, prune_floor, prune_historical_reasoning,
+    prune_historical_tool_outputs, prune_old_tool_outputs,
+};
+use super::tokens::estimate_message_tokens;
+use crate::app::ChatMessage;
+use std::future::Future;
+use std::time::Duration;
+
+pub(super) const SUMMARY_INPUT_MAX_BYTES: usize = 64 * 1024;
+
+/// A prior summary is high-value context, but must leave room for the original
+/// task and recent facts inside [`SUMMARY_INPUT_MAX_BYTES`].
+const SUMMARY_PRIOR_MAX_BYTES: usize = 24 * 1024;
+
+/// Provider output is requested at 1024 tokens; 16 KiB is a generous defensive
+/// byte ceiling for providers that ignore that limit.
+pub(super) const SUMMARY_OUTPUT_MAX_BYTES: usize = 16 * 1024;
+
+/// Total wall-clock budget for a non-streaming summary request, including
+/// connection, response headers, body transfer, and JSON decoding. Twenty-five
+/// seconds bounds the request while leaving ample time for valid summaries.
+pub(super) const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Preserve the existing per-message limit while additionally enforcing the
+/// whole-input byte ceiling above.
+const SUMMARY_MESSAGE_MAX_CHARS: usize = 2_000;
+
+/// Check if history needs compaction and compact if so.
+/// Returns true if compaction was performed.
+pub async fn maybe_compact(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    budget: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+) -> bool {
+    maybe_compact_with_local_policy(client, url, model, history, budget, cancel_token, false).await
+}
+
+/// Automatic compaction with an explicit local-model hint from the active
+/// profile. Keeping the wrapper above preserves direct callers and tests while
+/// allowing localhost OpenAI-compatible runtimes to avoid an unnecessary
+/// summarizer prefill even when their URL is not Ollama's default port.
+pub async fn maybe_compact_with_local_policy(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    budget: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    local_model: bool,
+) -> bool {
+    // 1. Local, zero-cost tool output pruning: collapse large tool outputs that
+    //    have aged past the recent window, then apply the hard rolling token cap
+    //    as a safety net.
+    //
+    //    Only under real pressure. Collapsing a file the model read three
+    //    round-trips ago while most of the window sits unused buys nothing and
+    //    costs the model its memory of what it just looked at — it re-reads,
+    //    which is both slower and how repeat-loops start. Below the threshold
+    //    the history is left exactly as it happened.
+    //
+    //    These two passes each rewrite the messages they collapse, so their
+    //    counts are deliberately not shared: a collapsed message is a different
+    //    string and must be counted as such. The memo in `estimate_tokens` is
+    //    what keeps the passes cheap — every message the passes leave alone is
+    //    encoded once and looked up thereafter.
+    let raw_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    if raw_tokens < prune_floor(budget) {
+        return false;
+    }
+
+    let duplicate_reads = prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
+    let historical_outputs = prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
+    let pruned_reasoning = prune_historical_reasoning(history, KEEP_RECENT_TURNS);
+    let old_outputs = prune_old_tool_outputs(history, (budget as f64 * 0.6) as usize);
+
+    // 2. Count the post-prune history once. `history` is not touched again
+    //    until compaction actually runs, so the same per-message counts serve
+    //    both the budget check and the keep-suffix walk below.
+    let per_message: Vec<usize> = history.iter().map(estimate_message_tokens).collect();
+    let total_tokens: usize = per_message.iter().sum();
+    // Cancellation still permits the deterministic local pruning above, but
+    // must never report a completed compaction or start a summarizer request.
+    if cancel_token.is_cancelled() {
+        return false;
+    }
+    if total_tokens < budget {
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs + pruned_reasoning,
+            false,
+            false,
+            history.len(),
+        );
+        return duplicate_reads + historical_outputs + old_outputs + pruned_reasoning > 0;
+    }
+
+    // Determine how many messages to summarize.
+    // We want to keep at least the KEEP_RECENT_TURNS most recent messages
+    // verbatim, but also retain a recent suffix of up to 30% of the token
+    // budget verbatim.
+    let mut accumulated_tokens = 0;
+    let keep_token_limit = (budget as f64 * 0.3) as usize; // Keep 30% of budget verbatim
+
+    let mut keep_count = 0;
+    for &tokens in per_message.iter().rev() {
+        if accumulated_tokens + tokens <= keep_token_limit || keep_count < KEEP_RECENT_TURNS {
+            accumulated_tokens += tokens;
+            keep_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    let summarize_count = history.len().saturating_sub(keep_count);
+    if summarize_count < 4 {
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            false,
+            false,
+            history.len(),
+        );
+        return duplicate_reads + historical_outputs + old_outputs > 0;
+    }
+    // Tiered compaction: local ollama engines skip LLM summarization —
+    // prune+trim already reclaimed tokens, and weak local summaries lose
+    // fidelity while adding latency/cost. Gate strictly on ollama endpoint
+    // so mock/test servers (random 127.0.0.1 ports) still exercise the
+    // summary path.
+    let is_local_engine = local_model || {
+        let lower = url.to_ascii_lowercase();
+        lower.contains("11434") || lower.contains("ollama")
+    };
+    if is_local_engine {
+        let structured = compact_with_structured_memory(history, keep_count, budget);
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            false,
+            true,
+            history.len(),
+        );
+        return structured || (duplicate_reads + historical_outputs + old_outputs > 0);
+    }
+
+    let summary_ok = force_compact_internal(
+        client,
+        url,
+        model,
+        history,
+        summarize_count,
+        Some(cancel_token),
+    )
+    .await
+    .is_ok();
+
+    if summary_ok {
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            true,
+            false,
+            history.len(),
+        );
+        true
+    } else {
+        let structured = compact_with_structured_memory(history, keep_count, budget);
+        emit_compaction_metrics(
+            raw_tokens,
+            total_tokens,
+            budget,
+            duplicate_reads,
+            historical_outputs + old_outputs,
+            false,
+            true,
+            history.len(),
+        );
+        structured || (duplicate_reads + historical_outputs + old_outputs > 0)
+    }
+}
+
+fn emit_compaction_metrics(
+    before_tokens: usize,
+    after_prune_tokens: usize,
+    budget: usize,
+    duplicate_reads: usize,
+    pruned_outputs: usize,
+    summarized: bool,
+    local_prune_only: bool,
+    messages_considered: usize,
+) {
+    crate::logger::operational_event(
+        "context.compaction",
+        serde_json::json!({
+            "before_tokens": before_tokens,
+            "after_prune_tokens": after_prune_tokens,
+            "reclaimed_tokens": before_tokens.saturating_sub(after_prune_tokens),
+            "budget": budget,
+            "messages_considered": messages_considered,
+            "messages_retained_raw": messages_considered.min(KEEP_RECENT_TURNS),
+            "duplicate_reads_collapsed": duplicate_reads,
+            "tool_outputs_pruned": pruned_outputs,
+            "summary_generated": summarized,
+            "local_prune_only": local_prune_only,
+            "hard_trim": false,
+        }),
+    );
+}
+
+pub async fn force_compact(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(usize, usize), String> {
+    force_compact_with_budget(client, url, model, history, None, cancel_token).await
+}
+
+pub async fn force_compact_with_budget(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    budget: Option<usize>,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(usize, usize), String> {
+    let before_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
+    prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
+    prune_historical_reasoning(history, KEEP_RECENT_TURNS);
+    let prune_threshold = budget
+        .map(|b| (b as f64 * 0.6) as usize)
+        .unwrap_or(DEFAULT_PRUNE_TOKEN_THRESHOLD);
+    prune_old_tool_outputs(history, prune_threshold);
+
+    // Summarize all but the most recent KEEP_RECENT_TURNS messages.
+    let summarize_count = history.len().saturating_sub(KEEP_RECENT_TURNS);
+    if summarize_count < 1 {
+        return Err("Not enough messages to compact.".to_string());
+    }
+
+    let result =
+        force_compact_internal(client, url, model, history, summarize_count, cancel_token).await;
+    let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    if after_tokens < before_tokens {
+        LAST_COMPACTION_RECLAIMED.store(
+            before_tokens - after_tokens,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    result.map(|_| (before_tokens, after_tokens))
+}
+
+async fn force_compact_internal(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    summarize_count: usize,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(), String> {
+    // Incremental compaction: if a prior summary already sits at the front of the
+    // range, preserve its facts and only summarize the messages that came after.
+    // Avoids re-compressing an already-compressed summary (which drifts and loses
+    // detail every pass).
+    let prior_summary = history
+        .iter()
+        .take(summarize_count)
+        .find(|m| m.role == "system" && m.content.starts_with(SUMMARY_MARKER))
+        .map(|m| {
+            m.content
+                .trim_start_matches(SUMMARY_MARKER)
+                .trim_start_matches('\n')
+                .to_string()
+        });
+
+    // Pin the original task (first user message, or the marker left by an
+    // earlier compaction) so the goal is never blurred away.
+    let first_user_task = history
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone());
+    let pinned_task = history
+        .iter()
+        .find(|m| m.role == "system" && m.content.starts_with(ORIGINAL_TASK_MARKER))
+        .map(|m| {
+            m.content
+                .strip_prefix(ORIGINAL_TASK_MARKER)
+                .unwrap_or_default()
+                .trim_start_matches('\n')
+                .to_string()
+        })
+        .filter(|task| !task.is_empty())
+        .or(first_user_task.clone());
+
+    // Only summarize messages that aren't the prior summary itself.
+    let to_summarize: Vec<&ChatMessage> = history[..summarize_count]
+        .iter()
+        .filter(|m| {
+            !(m.role == "system" && m.content.starts_with(SUMMARY_MARKER))
+                && !(m.role == "system" && m.content.starts_with(ORIGINAL_TASK_MARKER))
+        })
+        .collect();
+
+    let summary = match generate_summary(
+        client,
+        url,
+        model,
+        prior_summary.as_deref(),
+        &to_summarize,
+        cancel_token,
+    )
+    .await
+    {
+        Some(s) => s,
+        None => return Err("Failed to generate summary.".to_string()),
+    };
+
+    let tail: Vec<ChatMessage> = history[summarize_count..].to_vec();
+    let task_in_tail = pinned_task
+        .as_ref()
+        .is_some_and(|task| tail.iter().any(|m| m.role == "user" && &m.content == task));
+    let marker_in_tail = pinned_task.as_ref().is_some_and(|task| {
+        tail.iter()
+            .any(|m| m.role == "system" && m.content == format!("{ORIGINAL_TASK_MARKER}\n{task}"))
+    });
+
+    // Replace the summarized range with a single summary message.
+    history.clear();
+    history.push(ChatMessage::new(
+        "system",
+        format!("{SUMMARY_MARKER}\n{summary}\n[End Summary — the following messages are the most recent conversation]"),
+    ));
+    // Re-inject the original task verbatim if it fell inside the summarized range.
+    if let Some(task) = pinned_task
+        && !task_in_tail
+        && !marker_in_tail
+    {
+        history.push(ChatMessage::new(
+            "system",
+            format!("{ORIGINAL_TASK_MARKER}\n{task}"),
+        ));
+    }
+    history.extend(tail);
+
+    Ok(())
+}
+
+/// Prefix that marks a compaction summary message, used to detect and preserve
+/// prior summaries during incremental compaction.
+pub(crate) const SUMMARY_MARKER: &str = "[Session History Summary]";
+pub(super) const ORIGINAL_TASK_MARKER: &str = "[Original task — do not lose sight of this]";
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn render_summary_message(message: &ChatMessage) -> String {
+    let role_label = match message.role.as_str() {
+        "user" => "User",
+        "assistant" => "Assistant",
+        "tool" => "Tool Result",
+        "system" => "System",
+        _ => "Unknown",
+    };
+    let mut chars = message.content.chars();
+    let mut content: String = chars.by_ref().take(SUMMARY_MESSAGE_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        content.push_str("... [truncated]");
+    }
+    if let Some(record) = &message.tool_result {
+        let error =
+            record
+                .error_kind
+                .as_deref()
+                .unwrap_or(if record.success { "none" } else { "unknown" });
+        let paths = if record.changed_paths.is_empty() {
+            "none".to_string()
+        } else {
+            record
+                .changed_paths
+                .iter()
+                .take(16)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        content.push_str(&format!(
+            "\n[execution metadata: success={}, error_kind={}, retryable={}, exit_code={:?}, truncated={}, replayed={}, changed_paths={paths}]",
+            record.success,
+            error,
+            record.retryable,
+            record.exit_code,
+            record.truncated,
+            record.replayed,
+        ));
+    }
+    if !message.tool_calls.is_empty() {
+        let calls = message
+            .tool_calls
+            .iter()
+            .take(16)
+            .map(|call| format!("{}({})", call.name, call.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str(&format!("\n[structured tool calls: {calls}]"));
+    }
+    format!("{role_label}:\n{content}\n\n")
+}
+
+/// Build a bounded prompt that pins the original task and prior summary, then
+/// spends the remaining space on the newest messages in chronological order.
+pub(super) fn build_summary_input(
+    prior_summary: Option<&str>,
+    messages: &[&ChatMessage],
+) -> String {
+    let first_user_index = messages.iter().position(|message| message.role == "user");
+    let mut input = String::with_capacity(SUMMARY_INPUT_MAX_BYTES);
+    input.push_str("Summarize this coding conversation.\n\n");
+
+    if let Some(index) = first_user_index {
+        input.push_str("Original user task (preserve this objective):\n");
+        let rendered = render_summary_message(messages[index]);
+        let remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
+        input.push_str(truncate_utf8(&rendered, remaining));
+    }
+
+    if let Some(previous) = prior_summary {
+        input.push_str("Existing summary of earlier context (preserve every fact):\n");
+        let previous = truncate_utf8(previous, SUMMARY_PRIOR_MAX_BYTES);
+        let remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
+        input.push_str(truncate_utf8(previous, remaining));
+        input.push_str("\n\n");
+    }
+
+    input.push_str("Newest messages to fold into the summary:\n\n");
+    let mut recent = Vec::new();
+    let mut remaining = SUMMARY_INPUT_MAX_BYTES.saturating_sub(input.len());
+    for (index, message) in messages.iter().enumerate().rev() {
+        if Some(index) == first_user_index {
+            continue;
+        }
+        let rendered = render_summary_message(message);
+        if rendered.len() <= remaining {
+            remaining -= rendered.len();
+            recent.push(rendered);
+            continue;
+        }
+        if remaining > 0 {
+            recent.push(truncate_utf8(&rendered, remaining).to_string());
+        }
+        break;
+    }
+    for rendered in recent.into_iter().rev() {
+        input.push_str(&rendered);
+    }
+
+    debug_assert!(input.len() <= SUMMARY_INPUT_MAX_BYTES);
+    input
+}
+
+pub(super) fn parse_summary_response(body: &serde_json::Value) -> Option<String> {
+    let content = body
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?
+        .get("content")?
+        .as_str()?
+        .trim();
+    let content = truncate_utf8(content, SUMMARY_OUTPUT_MAX_BYTES).trim_end();
+    if content.is_empty()
+        || !content
+            .chars()
+            .any(|character| !character.is_control() && !character.is_whitespace())
+    {
+        return None;
+    }
+
+    Some(content.to_string())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SummaryRequestError {
+    Cancelled,
+    TimedOut,
+}
+
+/// Apply one deadline to the complete summary exchange. The supplied future
+/// includes both `send()` and response decoding, unlike a client-level connect
+/// timeout which only covers establishing the connection.
+pub(super) async fn await_summary_request<F>(
+    future: F,
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<F::Output, SummaryRequestError>
+where
+    F: Future,
+{
+    let timed = tokio::time::timeout(SUMMARY_REQUEST_TIMEOUT, future);
+    tokio::pin!(timed);
+
+    if let Some(cancel_token) = cancel_token {
+        tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => Err(SummaryRequestError::Cancelled),
+            result = &mut timed => result.map_err(|_| SummaryRequestError::TimedOut),
+        }
+    } else {
+        timed.await.map_err(|_| SummaryRequestError::TimedOut)
+    }
+}
+
+async fn generate_summary(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    prior_summary: Option<&str>,
+    messages: &[&ChatMessage],
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+) -> Option<String> {
+    let user_content = build_summary_input(prior_summary, messages);
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a conversation summarizer for a coding session. Produce a concise, incremental, inspectable bullet-point state record; merge new facts into the existing summary instead of retelling the transcript. Preserve these headings when applicable: Goal; Constraints; Architecture/discoveries; Decisions; Modified files; Failures and attempted fixes; Verification/test state; Unresolved work; Next steps. Keep exact file paths, commands, diagnostics, and outcomes that remain relevant. Retain recent raw evidence elsewhere in the conversation. Never invent facts, never drop a still-relevant fact from the existing summary, and do not include tool call syntax, JSON, secrets, source-code dumps, or full command output."
+            },
+            {
+                "role": "user",
+                "content": user_content
+            }
+        ],
+        "stream": false,
+        "temperature": 0.3,
+        "max_tokens": 1024,
+    });
+
+    let request = async {
+        let resp = client.post(url).json(&payload).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body: serde_json::Value = resp.json().await.ok()?;
+        parse_summary_response(&body)
+    };
+
+    await_summary_request(request, cancel_token)
+        .await
+        .ok()
+        .flatten()
+}
