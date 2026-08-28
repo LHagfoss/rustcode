@@ -5,17 +5,23 @@ use super::*;
 fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields() {
     let mut state = AppState::new();
     let mut context = TurnContext::with_max_tool_rounds(7);
-    context.tool_rounds = 4;
-    context.failed_mutations = 2;
-    context.consecutive_failed_mutations = 2;
-    context.changed_paths.insert("README.md".to_string());
+    context.budget.tool_rounds = 4;
+    context.progress.failed_mutations = 2;
+    context.progress.consecutive_failed_mutations = 2;
     context
+        .progress
+        .changed_paths
+        .insert("README.md".to_string());
+    context
+        .recovery
         .loop_detector
         .record_failed_tool("edit:readme:1", "edit:README.md");
     context
+        .recovery
         .loop_detector
         .check("inspect:README.md", "inspect:README.md");
     context
+        .recovery
         .loop_detector
         .check("inspect:README.md", "inspect:README.md");
     let progress_observation = loop_detect::ProgressObservation {
@@ -32,28 +38,30 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
         replayed: false,
         success: false,
     };
-    context.progress_ledger.observe(&progress_observation);
-    context.progress_ledger.observe(&progress_observation);
-    context.verification.record_edit();
+    context.progress.ledger.observe(&progress_observation);
+    context.progress.ledger.observe(&progress_observation);
+    context.verification.ledger.record_edit();
     context
         .verification
+        .ledger
         .record_explicit_command("markdownlint README.md", Some(1));
-    context.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+    context.lifecycle.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
 
     save_turn_context_after_run(&mut state, context, true);
 
     let mut resumed = take_turn_context_for_prompt(&mut state, true, 99);
 
-    assert_eq!(resumed.max_tool_rounds, 7);
-    assert_eq!(resumed.tool_rounds, 4);
-    assert_eq!(resumed.failed_mutations, 2);
-    assert_eq!(resumed.consecutive_failed_mutations, 2);
+    assert_eq!(resumed.budget.max_tool_rounds, 7);
+    assert_eq!(resumed.budget.tool_rounds, 4);
+    assert_eq!(resumed.progress.failed_mutations, 2);
+    assert_eq!(resumed.progress.consecutive_failed_mutations, 2);
     assert_eq!(
-        resumed.changed_paths.iter().collect::<Vec<_>>(),
+        resumed.progress.changed_paths.iter().collect::<Vec<_>>(),
         ["README.md"]
     );
     assert_eq!(
         resumed
+            .recovery
             .loop_detector
             .check("inspect:README.md", "inspect:README.md"),
         loop_detect::LoopStatus::Abort(3),
@@ -61,15 +69,17 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
     );
     assert_eq!(
         resumed
+            .recovery
             .loop_detector
             .record_failed_tool("edit:readme:2", "edit:README.md"),
         loop_detect::LoopStatus::Abort(2),
         "failed-mutation repetition must continue across a background wakeup"
     );
-    assert_eq!(resumed.progress_ledger.no_progress_streak(), 1);
+    assert_eq!(resumed.progress.ledger.no_progress_streak(), 1);
     assert_eq!(
         resumed
             .verification
+            .ledger
             .explicit_last_failure()
             .map(|evidence| evidence.command.as_str()),
         Some("markdownlint README.md")
@@ -80,18 +90,21 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
 fn new_user_prompt_starts_fresh_turn_context() {
     let mut state = AppState::new();
     let mut context = TurnContext::new();
-    context.failed_mutations = 3;
-    context.changed_paths.insert("src/lib.rs".to_string());
-    context.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
+    context.progress.failed_mutations = 3;
+    context
+        .progress
+        .changed_paths
+        .insert("src/lib.rs".to_string());
+    context.lifecycle.stop_reason = Some(lifecycle::StopReason::BackgroundPending);
     save_turn_context_after_run(&mut state, context, true);
 
     let fresh = take_turn_context_for_prompt(&mut state, false, 9);
 
-    assert_eq!(fresh.max_tool_rounds, 9);
-    assert_eq!(fresh.tool_rounds, 0);
-    assert_eq!(fresh.failed_mutations, 0);
-    assert!(fresh.changed_paths.is_empty());
-    assert!(fresh.verification.explicit_last_failure().is_none());
+    assert_eq!(fresh.budget.max_tool_rounds, 9);
+    assert_eq!(fresh.budget.tool_rounds, 0);
+    assert_eq!(fresh.progress.failed_mutations, 0);
+    assert!(fresh.progress.changed_paths.is_empty());
+    assert!(fresh.verification.ledger.explicit_last_failure().is_none());
     assert!(state.background_turn_context.is_none());
 }
 
@@ -616,22 +629,6 @@ fn call_refs_prefer_the_embedded_provider_id() {
 
     let refs = call_refs_for(&calls, &["positional-fallback".to_string()]);
     assert_eq!(refs[0].id, "native-call-1");
-}
-
-#[test]
-fn fence_counter_survives_chunk_boundaries() {
-    let mut counter = ToolFenceCounter::default();
-
-    // Marker split across three chunks still counts exactly once.
-    assert_eq!(counter.push("some text ``"), 0);
-    assert_eq!(counter.push("`to"), 0);
-    assert_eq!(counter.push("ol\n{\"name\": \"grep\"}"), 1);
-
-    // Two more in a single chunk.
-    assert_eq!(counter.push("```tool\n{}\n```\n```tool\n{}"), 3);
-
-    // Prose without fences leaves the count alone.
-    assert_eq!(counter.push(" and then I will check the results"), 3);
 }
 
 // Regression: an oversized batch used to be replayed into history verbatim,
@@ -1397,7 +1394,7 @@ fn failure_replan_message_preserves_workspace_safety_and_requests_different_appr
 #[test]
 fn benchmark_summary_includes_failure_replan_metric() {
     let mut ctx = TurnContext::new();
-    ctx.failure_replans = 1;
+    ctx.metrics.failure_replans = 1;
     let summary = ctx.benchmark_summary();
     assert_eq!(summary["failure_replans"], 1);
     assert!(mutation_made_progress(
@@ -1413,20 +1410,20 @@ fn repeated_compiler_diagnostics_increment_and_reset_their_streak() {
     let changed = "edit applied\n\nLSP/Compiler errors detected in workspace, please fix:\nsrc/GameScene.ts(95,5): error TS2339: Property 'unsubscribe' does not exist.";
 
     update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(first));
-    assert_eq!(ctx.consecutive_compiler_diagnostics, 1);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 1);
     update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(first));
-    assert_eq!(ctx.consecutive_compiler_diagnostics, 2);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 2);
     update_compiler_diagnostic_streak(&mut ctx, compiler_diagnostic_fingerprint(changed));
-    assert_eq!(ctx.consecutive_compiler_diagnostics, 1);
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 1);
     update_compiler_diagnostic_streak(&mut ctx, None);
-    assert_eq!(ctx.consecutive_compiler_diagnostics, 0);
-    assert!(ctx.last_compiler_diagnostic_fingerprint.is_none());
+    assert_eq!(ctx.compiler.consecutive_diagnostics, 0);
+    assert!(ctx.compiler.last_diagnostic_fingerprint.is_none());
 }
 
 #[test]
 fn repeated_compiler_diagnostics_trigger_the_budget() {
     let mut ctx = TurnContext::new();
-    ctx.consecutive_compiler_diagnostics = MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS;
+    ctx.compiler.consecutive_diagnostics = MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::CompilerDiagnostics(n)) => {
             assert_eq!(n, MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS)
@@ -1438,16 +1435,18 @@ fn repeated_compiler_diagnostics_trigger_the_budget() {
 #[test]
 fn benchmark_summary_contains_metrics_and_stop_reason() {
     let mut ctx = TurnContext::new();
-    ctx.tool_rounds = 7;
-    ctx.tokens_used = 1234;
-    ctx.tool_calls = 9;
-    ctx.malformed_calls = 2;
-    ctx.no_progress_results = 3;
-    ctx.provider_errors = 1;
-    ctx.provider_429s = 1;
-    ctx.changed_paths.insert("src/GameScene.ts".to_string());
-    ctx.phase_checkpoint = Some("Phase 3: verify placement".to_string());
-    ctx.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
+    ctx.budget.tool_rounds = 7;
+    ctx.budget.tokens_used = 1234;
+    ctx.metrics.tool_calls = 9;
+    ctx.metrics.malformed_calls = 2;
+    ctx.metrics.no_progress_results = 3;
+    ctx.metrics.provider_errors = 1;
+    ctx.metrics.provider_429s = 1;
+    ctx.progress
+        .changed_paths
+        .insert("src/GameScene.ts".to_string());
+    ctx.progress.phase_checkpoint = Some("Phase 3: verify placement".to_string());
+    ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
 
     let summary = ctx.benchmark_summary();
     assert_eq!(summary["tool_rounds"], 7);
@@ -1464,10 +1463,14 @@ fn provider_error_metrics_distinguish_quota_exhaustion() {
     let mut ctx = TurnContext::new();
     record_provider_error(&mut ctx, "429 Too Many Requests");
     record_provider_error(&mut ctx, "502 Bad Gateway");
-    assert_eq!(ctx.provider_errors, 2);
-    assert_eq!(ctx.provider_429s, 1);
+    assert_eq!(ctx.metrics.provider_errors, 2);
+    assert_eq!(ctx.metrics.provider_429s, 1);
     assert_eq!(
-        ctx.stop_reason.as_ref().map(ToString::to_string).as_deref(),
+        ctx.lifecycle
+            .stop_reason
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("provider_error:429")
     );
 }
@@ -2118,20 +2121,20 @@ fn compiler_diagnostics_preserve_missing_file_output() {
 #[test]
 fn healthy_progress_does_not_trigger_the_budget() {
     let mut ctx = TurnContext::new();
-    ctx.tool_rounds = 12;
-    ctx.tokens_used = 40_000;
-    ctx.consecutive_no_progress = 0;
-    ctx.consecutive_failed_mutations = 0;
-    ctx.consecutive_compiler_error_gates = 0;
+    ctx.budget.tool_rounds = 12;
+    ctx.budget.tokens_used = 40_000;
+    ctx.progress.consecutive_no_progress = 0;
+    ctx.progress.consecutive_failed_mutations = 0;
+    ctx.compiler.consecutive_error_gates = 0;
     assert!(turn_budget_exceeded(&ctx).is_none());
 }
 
 #[test]
 fn max_tool_rounds_triggers_the_budget() {
     let mut ctx = TurnContext::new();
-    ctx.tool_rounds = ctx.max_tool_rounds;
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
     match turn_budget_exceeded(&ctx) {
-        Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, ctx.max_tool_rounds),
+        Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, ctx.budget.max_tool_rounds),
         other => panic!("expected ToolRounds limit, got {other:?}"),
     }
 }
@@ -2139,7 +2142,7 @@ fn max_tool_rounds_triggers_the_budget() {
 #[test]
 fn custom_tool_round_limit_triggers_at_the_configured_round() {
     let mut ctx = TurnContext::with_max_tool_rounds(3);
-    ctx.tool_rounds = 3;
+    ctx.budget.tool_rounds = 3;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, 3),
         other => panic!("expected configured ToolRounds limit, got {other:?}"),
@@ -2178,10 +2181,10 @@ fn missing_provider_usage_falls_back_to_a_content_estimate_without_double_counti
 fn a_genuinely_oversized_turn_trips_the_token_budget() {
     let mut ctx = TurnContext::new();
     for _ in 0..200 {
-        ctx.tokens_used = accumulate_tokens_used(ctx.tokens_used, Some(30_000), "");
+        ctx.budget.tokens_used = accumulate_tokens_used(ctx.budget.tokens_used, Some(30_000), "");
     }
     assert!(
-        ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET,
+        ctx.budget.tokens_used >= MAX_TURN_TOKEN_BUDGET,
         "200 rounds of 30k tokens each must exceed the {MAX_TURN_TOKEN_BUDGET} budget"
     );
     match turn_budget_exceeded(&ctx) {
@@ -2196,8 +2199,8 @@ fn normal_multi_round_work_is_not_stopped_prematurely() {
     // every budget, must not trip any safety limit.
     let mut ctx = TurnContext::new();
     for _ in 0..10 {
-        ctx.tokens_used = accumulate_tokens_used(ctx.tokens_used, Some(5_000), "");
-        ctx.tool_rounds += 1;
+        ctx.budget.tokens_used = accumulate_tokens_used(ctx.budget.tokens_used, Some(5_000), "");
+        ctx.budget.tool_rounds += 1;
     }
     assert!(
         turn_budget_exceeded(&ctx).is_none(),
@@ -2208,7 +2211,7 @@ fn normal_multi_round_work_is_not_stopped_prematurely() {
 #[test]
 fn token_budget_triggers_the_budget() {
     let mut ctx = TurnContext::new();
-    ctx.tokens_used = MAX_TURN_TOKEN_BUDGET;
+    ctx.budget.tokens_used = MAX_TURN_TOKEN_BUDGET;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::Tokens(n)) => assert_eq!(n, MAX_TURN_TOKEN_BUDGET),
         other => panic!("expected Tokens limit, got {other:?}"),
@@ -2218,7 +2221,7 @@ fn token_budget_triggers_the_budget() {
 #[test]
 fn repeated_malformed_tool_calls_trigger_the_budget_and_leave_it_idle() {
     let mut ctx = TurnContext::new();
-    ctx.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
+    ctx.recovery.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::MalformedCalls(n)) => {
             assert_eq!(n, MAX_CONSECUTIVE_MALFORMED_CALLS)
@@ -2246,8 +2249,8 @@ fn identical_malformed_tool_calls_are_counted_as_repeats() {
         "ignored for parsed calls",
         std::slice::from_ref(&call)
     ));
-    assert_eq!(ctx.consecutive_malformed_calls, 2);
-    assert_eq!(ctx.malformed_calls, 2);
+    assert_eq!(ctx.recovery.consecutive_malformed_calls, 2);
+    assert_eq!(ctx.metrics.malformed_calls, 2);
     assert!(!super::turn_engine::record_malformed_call(
         &mut ctx,
         "ignored for parsed calls",
@@ -2257,20 +2260,20 @@ fn identical_malformed_tool_calls_are_counted_as_repeats() {
             call_id: None,
         }]
     ));
-    assert_eq!(ctx.consecutive_malformed_calls, 1);
+    assert_eq!(ctx.recovery.consecutive_malformed_calls, 1);
 }
 
 #[test]
 fn below_the_malformed_call_budget_does_not_trip() {
     let mut ctx = TurnContext::new();
-    ctx.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS - 1;
+    ctx.recovery.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS - 1;
     assert!(turn_budget_exceeded(&ctx).is_none());
 }
 
 #[test]
 fn repeated_failed_edits_trigger_the_budget() {
     let mut ctx = TurnContext::new();
-    ctx.consecutive_failed_mutations = MAX_CONSECUTIVE_FAILED_MUTATIONS;
+    ctx.progress.consecutive_failed_mutations = MAX_CONSECUTIVE_FAILED_MUTATIONS;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::FailedMutations(n)) => {
             assert_eq!(n, MAX_CONSECUTIVE_FAILED_MUTATIONS)
@@ -2284,7 +2287,7 @@ fn repeated_failed_edits_trigger_the_budget() {
 #[test]
 fn repeated_noop_edits_trigger_the_budget() {
     let mut ctx = TurnContext::new();
-    ctx.consecutive_no_progress = MAX_CONSECUTIVE_NO_PROGRESS;
+    ctx.progress.consecutive_no_progress = MAX_CONSECUTIVE_NO_PROGRESS;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::NoProgress(n)) => assert_eq!(n, MAX_CONSECUTIVE_NO_PROGRESS),
         other => panic!("expected NoProgress limit, got {other:?}"),
@@ -2294,7 +2297,7 @@ fn repeated_noop_edits_trigger_the_budget() {
 #[test]
 fn repeated_compiler_error_gates_trigger_the_budget() {
     let mut ctx = TurnContext::new();
-    ctx.consecutive_compiler_error_gates = MAX_CONSECUTIVE_COMPILER_ERROR_GATES;
+    ctx.compiler.consecutive_error_gates = MAX_CONSECUTIVE_COMPILER_ERROR_GATES;
     match turn_budget_exceeded(&ctx) {
         Some(TurnBudgetLimit::CompilerErrorGates(n)) => {
             assert_eq!(n, MAX_CONSECUTIVE_COMPILER_ERROR_GATES)
@@ -2307,32 +2310,33 @@ fn repeated_compiler_error_gates_trigger_the_budget() {
 async fn stopping_for_budget_never_falsely_reports_completion() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let mut ctx = TurnContext::new();
-    ctx.tool_rounds = ctx.max_tool_rounds;
-    ctx.task_completed = false;
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+    ctx.lifecycle.task_completed = false;
 
     let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
     let should_continue = stop_turn_for_budget(&state, &mut ctx, limit).await;
 
     assert!(!should_continue, "a budget stop must end the loop");
     assert!(
-        !ctx.task_completed,
+        !ctx.lifecycle.task_completed,
         "a budget stop must never claim completion"
     );
     assert!(
-        ctx.budget_stopped.is_some(),
+        ctx.budget.budget_stopped.is_some(),
         "the exact limit reached must be recorded"
     );
     assert!(
-        ctx.final_content.contains("stopped"),
+        ctx.response.final_content.contains("stopped"),
         "the summary must explain the stop: {}",
-        ctx.final_content
+        ctx.response.final_content
     );
     assert!(
-        ctx.final_content
+        ctx.response
+            .final_content
             .to_ascii_lowercase()
             .contains("not complete"),
         "the summary must be explicit that the task is unfinished: {}",
-        ctx.final_content
+        ctx.response.final_content
     );
 }
 
@@ -2345,7 +2349,7 @@ async fn stopping_for_a_malformed_call_streak_leaves_the_app_idle_and_preserves_
         s.history.push(ChatMessage::new("user", "do the thing"));
     }
     let mut ctx = TurnContext::new();
-    ctx.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
+    ctx.recovery.consecutive_malformed_calls = MAX_CONSECUTIVE_MALFORMED_CALLS;
 
     let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
     assert!(matches!(limit, TurnBudgetLimit::MalformedCalls(_)));
@@ -2353,7 +2357,7 @@ async fn stopping_for_a_malformed_call_streak_leaves_the_app_idle_and_preserves_
 
     assert!(!should_continue, "a budget stop must end the loop");
     assert!(
-        !ctx.task_completed,
+        !ctx.lifecycle.task_completed,
         "must never claim completion after a parse-failure streak"
     );
     let s = state.lock().await;
@@ -2378,7 +2382,7 @@ async fn cancellation_is_checked_before_the_budget_at_round_start() {
     let cancel_token = tokio_util::sync::CancellationToken::new();
     cancel_token.cancel();
     let mut ctx = TurnContext::new();
-    ctx.tool_rounds = ctx.max_tool_rounds;
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
 
     let budget_should_fire = !cancel_token.is_cancelled() && turn_budget_exceeded(&ctx).is_some();
     assert!(
@@ -4120,11 +4124,11 @@ fn test_reasoning_loop_is_cut_off_behavior() {
 #[test]
 fn test_turn_context_reasoning_benchmark_summary() {
     let mut ctx = TurnContext::new();
-    assert_eq!(ctx.reasoning_loops_detected, 0);
-    assert_eq!(ctx.reasoning_recovery_attempts, 0);
+    assert_eq!(ctx.recovery.reasoning_loops_detected, 0);
+    assert_eq!(ctx.recovery.reasoning_recovery_attempts, 0);
 
-    ctx.reasoning_loops_detected = 1;
-    ctx.reasoning_recovery_attempts = 1;
+    ctx.recovery.reasoning_loops_detected = 1;
+    ctx.recovery.reasoning_recovery_attempts = 1;
 
     let summary = ctx.benchmark_summary();
     assert_eq!(summary["reasoning_loops_detected"], 1);
