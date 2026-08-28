@@ -37,6 +37,7 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     stream_buffer: &Arc<Mutex<StreamBuffer>>,
     mut ctx: TurnContext,
 ) -> TurnContext {
+    let turn_session_id = state.lock().await.active_session_id.clone();
     let prompt_start_time = std::time::Instant::now();
     let mut turn_lifecycle = lifecycle::TurnLifecycle::new();
     while run_single_turn(client, state, cancel_token, policy, stream_buffer, &mut ctx).await {}
@@ -90,6 +91,12 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     );
 
     let mut s = state.lock().await;
+    // A cancelled turn may finish after /history has attached another
+    // session. Its final response belongs to the old session and must not be
+    // appended to the newly selected conversation.
+    if s.active_session_id != turn_session_id {
+        return ctx;
+    }
     s.continuous_mode = false;
     s.response_time = Some(prompt_start_time.elapsed());
     if let Some(content) = final_transcript {

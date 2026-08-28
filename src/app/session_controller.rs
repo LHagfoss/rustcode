@@ -59,7 +59,6 @@ impl SessionController {
         state: &mut AppState,
     ) -> Result<SessionTransition, SessionError> {
         crate::app::actions::start_new_session(state);
-        state.request_clear_screen();
         Ok(SessionTransition::Started {
             session_id: state.active_session_id.clone(),
         })
@@ -227,7 +226,8 @@ fn validate_session_id(id: &str) -> Result<(), SessionError> {
 #[cfg(test)]
 mod tests {
     use super::{SessionController, SessionError, SessionTransition};
-    use crate::app::{AppState, ChatMessage, SessionAction};
+    use crate::app::{AppState, ChatMessage, SessionAction, StreamTracker, SubagentController};
+    use std::collections::HashSet;
 
     #[test]
     fn clear_preserves_history_but_hides_the_current_transcript() {
@@ -346,6 +346,91 @@ mod tests {
                 .iter()
                 .any(|message| message.content == "latest task")
         );
+    }
+
+    #[test]
+    fn resume_requests_transcript_replacement_and_drops_session_local_state() {
+        let mut state = AppState::new();
+        let saved_id = state.active_session_id.clone();
+        state.history.push(ChatMessage::new("user", "saved task"));
+        state
+            .history
+            .push(ChatMessage::new("assistant", "saved answer"));
+
+        SessionController::default()
+            .start_fresh(&mut state)
+            .expect("new session should succeed");
+
+        let id = SubagentController.spawn(
+            &mut state,
+            "old subagent",
+            None,
+            None,
+            false,
+            Vec::new(),
+            None,
+            None,
+        );
+        state.selected_subagent_id = Some(id.raw());
+        state.next_subagent_id = 8;
+        state.expanded_thoughts = HashSet::from([1]);
+        state.stream_tracker = Some(StreamTracker::new());
+        state.running_tools.push("old tool".to_owned());
+        state.scroll_row = 12;
+        state.is_scroll_locked_to_bottom = false;
+        state.history_display_start = 1;
+        state.clear_screen_requested = false;
+
+        SessionController::default()
+            .resume(&mut state, SessionAction::Id(saved_id.clone()))
+            .expect("saved session should resume");
+
+        assert_eq!(state.active_session_id, saved_id);
+        assert_eq!(state.history_display_start, 0);
+        assert!(state.clear_screen_requested);
+        assert!(state.subagents.is_empty());
+        assert_eq!(state.selected_subagent_id, None);
+        assert_eq!(state.next_subagent_id, 1);
+        assert!(state.expanded_thoughts.is_empty());
+        assert!(state.stream_tracker.is_none());
+        assert!(state.running_tools.is_empty());
+        assert_eq!(state.scroll_row, 0);
+        assert!(state.is_scroll_locked_to_bottom);
+    }
+
+    #[test]
+    fn switching_sessions_replaces_history_in_both_directions() {
+        let mut state = AppState::new();
+        let session_a = state.active_session_id.clone();
+        state.history.push(ChatMessage::new("user", "session A"));
+        state
+            .history
+            .push(ChatMessage::new("assistant", "answer A"));
+        crate::config::save_session_history(&session_a, &state.history);
+        crate::config::flush_history();
+
+        SessionController::default()
+            .start_fresh(&mut state)
+            .expect("new session should succeed");
+        let session_b = state.active_session_id.clone();
+        state.history.push(ChatMessage::new("user", "session B"));
+        state
+            .history
+            .push(ChatMessage::new("assistant", "answer B"));
+        crate::config::save_session_history(&session_b, &state.history);
+        crate::config::flush_history();
+
+        SessionController::default()
+            .resume(&mut state, SessionAction::Id(session_a.clone()))
+            .expect("session A should resume");
+        assert!(state.history.iter().any(|m| m.content == "session A"));
+        assert!(!state.history.iter().any(|m| m.content == "session B"));
+
+        SessionController::default()
+            .resume(&mut state, SessionAction::Id(session_b.clone()))
+            .expect("session B should resume");
+        assert!(state.history.iter().any(|m| m.content == "session B"));
+        assert!(!state.history.iter().any(|m| m.content == "session A"));
     }
 
     #[test]

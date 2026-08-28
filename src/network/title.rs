@@ -67,8 +67,12 @@ pub(crate) async fn record_prompt_to_history(
     state: &Arc<Mutex<AppState>>,
     is_wakeup: bool,
     next_prompt: &str,
-) {
+    expected_session_id: &str,
+) -> bool {
     let mut s = state.lock().await;
+    if s.active_session_id != expected_session_id {
+        return false;
+    }
     if let Some(message) = prompt_history_message(is_wakeup, next_prompt) {
         s.history.push(message);
     }
@@ -77,6 +81,7 @@ pub(crate) async fn record_prompt_to_history(
     s.clear_current_response();
     s.current_token_usage = None;
     s.response_time = None;
+    true
 }
 
 #[cfg(test)]
@@ -108,8 +113,10 @@ pub(crate) async fn spawn_title_generation(
         if let Some(title) = generate_title(&client_clone, &config_clone, &first_msg).await {
             crate::config::save_session_title(&session_id, &title);
             let mut s = state_clone.lock().await;
-            s.invalidate_session_title_cache();
-            s.request_redraw();
+            if s.active_session_id == session_id {
+                s.invalidate_session_title_cache();
+                s.request_redraw();
+            }
         }
     });
 }

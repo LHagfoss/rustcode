@@ -103,12 +103,13 @@ pub(super) async fn collect_round(
         s.current_thought_started_at = None;
     }
     stream_buffer.lock().await.reset();
-    let (api_base_url, model_name, request_schema_policy) = {
+    let (api_base_url, model_name, request_schema_policy, request_session_id) = {
         let s = state.lock().await;
         (
             s.api_base_url.clone(),
             s.model_name.clone(),
             crate::tools::ToolSchemaPolicy::root(s.delegation_active),
+            s.active_session_id.clone(),
         )
     };
     let turn_start_time = std::time::Instant::now();
@@ -135,6 +136,7 @@ pub(super) async fn collect_round(
         let request_api_url = api_base_url.clone();
         let request_model = model_name.clone();
         let request_msgs = Arc::clone(&request_msgs);
+        let request_session_id = request_session_id.clone();
         async move {
             request_buffer.lock().await.reset();
             let current_msgs = messages_for_response_continuation(&request_msgs, &previous);
@@ -150,6 +152,7 @@ pub(super) async fn collect_round(
                 request_allow_tools,
                 request_disable_thinking,
                 request_schema_policy,
+                Some(request_session_id.as_str()),
             )
             .await
             .map_err(|e| e.to_string())?;
