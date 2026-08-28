@@ -2113,6 +2113,21 @@ fn activity_status_labels_idle_and_working_states() {
 }
 
 #[test]
+fn streaming_activity_displays_decode_speed() {
+    let mut state = AppState::new();
+    state.status = AppStatus::Streaming;
+    state.generation_start_time = Some(std::time::Instant::now());
+    let mut tracker = crate::app::StreamTracker::new();
+    tracker.tokens_so_far = 8;
+    tracker.record_chunk();
+    state.stream_tracker = Some(tracker);
+
+    let status = activity_status_line(&state.render_snapshot(), false).to_string();
+
+    assert!(status.contains("Tokens/s: 80.0"), "{status}");
+}
+
+#[test]
 fn background_terminal_activity_shows_management_hints_and_command() {
     let mut state = AppState::new();
     state.background_turn_context = Some(Box::new(
