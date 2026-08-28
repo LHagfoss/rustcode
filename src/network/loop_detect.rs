@@ -39,6 +39,9 @@ pub fn is_read_only(name: &str) -> bool {
 /// mutation makes harmless release inspection (`git log`, `git status`, etc.)
 /// escalate into a tool shutdown when a model repeats a query.
 fn is_read_only_category(name: &str, category: &str) -> bool {
+    if category.starts_with("read:") {
+        return true;
+    }
     if is_read_only(name) {
         return true;
     }
@@ -82,26 +85,11 @@ pub fn is_stable_inspection_command(command: &str) -> bool {
 /// other tools reuse their exact signature as the category.
 pub fn signatures(name: &str, args: &Value) -> (String, String) {
     let exact = format!("{name}:{}", serde_json::to_string(args).unwrap_or_default());
-    let category = if name == "run_command" {
+    let category = if let Some(category) = read_category(name, args) {
+        category
+    } else if name == "run_command" {
         match args.get("command").and_then(|v| v.as_str()) {
             Some(cmd) => normalize_command(cmd),
-            None => exact.clone(),
-        }
-    } else if name == "view_file" {
-        // Re-reading the *same region* of a file is a loop; reading *different*
-        // regions to collect scattered code is legitimate work. Bucket the start
-        // line coarsely (per 200 lines) so cosmetic ±N range shifts over the same
-        // area collapse to one category, while genuinely distinct parts of a big
-        // file stay distinct and don't trip the detector prematurely.
-        match args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            Some(path) => {
-                let start = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
-                format!("view_file:{path}#{}", start / 200)
-            }
             None => exact.clone(),
         }
     } else if name == "grep" {
@@ -165,16 +153,82 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
     (exact, category)
 }
 
-/// Reduce a shell command to its semantic core: primary command before any
-/// `||`/`&&`/`;`/`|`, flags dropped, arguments unquoted and de-slashed.
-/// Search tools normalize to `search:<args>` so all grep/rg variants match.
-fn normalize_command(cmd: &str) -> String {
-    // Isolate the primary substantive command (spaces around separators avoid
-    // matching operators inside quoted patterns like 'TODO|FIXME'). A leading
-    // `cd … &&` is setup, not the action: collapsing every workspace command
-    // to `cmd:cd:<path>` creates false loop warnings across unrelated checks.
-    let core = cmd
-        .split(" && ")
+/// Normalize native file reads and common read-only shell commands into one
+/// semantic category. This prevents a model from evading repeat detection by
+/// switching from `view_file` to `cat`, `sed`, or `awk` while inspecting the
+/// same region. Regions are bucketed per 200 lines so paging through a large
+/// file remains legitimate work.
+fn read_category(name: &str, args: &Value) -> Option<String> {
+    if name == "view_file" || name == "read_file" {
+        let path = args.get("path")?.as_str()?.trim();
+        if path.is_empty() {
+            return None;
+        }
+        let start = args
+            .get("start_line")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(1);
+        return Some(format!(
+            "read:{}#{}",
+            normalize_read_path(path),
+            start / 200
+        ));
+    }
+    if name != "run_command" {
+        return None;
+    }
+
+    let command = args.get("command")?.as_str()?;
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let command_index = tokens
+        .iter()
+        .position(|token| matches!(token.rsplit('/').next(), Some("cat" | "sed" | "awk" | "nl")))?;
+    let bin = tokens[command_index].rsplit('/').next()?;
+    if !matches!(bin, "cat" | "sed" | "awk" | "nl") {
+        return None;
+    }
+    let path = tokens
+        .iter()
+        .rev()
+        .map(|token| token.trim_matches(|c: char| c == '\'' || c == '"'))
+        .find(|token| !token.is_empty() && !token.starts_with('-'))?;
+    let start = match bin {
+        "sed" => tokens[command_index + 1..]
+            .iter()
+            .find_map(|token| parse_sed_start(token)),
+        "awk" => parse_awk_start(command),
+        _ => None,
+    }
+    .unwrap_or(1);
+    Some(format!(
+        "read:{}#{}",
+        normalize_read_path(path),
+        start / 200
+    ))
+}
+
+fn normalize_read_path(path: &str) -> &str {
+    path.trim_matches(|c: char| c == '\'' || c == '"')
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+}
+
+fn parse_sed_start(token: &str) -> Option<u64> {
+    token
+        .trim_matches(|c: char| c == '\'' || c == '"')
+        .split_once(',')
+        .and_then(|(start, _)| start.parse().ok())
+}
+
+fn parse_awk_start(command: &str) -> Option<u64> {
+    let marker = "NR>=";
+    let tail = command.split_once(marker)?.1;
+    let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+fn primary_command(cmd: &str) -> &str {
+    cmd.split(" && ")
         .flat_map(|segment| segment.split(" || "))
         .flat_map(|segment| segment.split(" ; "))
         .flat_map(|segment| segment.split(" | "))
@@ -183,7 +237,18 @@ fn normalize_command(cmd: &str) -> String {
             let mut tokens = segment.split_whitespace();
             !matches!(tokens.next(), Some("cd"))
         })
-        .unwrap_or("");
+        .unwrap_or("")
+}
+
+/// Reduce a shell command to its semantic core: primary command before any
+/// `||`/`&&`/`;`/`|`, flags dropped, arguments unquoted and de-slashed.
+/// Search tools normalize to `search:<args>` so all grep/rg variants match.
+fn normalize_command(cmd: &str) -> String {
+    // Isolate the primary substantive command (spaces around separators avoid
+    // matching operators inside quoted patterns like 'TODO|FIXME'). A leading
+    // `cd … &&` is setup, not the action: collapsing every workspace command
+    // to `cmd:cd:<path>` creates false loop warnings across unrelated checks.
+    let core = primary_command(cmd);
 
     let tokens: Vec<&str> = core.split_whitespace().collect();
     if tokens.is_empty() {
@@ -504,6 +569,8 @@ pub struct LoopDetector {
     failed_category: ConsecutiveTracker,
     output: HashTracker,
     frequency: FrequencyTracker,
+    cross_read_category: Option<String>,
+    cross_read_methods: HashSet<String>,
     warn: usize,
     abort: usize,
 }
@@ -519,6 +586,8 @@ impl LoopDetector {
             failed_category: ConsecutiveTracker::default(),
             output: HashTracker::default(),
             frequency: FrequencyTracker::new(abort * 2),
+            cross_read_category: None,
+            cross_read_methods: HashSet::new(),
             warn: abort.div_ceil(2),
             abort,
         }
@@ -543,6 +612,19 @@ impl LoopDetector {
     /// threshold, which is a real hang rather than legitimate re-reading.
     pub fn check_tool(&mut self, name: &str, exact: &str, category: &str) -> LoopStatus {
         let status = self.check(exact, category);
+        if category.starts_with("read:") {
+            if self.cross_read_category.as_deref() != Some(category) {
+                self.cross_read_category = Some(category.to_string());
+                self.cross_read_methods.clear();
+            }
+            self.cross_read_methods.insert(read_method(name, exact));
+            if self.cross_read_methods.len() >= 3 {
+                return LoopStatus::Abort(self.cross_read_methods.len());
+            }
+        } else {
+            self.cross_read_category = None;
+            self.cross_read_methods.clear();
+        }
         if is_read_only_category(name, category)
             && let LoopStatus::Abort(n) = status
             && n < self.abort.saturating_mul(3)
@@ -578,6 +660,8 @@ impl LoopDetector {
         self.failed_category = ConsecutiveTracker::default();
         self.output = HashTracker::default();
         self.frequency = FrequencyTracker::new(self.abort * 2);
+        self.cross_read_category = None;
+        self.cross_read_methods.clear();
     }
 
     /// Record a tool output and check for stagnation (same result repeatedly).
@@ -595,6 +679,17 @@ impl LoopDetector {
             LoopStatus::Ok
         }
     }
+}
+
+fn read_method(name: &str, exact: &str) -> String {
+    if name != "run_command" {
+        return name.to_string();
+    }
+    ["cat", "sed", "awk", "nl"]
+        .into_iter()
+        .find(|bin| exact.contains(&format!("\"command\":\"{bin} ")))
+        .map(|bin| format!("run_command:{bin}"))
+        .unwrap_or_else(|| name.to_string())
 }
 
 #[path = "loop_detect/reasoning.rs"]
