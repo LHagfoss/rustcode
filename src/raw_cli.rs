@@ -90,7 +90,7 @@ pub async fn run_headless_turn(
         crate::network::run_agent_turn(client, &state_arc, &cancel_token, &policy, &stream_buffer)
             .await;
 
-    let prose = crate::network::text::strip_tool_call_syntax(&ctx.final_content);
+    let prose = crate::network::text::strip_tool_call_syntax(&ctx.response.final_content);
     if !quiet && !prose.trim().is_empty() {
         println!("\nAssistant: {}", prose.trim());
     }

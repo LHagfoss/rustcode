@@ -56,9 +56,8 @@ pub(crate) use tool_exec::{
     tool_result_history_message, tool_result_precludes_preview_fallback,
 };
 
-#[path = "network/turn_engine.rs"]
+#[path = "network/turn/mod.rs"]
 pub(crate) mod turn_engine;
-pub(crate) use turn_engine::ToolFenceCounter;
 pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
 pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn};
 
@@ -220,38 +219,40 @@ pub(crate) fn accumulate_tokens_used(
 /// exceeded, if any. Order matters only for which reason is reported when
 /// several trip on the same round — all are equally terminal.
 pub(crate) fn turn_budget_exceeded(ctx: &TurnContext) -> Option<TurnBudgetLimit> {
-    if ctx.tokens_used >= MAX_TURN_TOKEN_BUDGET {
-        return Some(TurnBudgetLimit::Tokens(ctx.tokens_used));
+    if ctx.budget.tokens_used >= MAX_TURN_TOKEN_BUDGET {
+        return Some(TurnBudgetLimit::Tokens(ctx.budget.tokens_used));
     }
-    if ctx.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS {
-        return Some(TurnBudgetLimit::NoProgress(ctx.consecutive_no_progress));
+    if ctx.progress.consecutive_no_progress >= MAX_CONSECUTIVE_NO_PROGRESS {
+        return Some(TurnBudgetLimit::NoProgress(
+            ctx.progress.consecutive_no_progress,
+        ));
     }
-    if ctx.consecutive_failed_mutations >= MAX_CONSECUTIVE_FAILED_MUTATIONS {
+    if ctx.progress.consecutive_failed_mutations >= MAX_CONSECUTIVE_FAILED_MUTATIONS {
         return Some(TurnBudgetLimit::FailedMutations(
-            ctx.consecutive_failed_mutations,
+            ctx.progress.consecutive_failed_mutations,
         ));
     }
-    if ctx.consecutive_compiler_error_gates >= MAX_CONSECUTIVE_COMPILER_ERROR_GATES {
+    if ctx.compiler.consecutive_error_gates >= MAX_CONSECUTIVE_COMPILER_ERROR_GATES {
         return Some(TurnBudgetLimit::CompilerErrorGates(
-            ctx.consecutive_compiler_error_gates,
+            ctx.compiler.consecutive_error_gates,
         ));
     }
-    if ctx.consecutive_compiler_diagnostics >= MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
+    if ctx.compiler.consecutive_diagnostics >= MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS {
         return Some(TurnBudgetLimit::CompilerDiagnostics(
-            ctx.consecutive_compiler_diagnostics,
+            ctx.compiler.consecutive_diagnostics,
         ));
     }
-    if ctx.consecutive_malformed_calls >= MAX_CONSECUTIVE_MALFORMED_CALLS {
+    if ctx.recovery.consecutive_malformed_calls >= MAX_CONSECUTIVE_MALFORMED_CALLS {
         return Some(TurnBudgetLimit::MalformedCalls(
-            ctx.consecutive_malformed_calls,
+            ctx.recovery.consecutive_malformed_calls,
         ));
     }
     // The round count is intentionally last: evidence-aware recovery and
     // focused failure guards get a chance to act first. This remains the hard
     // final backstop for a model that keeps producing novel but unproductive
     // actions which evade the more specific deterministic signals.
-    if ctx.tool_rounds >= ctx.max_tool_rounds {
-        return Some(TurnBudgetLimit::ToolRounds(ctx.tool_rounds));
+    if ctx.budget.tool_rounds >= ctx.budget.max_tool_rounds {
+        return Some(TurnBudgetLimit::ToolRounds(ctx.budget.tool_rounds));
     }
     None
 }
@@ -269,21 +270,21 @@ pub(crate) async fn stop_turn_for_budget(
         "turn.budget_exceeded",
         serde_json::json!({
             "limit": limit.to_string(),
-            "tool_rounds": ctx.tool_rounds,
-            "elapsed_secs": ctx.turn_started_at.elapsed().as_secs(),
-            "tokens_used": ctx.tokens_used,
-            "failed_mutations": ctx.failed_mutations,
+            "tool_rounds": ctx.budget.tool_rounds,
+            "elapsed_secs": ctx.lifecycle.turn_started_at.elapsed().as_secs(),
+            "tokens_used": ctx.budget.tokens_used,
+            "failed_mutations": ctx.progress.failed_mutations,
         }),
     );
     let summary = format!(
         "[harness: stopped after {} tool round(s) — {limit}. The task is NOT complete. \
          Review the transcript above; if the remaining work is still valid, resume it in a new turn.]",
-        ctx.tool_rounds
+        ctx.budget.tool_rounds
     );
-    ctx.final_content = summary;
-    ctx.task_completed = false;
-    ctx.budget_stopped = Some(limit.to_string());
-    ctx.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
+    ctx.response.final_content = summary;
+    ctx.lifecycle.task_completed = false;
+    ctx.budget.budget_stopped = Some(limit.to_string());
+    ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
     let mut s = _state.lock().await;
     s.continuous_mode = false;
     s.status = AppStatus::Idle;
@@ -1380,14 +1381,14 @@ pub(crate) fn completion_claims_unapplied_work(
 }
 
 pub(crate) fn record_provider_error(ctx: &mut TurnContext, error: &str) {
-    ctx.provider_errors += 1;
+    ctx.metrics.provider_errors += 1;
     let is_quota =
         error.contains("429") || error.to_ascii_lowercase().contains("too many requests");
     if is_quota {
-        ctx.provider_429s += 1;
-        ctx.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
-    } else if ctx.stop_reason.is_none() {
-        ctx.stop_reason = Some(lifecycle::StopReason::ProviderError(None));
+        ctx.metrics.provider_429s += 1;
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(Some(429)));
+    } else if ctx.lifecycle.stop_reason.is_none() {
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::ProviderError(None));
     }
 }
 

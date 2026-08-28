@@ -79,7 +79,11 @@ pub(crate) async fn run_prompt(
     while let Ok(event) = receiver.try_recv() {
         send_updates(&connection, &session_id, event_stream.updates(event))?;
     }
-    let harness_reason = context.stop_reason.as_ref().map(ToString::to_string);
+    let harness_reason = context
+        .lifecycle
+        .stop_reason
+        .as_ref()
+        .map(ToString::to_string);
     Ok(acp_stop_reason(
         turn.cancel_token().is_cancelled(),
         harness_reason.as_deref(),
