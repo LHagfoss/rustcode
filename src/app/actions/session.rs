@@ -133,32 +133,10 @@ pub fn toggle_auto_confirm(s: &mut AppState) {
 }
 
 pub fn start_new_session(s: &mut AppState) {
-    s.subagent_supervisor.shutdown();
-    s.subagent_supervisor =
-        crate::app::SubagentSupervisor::new(s.config.subagent_concurrency_limit);
     if crate::config::session_has_content(&s.history) {
         crate::config::save_session_history(&s.active_session_id, &s.history);
     }
-    s.pending_queue.clear();
-    s.background_wakeup_ids.clear();
-    s.background_turn_context = None;
-    s.clear_current_response();
-    s.expanded_thoughts.clear();
-    s.current_token_usage = None;
-    s.response_time = None;
-    s.history_index = None;
-    s.temp_input.clear();
-    s.status = AppStatus::Idle;
-    s.subagents.clear();
-    s.selected_subagent_id = None;
-    s.show_subagent_picker = false;
-    s.delegation_armed = false;
-    s.delegation_active = false;
-    s.next_subagent_id = 1;
-    s.todos.clear();
-    s.read_file_mtimes.clear();
-    s.recent_read_calls.clear();
-    s.continuous_mode = false;
+    reset_active_session_state(s);
     s.tip_index = crate::app::random_tip_index();
     s.history_display_start = 0;
     s.history.clear();
@@ -169,6 +147,79 @@ pub fn start_new_session(s: &mut AppState) {
     s.history
         .push(ChatMessage::new("system", "✨ New chat started"));
     crate::config::save_session_history(&s.active_session_id, &s.history);
+}
+
+/// Drop state owned by the active conversation before another session is
+/// attached.  Configuration and cross-session input history intentionally stay
+/// untouched; the fields below are either model/session state or projections
+/// of the currently displayed transcript.
+pub(crate) fn reset_active_session_state(s: &mut AppState) {
+    s.subagent_supervisor.shutdown();
+    s.subagent_supervisor =
+        crate::app::SubagentSupervisor::new(s.config.subagent_concurrency_limit);
+    s.pending_queue.clear();
+    s.background_wakeup_ids.clear();
+    s.background_turn_context = None;
+    s.image_analysis_cache.clear();
+    s.clear_current_response();
+    s.current_thought_time_ms = 0;
+    s.current_thought_tokens = 0;
+    s.current_thought_started_at = None;
+    s.current_token_usage = None;
+    s.response_time = None;
+    s.generation_start_time = None;
+    s.history_index = None;
+    s.temp_input.clear();
+    s.expanded_thoughts.clear();
+    s.status = AppStatus::Idle;
+    s.subagents.clear();
+    s.selected_subagent_id = None;
+    s.show_history_picker = false;
+    s.show_model_picker = false;
+    s.show_theme_picker = false;
+    s.show_command_picker = false;
+    s.show_subagent_picker = false;
+    s.subagent_picker_index = 0;
+    s.delegation_armed = false;
+    s.delegation_active = false;
+    s.next_subagent_id = 1;
+    s.todos.clear();
+    s.read_file_mtimes.clear();
+    s.recent_read_calls.clear();
+    s.recent_read_outputs.clear();
+    s.continuous_mode = false;
+    s.pending_tool_confirmation = None;
+    s.tool_confirmation_response = None;
+    s.pending_question = None;
+    s.question_response = None;
+    s.running_tools.clear();
+    s.clear_live_tool_calls();
+    s.stream_tracker = None;
+    s.show_context_modal = false;
+    s.modal_scroll_row = 0;
+    s.tool_confirmation_selected = 0;
+    s.history_picker_index = 0;
+    s.history_picker_sessions.clear();
+    s.history_picker_truncated = false;
+    s.pending_delete_session_idx = None;
+    s.input_buffer.clear();
+    s.cursor_position = 0;
+    s.active_suggestion_index = None;
+    s.dismissed_completion = None;
+    s.clear_selection();
+    s.selected_text = None;
+    s.scroll_row = 0;
+    s.is_scroll_locked_to_bottom = true;
+    s.last_max_scroll = 0;
+    s.conversation_content_height = 0;
+    s.viewport_height = 0;
+    s.chat_area = None;
+    s.input_text_area = None;
+    s.scroll_to_bottom_btn = None;
+    s.context_snapshot = None;
+    s.last_copy_text = None;
+    s.invalidate_session_title_cache();
+    s.request_clear_screen();
 }
 
 /// Fill in the active profile's context window from the provider when the
@@ -296,18 +347,9 @@ pub fn load_session_into(s: &mut AppState, meta: &crate::config::SessionMeta) ->
     }
 
     s.history.replace(loaded);
+    reset_active_session_state(s);
     s.image_analysis_cache = crate::config::load_session_image_cache(&s.active_session_id);
     s.history_display_start = 0;
-    s.pending_queue.clear();
-    s.background_wakeup_ids.clear();
-    s.background_turn_context = None;
-    s.clear_current_response();
-    s.expanded_thoughts.clear();
-    s.current_token_usage = None;
-    s.response_time = None;
-    s.history_index = None;
-    s.temp_input.clear();
-    s.status = AppStatus::Idle;
     s.history.push(ChatMessage::new(
         "system",
         format!("Resumed session \"{}\"", meta.title),

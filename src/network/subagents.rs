@@ -234,6 +234,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     true,
                     false,
                     crate::tools::ToolSchemaPolicy::subagent(),
+                    None,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
