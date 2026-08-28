@@ -643,14 +643,14 @@ pub async fn stream_request(
     cancel_token: tokio_util::sync::CancellationToken,
     url: &str,
     model: &str,
-    messages: &[serde_json::Value],
+    messages: Vec<serde_json::Value>,
     buffer: Arc<Mutex<StreamBuffer>>,
     quiet: bool,
     allow_tools: bool,
     disable_thinking: bool,
     schema_policy: crate::tools::ToolSchemaPolicy,
 ) -> Result<Option<String>, String> {
-    let aligned_messages = align_alternating_messages(messages.to_vec());
+    let aligned_messages = align_alternating_messages(messages);
     let message_count = aligned_messages.len();
 
     let profile = {
@@ -694,22 +694,6 @@ pub async fn stream_request(
             .flatten()
     });
 
-    let mut payload = serde_json::json!({
-        "model": model,
-        "messages": aligned_messages,
-        "stream": true,
-        "stream_options": {
-            "include_usage": true
-        },
-        "max_tokens": max_tokens,
-    });
-
-    apply_profile_generation_options(&mut payload, profile.as_ref(), disable_thinking);
-
-    if !url.contains("generativelanguage.googleapis.com") {
-        payload["frequency_penalty"] = serde_json::json!(0.3);
-    }
-
     let (tool_protocol, native_tool_schemas, mcp_selection) = {
         let mut s = state.lock().await;
         let tool_protocol = s.active_tool_protocol();
@@ -727,6 +711,21 @@ pub async fn stream_request(
             )
         }
     };
+    let mut payload = serde_json::json!({
+        "model": model,
+        "stream": true,
+        "stream_options": {
+            "include_usage": true
+        },
+        "max_tokens": max_tokens,
+    });
+    payload["messages"] = serde_json::Value::Array(aligned_messages);
+
+    apply_profile_generation_options(&mut payload, profile.as_ref(), disable_thinking);
+
+    if !url.contains("generativelanguage.googleapis.com") {
+        payload["frequency_penalty"] = serde_json::json!(0.3);
+    }
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
         crate::logger::operational_event(
@@ -764,11 +763,15 @@ pub async fn stream_request(
     );
 
     let request_start_time = std::time::Instant::now();
+    let provider_messages = payload["messages"]
+        .as_array()
+        .expect("request messages were constructed as an array");
     let estimated_prompt_tokens =
-        estimate_token_usage_with_tool_schemas(&aligned_messages, "", &native_tool_schemas)
+        estimate_token_usage_with_tool_schemas(provider_messages, "", &native_tool_schemas)
             .await
             .map(|u| u.prompt_tokens)
             .unwrap_or(0);
+    drop(payload);
     let tool_schema_tokens =
         crate::network::compaction::estimate_tool_schema_tokens(&native_tool_schemas);
 

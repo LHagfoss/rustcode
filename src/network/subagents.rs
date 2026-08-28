@@ -197,9 +197,11 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let request_buffer = Arc::clone(&stream_buffer);
         let request_api_url = api_base_url.clone();
         let request_model = model_name.clone();
-        let request_msgs = msgs.clone();
+        let request_msgs: Arc<[serde_json::Value]> = msgs.into();
         let collected = match runner::collect_response(move |previous| {
-            let mut current_msgs = request_msgs.clone();
+            let mut current_msgs =
+                Vec::with_capacity(request_msgs.len() + if previous.is_empty() { 0 } else { 2 });
+            current_msgs.extend(request_msgs.iter().cloned());
             if !previous.is_empty() {
                 let continuation_assistant = format_continuation_assistant_message(&previous);
                 let nudge = continuation_nudge_for_category(&previous, None);
@@ -226,7 +228,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     request_cancel,
                     &request_api_url,
                     &request_model,
-                    &current_msgs,
+                    current_msgs,
                     Arc::clone(&request_buffer),
                     true,
                     true,

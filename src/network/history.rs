@@ -7,60 +7,58 @@ pub const MAX_CONTEXT_TAIL_CHARS: usize = 48 * 1024;
 /// Provider-independent history representation. Persisted `ChatMessage`
 /// values remain backward-compatible, while requests are normalized through
 /// explicit variants so tool calls and results cannot silently change roles.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum HistoryEntry {
-    User(String),
-    Assistant(String),
+#[derive(Debug, PartialEq)]
+pub(crate) enum HistoryEntry<'a> {
+    User(&'a str),
+    Assistant(&'a str),
     ToolCall(ToolCall),
     ToolResult {
-        tool_name: String,
-        content: String,
-        metadata: Option<ToolResultRecord>,
+        tool_name: &'a str,
+        content: &'a str,
+        metadata: Option<&'a ToolResultRecord>,
     },
-    System(String),
-    CompactionSummary(String),
-    Lifecycle(String),
+    System(&'a str),
+    CompactionSummary(&'a str),
+    Lifecycle(&'a str),
 }
 
-pub(crate) fn normalize_history(history: &[ChatMessage]) -> Vec<HistoryEntry> {
-    history
-        .iter()
-        .map(|message| match message.role.as_str() {
-            "user" => HistoryEntry::User(message.content.clone()),
-            "assistant" => {
-                let calls = message.resolved_tool_calls(crate::config::ToolProtocol::Json);
-                if calls.len() == 1 {
-                    HistoryEntry::ToolCall(calls.into_iter().next().expect("one call"))
-                } else {
-                    HistoryEntry::Assistant(message.content.clone())
-                }
+pub(crate) fn normalize_history(history: &[ChatMessage]) -> impl Iterator<Item = HistoryEntry<'_>> {
+    history.iter().map(normalize_message)
+}
+
+fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
+    match message.role.as_str() {
+        "user" => HistoryEntry::User(&message.content),
+        "assistant" => {
+            let calls = message.resolved_tool_calls(crate::config::ToolProtocol::Json);
+            if calls.len() == 1 {
+                HistoryEntry::ToolCall(calls.into_iter().next().expect("one call"))
+            } else {
+                HistoryEntry::Assistant(&message.content)
             }
-            "tool" => {
-                let (tool_name, content) = message
-                    .content
-                    .split_once(": ")
-                    .map(|(name, content)| (name.to_string(), content.to_string()))
-                    .unwrap_or_else(|| ("tool".to_string(), message.content.clone()));
-                HistoryEntry::ToolResult {
-                    tool_name,
-                    content,
-                    metadata: message.tool_result.clone(),
-                }
+        }
+        "tool" => {
+            let (tool_name, content) = message
+                .content
+                .split_once(": ")
+                .unwrap_or(("tool", message.content.as_str()));
+            HistoryEntry::ToolResult {
+                tool_name,
+                content,
+                metadata: message.tool_result.as_ref(),
             }
-            "system"
-                if message
-                    .content
-                    .starts_with(crate::network::compaction::SUMMARY_MARKER) =>
-            {
-                HistoryEntry::CompactionSummary(message.content.clone())
-            }
-            "system" if message.content.starts_with('[') => {
-                HistoryEntry::Lifecycle(message.content.clone())
-            }
-            "system" => HistoryEntry::System(message.content.clone()),
-            _ => HistoryEntry::Lifecycle(message.content.clone()),
-        })
-        .collect()
+        }
+        "system"
+            if message
+                .content
+                .starts_with(crate::network::compaction::SUMMARY_MARKER) =>
+        {
+            HistoryEntry::CompactionSummary(&message.content)
+        }
+        "system" if message.content.starts_with('[') => HistoryEntry::Lifecycle(&message.content),
+        "system" => HistoryEntry::System(&message.content),
+        _ => HistoryEntry::Lifecycle(&message.content),
+    }
 }
 
 /// A bounded, named piece of turn-varying context.
@@ -128,9 +126,6 @@ pub(crate) fn to_messages(
     // Rendering those back as prose would teach the model that tool calls are
     // text it writes — which is what lets a model narrate results for calls that
     // never ran. Messages without ids keep the text form.
-    let entries = normalize_history(history);
-    debug_assert_eq!(entries.len(), history.len());
-
     // Ids that some later message answers. A turn can end between announcing a
     // call and running it — the user interrupts, the provider drops the stream —
     // and an unanswered id makes the whole request invalid. Rather than trusting
@@ -149,7 +144,7 @@ pub(crate) fn to_messages(
         .map(|call| call.id.as_str())
         .collect();
 
-    for (message, entry) in history.iter().zip(entries) {
+    for message in history {
         let orphan_result = message
             .tool_call_id
             .as_deref()
@@ -174,10 +169,10 @@ pub(crate) fn to_messages(
             }
             continue;
         }
+        let entry = normalize_message(message);
         messages.push(match entry {
         HistoryEntry::ToolResult { tool_name, content, metadata } => {
             let metadata_line = metadata
-                .as_ref()
                 .map(|value| format!("\nmetadata: {}", serde_json::to_string(value).unwrap_or_default()))
                 .unwrap_or_default();
             serde_json::json!({
@@ -449,7 +444,7 @@ mod tests {
             ),
             ChatMessage::new("tool", "grep: found a match"),
         ];
-        let entries = normalize_history(&history);
+        let entries: Vec<_> = normalize_history(&history).collect();
         assert!(matches!(entries[1], HistoryEntry::ToolCall(_)));
         assert!(matches!(
             entries[2],
@@ -480,7 +475,7 @@ mod tests {
             full_output_artifact: None,
             ..Default::default()
         });
-        let entries = normalize_history(std::slice::from_ref(&message));
+        let entries: Vec<_> = normalize_history(std::slice::from_ref(&message)).collect();
         assert!(matches!(
             entries[0],
             HistoryEntry::ToolResult {
