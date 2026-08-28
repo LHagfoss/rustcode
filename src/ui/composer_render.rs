@@ -260,6 +260,11 @@ pub(super) fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     crate::app::status::format_elapsed_compact(elapsed_secs)
 }
 
+fn decode_speed_label(state: &RenderSnapshot) -> Option<String> {
+    let (tokens_per_second, _) = state.stream_tracker()?.snapshot();
+    (tokens_per_second >= 0.05).then(|| format!("Tokens/s: {tokens_per_second:.1}"))
+}
+
 pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) -> Line<'static> {
     let base_activity = classify_activity(&state.status(), &state.running_tools());
     let activity = if base_activity.kind == ActivityKind::ActionRequired {
@@ -370,6 +375,15 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     {
         spans.push(Span::styled(
             format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
+            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
+        ));
+    }
+
+    if *state.status() == AppStatus::Streaming
+        && let Some(speed) = decode_speed_label(state)
+    {
+        spans.push(Span::styled(
+            format!(" · {speed}"),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }
