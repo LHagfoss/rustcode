@@ -2,7 +2,7 @@ use crate::app::{AppState, AppStatus, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-#[path = "network/compaction.rs"]
+#[path = "network/context/mod.rs"]
 pub(crate) mod compaction;
 
 #[path = "network/retry.rs"]
