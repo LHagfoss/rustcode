@@ -689,6 +689,7 @@ pub async fn stream_request(
     allow_tools: bool,
     disable_thinking: bool,
     schema_policy: crate::tools::ToolSchemaPolicy,
+    expected_session_id: Option<&str>,
 ) -> Result<Option<String>, String> {
     let aligned_messages = align_alternating_messages(messages);
     let message_count = aligned_messages.len();
@@ -1072,6 +1073,9 @@ pub async fn stream_request(
                                                      let parsed_args = parse_speculative_arguments(&acc.arguments);
                                                      let id_opt = if acc.id.is_empty() { None } else { Some(acc.id.as_str()) };
                                                      let mut s = state.lock().await;
+                                                     if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                         return Ok(None);
+                                                     }
                                                      s.update_speculative_live_tool_call(id_opt, &acc.name, &parsed_args);
                                                  }
                                              }
@@ -1086,7 +1090,11 @@ pub async fn stream_request(
                                                 let started = std::time::Instant::now();
                                                 buffer.lock().await.thought_started_at = Some(started);
                                                 if !quiet {
-                                                    state.lock().await.current_thought_started_at = Some(started);
+                                                    let mut s = state.lock().await;
+                                                    if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                        return Ok(None);
+                                                    }
+                                                    s.current_thought_started_at = Some(started);
                                                 }
                                                 chunk.push_str("<think>\n");
                                             }
@@ -1105,6 +1113,9 @@ pub async fn stream_request(
                                             }
                                             if !quiet {
                                                 let mut s = state.lock().await;
+                                                if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                    return Ok(None);
+                                                }
                                                 s.current_thought_tokens = s
                                                     .current_thought_tokens
                                                     .saturating_add(thought_tokens);
@@ -1144,6 +1155,9 @@ pub async fn stream_request(
                                                 buffer.lock().await.finish_thought();
                                                 if !quiet {
                                                     let mut s = state.lock().await;
+                                                    if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                        return Ok(None);
+                                                    }
                                                     if let Some(started) = s.current_thought_started_at.take() {
                                                         s.current_thought_time_ms = s
                                                             .current_thought_time_ms
@@ -1162,14 +1176,22 @@ pub async fn stream_request(
                                                 > runaway_limit;
                                         if !chunk.is_empty() {
                                             let tokens = (chunk.len() as f64 * crate::app::TOKENS_PER_CHAR_APPROX) as u32;
-                                            if let Some(ref mut tracker) = state.lock().await.stream_tracker {
+                                            let mut s = state.lock().await;
+                                            if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                return Ok(None);
+                                            }
+                                            if let Some(ref mut tracker) = s.stream_tracker {
                                                 tracker.tokens_so_far += tokens;
                                                 tracker.record_chunk();
                                             }
+                                            drop(s);
 
                                             buffer.lock().await.content.push_str(&chunk);
                                             if !quiet {
                                                 let mut s = state.lock().await;
+                                                if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                    return Ok(None);
+                                                }
                                                 s.append_current_response(&chunk);
                                                 if s.raw_cli_mode {
                                                     use std::io::Write;
@@ -1181,6 +1203,9 @@ pub async fn stream_request(
                                                 let buf_content = { buffer.lock().await.content.clone() };
                                                 if let Some((tool_name, tool_args)) = parse_speculative_text_tool_call(&buf_content) {
                                                     let mut s = state.lock().await;
+                                                    if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                                        return Ok(None);
+                                                    }
                                                     s.update_speculative_live_tool_call(None, &tool_name, &tool_args);
                                                 }
                                             }
@@ -1215,7 +1240,11 @@ pub async fn stream_request(
                                             .or_else(|| usage.get("cached_tokens").and_then(|v| v.as_u64()))
                                             .map(|n| n as u32);
 
-                                        state.lock().await.current_token_usage = Some(TokenUsage {
+                                        let mut s = state.lock().await;
+                                        if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                                            return Ok(None);
+                                        }
+                                        s.current_token_usage = Some(TokenUsage {
                                             prompt_tokens: p as u32,
                                             completion_tokens: c as u32,
                                             total_tokens: t as u32,
@@ -1273,6 +1302,9 @@ pub async fn stream_request(
         buffer.lock().await.finish_thought();
         if !quiet {
             let mut s = state.lock().await;
+            if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                return Ok(None);
+            }
             if let Some(started) = s.current_thought_started_at.take() {
                 s.current_thought_time_ms = s
                     .current_thought_time_ms
@@ -1282,6 +1314,9 @@ pub async fn stream_request(
         buffer.lock().await.content.push_str("\n</think>\n\n");
         if !quiet {
             let mut s = state.lock().await;
+            if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
+                return Ok(None);
+            }
             s.append_current_response("\n</think>\n\n");
             if s.raw_cli_mode {
                 use std::io::Write;

@@ -40,7 +40,7 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
 ) {
     dbg_log!("Orchestrator started");
     loop {
-        let (next_prompt, is_wakeup, turn_context) = {
+        let (next_prompt, is_wakeup, turn_context, turn_session_id) = {
             let mut s = state.lock().await;
             if s.pending_queue.is_empty() {
                 dbg_log!("Pending queue empty, setting status to Idle");
@@ -59,8 +59,9 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             let is_wakeup = prompt.starts_with("__task_wakeup__:");
             let max_tool_rounds = s.config.max_tool_rounds;
             let turn_context = take_turn_context_for_prompt(&mut s, is_wakeup, max_tool_rounds);
+            let turn_session_id = s.active_session_id.clone();
             dbg_log!("Popped prompt from queue: '{}'", prompt);
-            (prompt, is_wakeup, turn_context)
+            (prompt, is_wakeup, turn_context, turn_session_id)
         };
 
         let stream_buffer = Arc::new(Mutex::new(StreamBuffer::new()));
@@ -70,10 +71,12 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
             state.lock().await.history.is_empty()
         };
 
-        record_prompt_to_history(&state, is_wakeup, &next_prompt).await;
+        if !record_prompt_to_history(&state, is_wakeup, &next_prompt, &turn_session_id).await {
+            break;
+        }
         crate::logger::operational_event("turn.start", serde_json::json!({"wakeup": is_wakeup}));
 
-        if is_first_prompt {
+        if is_first_prompt && state.lock().await.active_session_id == turn_session_id {
             spawn_title_generation(&client, &state, next_prompt.clone()).await;
         }
 
@@ -102,6 +105,11 @@ async fn process_queue_orchestrator_inner<P: policy::TurnPolicy + 'static>(
         };
 
         let mut s = state.lock().await;
+        if s.active_session_id != turn_session_id {
+            // The user switched sessions while this cancelled turn was
+            // unwinding. Do not carry its turn context into the replacement.
+            break;
+        }
         let preserve_for_wakeup = is_wakeup
             || matches!(
                 completed_context.lifecycle.stop_reason,
