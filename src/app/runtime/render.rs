@@ -2,6 +2,7 @@ use crate::app::AppState;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::terminal::{clear_terminal_for_transcript_replacement, reset_transcript_presentation};
 use super::transcript::commit_transcript;
 use crate::ui::{TerminalRuntime, TranscriptState};
 
@@ -128,12 +129,14 @@ pub(super) async fn render_frame(
     };
 
     if clear_screen {
-        terminal_runtime.terminal().clear_screen().ok();
-        transcript_cursor.reset();
-        transcript_cursor.commit_history_through(clear_history_display_start);
-        transcript_state.reset();
-        stream_commits.reset();
-        *replaying_transcript = true;
+        clear_terminal_for_transcript_replacement(terminal_runtime).ok();
+        reset_transcript_presentation(
+            transcript_cursor,
+            transcript_state,
+            stream_commits,
+            replaying_transcript,
+            clear_history_display_start,
+        );
     }
 
     commit_transcript(

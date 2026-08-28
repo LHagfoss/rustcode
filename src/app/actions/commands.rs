@@ -147,6 +147,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
         false,
         false,
         crate::tools::ToolSchemaPolicy::root(false),
+        None,
     )
     .await;
 
