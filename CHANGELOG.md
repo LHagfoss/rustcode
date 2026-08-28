@@ -1,3 +1,9 @@
+## [v0.38.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.38.1) - 2026-08-28
+
+### Fixes
+- **Audio Generation:** Treat signal-killed local audio backends as non-retryable and avoid reporting output paths for failed generation attempts ([#837](https://github.com/LHagfoss/rustcode/pull/837), [`9828d44`](https://github.com/LHagfoss/rustcode/commit/9828d44))
+- **Harness:** Stop cross-tool read loops when models repeatedly inspect the same file region through different native and shell readers ([#838](https://github.com/LHagfoss/rustcode/pull/838), [`720c93d`](https://github.com/LHagfoss/rustcode/commit/720c93d))
+
 ## [v0.38.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.38.0) - 2026-08-27
 
 ### Features
