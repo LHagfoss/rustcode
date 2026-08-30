@@ -1,3 +1,27 @@
+## [v0.40.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.0) - 2026-08-30
+
+### Features
+- **Reasoning model tool rounds:** Cap tool-enabled requests at 8192 tokens for reasoning-capable models while preserving the full completion budget for final prose turns ([`completion_token_limit`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **Headless background tasks:** The raw CLI now supports background command completion via wakeup callbacks, injecting terminal results into session history and resuming the turn ([`raw_cli.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **MCP schema relevance filtering:** Builtin native tools are now filtered by context terms — coding requests keep only the core coding tools, while media/audio requests surface the relevant specialized tools ([`tools/schema.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **oMLX reasoning controls:** Pass `enable_thinking` through `chat_template_kwargs` for oMLX-compatible servers that expose reasoning controls this way ([`stream_request.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **Tool choice required for recovery:** When a thinking-disabled recovery turn needs a tool call, the request now sets `tool_choice: "required"` to force action emission ([`stream_request.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+
+### Fixes
+- **Deadlock in compiler verification:** Release the application-state mutex before running the potentially slow compiler check in `handle_tool_response`, then reacquire for history/status updates ([`turn/tools.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **Loop detection false resets:** Behavioral history now only resets on actual workspace edits, not on reads alone — prevents local models from accumulating "I will edit now" hesitations indefinitely ([`loop_detect/reasoning.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **Continuation amplification:** Reduced max provider continuations from 5 to 2 to avoid amplifying incomplete structured tool calls, especially from local models that restart large writes from byte zero ([`runner.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **No-progress escalation:** Reduced max consecutive no-progress turns from 8 to 6 for faster escalation when the agent is spinning ([`network.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **Reasoning budget finish reason:** Treat `reasoning_budget` the same as `reasoning_loop` in recovery and cut-off detection ([`text.rs`, `recovery.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+
+### Performance
+- **MCP schema selection:** Added a relevance threshold (6) and core-tool fallback ordering to prevent generic descriptions from pulling large MCP suites into unrelated requests ([`tools/schema.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **Recovery thinking budget:** Recovery turns now use a small deterministic 1024-token thinking budget instead of the full configured budget, keeping recovery focused on action emission ([`stream_request.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+
+### Refactoring
+- **System prompt:** Streamlined the system prompt — removed redundant rules, consolidated workflow guidance, and tightened the skills section ([`tools/schema.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+- **Tool descriptions:** Improved `view_file` and `grep` descriptions to better guide model behavior around the 800-line cap and ripgrep usage ([`filesystem.rs`, `search.rs`](https://github.com/LHagfoss/rustcode/commit/757559f))
+
 ## [v0.39.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.39.0) - 2026-08-28
 
 ### Features

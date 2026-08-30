@@ -234,6 +234,13 @@ pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
 
 pub(crate) const MAX_MCP_NATIVE_SCHEMAS: usize = 16;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
+const MCP_RELEVANCE_THRESHOLD: usize = 6;
+const MCP_DISCOVERY_CORE: &[&str] = &[
+    "codebase_search",
+    "codebase_symbols",
+    "codebase_impact",
+    "codebase_flow",
+];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct McpSchemaSelectionStats {
@@ -246,10 +253,63 @@ pub(crate) struct McpSchemaSelectionStats {
     pub selected_names: Vec<String>,
 }
 
-fn build_builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
+const CORE_CODING_TOOLS: &[&str] = &[
+    "grep",
+    "glob",
+    "list_directory",
+    "find_symbol",
+    "get_project_map",
+    "view_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "write_to_file",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "run_command",
+    "manage_task",
+    "ask_question",
+    "complete_task",
+    "list_skills",
+    "use_skill",
+];
+
+fn builtin_tool_is_relevant(name: &str, terms: &std::collections::HashSet<String>) -> bool {
+    if CORE_CODING_TOOLS.contains(&name) {
+        return true;
+    }
+    let relevant = |needles: &[&str]| needles.iter().any(|needle| terms.contains(*needle));
+    match name {
+        "search_web" => relevant(&[
+            "web", "internet", "online", "research", "latest", "docs", "http", "https",
+        ]),
+        "get_time" => relevant(&["time", "timezone", "clock", "date"]),
+        "remember" | "recall_memory" | "forget_memory" => {
+            relevant(&["memory", "remember", "recall", "forget", "preference"])
+        }
+        "generate_sound_effect" | "generate_music" | "inspect_audio" => {
+            relevant(&["audio", "sound", "music", "voice", "song"])
+        }
+        "inspect_media" | "validate_video_project" | "render_video" => {
+            relevant(&["video", "media", "render", "movie", "animation"])
+        }
+        "wait_agent" | "cancel_agent" => relevant(&["agent", "subagent", "delegate", "parallel"]),
+        _ => true,
+    }
+}
+
+fn build_builtin_native_tools_schema(
+    include_agent_tools: bool,
+    terms: Option<&std::collections::HashSet<String>>,
+) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
         if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
+            continue;
+        }
+        if !(include_agent_tools && t.capabilities.contains(&ToolCapability::AgentDelegation))
+            && terms.is_some_and(|terms| !builtin_tool_is_relevant(t.name, terms))
+        {
             continue;
         }
         tools.push(serde_json::json!({
@@ -266,9 +326,9 @@ fn build_builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
 
 fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> =
-        LazyLock::new(|| build_builtin_native_tools_schema(false));
+        LazyLock::new(|| build_builtin_native_tools_schema(false, None));
     static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> =
-        LazyLock::new(|| build_builtin_native_tools_schema(true));
+        LazyLock::new(|| build_builtin_native_tools_schema(true, None));
 
     if include_agent_tools {
         WITH_AGENT_TOOLS.clone()
@@ -453,7 +513,11 @@ pub(super) fn select_mcp_tools_for_context(
             previous.push(index);
         } else {
             let score = mcp_tool_relevance(name, description, schema, &terms);
-            if score > 0 {
+            // A single generic description/schema word such as "result",
+            // "file", or "project" must not pull a large MCP suite into an
+            // unrelated request. Exact name terms score eight; two strong
+            // description matches score six.
+            if score >= MCP_RELEVANCE_THRESHOLD {
                 relevant.push((index, score));
             }
         }
@@ -480,8 +544,23 @@ pub(super) fn select_mcp_tools_for_context(
     let relevant_count = selected.len().saturating_sub(previously_used_count);
     let mut fallback_count = 0;
     if selected.is_empty() {
-        fallback_count = tools.len().min(MCP_DISCOVERY_FALLBACK_COUNT);
-        selected.extend(0..fallback_count);
+        for preferred in MCP_DISCOVERY_CORE {
+            if selected.len() >= MCP_DISCOVERY_FALLBACK_COUNT {
+                break;
+            }
+            if let Some(index) = tools.iter().position(|(name, _, _)| name == preferred) {
+                selected.push(index);
+            }
+        }
+        for index in 0..tools.len() {
+            if selected.len() >= MCP_DISCOVERY_FALLBACK_COUNT {
+                break;
+            }
+            if !selected.contains(&index) {
+                selected.push(index);
+            }
+        }
+        fallback_count = selected.len();
     }
     selected.sort_unstable();
     selected.dedup();
@@ -547,7 +626,8 @@ pub(crate) fn native_tools_schema_for_context_with_sticky(
     messages: &[Value],
     sticky_names: &[String],
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
-    let mut tools = builtin_native_tools_schema(policy.include_agent_tools);
+    let terms = context_terms(messages);
+    let mut tools = build_builtin_native_tools_schema(policy.include_agent_tools, Some(&terms));
     // MCP tools are selected from the current request context. The registry is
     // a HashMap, so collection is sorted before scoring and emission to keep
     // both selection and the provider-facing payload deterministic.
@@ -620,9 +700,8 @@ pub(crate) fn tool_system_prompt_for_policy(
     p.push_str(
         "\n# Skills\n\
 Skills are discovered on demand so their catalog and instruction bodies stay out of the base prompt. \
-If a priority skill route appears in the request context, follow it; otherwise, at the START of a task that may match a specialized workflow, call `list_skills` first. \
-Review its names and descriptions, then call `use_skill` with the exact matching name before taking other task actions. \
-`list_skills` returns metadata only; `use_skill` loads the selected SKILL.md and its available files.\n\n",
+If the request context names a skill, load it first. For a likely specialized workflow, call `list_skills` once, then `use_skill` for the exact match. \
+`list_skills` returns metadata only; `use_skill` loads the selected SKILL.md.\n\n",
     );
 
     if agent_mode == crate::config::AgentMode::Plan {
@@ -636,28 +715,25 @@ Review its names and descriptions, then call `use_skill` with the exact matching
     }
 
     p.push_str(
-        "You are rustcode, a terminal-based coding assistant.\n\
-- Use `sandbox/` for temporary scripts/builds and `artifacts/` for persistent designs/reports. For commands over 2s (build/test/install), set `\"background\": true` in `run_command`.\n\
-- `run_command` sends its complete `command` through the platform shell. Use `&&` for dependent commands and `;` for independent observations; keep destructive operations inspectable and never hide a required failure with `;`.\n\
-# Rules\n\
-- Be concise and direct; execute tools without filler. Include changed files, verification, blockers, and next steps when relevant.\n\
-- Do not add code comments unless requested. After edits, inspect the result, run the safest relevant check, and report changes and verification.\n\
+        "You are rustcode, a terminal coding agent.\n\
+# Workflow\n\
+- Act on change requests: locate, inspect, edit, verify. Do not restate the task, draft code in reasoning, or announce an edit and then perform another broad read. Once relevant definitions and conventions are known, make the smallest grounded change.\n\
+- Be concise; tool calls need no narration. Finish with changed files, verification, and blockers. Do not add comments unless requested.\n\
+- Use `sandbox/` for temporary work and `artifacts/` for persistent reports. Run commands expected to exceed 2s in the background; completion notifications are automatic, so never poll them.\n\
+- `run_command` uses the platform shell. Chained shell commands are fine when inspectable: use `&&` for dependent commands, keep destructive operations visible, and never mask required failures. Locate the nearest project manifest and check from its root. If dependencies are missing and installation is in scope, use the lockfile's deterministic install command once, then retry the original check. Never run `cargo check` on a standalone `.rs` file outside a Cargo project.\n\
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
-- Locate the nearest project manifest (`Cargo.toml`, `package.json`, `pyproject.toml`, etc.) and check from its root. Never run `cargo check` on a standalone `.rs` file outside a Cargo project.\n\
-- Explore exact definitions with `grep`/`glob` before reading; do not page through large files. Before editing existing files, inspect their actual content and use the repository's editing tool with non-empty exact targets; do not guess lines, imports, dependencies, or fields.\n\
-- ISSUE INDEPENDENT READS TOGETHER: request `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` together; independent reads run in parallel. Wait for dependent results.\n\
-- ONE CHANGE AT A TIME: each write, command, or delegation must be grounded in known results and execute alone; never speculate dependent calls; at most 4 such calls per response; reads may batch.\n\
-- Chained shell commands are fine for small, inspectable observations. Prefer native `view_file`/`grep` tools for targeted inspection.\n\
+- Use native `grep`/`glob` for exact discovery and `rg` through `run_command` for advanced searches. Use SocratiCode `codebase_*` tools for semantic relationships, not exact text. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
+- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel. Wait for dependent results. Keep writes, commands, and delegation grounded in observed results and at most 4 such calls per response.\n\
+- Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; do not retrieve the same range again with `cat`, `sed`, or `awk`.\n\
 - Match project style and mirror neighboring code patterns (signatures, state/locks, errors).\n\
 - Prefer the smallest focused sequence: locate, inspect, change, verify.\n\
 - Run focused tests/checks after changes and cover boundaries for complex logic.\n\
 - Ask before expensive or externally visible operations. Read-only tools run immediately; modifying/destructive tools require confirmation.\n\
 - Use `ask_question` only for ambiguous requirements/design or explicit validation, never routine confirmation. The UI supplies the `write your own answer` slot; do not include `Other`/`Write your own` options. Finish with a plain-text summary.\n\n\
-# Working memory & avoiding loops\n\
-- Background completion notifications are automatic; do not poll `manage_task` status/list while waiting.\n\
+# Avoiding loops\n\
 - If a tool execution or compiler check returns compilation errors or warnings, prioritize fixing them immediately before proceeding to other steps.
-- Do not reread unchanged files or repeat identical calls; on errors correct arguments, and on empty results change the query.
+- Do not reread unchanged file regions or switch between `view_file`, `cat`, `sed`, and `awk` to retrieve the same text. Follow `view_file`'s `next_start_line`, narrow with `grep`/`rg`, or proceed from the evidence already returned. On errors correct arguments, and on empty results change the query.
 - An edit that reports \"already applied\" changed nothing on disk; re-issuing the identical edit will report the same no-op again, not succeed differently. Neither a no-op nor a failed edit counts as progress, and the harness ends the turn after a handful of either in a row — re-read the file or change your approach instead of repeating the call.
 - Use `todo_write` ONLY for complex code refactors or multi-stage tasks (3+ steps). For routine tasks, git operations, single-file edits, or simple questions, DO NOT use `todo_write` — execute tools directly. Do not update `todo_write` after every single command; only update it when completing major milestones.\n\n"
     );

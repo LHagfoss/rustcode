@@ -89,7 +89,10 @@ pub(super) async fn handle_response_recovery(
         return ResponseRecoveryOutcome::Stop;
     }
 
-    let is_reasoning_loop = response_finish_reason == Some("reasoning_loop");
+    let is_reasoning_loop = matches!(
+        response_finish_reason,
+        Some("reasoning_loop" | "reasoning_budget")
+    );
     if is_reasoning_loop && !ctx.recovery.force_final {
         ctx.recovery.reasoning_loops_detected += 1;
         dbg_log!(
@@ -105,6 +108,7 @@ pub(super) async fn handle_response_recovery(
                     "turn.reasoning_loop_recovery",
                     serde_json::json!({
                         "attempt": ctx.recovery.reasoning_recovery_attempts,
+                        "finish_reason": response_finish_reason,
                     }),
                 );
                 let mut s = state.lock().await;

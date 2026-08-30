@@ -56,10 +56,15 @@ fn apply_profile_generation_options(
 ) {
     if disable_thinking || profile.is_some_and(|p| p.enable_thinking == Some(false)) {
         payload["enable_thinking"] = serde_json::json!(false);
+        // oMLX exposes reasoning controls through OpenAI-compatible
+        // `chat_template_kwargs`; keep the top-level field for servers that
+        // implement the Qwen extension directly.
+        payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(false);
         return;
     }
     if let Some(enable_thinking) = profile.and_then(|p| p.enable_thinking) {
         payload["enable_thinking"] = serde_json::json!(enable_thinking);
+        payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(enable_thinking);
     }
     if let Some(effort) = profile.and_then(|p| p.reasoning_effort.as_ref()) {
         payload["reasoning_effort"] = serde_json::json!(effort);
@@ -69,16 +74,28 @@ fn apply_profile_generation_options(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeToolChoice {
+    Auto,
+    Required,
+}
+
 fn apply_api_native_tools(
     payload: &mut serde_json::Value,
     schema: Vec<serde_json::Value>,
     allow_tools: bool,
+    choice: NativeToolChoice,
 ) {
     if allow_tools && !schema.is_empty() {
         payload["tools"] = serde_json::Value::Array(schema);
-        payload["tool_choice"] = serde_json::json!("auto");
+        payload["tool_choice"] = serde_json::json!(match choice {
+            NativeToolChoice::Auto => "auto",
+            NativeToolChoice::Required => "required",
+        });
     }
 }
+
+const RECOVERY_THINKING_BUDGET: u32 = 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 struct BoundedReasoningChunk {
@@ -291,6 +308,7 @@ mod tests {
         apply_profile_generation_options(&mut payload, Some(&profile), false);
 
         assert_eq!(payload["enable_thinking"], true);
+        assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
         assert_eq!(payload["reasoning_effort"], "low");
         assert_eq!(payload["thinking_budget"], 4096);
     }
@@ -359,6 +377,7 @@ mod tests {
         apply_profile_generation_options(&mut payload, Some(&profile), false);
 
         assert_eq!(payload["enable_thinking"], false);
+        assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], false);
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
     }
@@ -376,6 +395,7 @@ mod tests {
         apply_profile_generation_options(&mut payload, Some(&profile), true);
 
         assert_eq!(payload["enable_thinking"], false);
+        assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], false);
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
     }
@@ -388,7 +408,7 @@ mod tests {
             "function": {"name": "view_file"}
         })];
 
-        apply_api_native_tools(&mut payload, schema, false);
+        apply_api_native_tools(&mut payload, schema, false, NativeToolChoice::Auto);
 
         assert!(payload.get("tools").is_none());
         assert!(payload.get("tool_choice").is_none());
@@ -402,10 +422,28 @@ mod tests {
             "function": {"name": "view_file"}
         })];
 
-        apply_api_native_tools(&mut payload, schema, true);
+        apply_api_native_tools(&mut payload, schema, true, NativeToolChoice::Auto);
 
         assert_eq!(payload["tools"].as_array().map(Vec::len), Some(1));
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn recovery_tool_requests_require_a_tool_call() {
+        let mut payload = serde_json::json!({});
+        let schema = vec![serde_json::json!({
+            "type": "function",
+            "function": {"name": "view_file"}
+        })];
+
+        apply_api_native_tools(&mut payload, schema, true, NativeToolChoice::Required);
+
+        assert_eq!(payload["tool_choice"], "required");
+    }
+
+    #[test]
+    fn recovery_thinking_budget_is_small_and_deterministic() {
+        assert_eq!(RECOVERY_THINKING_BUDGET, 1024);
     }
 
     #[test]
@@ -708,7 +746,7 @@ pub async fn stream_request(
     };
     let max_tokens = profile
         .as_ref()
-        .map(|p| p.context_budget().completion_reserve)
+        .map(|p| p.completion_token_limit(allow_tools))
         .unwrap_or_else(|| {
             crate::config::ModelProfile {
                 name: model.to_string(),
@@ -729,11 +767,15 @@ pub async fn stream_request(
             .context_budget()
             .completion_reserve
         });
-    let thinking_budget = profile.as_ref().and_then(|p| {
-        (!disable_thinking && p.enable_thinking != Some(false))
-            .then_some(p.thinking_budget)
-            .flatten()
-    });
+    // Keep a client-side bound even when a provider ignores
+    // `enable_thinking=false`. Recovery is intentionally tighter: it exists
+    // to produce the next action, not to give the model another full planning
+    // turn.
+    let thinking_budget = if disable_thinking {
+        Some(RECOVERY_THINKING_BUDGET)
+    } else {
+        profile.as_ref().and_then(|p| p.thinking_budget)
+    };
 
     let (tool_protocol, native_tool_schemas, mcp_selection) = {
         let mut s = state.lock().await;
@@ -768,7 +810,17 @@ pub async fn stream_request(
         payload["frequency_penalty"] = serde_json::json!(0.3);
     }
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
+        let tool_choice = if disable_thinking && allow_tools {
+            NativeToolChoice::Required
+        } else {
+            NativeToolChoice::Auto
+        };
+        apply_api_native_tools(
+            &mut payload,
+            native_tool_schemas.clone(),
+            allow_tools,
+            tool_choice,
+        );
         crate::logger::operational_event(
             "mcp.native_schema_selection",
             serde_json::json!({

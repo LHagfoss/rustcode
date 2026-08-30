@@ -75,7 +75,7 @@ fn view_file_schema() -> Value {
 
 pub const VIEW_FILE: Tool = Tool {
     name: "view_file",
-    description: "View the contents of a file or directory. Each call has a 800-line hard cap; request targeted follow-up ranges with start_line/end_line for more content. Supports 1-indexed line ranges and an optional byte offset.",
+    description: "Return exact, numbered file text for an inclusive 1-indexed range (or list a directory). Output is never silently summarized: when the 800-line hard cap omits content, the result reports the omitted lines and exact next start line. Use targeted follow-up ranges instead of retrying through cat/sed/awk. Supports an optional UTF-8 byte offset.",
     arguments: r#"{"path": "absolute or relative path to file or directory", "start_line": "optional start line number, 1-indexed (default 1)", "end_line": "optional end line number, 1-indexed (each call is capped at 800 lines; request targeted follow-up ranges for more content)", "content_offset": "optional byte offset into content"}"#,
     handler: view_file_tool,
     requires_confirmation: false,
