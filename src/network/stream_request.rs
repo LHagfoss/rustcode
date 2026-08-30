@@ -52,14 +52,23 @@ mod fence_counter_tests {
 fn apply_profile_generation_options(
     payload: &mut serde_json::Value,
     profile: Option<&crate::config::ModelProfile>,
-    disable_thinking: bool,
+    thinking_mode: ThinkingMode,
 ) {
-    if disable_thinking || profile.is_some_and(|p| p.enable_thinking == Some(false)) {
+    if thinking_mode == ThinkingMode::Disabled
+        || profile.is_some_and(|p| p.enable_thinking == Some(false))
+    {
         payload["enable_thinking"] = serde_json::json!(false);
         // oMLX exposes reasoning controls through OpenAI-compatible
         // `chat_template_kwargs`; keep the top-level field for servers that
         // implement the Qwen extension directly.
         payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(false);
+        return;
+    }
+    if thinking_mode == ThinkingMode::BoundedRecovery {
+        payload["enable_thinking"] = serde_json::json!(true);
+        payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(true);
+        payload["reasoning_effort"] = serde_json::json!("low");
+        payload["thinking_budget"] = serde_json::json!(RECOVERY_THINKING_BUDGET);
         return;
     }
     if let Some(enable_thinking) = profile.and_then(|p| p.enable_thinking) {
@@ -78,6 +87,13 @@ fn apply_profile_generation_options(
 enum NativeToolChoice {
     Auto,
     Required,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThinkingMode {
+    Normal,
+    BoundedRecovery,
+    Disabled,
 }
 
 fn apply_api_native_tools(
@@ -305,7 +321,7 @@ mod tests {
         };
         let mut payload = serde_json::json!({});
 
-        apply_profile_generation_options(&mut payload, Some(&profile), false);
+        apply_profile_generation_options(&mut payload, Some(&profile), ThinkingMode::Normal);
 
         assert_eq!(payload["enable_thinking"], true);
         assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
@@ -320,7 +336,7 @@ mod tests {
         apply_profile_generation_options(
             &mut payload,
             Some(&crate::config::ModelProfile::default()),
-            false,
+            ThinkingMode::Normal,
         );
 
         assert!(payload.get("enable_thinking").is_none());
@@ -374,7 +390,7 @@ mod tests {
         };
         let mut payload = serde_json::json!({});
 
-        apply_profile_generation_options(&mut payload, Some(&profile), false);
+        apply_profile_generation_options(&mut payload, Some(&profile), ThinkingMode::Normal);
 
         assert_eq!(payload["enable_thinking"], false);
         assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], false);
@@ -392,12 +408,34 @@ mod tests {
         };
         let mut payload = serde_json::json!({});
 
-        apply_profile_generation_options(&mut payload, Some(&profile), true);
+        apply_profile_generation_options(&mut payload, Some(&profile), ThinkingMode::Disabled);
 
         assert_eq!(payload["enable_thinking"], false);
         assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], false);
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn recovery_keeps_thinking_on_with_a_small_one_request_budget() {
+        let profile = crate::config::ModelProfile {
+            enable_thinking: Some(true),
+            reasoning_effort: Some("medium".to_string()),
+            thinking_budget: Some(4096),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(
+            &mut payload,
+            Some(&profile),
+            ThinkingMode::BoundedRecovery,
+        );
+
+        assert_eq!(payload["enable_thinking"], true);
+        assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(payload["reasoning_effort"], "low");
+        assert_eq!(payload["thinking_budget"], RECOVERY_THINKING_BUDGET);
     }
 
     #[test]
@@ -725,7 +763,7 @@ pub async fn stream_request(
     buffer: Arc<Mutex<StreamBuffer>>,
     quiet: bool,
     allow_tools: bool,
-    disable_thinking: bool,
+    thinking_mode: ThinkingMode,
     schema_policy: crate::tools::ToolSchemaPolicy,
     expected_session_id: Option<&str>,
 ) -> Result<Option<String>, String> {
@@ -767,12 +805,12 @@ pub async fn stream_request(
             .context_budget()
             .completion_reserve
         });
-    // Keep a client-side bound even when a provider ignores
-    // `enable_thinking=false`. Recovery is intentionally tighter: it exists
-    // to produce the next action, not to give the model another full planning
-    // turn.
-    let thinking_budget = if disable_thinking {
+    // Recovery keeps reasoning enabled but applies a small client-side bound:
+    // it exists to produce the next action, not another full planning turn.
+    let thinking_budget = if thinking_mode == ThinkingMode::BoundedRecovery {
         Some(RECOVERY_THINKING_BUDGET)
+    } else if thinking_mode == ThinkingMode::Disabled {
+        None
     } else {
         profile.as_ref().and_then(|p| p.thinking_budget)
     };
@@ -804,13 +842,13 @@ pub async fn stream_request(
     });
     payload["messages"] = serde_json::Value::Array(aligned_messages);
 
-    apply_profile_generation_options(&mut payload, profile.as_ref(), disable_thinking);
+    apply_profile_generation_options(&mut payload, profile.as_ref(), thinking_mode);
 
     if !url.contains("generativelanguage.googleapis.com") {
         payload["frequency_penalty"] = serde_json::json!(0.3);
     }
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        let tool_choice = if disable_thinking && allow_tools {
+        let tool_choice = if thinking_mode == ThinkingMode::BoundedRecovery && allow_tools {
             NativeToolChoice::Required
         } else {
             NativeToolChoice::Auto

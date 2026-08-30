@@ -126,8 +126,13 @@ pub(super) async fn collect_round(
     let request_cancel = cancel_token.clone();
     let request_buffer = Arc::clone(stream_buffer);
     let request_allow_tools = !ctx.recovery.force_final;
-    let request_disable_thinking =
-        ctx.recovery.force_final || ctx.recovery.reasoning_recovery_attempts > 0;
+    let request_thinking_mode = if ctx.recovery.force_final {
+        super::super::stream_request::ThinkingMode::Disabled
+    } else if std::mem::take(&mut ctx.recovery.reasoning_recovery_pending) {
+        super::super::stream_request::ThinkingMode::BoundedRecovery
+    } else {
+        super::super::stream_request::ThinkingMode::Normal
+    };
     let collected = runner::collect_response(move |previous| {
         let request_client = request_client.clone();
         let request_state = Arc::clone(&request_state);
@@ -150,7 +155,7 @@ pub(super) async fn collect_round(
                 Arc::clone(&request_buffer),
                 false,
                 request_allow_tools,
-                request_disable_thinking,
+                request_thinking_mode,
                 request_schema_policy,
                 Some(request_session_id.as_str()),
             )

@@ -103,6 +103,7 @@ pub(super) async fn handle_response_recovery(
         match reasoning_loop_recovery_action(ctx.recovery.reasoning_recovery_attempts) {
             LoopRecoveryAction::Recover => {
                 ctx.recovery.reasoning_recovery_attempts += 1;
+                ctx.recovery.reasoning_recovery_pending = true;
                 ctx.recovery.reasoning_loop_detector.reset();
                 crate::logger::operational_event(
                     "turn.reasoning_loop_recovery",

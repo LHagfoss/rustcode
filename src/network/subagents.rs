@@ -232,7 +232,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                     Arc::clone(&request_buffer),
                     true,
                     true,
-                    false,
+                    super::stream_request::ThinkingMode::Normal,
                     crate::tools::ToolSchemaPolicy::subagent(),
                     None,
                 )
