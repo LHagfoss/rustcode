@@ -125,7 +125,7 @@ pub(crate) const EMPTY_RESPONSE_RECOVERY_PROMPT: &str = "The previous model resp
 
 pub(crate) const LOOP_RECOVERY_PROMPT: &str = "The previous tool action repeated without making progress. Tools remain enabled for one recovery attempt. \
 Do not repeat the same tool call or the same exact edit. Re-read a broader file region or use grep to verify exact target content, \
-then use a grounded approach. If emitting a tool call in this recovery attempt, output the ```tool block cleanly. \
+then use a grounded approach. Use the active tool interface directly; never print tool-call syntax as prose. \
 If the requested change is already present or cannot be applied safely, explain that instead of retrying. This is the final recovery attempt.";
 
 pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. Thinking is disabled for this recovery attempt. Do not read files again or restate the requirements. If the user requested workspace changes, emit exactly one mutating tool call now using what you already learned. Otherwise, give the direct final answer.]";
@@ -315,15 +315,17 @@ pub(crate) fn reasoning_loop_recovery_action(attempts: u8) -> LoopRecoveryAction
     }
 }
 
-/// Push a loop warning, replacing the previous one if it's still the last
-/// history entry — a model stuck in a loop would otherwise collect one
-/// near-identical warning per round, crowding out the transcript.
+/// Keep at most one loop warning in the current user turn. Tool results land
+/// after the warning, so checking only the final history entry still allowed
+/// near-identical warnings to crowd out useful context.
 pub(crate) fn push_or_replace_loop_warning(history: &mut Vec<ChatMessage>, text: String) {
-    if let Some(last) = history.last_mut()
-        && last.role == "system"
-        && last.content.starts_with("[Loop warning:")
-    {
-        last.content = text;
+    let warning = history
+        .iter_mut()
+        .rev()
+        .take_while(|message| message.role != "user")
+        .find(|message| message.role == "system" && message.content.starts_with("[Loop warning:"));
+    if let Some(warning) = warning {
+        warning.content = text;
     } else {
         history.push(ChatMessage::new("system", text));
     }

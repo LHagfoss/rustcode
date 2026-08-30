@@ -54,6 +54,19 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
         .stop_reason
         .clone()
         .expect("turn finalization always assigns a stop reason");
+    if matches!(stop_reason, lifecycle::StopReason::LoopEscalation) {
+        let promoted =
+            super::super::text::promote_bare_thought_markers(&ctx.response.final_content);
+        let clean = super::super::text::strip_tool_call_syntax(
+            &super::super::text::strip_think_blocks(&promoted),
+        );
+        ctx.response.final_content = if clean.trim().is_empty() {
+            super::recovery::reasoning_loop_final_response().to_string()
+        } else {
+            clean.trim().to_string()
+        };
+        ctx.response.final_content_persisted = false;
+    }
     if !turn_lifecycle.mark_finalized() {
         return ctx;
     }

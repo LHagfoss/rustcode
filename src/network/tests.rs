@@ -1968,6 +1968,26 @@ fn loop_abort_allows_one_bounded_recovery_before_forced_final() {
         LoopRecoveryAction::ForceFinal
     );
     assert!(LOOP_RECOVERY_PROMPT.contains("Tools remain enabled"));
+    assert!(!LOOP_RECOVERY_PROMPT.contains("```tool"));
+}
+
+#[test]
+fn loop_warnings_are_coalesced_within_a_user_turn() {
+    let mut history = vec![
+        ChatMessage::new("user", "do it"),
+        ChatMessage::new("system", "[Loop warning: first]"),
+        ChatMessage::new("assistant", "trying again"),
+        ChatMessage::new("tool", "same output"),
+    ];
+
+    push_or_replace_loop_warning(&mut history, "[Loop warning: updated]".to_string());
+
+    let warnings = history
+        .iter()
+        .filter(|message| message.content.starts_with("[Loop warning:"))
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].content, "[Loop warning: updated]");
 }
 
 // Regression: hoisting every system message into the prompt filed each loop

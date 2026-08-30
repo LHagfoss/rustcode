@@ -26,6 +26,29 @@ use policy::{has_interactive_sudo, is_short_discovery_command};
 
 static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(not(target_os = "windows"))]
+fn shell_command(command: &str) -> std::process::Command {
+    let bash = std::path::Path::new("/bin/bash");
+    let mut cmd = if bash.is_file() {
+        std::process::Command::new(bash)
+    } else {
+        std::process::Command::new("sh")
+    };
+    if bash.is_file() {
+        cmd.args(["-o", "pipefail", "-c", command]);
+    } else {
+        cmd.args(["-c", command]);
+    }
+    cmd
+}
+
+#[cfg(target_os = "windows")]
+fn shell_command(command: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/C", command]);
+    cmd
+}
+
 fn run_command_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {
@@ -39,7 +62,7 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. The command may use normal shell syntax, including ';' or '&&' to chain commands, pipes, redirects, and environment assignments. Supports an optional working directory, environment overrides, timeout (default 120s), and background execution ('background': true). Note: Interactive 'sudo' requiring passwords is disabled; use non-privileged commands or 'sudo -n'.",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -191,9 +214,7 @@ fn run_command_output_inner(
         c.args(["/C", command_str]);
         c
     } else {
-        let mut c = std::process::Command::new("sh");
-        c.args(["-c", command_str]);
-        c
+        shell_command(command_str)
     };
 
     cmd.stdout(Stdio::piped())
@@ -257,8 +278,7 @@ fn run_command_output_inner(
                 c.args(["/C", &command_for_thread]);
                 c
             } else {
-                let mut c = std::process::Command::new("sh");
-                c.args(["-c", &command_for_thread]);
+                let mut c = shell_command(&command_for_thread);
                 #[cfg(unix)]
                 {
                     use std::os::unix::process::CommandExt;
@@ -751,6 +771,17 @@ mod tests {
         .expect("shell command should succeed");
 
         assert!(result.contains("firstsecond"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn run_command_propagates_pipeline_failures() {
+        let result = run_command(&serde_json::json!({
+            "command": "false | tail -n 1"
+        }))
+        .expect("run_command reports command failure in its output");
+
+        assert!(result.contains("exit code: 1"), "{result}");
     }
 
     #[test]

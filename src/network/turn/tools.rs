@@ -976,13 +976,19 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         let reason = crate::tools::diagnose_failed_tool_call(&ctx.response.final_content)
             .map(|r| format!("{r}\n\n"))
             .unwrap_or_default();
+        let correction = match protocol {
+            crate::config::ToolProtocol::ApiNative => {
+                "Invoke one function through the native tool interface. Do not print XML, JSON, or a fenced tool block as assistant prose."
+            }
+            crate::config::ToolProtocol::Native => {
+                "Output one complete call using the active native text-tool format; do not mix it with JSON fencing."
+            }
+            crate::config::ToolProtocol::Json => {
+                "Output one complete JSON call inside a ```tool fenced block with exactly the keys `name` and `arguments`."
+            }
+        };
         let feedback = format!(
-            "tool_error: The tool call block was malformed or could not be parsed. {reason}\
-    Please output a single, complete, valid tool call block inside a ```tool fenced block using JSON format:\n\n\
-    ```tool\n\
-    {{\"name\": \"tool_name\", \"arguments\": {{...}}}}\n\
-    ```\n\n\
-    Make sure keys are exactly \"name\" and \"arguments\", and do not wrap numbers/booleans in quotes if they are expected as numbers/booleans.{}",
+            "tool_error: The attempted tool call was malformed or could not be parsed. {reason}{correction} Ensure argument numbers and booleans use their schema types.{}",
             if repeated_malformed {
                 format!(
                     " This malformed request has repeated {} times; stop emitting the same block and re-plan or answer with text.",

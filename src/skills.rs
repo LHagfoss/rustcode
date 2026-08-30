@@ -85,9 +85,14 @@ fn prompt_mentions_skill(prompt: &str, skill_name: &str) -> bool {
 }
 
 pub fn skill_routing_hint(prompt: &str, skills: &[SkillMetadata]) -> Option<String> {
-    let skill = skills
-        .iter()
-        .find(|skill| prompt_mentions_skill(prompt, &skill.name))?;
+    let skill = skills.iter().find(|skill| {
+        prompt_mentions_skill(prompt, &skill.name)
+            || skill
+                .name
+                .split(['-', '_'])
+                .filter(|part| part.len() >= 5)
+                .any(|part| prompt_mentions_skill(prompt, part))
+    })?;
     Some(format!(
         "# Priority skill route\nThe latest user prompt explicitly names available skill `{}`. Call `use_skill` first with the exact name `{}` before any filesystem, web, or exploration tool.",
         skill.name, skill.name
@@ -394,5 +399,18 @@ mod tests {
         assert!(skill_routing_hint("Please inspect the time module.", &skills).is_none());
         assert!(skill_routing_hint("Please inspect solidtimes.", &skills).is_none());
         assert!(skill_routing_hint("Please inspect solidtime-like behavior.", &skills).is_none());
+    }
+
+    #[test]
+    fn skill_routing_hint_matches_a_distinctive_name_component() {
+        let skills = [SkillMetadata {
+            name: "release-automation".to_string(),
+            description: "Release workflow".to_string(),
+            path: PathBuf::from("/skills/release-automation"),
+        }];
+
+        let hint = skill_routing_hint("Clean this up and release it.", &skills)
+            .expect("distinctive skill-name component should route");
+        assert!(hint.contains("release-automation"));
     }
 }
