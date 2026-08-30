@@ -42,6 +42,13 @@ fn shell_command(command: &str) -> std::process::Command {
     cmd
 }
 
+#[cfg(target_os = "windows")]
+fn shell_command(command: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/C", command]);
+    cmd
+}
+
 fn run_command_schema() -> Value {
     serde_json::json!({
         "type": "object", "properties": {
