@@ -177,6 +177,22 @@ pub(super) enum FinishGateOutcome {
     Stop,
 }
 
+fn has_verified_implicit_completion(ctx: &TurnContext) -> bool {
+    if !ctx.progress.made_edits
+        || ctx.recovery.force_final
+        || ctx.verification.ledger.explicit_last_failure().is_some()
+        || !ctx.verification.ledger.has_fresh_successful_verification()
+    {
+        return false;
+    }
+
+    let promoted = super::super::text::promote_bare_thought_markers(&ctx.response.final_content);
+    let prose = super::super::text::strip_tool_call_syntax(
+        &super::super::text::strip_think_blocks(&promoted),
+    );
+    !prose.trim().is_empty()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static>(
     state: &Arc<Mutex<AppState>>,
@@ -204,6 +220,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
         s.continuous_mode = false;
     }
 
+    let mut finish_gate_passed = !policy.should_verify_completion() || !ctx.progress.made_edits;
     if policy.should_verify_completion()
         && ctx.progress.made_edits
         && !ctx.recovery.force_final
@@ -269,9 +286,79 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
                 }
                 return FinishGateOutcome::Continue;
             }
+        } else {
+            finish_gate_passed = true;
         }
-        dbg_log!("Finish gate: build is green, accepting done");
+        if finish_gate_passed {
+            dbg_log!("Finish gate: build is green, accepting done");
+        }
+    }
+
+    if finish_gate_passed && has_verified_implicit_completion(ctx) {
+        dbg_log!("Verified final prose accepted as implicit completion");
+        let mut s = state.lock().await;
+        let mut msg = ChatMessage::new("assistant", ctx.response.final_content.clone());
+        msg.response_time_ms = Some(turn_response_time_ms);
+        msg.token_usage = turn_token_usage;
+        msg.thought_time_ms = thought_time_ms;
+        msg.thought_tokens = thought_tokens;
+        s.history.push(msg);
+        crate::config::save_history(&s.history);
+        ctx.response.final_content_persisted = true;
+        ctx.lifecycle.task_completed = true;
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
     }
 
     FinishGateOutcome::Stop
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn verified_edit_context(content: &str) -> TurnContext {
+        let mut ctx = TurnContext::new();
+        ctx.progress.made_edits = true;
+        ctx.response.final_content = content.to_string();
+        ctx.verification.ledger.record_edit();
+        ctx.verification
+            .ledger
+            .record_command("cargo test", Some(0));
+        ctx
+    }
+
+    #[test]
+    fn fresh_verification_and_substantive_final_prose_can_complete_implicitly() {
+        let ctx = verified_edit_context("Implemented the CLI and all tests pass.");
+        assert!(has_verified_implicit_completion(&ctx));
+    }
+
+    #[test]
+    fn edits_after_verification_cannot_complete_implicitly() {
+        let mut ctx = verified_edit_context("Everything is done.");
+        ctx.verification.ledger.record_edit();
+        assert!(!has_verified_implicit_completion(&ctx));
+    }
+
+    #[test]
+    fn failed_explicit_verification_cannot_complete_implicitly() {
+        let mut ctx = verified_edit_context("Everything is done.");
+        ctx.verification
+            .ledger
+            .record_explicit_command("cargo test --all", Some(1));
+        assert!(!has_verified_implicit_completion(&ctx));
+    }
+
+    #[test]
+    fn thoughts_without_final_prose_cannot_complete_implicitly() {
+        let ctx = verified_edit_context("<think>I should probably finish now.</think>");
+        assert!(!has_verified_implicit_completion(&ctx));
+    }
+
+    #[test]
+    fn force_final_recovery_cannot_complete_implicitly() {
+        let mut ctx = verified_edit_context("The work is complete.");
+        ctx.recovery.force_final = true;
+        assert!(!has_verified_implicit_completion(&ctx));
+    }
 }
