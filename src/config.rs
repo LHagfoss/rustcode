@@ -8,6 +8,11 @@ pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 40;
 pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
+/// Tool rounds should be short and action-oriented. Reasoning models often
+/// spend their entire completion allowance thinking before emitting a tool
+/// call; a smaller cap keeps local agent turns responsive while final prose
+/// still uses the profile's full completion budget.
+pub const DEFAULT_TOOL_ROUND_MAX_TOKENS: u32 = 8192;
 
 pub const MODELS_FILE: &str = "models.json";
 pub const CONFIG_FILE: &str = "config.json";
@@ -98,6 +103,24 @@ pub struct ContextBudget {
 }
 
 impl ModelProfile {
+    /// Return the completion cap for one request. Tool-enabled requests are
+    /// deliberately bounded for reasoning-capable models: a long speculative
+    /// chain is expensive and cannot be useful until it produces an action.
+    /// Requests without tools retain the configured cap for normal answers.
+    pub fn completion_token_limit(&self, allow_tools: bool) -> u32 {
+        let configured = self.context_budget().completion_reserve;
+        let reasoning_capable = self.enable_thinking == Some(true)
+            || self.reasoning_effort.as_deref().is_some_and(|effort| {
+                !effort.eq_ignore_ascii_case("off") && !effort.eq_ignore_ascii_case("none")
+            })
+            || self.thinking_budget.is_some();
+        if allow_tools && reasoning_capable {
+            configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
+        } else {
+            configured
+        }
+    }
+
     pub fn context_budget(&self) -> ContextBudget {
         // Keep the effective value bounded and honest. In particular, do not
         // inflate a deliberately small profile and then send a request that

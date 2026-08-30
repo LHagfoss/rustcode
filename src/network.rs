@@ -59,6 +59,7 @@ pub(crate) use tool_exec::{
 #[path = "network/turn/mod.rs"]
 pub(crate) mod turn_engine;
 pub(crate) use turn_engine::process_queue_orchestrator_with_ui_events;
+pub(crate) use turn_engine::run_agent_turn_with_context;
 pub use turn_engine::{TurnContext, process_queue_orchestrator, run_agent_turn};
 
 #[path = "network/lifecycle.rs"]
@@ -142,7 +143,7 @@ const MAX_TURN_TOKEN_BUDGET: u64 = 5_000_000;
 /// A tool that reports success without changing anything (already-applied
 /// edits, no-op runs) does not count as progress, so this escalates much
 /// faster than the round budget when the agent is just spinning.
-const MAX_CONSECUTIVE_NO_PROGRESS: usize = 8;
+const MAX_CONSECUTIVE_NO_PROGRESS: usize = 6;
 const MAX_CONSECUTIVE_FAILED_MUTATIONS: usize = 5;
 const MAX_CONSECUTIVE_COMPILER_ERROR_GATES: usize = 5;
 const MAX_CONSECUTIVE_COMPILER_DIAGNOSTICS: usize = 4;

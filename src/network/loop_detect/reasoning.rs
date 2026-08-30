@@ -141,7 +141,12 @@ impl ReasoningLoopDetector {
 
     /// Record turn reasoning with full evidence to detect behavioral loops across turns.
     pub fn record_turn_evidence(&mut self, evidence: &TurnEvidence<'_>) -> ReasoningLoopStatus {
-        if evidence.made_progress {
+        // A workspace mutation is decisive forward progress and clears the
+        // behavioral history. A fresh read is useful information, but must not
+        // erase an "I will edit now" hesitation streak: local models can keep
+        // finding one more fact forever while never performing the announced
+        // change.
+        if evidence.made_progress && evidence.had_edits {
             self.reset();
             return ReasoningLoopStatus::Ok;
         }
@@ -787,6 +792,12 @@ pub fn detect_ready_intent(text: &str) -> bool {
         "will now apply",
         "start implementing",
         "ready to make the change",
+        "let me write the code",
+        "let me write the implementation",
+        "write the code now",
+        "write the implementation now",
+        "create the files now",
+        "now let me create the file",
     ];
     READY_PHRASES.iter().any(|phrase| lower.contains(phrase))
 }

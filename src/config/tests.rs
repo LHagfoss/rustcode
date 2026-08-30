@@ -139,6 +139,19 @@ fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
 }
 
 #[test]
+fn reasoning_model_tool_round_cap_preserves_full_final_cap() {
+    let profile = ModelProfile {
+        enable_thinking: Some(true),
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.completion_token_limit(true), 8192);
+    assert_eq!(profile.completion_token_limit(false), 16_000);
+}
+
+#[test]
 fn context_budget_scales_without_double_reserving_large_or_small_windows() {
     let mut profile = AppConfig::default().models[0].clone();
     profile.max_tokens = Some(u32::MAX);

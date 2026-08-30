@@ -25,7 +25,7 @@ fn grep_schema() -> Value {
 
 pub const GREP: Tool = Tool {
     name: "grep",
-    description: "Recursively search file contents with regex. Respects                       .gitignore and skips hidden files. Use this to find where                       functions, classes, strings, or patterns are defined or used",
+    description: "Bounded ripgrep-style regex search over repository files. Respects .gitignore, skips hidden files, and returns structured matches. Use this first to locate exact definitions and references; use `rg` via run_command only when advanced ripgrep flags, counts, or file-list modes are needed.",
     arguments: r#"{"pattern": "regex pattern", "path": "optional directory or file (default current dir)", "include": "optional file glob filter e.g. '*.rs'", "ignore_case": optional bool (default false)}"#,
     handler: grep,
     requires_confirmation: false,

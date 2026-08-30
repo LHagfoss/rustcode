@@ -25,7 +25,11 @@ impl TurnRunner {
     pub(crate) fn new() -> Self {
         Self {
             continuation_count: 0,
-            max_continuations: 5,
+            // More than two provider continuations tends to amplify an
+            // incomplete structured tool call. In particular, local models
+            // often restart a large write from byte zero instead of resuming
+            // its JSON arguments, growing context without making progress.
+            max_continuations: 2,
         }
     }
 
@@ -82,7 +86,7 @@ mod tests {
     fn continuation_policy_is_bounded_and_reusable() {
         let mut runner = TurnRunner::new();
         assert!(!runner.allow_continuation(false));
-        for _ in 0..5 {
+        for _ in 0..2 {
             assert!(runner.allow_continuation(true));
         }
         assert!(!runner.allow_continuation(true));
