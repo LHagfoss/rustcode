@@ -858,22 +858,27 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 if ctx.progress.made_edits
                     && verification::requires_verification(&ctx.progress.changed_paths)
                 {
-                    {
-                        let mut s = state.lock().await;
-                        s.status = AppStatus::Streaming;
-                    }
+                    // `s` already owns the application-state mutex here. Do
+                    // not lock it recursively: Tokio's mutex is not reentrant
+                    // and that used to deadlock every accepted complete_task
+                    // which reached the compiler finish gate. Release state
+                    // while the potentially slow compiler check runs, then
+                    // reacquire it for the history/status updates below.
+                    s.status = AppStatus::Streaming;
                     let root = ctx
                         .compiler
                         .edit_root
                         .clone()
                         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                    if let Some(errors) = cached_compiler_check(
+                    drop(s);
+                    let compiler_errors = cached_compiler_check(
                         &root,
                         &mut ctx.compiler.dirty,
                         &mut ctx.compiler.cache,
                     )
-                    .await
-                    {
+                    .await;
+                    s = state.lock().await;
+                    if let Some(errors) = compiler_errors {
                         if errors.starts_with("__BUILD_UNVERIFIED__") {
                             dbg_log!("complete_task finish gate: build unverified — {errors}");
                             build_status = "unverified";

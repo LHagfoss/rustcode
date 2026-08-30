@@ -616,6 +616,36 @@ fn reasoning_loop_detector_catches_ready_to_implement_hesitation_loop() {
 }
 
 #[test]
+fn reasoning_loop_detector_catches_local_model_write_announcements_followed_by_reads() {
+    let mut detector = ReasoningLoopDetector::default();
+    let first = "The types are understood. Let me write the implementation now, after viewing the config once more.";
+    let second = "The config confirms the values. Let me write the code now, but first inspect the existing test style.";
+
+    assert_eq!(
+        detector.record_turn_evidence(&TurnEvidence {
+            reasoning: first,
+            target_files: &["src/config.ts"],
+            made_progress: true,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 0,
+        }),
+        ReasoningLoopStatus::Ok
+    );
+    assert_eq!(
+        detector.record_turn_evidence(&TurnEvidence {
+            reasoning: second,
+            target_files: &["src/example.test.ts"],
+            made_progress: true,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 0,
+        }),
+        ReasoningLoopStatus::LoopDetected(DIAG_SEMANTIC_NO_PROGRESS)
+    );
+}
+
+#[test]
 fn reasoning_loop_detector_catches_same_files_no_progress() {
     let mut detector = ReasoningLoopDetector::default();
     let file = "src/app/state.rs";

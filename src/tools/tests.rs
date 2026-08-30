@@ -296,6 +296,47 @@ fn mcp_schema_selection_has_bounded_deterministic_discovery_fallback() {
 }
 
 #[test]
+fn mcp_discovery_prefers_the_socraticode_core_without_schema_flooding() {
+    let names = [
+        "codebase_about",
+        "codebase_context_index",
+        "codebase_flow",
+        "codebase_graph_visualize",
+        "codebase_impact",
+        "codebase_search",
+        "codebase_status",
+        "codebase_symbols",
+    ];
+    let tools = names
+        .iter()
+        .map(|name| {
+            (
+                (*name).to_string(),
+                "Generic code project result".to_string(),
+                serde_json::json!({"type":"object","properties":{}}),
+            )
+        })
+        .collect::<Vec<_>>();
+    let messages = vec![serde_json::json!({
+        "role":"user",
+        "content":"Create result.txt in this repository"
+    })];
+
+    let (selected, stats) = select_mcp_tools_for_context(&tools, &messages);
+    assert_eq!(selected.len(), MCP_DISCOVERY_FALLBACK_COUNT);
+    assert_eq!(stats.relevant, 0);
+    assert_eq!(
+        stats.selected_names,
+        vec![
+            "codebase_flow",
+            "codebase_impact",
+            "codebase_search",
+            "codebase_symbols"
+        ]
+    );
+}
+
+#[test]
 fn mcp_schema_selection_retains_sticky_tools_and_adds_newly_relevant_tools() {
     let mcp = vec![
         (
@@ -382,6 +423,46 @@ fn request_schema_policy_isolates_subagents_from_parent_delegation() {
     assert!(!child_names.iter().any(|name| is_agent_tool(name)));
     assert!(!ToolSchemaPolicy::subagent().include_mcp_tools);
     assert!(ToolSchemaPolicy::root(true).include_mcp_tools);
+}
+
+#[test]
+fn api_native_builtin_selection_keeps_coding_core_and_routes_specialized_tools() {
+    let coding_messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Implement the parser fix, edit the Rust files, and run tests"
+    })];
+    let coding = native_tools_schema_for_context(ToolSchemaPolicy::root(false), &coding_messages).0;
+    let coding_names = coding
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    for required in [
+        "grep",
+        "view_file",
+        "replace_file_content",
+        "run_command",
+        "complete_task",
+    ] {
+        assert!(coding_names.contains(&required), "missing {required}");
+    }
+    for irrelevant in ["render_video", "generate_music", "get_time", "remember"] {
+        assert!(
+            !coding_names.contains(&irrelevant),
+            "unrelated schema leaked into coding request: {irrelevant}"
+        );
+    }
+
+    let media_messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Render a video and generate music for it"
+    })];
+    let media = native_tools_schema_for_context(ToolSchemaPolicy::root(false), &media_messages).0;
+    let media_names = media
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(media_names.contains(&"render_video"));
+    assert!(media_names.contains(&"generate_music"));
 }
 
 #[test]

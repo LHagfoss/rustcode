@@ -2,6 +2,38 @@ use crate::app::{AppState, ChatMessage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+fn background_task_history_message(
+    task_id: &str,
+    output: crate::tools::ToolExecutionOutput,
+) -> ChatMessage {
+    let command = output
+        .command
+        .as_deref()
+        .map(|command| format!(" Command: {command}."))
+        .unwrap_or_default();
+    let prefix = format!("background_task: Task {task_id} completed.{command} Output:\n");
+    crate::network::bounded_tool_result_history_message(
+        crate::network::ToolResult {
+            tool_name: "background_task".to_string(),
+            content: output.content,
+            diff: None,
+            file_preview: None,
+            metadata: crate::network::ToolResultMetadata {
+                success: output.success,
+                exit_code: output.exit_code,
+                command: output.command,
+                truncated: output.truncated,
+                replayed: output.replayed,
+                error_kind: output.error_kind,
+                retryable: output.retryable,
+                ..Default::default()
+            },
+        },
+        &prefix,
+        None,
+    )
+}
+
 /// Build the initial application state and apply any model overrides.
 pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
     let mut state = AppState::new();
@@ -35,6 +67,17 @@ pub fn build_state(prompt: &str, model_override: Option<&str>) -> AppState {
 /// execution without ever blocking for TUI confirmation.
 pub(crate) struct HeadlessPolicy {
     pub(crate) quiet: bool,
+}
+
+fn headless_failure(ctx: &crate::network::TurnContext) -> Option<String> {
+    if ctx.lifecycle.task_completed {
+        return None;
+    }
+    ctx.lifecycle
+        .stop_reason
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| Some("turn did not complete".to_string()))
 }
 
 impl crate::network::policy::TurnPolicy for HeadlessPolicy {
@@ -83,16 +126,73 @@ pub async fn run_headless_turn(
     if !quiet {
         println!("Starting headless agent loop...");
     }
-    // Drive the prompt through the SAME shared turn lifecycle the interactive
-    // orchestrator uses (TurnMachine, approval/finish gates, build verification,
-    // token/history persistence). HeadlessPolicy keeps it non-interactive.
-    let ctx =
+    let (wakeup_tx, mut wakeup_rx) = tokio::sync::mpsc::unbounded_channel();
+    let callback_state = Arc::clone(&state_arc);
+    let callback_runtime = tokio::runtime::Handle::current();
+    crate::tools::register_wakeup_callback(move |session_id, task_id, output| {
+        let state = Arc::clone(&callback_state);
+        let sender = wakeup_tx.clone();
+        callback_runtime.spawn(async move {
+            let mut state = state.lock().await;
+            if state.active_session_id != session_id {
+                return;
+            }
+            state
+                .history
+                .push(background_task_history_message(&task_id, output));
+            crate::config::save_session_history(&session_id, &state.history);
+            drop(state);
+            let _ = sender.send(task_id);
+        });
+    });
+
+    // Drive the prompt through the same lifecycle as the interactive
+    // orchestrator. A background command pauses a logical turn rather than
+    // completing it: wait for the callback, inject its terminal result, and
+    // resume with the existing budgets/verification ledger.
+    let mut ctx =
         crate::network::run_agent_turn(client, &state_arc, &cancel_token, &policy, &stream_buffer)
             .await;
+    while matches!(
+        ctx.lifecycle.stop_reason,
+        Some(crate::network::lifecycle::StopReason::BackgroundPending)
+    ) {
+        let session_id = state_arc.lock().await.active_session_id.clone();
+        loop {
+            let Some(_) = wakeup_rx.recv().await else {
+                return Err(std::io::Error::other(
+                    "background task wakeup channel closed before completion",
+                )
+                .into());
+            };
+            let session_still_running = crate::tools::get_background_tasks()
+                .lock()
+                .is_ok_and(|tasks| tasks.values().any(|task| task.session_id == session_id));
+            if !session_still_running {
+                break;
+            }
+        }
+        ctx = crate::network::run_agent_turn_with_context(
+            client,
+            &state_arc,
+            &cancel_token,
+            &policy,
+            &stream_buffer,
+            ctx,
+        )
+        .await;
+    }
 
     let prose = crate::network::text::strip_tool_call_syntax(&ctx.response.final_content);
     if !quiet && !prose.trim().is_empty() {
         println!("\nAssistant: {}", prose.trim());
+    }
+
+    if let Some(reason) = headless_failure(&ctx) {
+        return Err(std::io::Error::other(format!(
+            "headless turn incomplete ({reason}); task is not complete"
+        ))
+        .into());
     }
 
     Ok(prose.trim().to_string())
@@ -132,6 +232,15 @@ pub async fn run_raw_cli(
     });
 
     let state_arc = Arc::new(Mutex::new(state));
+
+    let mcp_servers = state_arc.lock().await.config.mcp_servers.clone();
+    for warning in crate::mcp::start_enabled_servers(&mcp_servers, |name| async move {
+        crate::mcp::start_server_by_name(&name).await
+    })
+    .await
+    {
+        eprintln!("{warning}");
+    }
 
     run_headless_turn(&client, state_arc).await.map(|_| ())
 }
@@ -188,5 +297,46 @@ mod tests {
         // The finish gate (compiler/build verification before accepting done)
         // is driven by this flag; raw CLI must match interactive behavior.
         assert!(HeadlessPolicy { quiet: true }.should_verify_completion());
+    }
+
+    #[test]
+    fn headless_failure_reports_unfinished_turns() {
+        let mut ctx = crate::network::TurnContext::default();
+        ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::BudgetExceeded(
+            "token budget".to_string(),
+        ));
+        assert_eq!(
+            headless_failure(&ctx).as_deref(),
+            Some("budget:token budget")
+        );
+
+        ctx.lifecycle.task_completed = true;
+        assert!(headless_failure(&ctx).is_none());
+    }
+
+    #[test]
+    fn background_completion_is_preserved_as_typed_tool_evidence() {
+        let message = background_task_history_message(
+            "task-7",
+            crate::tools::ToolExecutionOutput {
+                content: "tests failed".to_string(),
+                success: false,
+                pending: false,
+                command: Some("cargo test".to_string()),
+                exit_code: Some(1),
+                truncated: false,
+                replayed: false,
+                error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
+                retryable: false,
+            },
+        );
+
+        assert_eq!(message.role, "tool");
+        assert!(message.content.contains("Task task-7 completed"));
+        assert!(message.content.contains("tests failed"));
+        let record = message.tool_result.expect("typed result metadata");
+        assert!(!record.success);
+        assert_eq!(record.exit_code, Some(1));
+        assert_eq!(record.command.as_deref(), Some("cargo test"));
     }
 }

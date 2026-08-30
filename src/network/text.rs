@@ -14,7 +14,7 @@ pub(crate) fn has_intended_tool_call(content: &str) -> bool {
 }
 
 pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
-    if finish_reason == Some("reasoning_loop") {
+    if matches!(finish_reason, Some("reasoning_loop" | "reasoning_budget")) {
         return false;
     }
 
@@ -354,7 +354,7 @@ pub(crate) fn continuation_nudge_for_category(
     } else if previous.matches("```").count() % 2 != 0
         || (previous.contains("<tool_call>") && !previous.contains("</tool_call>"))
     {
-        "Your tool call syntax was cut off. Continue the tool syntax directly."
+        "Your tool call syntax was cut off. Continue from the exact cutoff without restarting or repeating earlier arguments. Keep the remainder bounded; use a smaller follow-up edit if needed."
     } else if !has_intended_tool_call(previous) && ends_with_stated_intent(previous) {
         "You stated your intended action. Please execute the tool call now."
     } else {

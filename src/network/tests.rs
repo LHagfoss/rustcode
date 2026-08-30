@@ -3827,7 +3827,7 @@ fn test_continuation_nudges_are_category_aware() {
     // Incomplete tool call
     assert_eq!(
         continuation_nudge_for_category("```tool\n{\"name\": \"view_file\"", None),
-        "Your tool call syntax was cut off. Continue the tool syntax directly."
+        "Your tool call syntax was cut off. Continue from the exact cutoff without restarting or repeating earlier arguments. Keep the remainder bounded; use a smaller follow-up edit if needed."
     );
 
     // Stated intent without tool call
@@ -4118,6 +4118,10 @@ fn test_reasoning_loop_is_cut_off_behavior() {
     assert!(!is_cut_off(
         "<think>thoughts</think>",
         Some("reasoning_loop")
+    ));
+    assert!(!is_cut_off(
+        "<think>reasoning reached its client budget</think>",
+        Some("reasoning_budget")
     ));
 }
 
