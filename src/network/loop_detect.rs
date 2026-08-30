@@ -313,6 +313,7 @@ pub enum ProgressReason {
     NewInformation,
     FreshRead,
     Verification,
+    RepeatedVerification,
     RepeatedFailure,
     NoNewInformation,
     Churn,
@@ -325,6 +326,7 @@ impl ProgressReason {
             Self::NewInformation => "new_information",
             Self::FreshRead => "fresh_read",
             Self::Verification => "verification",
+            Self::RepeatedVerification => "repeated_verification",
             Self::RepeatedFailure => "repeated_failure",
             Self::NoNewInformation => "no_new_information",
             Self::Churn => "edit_test_revert_churn",
@@ -352,6 +354,7 @@ pub struct ProgressAssessment {
 #[derive(Debug, Clone)]
 pub struct ProgressLedger {
     seen_outputs: HashSet<u64>,
+    seen_verifications: HashSet<u64>,
     seen_failures: HashSet<u64>,
     recent_states: VecDeque<u64>,
     no_progress_streak: usize,
@@ -361,6 +364,7 @@ impl Default for ProgressLedger {
     fn default() -> Self {
         Self {
             seen_outputs: HashSet::new(),
+            seen_verifications: HashSet::new(),
             seen_failures: HashSet::new(),
             recent_states: VecDeque::with_capacity(4),
             no_progress_streak: 0,
@@ -383,6 +387,16 @@ impl ProgressLedger {
             observation.action, observation.output_fingerprint
         ));
         let new_output = remember(&mut self.seen_outputs, action_output);
+        if observation.changed_workspace {
+            self.seen_verifications.clear();
+        }
+        let stable_verification = observation.verification && observation.success;
+        // Verification novelty is keyed to the normalized action, not its
+        // stdout. Test runners commonly vary elapsed-time text between runs;
+        // that does not make the same check new evidence.
+        let verification_action = stable_hash(&observation.action);
+        let fresh_verification =
+            stable_verification && remember(&mut self.seen_verifications, verification_action);
         let new_failure = observation
             .failure_fingerprint
             .is_some_and(|hash| remember(&mut self.seen_failures, hash));
@@ -402,7 +416,6 @@ impl ProgressLedger {
             }
         }
 
-        let stable_verification = observation.verification && observation.success;
         let (meaningful, reason) = if churn {
             (false, ProgressReason::Churn)
         } else if observation.changed_workspace {
@@ -415,8 +428,10 @@ impl ProgressLedger {
             (false, ProgressReason::NoNewInformation)
         } else if observation.search_result && new_output {
             (true, ProgressReason::NewInformation)
-        } else if stable_verification && new_output {
+        } else if fresh_verification {
             (true, ProgressReason::Verification)
+        } else if stable_verification {
+            (false, ProgressReason::RepeatedVerification)
         } else if !observation.success && new_failure {
             (true, ProgressReason::NewInformation)
         } else if !observation.success {
@@ -431,7 +446,7 @@ impl ProgressLedger {
 
         if meaningful {
             self.no_progress_streak = 0;
-        } else if !stable_verification {
+        } else if !fresh_verification {
             self.no_progress_streak = self.no_progress_streak.saturating_add(1);
         }
 
@@ -439,10 +454,11 @@ impl ProgressLedger {
             meaningful,
             reason,
             streak: self.no_progress_streak,
-            // A successful verification may repeat harmlessly. A failed
-            // verification must remain visible to the failure/stagnation
-            // guards so an agent cannot loop forever on the same broken test.
-            suppress_stagnation: stable_verification,
+            // The first successful verification for an unchanged workspace is
+            // useful evidence. Repeating the same successful check is not: it
+            // must remain visible to stagnation guards so a model cannot spend
+            // the turn re-proving an already established result.
+            suppress_stagnation: fresh_verification,
         }
     }
 
