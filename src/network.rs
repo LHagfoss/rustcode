@@ -128,7 +128,7 @@ Do not repeat the same tool call or the same exact edit. Re-read a broader file 
 then use a grounded approach. Use the active tool interface directly; never print tool-call syntax as prose. \
 If the requested change is already present or cannot be applied safely, explain that instead of retrying. This is the final recovery attempt.";
 
-pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. Thinking is disabled for this recovery attempt. Do not read files again or restate the requirements. If the user requested workspace changes, emit exactly one mutating tool call now using what you already learned. Otherwise, give the direct final answer.]";
+pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. Use the bounded reasoning budget for this one recovery attempt. Do not read files again or restate the requirements. If the user requested workspace changes, emit exactly one mutating tool call now using what you already learned. Otherwise, give the direct final answer.]";
 
 pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
 pub(crate) const MAX_REASONING_RECOVERY_ROUNDS: u8 = 1;

@@ -85,14 +85,9 @@ fn prompt_mentions_skill(prompt: &str, skill_name: &str) -> bool {
 }
 
 pub fn skill_routing_hint(prompt: &str, skills: &[SkillMetadata]) -> Option<String> {
-    let skill = skills.iter().find(|skill| {
-        prompt_mentions_skill(prompt, &skill.name)
-            || skill
-                .name
-                .split(['-', '_'])
-                .filter(|part| part.len() >= 5)
-                .any(|part| prompt_mentions_skill(prompt, part))
-    })?;
+    let skill = skills
+        .iter()
+        .find(|skill| prompt_mentions_skill(prompt, &skill.name))?;
     Some(format!(
         "# Priority skill route\nThe latest user prompt explicitly names available skill `{}`. Call `use_skill` first with the exact name `{}` before any filesystem, web, or exploration tool.",
         skill.name, skill.name
@@ -402,15 +397,29 @@ mod tests {
     }
 
     #[test]
-    fn skill_routing_hint_matches_a_distinctive_name_component() {
+    fn skill_routing_hint_does_not_guess_from_a_name_component() {
         let skills = [SkillMetadata {
             name: "release-automation".to_string(),
             description: "Release workflow".to_string(),
             path: PathBuf::from("/skills/release-automation"),
         }];
 
-        let hint = skill_routing_hint("Clean this up and release it.", &skills)
-            .expect("distinctive skill-name component should route");
-        assert!(hint.contains("release-automation"));
+        assert!(skill_routing_hint("Clean this up and release it.", &skills).is_none());
+    }
+
+    #[test]
+    fn skill_routing_hint_does_not_route_email_to_cloudflare_email_service() {
+        let skills = [SkillMetadata {
+            name: "cloudflare-email-service".to_string(),
+            description: "Cloudflare email workflow".to_string(),
+            path: PathBuf::from("/skills/cloudflare-email-service"),
+        }];
+
+        assert!(
+            skill_routing_hint("Build a Bun API that stores email addresses.", &skills).is_none()
+        );
+        assert!(
+            skill_routing_hint("Use cloudflare-email-service for delivery.", &skills).is_some()
+        );
     }
 }
