@@ -1,3 +1,8 @@
+## [v0.40.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.2) - 2026-08-30
+
+### Fixes
+- **Verification loops:** Count a successful verification command as fresh evidence only once per unchanged workspace generation, normalize equivalent command variants, and redirect repeated green checks toward unverified user-visible behavior ([#854](https://github.com/LHagfoss/rustcode/pull/854), [`aa56e6d`](https://github.com/LHagfoss/rustcode/commit/aa56e6d))
+
 ## [v0.40.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.1) - 2026-08-30
 
 ### Fixes
