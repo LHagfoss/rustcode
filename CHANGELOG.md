@@ -1,3 +1,8 @@
+## [v0.40.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.3) - 2026-08-30
+
+### Fixes
+- **Verified final completion:** Accept substantive final prose as completion after fresh successful verification and a green build gate, while keeping stale, failed, thought-only, and forced-recovery responses blocked ([#856](https://github.com/LHagfoss/rustcode/pull/856), [`40a06d4`](https://github.com/LHagfoss/rustcode/commit/40a06d4))
+
 ## [v0.40.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.2) - 2026-08-30
 
 ### Fixes
