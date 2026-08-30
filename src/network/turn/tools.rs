@@ -540,7 +540,15 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         loop_detect::stable_hash(loop_detect::stagnation_key(&content))
                     });
                 let action = call
-                    .map(|call| loop_detect::signatures(&call.name, &call.arguments).0)
+                    .map(|call| {
+                        let (exact, category) =
+                            loop_detect::signatures(&call.name, &call.arguments);
+                        if verification_command {
+                            category
+                        } else {
+                            exact
+                        }
+                    })
                     .unwrap_or_else(|| name.clone());
                 let failure_fingerprint = (!metadata.success).then(|| {
                     loop_detect::stable_hash(&format!(
@@ -703,8 +711,15 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     "repeated tool output".to_string(),
                 ));
+                let recovery_guidance = if reason
+                    == loop_detect::ProgressReason::RepeatedVerification
+                {
+                    "This verification already passed for the unchanged workspace. Do not run it again. Verify a different user-visible behavior, make a necessary edit, or finish."
+                } else {
+                    "Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command."
+                };
                 let evidence = format!(
-                    "[Evidence-based recovery: signal={} streak={} action={}]. Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command.",
+                    "[Evidence-based recovery: signal={} streak={} action={}]. {recovery_guidance}",
                     reason.label(),
                     streak,
                     action

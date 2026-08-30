@@ -16,6 +16,15 @@ fn search_variants_share_category() {
 }
 
 #[test]
+fn verification_flag_variants_share_category() {
+    let (_, all_tests) = signatures("run_command", &json!({"command": "cargo test"}));
+    let (_, library_tests) = signatures("run_command", &json!({"command": "cargo test --lib"}));
+
+    assert_eq!(all_tests, library_tests);
+    assert_eq!(all_tests, "cmd:cargo:test");
+}
+
+#[test]
 fn view_file_range_shifting_shares_category() {
     // Same file, different line ranges = one intent. Range-shifting must not
     // dodge the loop detector.
@@ -404,12 +413,35 @@ fn progress_ledger_treats_varied_no_result_searches_as_stagnation() {
 }
 
 #[test]
-fn stable_successful_verification_suppresses_output_only_stagnation() {
+fn successful_verification_only_suppresses_stagnation_once_per_workspace_generation() {
     let mut ledger = ProgressLedger::default();
     let mut check = observation("cargo test: clean", None, None);
     check.verification = true;
-    assert!(ledger.observe(&check).suppress_stagnation);
-    assert!(ledger.observe(&check).suppress_stagnation);
+    let first = ledger.observe(&check);
+    assert_eq!(first.reason, ProgressReason::Verification);
+    assert!(first.suppress_stagnation);
+
+    let repeated = ledger.observe(&check);
+    assert_eq!(repeated.reason, ProgressReason::RepeatedVerification);
+    assert!(!repeated.meaningful);
+    assert!(!repeated.suppress_stagnation);
+    assert_eq!(ledger.no_progress_streak(), 1);
+
+    let mut varied_output = check.clone();
+    varied_output.output_fingerprint = stable_hash("cargo test: clean in 0.02s");
+    let varied = ledger.observe(&varied_output);
+    assert_eq!(varied.reason, ProgressReason::RepeatedVerification);
+    assert_eq!(ledger.no_progress_streak(), 2);
+
+    let edit = observation("edit applied", Some("src/lib.rs changed"), None);
+    assert_eq!(
+        ledger.observe(&edit).reason,
+        ProgressReason::WorkspaceChanged
+    );
+
+    let after_edit = ledger.observe(&check);
+    assert_eq!(after_edit.reason, ProgressReason::Verification);
+    assert!(after_edit.suppress_stagnation);
     assert_eq!(ledger.no_progress_streak(), 0);
 }
 
