@@ -33,6 +33,14 @@ pub(super) enum ToolHandlingOutcome {
     NotHandled,
 }
 
+fn should_apply_loop_recovery(
+    completion_requested: bool,
+    output_abort: bool,
+    has_evidence_recovery: bool,
+) -> bool {
+    !completion_requested && (output_abort || has_evidence_recovery)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     client: &reqwest::Client,
@@ -646,7 +654,10 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // batch once after all results are processed; calling it for each
             // result makes two read-only calls from one response look like two
             // repeated turns and triggers a false cross-turn loop.
-            if cross_turn_tool_count > 0 {
+            // Completion has its own evidence, verification, and compiler
+            // gates below. Do not let generic loop recovery intercept a
+            // `complete_task` request before those authoritative gates run.
+            if !completed && cross_turn_tool_count > 0 {
                 let target_file_refs = cross_turn_target_files
                     .iter()
                     .map(String::as_str)
@@ -688,8 +699,9 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
             }
 
-            if let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
-                stagnation
+            if !completed
+                && let loop_detect::LoopStatus::Warning(n) | loop_detect::LoopStatus::Abort(n) =
+                    stagnation
             {
                 push_or_replace_loop_warning(
                     s.history.as_mut_vec(),
@@ -700,7 +712,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             }
 
             let output_abort = matches!(stagnation, loop_detect::LoopStatus::Abort(_));
-            if output_abort || evidence_recovery.is_some() {
+            if should_apply_loop_recovery(completed, output_abort, evidence_recovery.is_some()) {
                 let (reason, streak, action) = evidence_recovery.unwrap_or((
                     loop_detect::ProgressReason::NoNewInformation,
                     match stagnation {
@@ -1025,4 +1037,22 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         return ToolHandlingOutcome::Continue;
     }
     ToolHandlingOutcome::NotHandled
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_apply_loop_recovery;
+
+    #[test]
+    fn completion_request_reaches_finish_gates_before_loop_recovery() {
+        assert!(!should_apply_loop_recovery(true, true, true));
+        assert!(!should_apply_loop_recovery(true, false, true));
+    }
+
+    #[test]
+    fn ordinary_tool_rounds_still_apply_loop_recovery() {
+        assert!(should_apply_loop_recovery(false, true, false));
+        assert!(should_apply_loop_recovery(false, false, true));
+        assert!(!should_apply_loop_recovery(false, false, false));
+    }
 }
