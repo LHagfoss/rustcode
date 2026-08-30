@@ -1,5 +1,7 @@
 use super::*;
 
+static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn render_state_to_text(state: &mut AppState, width: u16, height: u16) -> String {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
@@ -97,6 +99,7 @@ fn render_snapshot_to_text(state: &AppState, width: u16, height: u16) -> String 
 
 #[test]
 fn render_snapshot_preserves_existing_ui_output() {
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
     let mut states = Vec::new();
 
     states.push(AppState::new());
@@ -155,6 +158,7 @@ fn render_snapshot_preserves_existing_ui_output() {
         state.api_base_url = "http://localhost:3000/v1/chat/completions".to_owned();
         state.cwd_and_branch = "/repo:main".to_owned();
     }
+    theme::set_active_theme("default");
 
     let appearance_oracle = render_snapshot_to_text(&states[0], 1, 1);
     assert!(
@@ -605,6 +609,8 @@ fn tool_result_cache_evicts_one_lru_entry_at_cap() {
 fn theme_change_changes_cache_keys() {
     use super::{theme, tool_result_cache_key};
 
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
+
     let verbosity = crate::app::Verbosity::Low;
     theme::set_active_theme("default");
     let key1 = tool_result_cache_key("Bash", "result 0", 80, &verbosity, false);
@@ -621,6 +627,8 @@ fn theme_change_changes_cache_keys() {
 #[test]
 fn sky_theme_loads_and_updates_syntax_highlighting() {
     use super::theme;
+
+    let _theme_guard = THEME_TEST_LOCK.lock().expect("theme test lock");
 
     let sky = theme::get_palette("sky");
     assert_eq!(sky.name, "sky");
