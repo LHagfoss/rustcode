@@ -145,7 +145,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
         Arc::clone(&stream_buffer),
         true, // quiet: don't stream into the main chat view; we post the result
         false,
-        false,
+        crate::network::stream_request::ThinkingMode::Normal,
         crate::tools::ToolSchemaPolicy::root(false),
         None,
     )
