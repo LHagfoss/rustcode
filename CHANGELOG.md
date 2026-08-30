@@ -1,3 +1,11 @@
+## [v0.40.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.1) - 2026-08-30
+
+### Fixes
+- **Agent recovery:** Keep recovery instructions aligned with the active tool protocol, strip serialized tool syntax from loop-escalation finals, and coalesce repeated loop warnings so useful context remains visible ([#852](https://github.com/LHagfoss/rustcode/pull/852), [`916fe0a`](https://github.com/LHagfoss/rustcode/commit/916fe0a))
+- **Command verification:** Propagate failures from every Unix pipeline stage so commands such as `cargo test | tail` cannot falsely report successful verification ([#852](https://github.com/LHagfoss/rustcode/pull/852), [`916fe0a`](https://github.com/LHagfoss/rustcode/commit/916fe0a))
+- **Skill routing:** Recognize distinctive components of compound skill names, allowing prompts such as “release” to route to `release-automation` without injecting the full skill into context ([#852](https://github.com/LHagfoss/rustcode/pull/852), [`916fe0a`](https://github.com/LHagfoss/rustcode/commit/916fe0a))
+- **Portable UI tests:** Isolate global theme state in render snapshots and keep the shell helper available on Windows ([#852](https://github.com/LHagfoss/rustcode/pull/852), [`916fe0a`](https://github.com/LHagfoss/rustcode/commit/916fe0a))
+
 ## [v0.40.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.0) - 2026-08-30
 
 ### Features
