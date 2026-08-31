@@ -64,15 +64,7 @@ pub(crate) use filesystem::edit_target_and_replacement;
 pub(crate) use misc::search_web_async;
 pub(crate) use video::render_confirmation_preview;
 
-/// A parsed tool request emitted by a model.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ToolCall {
-    pub name: String,
-    pub arguments: Value,
-    /// Provider/native identity when the source supplied one. Text protocols
-    /// leave this unset and the execution boundary supplies a local identity.
-    pub call_id: Option<String>,
-}
+pub use rustcode_tool_protocol::ToolCall;
 
 /// Resolve structured calls recorded in history, falling back to the parser
 /// used by the selected text protocol. This behavior-specific adapter stays in
