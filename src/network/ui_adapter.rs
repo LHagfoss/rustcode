@@ -117,8 +117,18 @@ pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
     }
 }
 
-fn history_tool_result_event(message: &ChatMessage) -> Option<AgentUiEvent> {
+fn history_tool_result_event(
+    message: &ChatMessage,
+    suppress_synthetic_background_completion: bool,
+) -> Option<AgentUiEvent> {
     let record = message.tool_result.as_ref()?;
+    // ACP's server-owned task sink emits terminal background updates directly
+    // and persists this synthetic evidence for the model. Replaying the
+    // synthetic history row on every continuation would send a duplicate
+    // terminal update for the original provider call ID.
+    if suppress_synthetic_background_completion && record.tool_name == "background_task" {
+        return None;
+    }
     let id = message
         .tool_call_id
         .clone()
@@ -155,6 +165,31 @@ async fn publish_snapshot(
     finished_tools: &mut HashSet<String>,
     approval_sent: &mut bool,
     previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
+) {
+    publish_snapshot_with_mode(
+        state,
+        sender,
+        previous_response,
+        previous_history_len,
+        started_tools,
+        finished_tools,
+        approval_sent,
+        previous_subagents,
+        false,
+    )
+    .await;
+}
+
+async fn publish_snapshot_with_mode(
+    state: &Arc<Mutex<AppState>>,
+    sender: &AgentUiEventSender,
+    previous_response: &mut ResponseDeltaTracker,
+    previous_history_len: &mut usize,
+    started_tools: &mut HashSet<String>,
+    finished_tools: &mut HashSet<String>,
+    approval_sent: &mut bool,
+    previous_subagents: &mut std::collections::HashMap<u32, (crate::app::SubAgentStatus, bool)>,
+    suppress_synthetic_background_completion: bool,
 ) {
     let (
         response,
@@ -252,7 +287,8 @@ async fn publish_snapshot(
     }
 
     for message in history {
-        if let Some(event) = history_tool_result_event(&message)
+        if let Some(event) =
+            history_tool_result_event(&message, suppress_synthetic_background_completion)
             && let AgentUiEvent::ToolFinished { id, .. } = &event
             && finished_tools.insert(id.clone())
         {
@@ -295,6 +331,79 @@ pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'stat
     sender: AgentUiEventSender,
     context: super::TurnContext,
 ) -> super::TurnContext {
+    run_agent_turn_with_events_and_context_mode(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        prompt,
+        sender,
+        context,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn run_agent_turn_with_events_for_acp<P: TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<super::stream::StreamBuffer>>,
+    prompt: String,
+    sender: AgentUiEventSender,
+) -> super::TurnContext {
+    let max_tool_rounds = { state.lock().await.config.max_tool_rounds };
+    run_agent_turn_with_events_and_context_mode(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        prompt,
+        sender,
+        super::TurnContext::with_max_tool_rounds(max_tool_rounds),
+        true,
+    )
+    .await
+}
+
+pub(crate) async fn run_agent_turn_with_events_and_context_for_acp<P: TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<super::stream::StreamBuffer>>,
+    prompt: String,
+    sender: AgentUiEventSender,
+    context: super::TurnContext,
+) -> super::TurnContext {
+    run_agent_turn_with_events_and_context_mode(
+        client,
+        state,
+        cancel_token,
+        policy,
+        stream_buffer,
+        prompt,
+        sender,
+        context,
+        true,
+    )
+    .await
+}
+
+async fn run_agent_turn_with_events_and_context_mode<P: TurnPolicy + 'static>(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &CancellationToken,
+    policy: &Arc<P>,
+    stream_buffer: &Arc<Mutex<super::stream::StreamBuffer>>,
+    prompt: String,
+    sender: AgentUiEventSender,
+    context: super::TurnContext,
+    suppress_synthetic_background_completion: bool,
+) -> super::TurnContext {
     sender.send(AgentUiEvent::PromptStarted { prompt });
     let mut turn = Box::pin(super::turn_engine::run_agent_turn_with_context(
         client,
@@ -315,7 +424,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'stat
         tokio::select! {
             context = &mut turn => break context,
             _ = tokio::time::sleep(Duration::from_millis(16)) => {
-                publish_snapshot(
+                publish_snapshot_with_mode(
                     state,
                     &sender,
                     &mut previous_response,
@@ -324,12 +433,13 @@ pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'stat
                     &mut finished_tools,
                     &mut approval_sent,
                     &mut previous_subagents,
+                    suppress_synthetic_background_completion,
                 ).await;
             }
         }
     };
 
-    publish_snapshot(
+    publish_snapshot_with_mode(
         state,
         &sender,
         &mut previous_response,
@@ -338,6 +448,7 @@ pub(crate) async fn run_agent_turn_with_events_and_context<P: TurnPolicy + 'stat
         &mut finished_tools,
         &mut approval_sent,
         &mut previous_subagents,
+        suppress_synthetic_background_completion,
     )
     .await;
 
@@ -549,6 +660,45 @@ mod tests {
             Some(AgentUiEvent::TextDelta {
                 text: "final response".to_owned()
             })
+        );
+    }
+
+    #[test]
+    fn synthetic_background_completion_history_is_not_replayed_to_acp() {
+        let message = crate::background_task_history_message_with_call_id(
+            "task-fast",
+            crate::tools::ToolExecutionOutput::success("done".to_owned()),
+            Some("call-bg".to_owned()),
+        );
+
+        assert!(
+            message.tool_result.is_some(),
+            "completion must remain model history"
+        );
+        assert!(
+            matches!(
+                super::history_tool_result_event(&message, false),
+                Some(AgentUiEvent::ToolFinished { id, result })
+                    if id == "call-bg" && result.tool_name == "background_task"
+            ),
+            "non-ACP consumers must continue replaying background history"
+        );
+        assert!(
+            super::history_tool_result_event(&message, true).is_none(),
+            "the sink already emitted the terminal ACP update"
+        );
+
+        let ordinary = crate::app::ChatMessage::new("tool", "file contents")
+            .answering(Some("call-read".to_owned()))
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "read_file".to_owned(),
+                success: true,
+                ..Default::default()
+            });
+        assert!(super::history_tool_result_event(&ordinary, false).is_some());
+        assert!(
+            super::history_tool_result_event(&ordinary, true).is_some(),
+            "ACP filtering must only affect synthetic background completion records"
         );
     }
 }

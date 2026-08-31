@@ -115,7 +115,9 @@ impl AcpEventStream {
                 updates
             }
             crate::network::AgentUiEvent::ToolFinished { id, result } => {
-                let status = if result.metadata.success {
+                let status = if result.metadata.pending {
+                    ToolCallStatus::InProgress
+                } else if result.metadata.success {
                     ToolCallStatus::Completed
                 } else {
                     ToolCallStatus::Failed

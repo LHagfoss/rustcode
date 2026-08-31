@@ -25,6 +25,7 @@ pub use schema::{native_tools_schema, tool_system_prompt};
 #[allow(unused_imports)]
 pub(crate) use dispatch::{
     execute_video_with_progress, execute_with_metadata, execute_with_metadata_cancellable,
+    execute_with_metadata_cancellable_for_call,
 };
 pub(crate) use parser::find_closing_tool_fence;
 pub(crate) use schema::{
@@ -54,9 +55,11 @@ pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
 pub(crate) use exec::{
-    CommandProgressCallback, background_task_manager, command_confirmation_preview,
-    command_requires_confirmation, run_command_output_with_progress_cancellable,
-    stop_background_tasks, task_event_to_tool_output,
+    CommandProgressCallback, abort_background_starts, background_task_manager,
+    command_confirmation_preview, command_requires_confirmation, release_background_start,
+    run_command_output_with_progress_cancellable,
+    run_command_output_with_progress_cancellable_for_call, stop_background_tasks,
+    task_event_to_tool_output,
 };
 
 pub(crate) use filesystem::edit_target_and_replacement;

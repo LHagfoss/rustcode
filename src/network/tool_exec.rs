@@ -148,6 +148,37 @@ pub(crate) async fn confirm_and_execute(
     Option<String>,
     std::time::Duration,
 ) {
+    confirm_and_execute_for_call(
+        client,
+        state,
+        cancel_token,
+        name,
+        args,
+        display_name,
+        bypass_confirm,
+        workspace_root,
+        live_key,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn confirm_and_execute_for_call(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    name: &str,
+    args: &serde_json::Value,
+    display_name: &str,
+    bypass_confirm: bool,
+    workspace_root: Option<std::path::PathBuf>,
+    live_key: Option<&str>,
+    call_id: Option<&str>,
+) -> (
+    crate::tools::ToolExecutionOutput,
+    Option<String>,
+    std::time::Duration,
+) {
     let (agent_mode, auto_confirm) = {
         let s = state.lock().await;
         (s.agent_mode, s.auto_confirm)
@@ -211,6 +242,7 @@ pub(crate) async fn confirm_and_execute(
 
         let name_owned = name.to_string();
         let args_owned = args.clone();
+        let call_id_owned = call_id.map(str::to_owned);
         let session_id = { state.lock().await.active_session_id.clone() };
         let workspace_root_for_task = workspace_root.clone();
         let live_key_owned = live_key.map(str::to_owned);
@@ -235,10 +267,11 @@ pub(crate) async fn confirm_and_execute(
                         Arc::new(move |bytes, stderr| {
                             let _ = progress_tx.send((bytes.to_vec(), stderr));
                         });
-                    crate::tools::run_command_output_with_progress_cancellable(
+                    crate::tools::run_command_output_with_progress_cancellable_for_call(
                         &args_owned,
                         callback,
                         Some(cancel_token_for_task),
+                        call_id_owned.as_deref(),
                     )
                     .unwrap_or_else(|error| {
                         crate::tools::ToolExecutionOutput::failure_with_kind(
@@ -259,10 +292,11 @@ pub(crate) async fn confirm_and_execute(
                         Some(callback),
                     )
                 } else {
-                    crate::tools::execute_with_metadata_cancellable(
+                    crate::tools::execute_with_metadata_cancellable_for_call(
                         &name_owned,
                         &args_owned,
                         Some(cancel_token_for_task),
+                        call_id_owned.as_deref(),
                     )
                 };
                 crate::tools::set_active_workspace_root(None);
@@ -393,6 +427,7 @@ pub(crate) async fn confirm_and_execute(
 
                 let name_owned = name.to_string();
                 let args_owned = args.clone();
+                let call_id_owned = call_id.map(str::to_owned);
                 let session_id = { state.lock().await.active_session_id.clone() };
                 let workspace_root_for_task = workspace_root.clone();
                 let cancel_token_for_task = cancel_token.clone();
@@ -413,10 +448,11 @@ pub(crate) async fn confirm_and_execute(
                             Some(callback),
                         )
                     } else {
-                        crate::tools::execute_with_metadata_cancellable(
+                        crate::tools::execute_with_metadata_cancellable_for_call(
                             &name_owned,
                             &args_owned,
                             Some(cancel_token_for_task),
+                            call_id_owned.as_deref(),
                         )
                     };
                     crate::tools::set_active_workspace_root(None);
@@ -624,6 +660,7 @@ pub(crate) async fn execute_tool_batch(
         let cancel_token_clone = cancel_token.clone();
         let name_clone = name.clone();
         let args_clone = args.clone();
+        let call_id_owned = call.call_id.clone();
         let plan_mode_denied = {
             let plan_mode = state.lock().await.agent_mode == crate::config::AgentMode::Plan;
             plan_mode && !crate::tools::allowed_in_plan_mode(name)
@@ -744,7 +781,7 @@ different, read another range or make an edit first; repeating this call returns
                 )
             } else {
                 let workspace_root = { state_clone.lock().await.workspace_root.clone() };
-                confirm_and_execute(
+                confirm_and_execute_for_call(
                     &client_clone,
                     &state_clone,
                     &cancel_token_clone,
@@ -754,6 +791,7 @@ different, read another range or make an edit first; repeating this call returns
                     true, // bypass confirmation
                     workspace_root,
                     Some(&execution_live_key),
+                    call_id_owned.as_deref(),
                 )
                 .await
             };
