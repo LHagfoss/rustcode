@@ -10,6 +10,13 @@
 Originally made for testing Apple's on-device Foundation Models. Turned into a way deeper project.
 Now supports ollama or openai compatible APIs.
 
+## Documentation
+
+- [Background tasks and cancellation](docs/background-tasks.md)
+- [ACP server integration](docs/acp.md)
+- [Runtime and workspace architecture](docs/architecture.md)
+- [Build-boundary benchmark](scripts/bench-build-boundaries.md)
+
 ## Installation
 
 ### macOS & Linux (curl)
@@ -40,6 +47,11 @@ brew trust lhagfoss/tap
 # 3. Install the harness
 brew install rustcode
 ```
+
+Official release binaries are published for Linux x86_64, macOS Apple Silicon
+(ARM64), and Windows x86_64. Intel macOS is not supported by the prebuilt
+installer or Homebrew formula. Building from source may support additional
+targets, but those targets are not covered by release CI.
 
 ### From Source (Rust / Cargo)
 
@@ -83,6 +95,39 @@ fields use compiled defaults. Malformed or newer unsupported TOML is preserved
 and reported instead of being overwritten.
 Configured MCP servers are started by Rustcode before ACP prompts are handled;
 ACP's optional MCP-over-ACP transport is not required.
+
+ACP supports background command completion and continuation. A background tool
+call is reported as `InProgress`, its terminal update retains the provider's
+original tool-call ID, and the same logical turn resumes after completion.
+Cancelling a prompt never revives that prompt when its detached process later
+finishes; the completion is still persisted in the session. `session/close`
+cancels the active turn and that session's running tasks. See
+[docs/acp.md](docs/acp.md) for lifecycle and integration details.
+
+## Non-interactive prompt
+
+Run one prompt without opening the TUI:
+
+```bash
+rustcode --prompt "inspect this repository and run its tests"
+```
+
+Add `--yolo` only in a trusted workspace when the run should automatically
+approve tool confirmations. Background commands started by the turn are
+tracked until their terminal result is delivered; unrelated tasks already
+running in the same session do not delay the turn.
+
+## Background commands
+
+The `run_command` tool can detach long-running work with `background: true`.
+RustCode returns a task ID immediately and delivers the final output
+automatically. The model should not poll `manage_task` in a loop. `manage_task`
+is intended for an occasional `list`, `status`, or explicit `kill` operation.
+
+Tasks are isolated by session. A task ID from one session cannot be used to
+terminate another session's process. Cancellation terminates the complete
+process group on Unix and the process tree on Windows, including descendants.
+See [docs/background-tasks.md](docs/background-tasks.md) for exact behavior.
 
 ## Configuration
 
