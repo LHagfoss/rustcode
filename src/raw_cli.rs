@@ -413,6 +413,7 @@ mod tests {
         let old = TaskEvent::Finished {
             id: "old-task".into(),
             session_id: "session".into(),
+            call_id: None,
             command: "sleep 1".to_owned(),
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
@@ -426,11 +427,13 @@ mod tests {
         let first = TaskEvent::Started {
             id: "new-a".into(),
             session_id: "session".into(),
+            call_id: None,
             pid: 10,
         };
         let second = TaskEvent::Started {
             id: "new-b".into(),
             session_id: "session".into(),
+            call_id: None,
             pid: 11,
         };
         assert!(tracker.observe_event(&first));
@@ -440,6 +443,7 @@ mod tests {
         let finished = TaskEvent::Finished {
             id: "new-a".into(),
             session_id: "session".into(),
+            call_id: None,
             command: "cargo test".to_owned(),
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
@@ -454,6 +458,7 @@ mod tests {
         let cancelled = TaskEvent::Cancelled {
             id: "new-b".into(),
             session_id: "session".into(),
+            call_id: None,
             command: "cargo check".to_owned(),
         };
         assert!(tracker.observe_event(&cancelled));

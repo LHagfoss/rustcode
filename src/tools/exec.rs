@@ -46,6 +46,7 @@ pub(crate) fn task_event_to_tool_output(
             session_id,
             command,
             output,
+            ..
         } => {
             let mut output = match output {
                 Ok(output) => command_output_to_tool_output(&command, output),
@@ -64,6 +65,7 @@ pub(crate) fn task_event_to_tool_output(
             id,
             session_id,
             command,
+            ..
         } => {
             let mut output = super::ToolExecutionOutput::failure_with_kind(
                 "background task cancelled".to_string(),
@@ -157,14 +159,32 @@ pub fn run_command(args: &Value) -> Result<String, String> {
 }
 
 pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOutput, String> {
-    run_command_output_inner(args, None, None)
+    run_command_output_inner(args, None, None, None)
 }
 
 pub(crate) fn run_command_output_cancellable(
     args: &Value,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
 ) -> Result<super::ToolExecutionOutput, String> {
-    match run_command_output_inner(args, None, cancel_token) {
+    match run_command_output_inner(args, None, cancel_token, None) {
+        Ok(output) => Ok(output),
+        Err(error) if error == "command cancelled by user" => {
+            Ok(super::ToolExecutionOutput::failure_with_kind(
+                "error: tool execution cancelled by user".to_string(),
+                super::ToolErrorKind::Cancelled,
+                true,
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn run_command_output_with_call_id(
+    args: &Value,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
+) -> Result<super::ToolExecutionOutput, String> {
+    match run_command_output_inner(args, None, cancel_token, call_id) {
         Ok(output) => Ok(output),
         Err(error) if error == "command cancelled by user" => {
             Ok(super::ToolExecutionOutput::failure_with_kind(
@@ -183,7 +203,7 @@ pub(crate) fn run_command_output_with_progress(
     args: &Value,
     progress: CommandProgressCallback,
 ) -> Result<super::ToolExecutionOutput, String> {
-    run_command_output_inner(args, Some(progress), None)
+    run_command_output_inner(args, Some(progress), None, None)
 }
 
 pub(crate) fn run_command_output_with_progress_cancellable(
@@ -191,7 +211,16 @@ pub(crate) fn run_command_output_with_progress_cancellable(
     progress: CommandProgressCallback,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
 ) -> Result<super::ToolExecutionOutput, String> {
-    match run_command_output_inner(args, Some(progress), cancel_token) {
+    run_command_output_with_progress_cancellable_for_call(args, progress, cancel_token, None)
+}
+
+pub(crate) fn run_command_output_with_progress_cancellable_for_call(
+    args: &Value,
+    progress: CommandProgressCallback,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
+) -> Result<super::ToolExecutionOutput, String> {
+    match run_command_output_inner(args, Some(progress), cancel_token, call_id) {
         Ok(output) => Ok(output),
         Err(error) if error == "command cancelled by user" => {
             Ok(super::ToolExecutionOutput::failure_with_kind(
@@ -208,6 +237,7 @@ fn run_command_output_inner(
     args: &Value,
     progress: Option<CommandProgressCallback>,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
 ) -> Result<super::ToolExecutionOutput, String> {
     let command_str = args
         .get("command")
@@ -288,11 +318,12 @@ fn run_command_output_inner(
         );
 
         let task_manager = background_task_manager();
+        let task_spec = TaskSpec::new(SessionId::new(session_id.clone()), command_request);
+        let task_spec = call_id
+            .map(|call_id| task_spec.clone().with_call_id(call_id))
+            .unwrap_or(task_spec);
         task_manager
-            .spawn_with_id(
-                task_id.clone(),
-                TaskSpec::new(SessionId::new(session_id.clone()), command_request),
-            )
+            .spawn_with_id(task_id.clone(), task_spec)
             .map_err(|error| format!("failed to start background task: {error}"))?;
 
         return Ok(super::ToolExecutionOutput {
@@ -649,6 +680,7 @@ mod tests {
         let event = rustcode_tasks::TaskEvent::Cancelled {
             id: rustcode_tasks::TaskId::new("cancelled-task"),
             session_id: rustcode_tasks::SessionId::new("cancelled-session"),
+            call_id: None,
             command: "cargo test".to_string(),
         };
 
