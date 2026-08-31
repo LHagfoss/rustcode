@@ -419,6 +419,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut stagnation = loop_detect::LoopStatus::Ok;
             let mut failure_replan = None;
             let mut evidence_recovery = None;
+            let mut grounded_recovery = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
             let mut cross_turn_target_files = Vec::new();
@@ -526,6 +527,18 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     }
                 }
 
+                // Keep authoritative write metadata separate from display
+                // output. A later read can then prove that it is checking the
+                // same revision without replaying source into recovery.
+                if is_mutating_tool(&name) && metadata.success {
+                    for path in &metadata.changed_paths {
+                        let content = file_preview.as_ref().and_then(|(preview_path, content)| {
+                            (preview_path == path).then_some(content.as_str())
+                        });
+                        ctx.progress.file_evidence.record_mutation(path, content);
+                    }
+                }
+
                 let no_result = loop_detect::stagnation_key(&content) == "grep:no-matches";
                 let search_result = loop_detect::is_search_tool(&name)
                     || call.is_some_and(|call| {
@@ -551,13 +564,32 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .map(|call| {
                         let (exact, category) =
                             loop_detect::signatures(&call.name, &call.arguments);
-                        if verification_command {
+                        if verification_command || loop_detect::is_read_only(&call.name) {
                             category
                         } else {
                             exact
                         }
                     })
                     .unwrap_or_else(|| name.clone());
+                if metadata.success
+                    && let Some(call) = call
+                    && let Some((path, start_line, end_line)) =
+                        loop_detect::read_target(&call.name, &call.arguments)
+                    && let Some(recovery) = ctx.progress.file_evidence.record_read_with_kind(
+                        &path,
+                        start_line,
+                        end_line,
+                        !metadata.truncated,
+                        loop_detect::read_returns_content(&call.name, &call.arguments),
+                    )
+                {
+                    grounded_recovery = Some(recovery.message());
+                    evidence_recovery = Some((
+                        loop_detect::ProgressReason::NoNewInformation,
+                        recovery.repeated_reads,
+                        format!("read:{}#{}", path, start_line / 200),
+                    ));
+                }
                 let failure_fingerprint = (!metadata.success).then(|| {
                     loop_detect::stable_hash(&format!(
                         "{name}:{}:{}",
@@ -730,11 +762,16 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 } else {
                     "Use a different, evidence-producing next step; do not repeat the same unchanged read, no-result search, no-op edit, or failed command."
                 };
-                let evidence = format!(
-                    "[Evidence-based recovery: signal={} streak={} action={}]. {recovery_guidance}",
-                    reason.label(),
-                    streak,
-                    action
+                let evidence = grounded_recovery.clone().map_or_else(
+                    || {
+                        format!(
+                            "[Evidence-based recovery: signal={} streak={} action={}]. {recovery_guidance}",
+                            reason.label(),
+                            streak,
+                            action
+                        )
+                    },
+                    |notice| format!("[Evidence-based recovery: {notice}]"),
                 );
                 match loop_recovery_action(ctx.recovery.loop_recovery_attempts) {
                     LoopRecoveryAction::Recover => {
