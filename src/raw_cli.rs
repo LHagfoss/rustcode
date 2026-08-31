@@ -165,9 +165,7 @@ pub async fn run_headless_turn(
                 )
                 .into());
             };
-            let session_still_running = crate::tools::get_background_tasks()
-                .lock()
-                .is_ok_and(|tasks| tasks.values().any(|task| task.session_id == session_id));
+            let session_still_running = crate::tools::has_background_tasks(&session_id);
             if !session_still_running {
                 break;
             }

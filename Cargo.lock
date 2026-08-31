@@ -2974,6 +2974,7 @@ dependencies = [
  "rustcode-lifecycle",
  "rustcode-loop-detect",
  "rustcode-session",
+ "rustcode-tasks",
  "rustcode-tool-protocol",
  "rustcode-tools",
  "scraper",

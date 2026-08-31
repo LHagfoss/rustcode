@@ -2142,25 +2142,17 @@ fn background_terminal_activity_shows_management_hints_and_command() {
         crate::network::TurnContext::with_max_tool_rounds(1),
     ));
     let session_id = state.active_session_id.clone();
-    let task_id = "ui-background-footer".to_string();
-    crate::tools::get_background_tasks().lock().unwrap().insert(
-        task_id.clone(),
-        crate::tools::BackgroundTaskInfo {
-            id: task_id.clone(),
-            session_id,
-            command: "cargo test --locked".to_string(),
-            start_time: std::time::Instant::now(),
-            child_pid: Some(42),
-            cancel_sender: None,
-        },
-    );
+    let task_id = "ui-background-footer";
+    let long_command = if cfg!(target_os = "windows") {
+        "ping -n 30 127.0.0.1 > NUL"
+    } else {
+        "sleep 30"
+    };
+    crate::tools::spawn_background_task_for_test(task_id, &session_id, long_command).unwrap();
     let snapshot = state.render_snapshot();
     state.background_turn_context = None;
     let neutral_snapshot = state.render_snapshot();
-    crate::tools::get_background_tasks()
-        .lock()
-        .unwrap()
-        .remove(&task_id);
+    crate::tools::stop_background_tasks(&session_id);
 
     let status = super::activity_status_line(&snapshot, false).to_string();
     assert!(status.contains("Waiting for background terminal"));
@@ -2175,14 +2167,14 @@ fn background_terminal_activity_shows_management_hints_and_command() {
 
     let commands = super::background_command_lines(&snapshot);
     assert_eq!(commands.len(), 1);
-    assert_eq!(commands[0].to_string(), "  └ cargo test --locked");
+    assert_eq!(commands[0].to_string(), format!("  └ {long_command}"));
     let live_tail = super::render_live_tail_snapshot(&snapshot, 120, 10)
         .into_iter()
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
     assert!(live_tail.contains("Waiting for background terminal"));
-    assert!(live_tail.contains("  └ cargo test --locked"));
+    assert!(live_tail.contains(&format!("  └ {long_command}")));
     assert_eq!(
         super::background_terminal_summary(2),
         "2 background terminals running · /ps to view · /stop to close"
