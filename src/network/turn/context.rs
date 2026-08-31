@@ -40,6 +40,7 @@ pub struct RecoveryState {
 
 pub struct ProgressState {
     pub ledger: loop_detect::ProgressLedger,
+    pub file_evidence: loop_detect::FileEvidenceLedger,
     pub made_edits: bool,
     pub failed_mutations: usize,
     pub consecutive_no_progress: usize,
@@ -118,6 +119,7 @@ impl TurnContext {
             },
             progress: ProgressState {
                 ledger: loop_detect::ProgressLedger::default(),
+                file_evidence: loop_detect::FileEvidenceLedger::default(),
                 made_edits: false,
                 failed_mutations: 0,
                 consecutive_no_progress: 0,
