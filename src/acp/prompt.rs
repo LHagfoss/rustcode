@@ -307,7 +307,7 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
     event_stream: &mut AcpEventStream,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error> {
     forward_prompt_run(
-        crate::network::ui_adapter::run_agent_turn_with_events(
+        crate::network::ui_adapter::run_agent_turn_with_events_for_acp(
             client,
             state,
             cancel_token,
@@ -339,7 +339,7 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
     context: crate::network::TurnContext,
 ) -> Result<crate::network::TurnContext, agent_client_protocol::Error> {
     forward_prompt_run(
-        crate::network::ui_adapter::run_agent_turn_with_events_and_context(
+        crate::network::ui_adapter::run_agent_turn_with_events_and_context_for_acp(
             client,
             state,
             cancel_token,
