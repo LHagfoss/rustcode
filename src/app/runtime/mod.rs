@@ -11,6 +11,7 @@ use crossterm::{
     execute,
 };
 use ratatui::layout::Size;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -64,6 +65,7 @@ pub(crate) struct AppRuntime {
     app_event_receiver: mpsc::UnboundedReceiver<AppEvent>,
     agent_ui_event_sender: AgentUiEventSender,
     agent_ui_event_receiver: AgentUiEventReceiver,
+    task_subscriptions: HashMap<String, rustcode_tasks::TaskSubscription>,
 }
 
 #[derive(Debug)]
@@ -114,6 +116,7 @@ impl AppRuntime {
             app_event_receiver,
             agent_ui_event_sender,
             agent_ui_event_receiver,
+            task_subscriptions: HashMap::new(),
         })
     }
 
@@ -142,6 +145,7 @@ impl AppRuntime {
             app_event_receiver,
             agent_ui_event_sender,
             agent_ui_event_receiver,
+            task_subscriptions: HashMap::new(),
         }
     }
 

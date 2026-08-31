@@ -1,7 +1,6 @@
 use serde_json::Value;
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::time::Instant;
 
 mod audio;
@@ -57,7 +56,7 @@ pub use rustcode_core::ToolErrorKind;
 pub(crate) use exec::{
     CommandProgressCallback, background_task_manager, command_confirmation_preview,
     command_requires_confirmation, run_command_output_with_progress_cancellable,
-    stop_background_tasks,
+    stop_background_tasks, task_event_to_tool_output,
 };
 
 pub(crate) use filesystem::edit_target_and_replacement;
@@ -468,17 +467,6 @@ pub(crate) fn spawn_background_task_for_test(
             ),
         )
         .map(|_| ())
-}
-
-type WakeupCallback = Box<dyn Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static>;
-
-pub(crate) static WAKEUP_CALLBACK: OnceLock<WakeupCallback> = OnceLock::new();
-
-pub fn register_wakeup_callback<F>(cb: F)
-where
-    F: Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static,
-{
-    let _ = WAKEUP_CALLBACK.set(Box::new(cb));
 }
 
 thread_local! {

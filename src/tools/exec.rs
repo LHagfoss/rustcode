@@ -4,7 +4,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 // Re-exports needed by exec tools
-pub(crate) use super::WAKEUP_CALLBACK;
 pub(crate) use super::get_active_session_id;
 pub(crate) use super::parse_json_bool;
 pub(crate) use super::parse_json_number;
@@ -27,19 +26,7 @@ static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static BACKGROUND_TASK_MANAGER: OnceLock<TaskManager> = OnceLock::new();
 
 pub(crate) fn background_task_manager() -> &'static TaskManager {
-    BACKGROUND_TASK_MANAGER.get_or_init(|| {
-        let manager = TaskManager::new(Arc::new(RootProcessTerminator));
-        let subscription = manager.subscribe();
-        std::thread::Builder::new()
-            .name("rustcode-task-events".to_string())
-            .spawn(move || {
-                while let Ok(event) = subscription.recv() {
-                    dispatch_background_event(event);
-                }
-            })
-            .expect("failed to start background task event dispatcher");
-        manager
-    })
+    BACKGROUND_TASK_MANAGER.get_or_init(|| TaskManager::new(Arc::new(RootProcessTerminator)))
 }
 
 struct RootProcessTerminator;
@@ -50,31 +37,45 @@ impl ProcessTerminator for RootProcessTerminator {
     }
 }
 
-fn dispatch_background_event(event: TaskEvent) {
-    let TaskEvent::Finished {
-        id,
-        session_id,
-        command,
-        output,
-    } = event
-    else {
-        return;
-    };
-
-    let mut output = match output {
-        Ok(output) => command_output_to_tool_output(&command, output),
-        Err(error) => {
-            let error = error.strip_prefix("failed to spawn process:").map_or_else(
-                || format!("failed to wait: {error}"),
-                |cause| format!("failed to spawn:{cause}"),
-            );
-            super::ToolExecutionOutput::failure(error)
+pub(crate) fn task_event_to_tool_output(
+    event: TaskEvent,
+) -> Option<(String, String, super::ToolExecutionOutput)> {
+    let (id, session_id, output) = match event {
+        TaskEvent::Finished {
+            id,
+            session_id,
+            command,
+            output,
+        } => {
+            let mut output = match output {
+                Ok(output) => command_output_to_tool_output(&command, output),
+                Err(error) => {
+                    let error = error.strip_prefix("failed to spawn process:").map_or_else(
+                        || format!("failed to wait: {error}"),
+                        |cause| format!("failed to spawn:{cause}"),
+                    );
+                    super::ToolExecutionOutput::failure(error)
+                }
+            };
+            output.command = Some(command);
+            (id, session_id, output)
         }
+        TaskEvent::Cancelled {
+            id,
+            session_id,
+            command,
+        } => {
+            let mut output = super::ToolExecutionOutput::failure_with_kind(
+                "background task cancelled".to_string(),
+                super::ToolErrorKind::Cancelled,
+                false,
+            );
+            output.command = Some(command);
+            (id, session_id, output)
+        }
+        TaskEvent::Started { .. } => return None,
     };
-    output.command = Some(command);
-    if let Some(callback) = WAKEUP_CALLBACK.get() {
-        callback(session_id.to_string(), id.to_string(), output);
-    }
+    Some((id.to_string(), session_id.to_string(), output))
 }
 
 fn command_output_to_tool_output(
@@ -410,19 +411,24 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 .and_then(|t| t.as_str())
                 .ok_or("missing 'task_id' argument for kill action")?;
 
-            match manager.cancel_in_session(&session_id, task_id) {
-                CancelResult::Cancelled | CancelResult::Requested => {
-                    Ok(format!("Task '{task_id}' terminated successfully."))
-                }
-                CancelResult::Failed => Err(format!("Failed to terminate task '{task_id}'.")),
-                CancelResult::AlreadyFinished | CancelResult::NotFound => {
-                    Err(format!("Task '{task_id}' not found."))
-                }
-            }
+            cancel_result_message(task_id, manager.cancel_in_session(&session_id, task_id))
         }
         _ => Err(format!(
             "Unknown action '{action}'. Supported actions: list, status, kill."
         )),
+    }
+}
+
+fn cancel_result_message(task_id: &str, result: CancelResult) -> Result<String, String> {
+    match result {
+        CancelResult::Cancelled => Ok(format!("Task '{task_id}' terminated successfully.")),
+        CancelResult::Requested => Ok(format!(
+            "Task '{task_id}' termination requested; it will be cancelled when its process starts."
+        )),
+        CancelResult::Failed => Err(format!("Failed to terminate task '{task_id}'.")),
+        CancelResult::AlreadyFinished | CancelResult::NotFound => {
+            Err(format!("Task '{task_id}' not found."))
+        }
     }
 }
 
@@ -479,10 +485,10 @@ mod tests {
     #[cfg(unix)]
     use super::terminate_background_pid;
     use super::{
-        command_confirmation_preview, command_confirmation_scope, command_output_to_tool_output,
+        cancel_result_message, command_confirmation_preview, command_confirmation_scope,
         command_requires_confirmation, has_interactive_sudo, manage_task_tool,
         reject_broad_git_stage, run_command, run_command_output, run_command_output_cancellable,
-        run_command_output_with_progress,
+        run_command_output_with_progress, task_event_to_tool_output,
     };
 
     #[cfg(unix)]
@@ -629,17 +635,33 @@ mod tests {
             }
         }
         assert_eq!(terminal_events.len(), 1);
-        match &terminal_events[0] {
-            rustcode_tasks::TaskEvent::Finished {
-                output: Ok(output), ..
-            } => {
-                let converted = command_output_to_tool_output(task.id().as_str(), output.clone());
-                assert!(converted.success);
-                assert_eq!(converted.command.as_deref(), Some(task.id().as_str()));
-                assert!(converted.content.contains("done"));
-            }
-            other => panic!("expected one successful completion, got {other:?}"),
-        }
+        let (task_id, session_id, converted) =
+            task_event_to_tool_output(terminal_events.pop().unwrap()).expect("finished output");
+        assert_eq!(task_id, task.id().as_str());
+        assert_eq!(session_id, "root-completion-session");
+        assert!(converted.success);
+        assert_eq!(converted.command.as_deref(), Some("printf done"));
+        assert!(converted.content.contains("done"));
+    }
+
+    #[test]
+    fn task_event_root_adapter_preserves_cancelled_metadata() {
+        let event = rustcode_tasks::TaskEvent::Cancelled {
+            id: rustcode_tasks::TaskId::new("cancelled-task"),
+            session_id: rustcode_tasks::SessionId::new("cancelled-session"),
+            command: "cargo test".to_string(),
+        };
+
+        let (task_id, session_id, output) = task_event_to_tool_output(event).expect("cancelled");
+        assert_eq!(task_id, "cancelled-task");
+        assert_eq!(session_id, "cancelled-session");
+        assert!(!output.success);
+        assert_eq!(output.command.as_deref(), Some("cargo test"));
+        assert_eq!(
+            output.error_kind,
+            Some(crate::tools::ToolErrorKind::Cancelled)
+        );
+        assert_eq!(output.content, "background task cancelled");
     }
 
     #[test]
@@ -679,6 +701,17 @@ mod tests {
         crate::tools::set_active_session_id(Some(owner.to_owned()));
         crate::tools::stop_background_tasks(owner);
         crate::tools::set_active_session_id(None);
+    }
+
+    #[test]
+    fn manage_task_requested_kill_explains_asynchronous_termination() {
+        assert_eq!(
+            cancel_result_message(
+                "task-starting",
+                rustcode_tasks::CancelResult::Requested
+            ),
+            Ok("Task 'task-starting' termination requested; it will be cancelled when its process starts.".to_string())
+        );
     }
 
     #[test]
