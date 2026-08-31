@@ -191,7 +191,7 @@ fn read_only_repeats_warn_not_abort() {
 }
 
 #[test]
-fn equivalent_native_and_shell_reads_abort_after_three() {
+fn equivalent_native_and_shell_reads_warn_before_result_grounded_recovery() {
     let mut detector = LoopDetector::new(8);
     let calls = [
         (
@@ -216,8 +216,192 @@ fn equivalent_native_and_shell_reads_abort_after_three() {
     }
     assert_eq!(
         statuses,
-        [LoopStatus::Ok, LoopStatus::Ok, LoopStatus::Abort(3)]
+        [LoopStatus::Ok, LoopStatus::Ok, LoopStatus::Warning(3)]
     );
+}
+
+#[test]
+fn replayed_cross_tool_sequence_recovers_before_sixth_inspection() {
+    let mut ledger = FileEvidenceLedger::default();
+    ledger.record_mutation("src/config.ts", Some("one\ntwo\nthree\n"));
+    let calls = [
+        (
+            "view_file",
+            serde_json::json!({"path": "src/config.ts", "start_line": 1, "end_line": 3}),
+        ),
+        (
+            "run_command",
+            serde_json::json!({"command": "cat src/config.ts"}),
+        ),
+        (
+            "run_command",
+            serde_json::json!({"command": "wc -l -c src/config.ts"}),
+        ),
+        (
+            "run_command",
+            serde_json::json!({"command": "od -An -t x1 src/config.ts"}),
+        ),
+    ];
+    let mut grounded_at = None;
+    for (index, (name, args)) in calls.iter().enumerate() {
+        let Some((path, start, end)) = read_target(name, args) else {
+            panic!("expected read target for {name}");
+        };
+        if ledger.record_read(&path, start, end, true).is_some() {
+            grounded_at = Some(index + 1);
+            break;
+        }
+    }
+    assert_eq!(grounded_at, Some(3));
+}
+
+#[test]
+fn wc_and_od_share_the_file_read_family_with_native_tools() {
+    let args =
+        serde_json::json!({"path": "/tmp/project/src/config.ts", "start_line": 1, "end_line": 36});
+    let (_, native) = signatures("view_file", &args);
+    let (_, cat) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "cat /tmp/project/src/config.ts"}),
+    );
+    let (_, wc) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "wc -l -c /tmp/project/src/config.ts"}),
+    );
+    let (_, od) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "od -An -t x1 /tmp/project/src/config.ts"}),
+    );
+    assert_eq!(native, "read:/tmp/project/src/config.ts#0");
+    assert_eq!(cat, native);
+    assert_eq!(wc, native);
+    assert_eq!(od, native);
+}
+
+#[test]
+fn shell_read_target_stops_at_pipeline_and_command_boundaries() {
+    let (_, piped) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "cat src/config.ts | head -60"}),
+    );
+    let (_, combined) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "cat src/config.ts && wc -l src/other.ts"}),
+    );
+    assert_eq!(piped, "read:src/config.ts#0");
+    assert_eq!(combined, "read:src/config.ts#0");
+    assert!(read_returns_content(
+        "run_command",
+        &serde_json::json!({"command": "cat src/config.ts | head -60"})
+    ));
+    assert!(!read_returns_content(
+        "run_command",
+        &serde_json::json!({"command": "wc -l src/config.ts | cat"})
+    ));
+}
+
+#[test]
+fn shell_read_paths_normalize_cd_and_quoting() {
+    let (_, via_cd) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "cd /tmp/project && cat 'src/config.ts'"}),
+    );
+    let (_, absolute) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "cat /tmp/project/src/config.ts"}),
+    );
+    assert_eq!(via_cd, absolute);
+    let (_, relative_cd) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "cd src && cat 'config.ts'"}),
+    );
+    let (_, relative) = signatures(
+        "run_command",
+        &serde_json::json!({"command": "cat src/config.ts"}),
+    );
+    assert_eq!(relative_cd, relative);
+}
+
+#[test]
+fn grounded_file_evidence_recovers_only_after_same_revision_and_range_repeat() {
+    let mut ledger = FileEvidenceLedger::default();
+    ledger.record_mutation("src/config.ts", Some("one\ntwo\n"));
+    assert!(
+        ledger
+            .record_read("src/config.ts", 1, Some(2), true)
+            .is_none()
+    );
+    assert!(
+        ledger
+            .record_read("src/config.ts", 1, Some(1), true)
+            .is_none()
+    );
+    assert!(
+        ledger
+            .record_read("src/config.ts", 2, Some(2), true)
+            .is_none()
+    );
+    assert!(
+        ledger
+            .record_read("src/config.ts", 1, Some(2), true)
+            .is_none()
+    );
+    let recovery = ledger
+        .record_read("src/config.ts", 1, Some(2), true)
+        .expect("same range should be recognized as unchanged evidence");
+    assert_eq!(recovery.repeated_reads, 2);
+    assert!(recovery.message().contains("src/config.ts is unchanged"));
+    assert!(recovery.message().contains("2 lines, 8 bytes"));
+}
+
+#[test]
+fn metadata_only_recovery_does_not_claim_source_was_returned() {
+    let mut ledger = FileEvidenceLedger::default();
+    ledger.record_mutation("src/config.ts", Some("one\ntwo\n"));
+    for _ in 0..3 {
+        ledger.record_read_with_kind("src/config.ts", 1, Some(2), true, false);
+    }
+    let recovery = ledger
+        .record_read_with_kind("src/config.ts", 1, Some(2), true, false)
+        .expect("repeated metadata probes should still recover");
+    let message = recovery.message();
+    assert!(message.contains("same file metadata was already checked"));
+    assert!(!message.contains("complete range 1-2 was already returned"));
+}
+
+#[test]
+fn file_evidence_resets_after_edit_and_different_pages_are_progress() {
+    let mut ledger = FileEvidenceLedger::default();
+    ledger.record_mutation("src/config.ts", Some("one\ntwo\nthree\n"));
+    assert!(
+        ledger
+            .record_read("src/config.ts", 1, Some(1), true)
+            .is_none()
+    );
+    assert!(
+        ledger
+            .record_read("src/config.ts", 2, Some(2), true)
+            .is_none()
+    );
+    ledger.record_mutation("src/config.ts", Some("changed\n"));
+    assert!(
+        ledger
+            .record_read("src/config.ts", 1, Some(1), true)
+            .is_none()
+    );
+}
+
+#[test]
+fn partial_rechecks_never_claim_a_complete_range() {
+    let mut ledger = FileEvidenceLedger::default();
+    ledger.record_mutation("src/config.ts", Some("one\ntwo\nthree\n"));
+    for _ in 0..5 {
+        assert!(
+            ledger
+                .record_read("src/config.ts", 1, Some(1), true)
+                .is_none()
+        );
+    }
 }
 
 #[test]

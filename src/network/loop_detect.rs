@@ -17,6 +17,7 @@ use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 
 /// Search binaries collapsed into a single `search:` category so
 /// `grep`/`rg`/`ag` variants of the same query count as one intent.
@@ -159,6 +160,13 @@ pub fn signatures(name: &str, args: &Value) -> (String, String) {
 /// same region. Regions are bucketed per 200 lines so paging through a large
 /// file remains legitimate work.
 fn read_category(name: &str, args: &Value) -> Option<String> {
+    let (path, start, _) = read_target(name, args)?;
+    Some(format!("read:{path}#{}", start / 200))
+}
+
+/// Return the normalized path and requested line range for a native read or
+/// a safe shell probe. `wc` and `od` represent whole-file checks.
+pub fn read_target(name: &str, args: &Value) -> Option<(String, usize, Option<usize>)> {
     if name == "view_file" || name == "read_file" {
         let path = args.get("path")?.as_str()?.trim();
         if path.is_empty() {
@@ -166,58 +174,143 @@ fn read_category(name: &str, args: &Value) -> Option<String> {
         }
         let start = args
             .get("start_line")
-            .and_then(|value| value.as_u64())
+            .and_then(crate::tools::parse_json_number)
+            .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(1);
-        return Some(format!(
-            "read:{}#{}",
-            normalize_read_path(path),
-            start / 200
-        ));
+        let end = args
+            .get("end_line")
+            .and_then(crate::tools::parse_json_number)
+            .and_then(|value| usize::try_from(value).ok());
+        return Some((normalize_read_path(path), start, end));
     }
     if name != "run_command" {
         return None;
     }
-
     let command = args.get("command")?.as_str()?;
-    let tokens: Vec<&str> = command.split_whitespace().collect();
-    let command_index = tokens
-        .iter()
-        .position(|token| matches!(token.rsplit('/').next(), Some("cat" | "sed" | "awk" | "nl")))?;
+    let tokens = shell_tokens(command);
+    let command_index = tokens.iter().position(|token| {
+        matches!(
+            token.rsplit('/').next(),
+            Some("cat" | "sed" | "awk" | "nl" | "wc" | "od")
+        )
+    })?;
     let bin = tokens[command_index].rsplit('/').next()?;
-    if !matches!(bin, "cat" | "sed" | "awk" | "nl") {
-        return None;
-    }
-    let path = tokens
+    let segment_end = tokens[command_index + 1..]
         .iter()
+        .position(|token| is_shell_operator(token))
+        .map_or(tokens.len(), |offset| command_index + 1 + offset);
+    let path = tokens
+        .get(command_index + 1..segment_end)?
+        .iter()
+        .enumerate()
         .rev()
-        .map(|token| token.trim_matches(|c: char| c == '\'' || c == '"'))
-        .find(|token| !token.is_empty() && !token.starts_with('-'))?;
-    let start = match bin {
-        "sed" => tokens[command_index + 1..]
+        .find(|(_, token)| {
+            !token.is_empty()
+                && !token.starts_with('-')
+                && !token.contains('=')
+                && !token.contains('>')
+        })
+        .map(|(_, token)| token)?;
+    let segment = &tokens[command_index..segment_end];
+    let (start, end) = match bin {
+        "sed" => segment[1..]
             .iter()
-            .find_map(|token| parse_sed_start(token)),
-        "awk" => parse_awk_start(command),
-        _ => None,
-    }
-    .unwrap_or(1);
-    Some(format!(
-        "read:{}#{}",
-        normalize_read_path(path),
-        start / 200
-    ))
+            .find_map(|token| parse_sed_range(token))
+            .unwrap_or((1, None)),
+        "awk" => parse_awk_range(&segment.join(" ")).unwrap_or((1, None)),
+        _ => (1, None),
+    };
+    Some((normalize_shell_read_path(&tokens, path), start, end))
 }
 
-fn normalize_read_path(path: &str) -> &str {
+/// Whether a recognized read command returns file content. `wc` and `od`
+/// provide useful integrity metadata but must not make recovery claim that
+/// the complete source range was shown to the model.
+pub fn read_returns_content(name: &str, args: &Value) -> bool {
+    if name == "view_file" || name == "read_file" {
+        return true;
+    }
+    let Some(command) = args.get("command").and_then(Value::as_str) else {
+        return false;
+    };
+    shell_tokens(command)
+        .iter()
+        .find_map(|token| token.rsplit('/').next())
+        .is_some_and(|bin| matches!(bin, "cat" | "sed" | "awk" | "nl"))
+}
+
+fn is_shell_operator(token: &str) -> bool {
+    matches!(token, "|" | "||" | "&&" | ";" | "&")
+        || token.starts_with('>')
+        || token.starts_with("2>")
+}
+
+fn normalize_read_path(path: &str) -> String {
     path.trim_matches(|c: char| c == '\'' || c == '"')
         .trim_start_matches("./")
         .trim_end_matches('/')
+        .to_string()
 }
 
-fn parse_sed_start(token: &str) -> Option<u64> {
-    token
-        .trim_matches(|c: char| c == '\'' || c == '"')
-        .split_once(',')
-        .and_then(|(start, _)| start.parse().ok())
+/// Tokenize the small shell subset used by read-only probes. This deliberately
+/// does not attempt to execute shell syntax; it only keeps quoted paths (and
+/// awk/sed expressions) together so equivalent commands share a key.
+fn shell_tokens(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in command.chars() {
+        if escaped {
+            token.push(ch);
+            escaped = false;
+        } else if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                token.push(ch);
+            }
+        } else if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+        } else if ch.is_whitespace() {
+            if !token.is_empty() {
+                tokens.push(std::mem::take(&mut token));
+            }
+        } else {
+            token.push(ch);
+        }
+    }
+    if !token.is_empty() {
+        tokens.push(token);
+    }
+    tokens
+}
+
+fn normalize_shell_read_path(tokens: &[String], path: &str) -> String {
+    let mut path = normalize_read_path(path);
+    // `cd /project && cat src/x` and `cat /project/src/x` are the same
+    // inspection. Relative `cd` prefixes are retained too: they are stable
+    // within the command and avoid treating `cd src && cat config.ts` as an
+    // unrelated root-level read.
+    if !Path::new(&path).is_absolute()
+        && tokens.first().is_some_and(|token| token == "cd")
+        && let Some(cwd) = tokens.get(1)
+        && !cwd.is_empty()
+    {
+        path = Path::new(cwd).join(path).to_string_lossy().into_owned();
+        path = normalize_read_path(&path);
+    }
+    path
+}
+
+fn parse_sed_range(token: &str) -> Option<(usize, Option<usize>)> {
+    let token = token.trim_matches(|c: char| c == '\'' || c == '"');
+    let (start, end) = token.split_once(',')?;
+    let start = start.parse().ok()?;
+    let end = end.strip_suffix('p').unwrap_or(end).parse().ok()?;
+    Some((start, Some(end)))
 }
 
 fn parse_awk_start(command: &str) -> Option<u64> {
@@ -225,6 +318,14 @@ fn parse_awk_start(command: &str) -> Option<u64> {
     let tail = command.split_once(marker)?.1;
     let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
+}
+
+fn parse_awk_range(command: &str) -> Option<(usize, Option<usize>)> {
+    let start = parse_awk_start(command)?.try_into().ok()?;
+    let marker = "NR<=";
+    let end = command.split_once(marker)?.1;
+    let digits: String = end.chars().take_while(char::is_ascii_digit).collect();
+    Some((start, digits.parse().ok()))
 }
 
 fn primary_command(cmd: &str) -> &str {
@@ -307,6 +408,151 @@ pub struct ProgressObservation {
     pub success: bool,
 }
 
+/// Authoritative, compact evidence for a file that was successfully mutated.
+/// This is intentionally metadata-only: recovery messages can identify the
+/// verified path and range without copying source back into the transcript.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEvidence {
+    pub revision: u64,
+    pub content_digest: Option<u64>,
+    pub byte_count: Option<usize>,
+    pub line_count: Option<usize>,
+    pub last_mutation: u64,
+    ranges: HashSet<(usize, usize)>,
+    content_ranges: HashSet<(usize, usize)>,
+    repeated_reads: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroundedReadRecovery {
+    pub path: String,
+    pub revision: u64,
+    pub line_count: Option<usize>,
+    pub byte_count: Option<usize>,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub repeated_reads: usize,
+    pub content_returned: bool,
+}
+
+impl GroundedReadRecovery {
+    pub fn message(&self) -> String {
+        let counts = match (self.line_count, self.byte_count) {
+            (Some(lines), Some(bytes)) => format!("; {lines} lines, {bytes} bytes"),
+            (Some(lines), None) => format!("; {lines} lines"),
+            (None, Some(bytes)) => format!("; {bytes} bytes"),
+            (None, None) => String::new(),
+        };
+        let evidence = if self.content_returned {
+            format!(
+                "complete range {}-{} was already returned{}",
+                self.start_line, self.end_line, counts
+            )
+        } else {
+            format!(
+                "the same file metadata was already checked{} (range {}-{})",
+                counts, self.start_line, self.end_line
+            )
+        };
+        format!(
+            "{} is unchanged since successful write (revision {}); {evidence}; do not re-check it unless a specific missing line or a new diagnostic is identified.",
+            self.path, self.revision
+        )
+    }
+}
+
+/// Tracks read evidence by path and mutation revision. A different range or
+/// any successful edit starts a new evidence sequence, which keeps ordinary
+/// paging and post-edit reads out of the recovery path.
+#[derive(Debug, Default, Clone)]
+pub struct FileEvidenceLedger {
+    generation: u64,
+    files: HashMap<String, FileEvidence>,
+}
+
+impl FileEvidenceLedger {
+    const RECOVERY_REPEATS: usize = 2;
+
+    pub fn record_mutation(&mut self, path: &str, content: Option<&str>) {
+        self.generation = self.generation.saturating_add(1);
+        let (content_digest, byte_count, line_count) = content
+            .map(|content| {
+                (
+                    Some(stable_hash(content)),
+                    Some(content.len()),
+                    Some(content.lines().count()),
+                )
+            })
+            .unwrap_or((None, None, None));
+        self.files.insert(
+            normalize_read_path(path),
+            FileEvidence {
+                revision: self.generation,
+                content_digest,
+                byte_count,
+                line_count,
+                last_mutation: self.generation,
+                ranges: HashSet::new(),
+                content_ranges: HashSet::new(),
+                repeated_reads: 0,
+            },
+        );
+    }
+
+    /// Record one successful native or shell read. The semantic category is
+    /// supplied by `signatures`, while this method retains exact ranges so a
+    /// non-overlapping page is progress even when it falls in one bucket.
+    pub fn record_read(
+        &mut self,
+        path: &str,
+        start_line: usize,
+        end_line: Option<usize>,
+        successful: bool,
+    ) -> Option<GroundedReadRecovery> {
+        self.record_read_with_kind(path, start_line, end_line, successful, true)
+    }
+
+    pub fn record_read_with_kind(
+        &mut self,
+        path: &str,
+        start_line: usize,
+        end_line: Option<usize>,
+        successful: bool,
+        content_read: bool,
+    ) -> Option<GroundedReadRecovery> {
+        if !successful || start_line == 0 {
+            return None;
+        }
+        let path = normalize_read_path(path);
+        let evidence = self.files.get_mut(&path)?;
+        let end_line = end_line.or(evidence.line_count).unwrap_or(start_line);
+        let range = (start_line, end_line.max(start_line));
+        let complete = evidence
+            .line_count
+            .is_some_and(|line_count| start_line == 1 && range.1 >= line_count);
+        if evidence.ranges.insert(range) {
+            evidence.repeated_reads = 0;
+        } else {
+            evidence.repeated_reads = evidence.repeated_reads.saturating_add(1);
+        }
+        if content_read {
+            evidence.content_ranges.insert(range);
+        }
+        (complete && evidence.repeated_reads >= Self::RECOVERY_REPEATS).then(|| {
+            GroundedReadRecovery {
+                path,
+                revision: evidence.revision,
+                line_count: evidence.line_count,
+                byte_count: evidence.byte_count,
+                start_line: range.0,
+                end_line: range.1,
+                repeated_reads: evidence.repeated_reads,
+                content_returned: evidence.content_ranges.contains(&range),
+            }
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressReason {
     WorkspaceChanged,
@@ -354,6 +600,7 @@ pub struct ProgressAssessment {
 #[derive(Debug, Clone)]
 pub struct ProgressLedger {
     seen_outputs: HashSet<u64>,
+    seen_reads: HashSet<u64>,
     seen_verifications: HashSet<u64>,
     seen_failures: HashSet<u64>,
     recent_states: VecDeque<u64>,
@@ -364,6 +611,7 @@ impl Default for ProgressLedger {
     fn default() -> Self {
         Self {
             seen_outputs: HashSet::new(),
+            seen_reads: HashSet::new(),
             seen_verifications: HashSet::new(),
             seen_failures: HashSet::new(),
             recent_states: VecDeque::with_capacity(4),
@@ -389,7 +637,10 @@ impl ProgressLedger {
         let new_output = remember(&mut self.seen_outputs, action_output);
         if observation.changed_workspace {
             self.seen_verifications.clear();
+            self.seen_reads.clear();
         }
+        let new_read = observation.read_only
+            && remember(&mut self.seen_reads, stable_hash(&observation.action));
         let stable_verification = observation.verification && observation.success;
         // Verification novelty is keyed to the normalized action, not its
         // stdout. Test runners commonly vary elapsed-time text between runs;
@@ -422,6 +673,12 @@ impl ProgressLedger {
             (true, ProgressReason::WorkspaceChanged)
         } else if observation.read_only && observation.replayed {
             (false, ProgressReason::NoNewInformation)
+        } else if observation.read_only && observation.success {
+            if observation.fresh_read && new_read {
+                (true, ProgressReason::FreshRead)
+            } else {
+                (false, ProgressReason::NoNewInformation)
+            }
         } else if observation.fresh_read && new_output {
             (true, ProgressReason::FreshRead)
         } else if observation.search_result && observation.success && observation.no_result {
@@ -634,8 +891,12 @@ impl LoopDetector {
                 self.cross_read_methods.clear();
             }
             self.cross_read_methods.insert(read_method(name, exact));
-            if self.cross_read_methods.len() >= 3 {
-                return LoopStatus::Abort(self.cross_read_methods.len());
+            // Do not abort before the result is available. The result handler
+            // may have authoritative write/range evidence that can ground a
+            // recovery notice; a pre-execution abort would only emit the
+            // generic loop prompt and lose that context.
+            if self.cross_read_methods.len() >= 3 && status == LoopStatus::Ok {
+                return LoopStatus::Warning(self.cross_read_methods.len());
             }
         } else {
             self.cross_read_category = None;
