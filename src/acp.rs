@@ -17,6 +17,7 @@ use rustcode_tasks::TaskEvent;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 pub(crate) use config::{build_session_config_options, handle_set_config_option};
@@ -56,6 +57,7 @@ struct SessionTaskSink {
     runtime: tokio::runtime::Handle,
     terminal_ledger: std::sync::Mutex<TerminalLedger>,
     terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
+    terminal_overflow: Arc<AtomicBool>,
 }
 
 impl SessionTaskSink {
@@ -86,6 +88,7 @@ impl SessionTaskSink {
         let connection = self.connection.clone();
         let session_id = self.session_id.clone();
         let terminal_backlog = Arc::clone(&self.terminal_backlog);
+        let terminal_overflow = Arc::clone(&self.terminal_overflow);
         self.runtime.spawn(async move {
             {
                 let mut state = state.lock().await;
@@ -126,6 +129,7 @@ impl SessionTaskSink {
                 backlog.push_back(event.clone());
                 while backlog.len() > ACP_TERMINAL_BACKLOG_CAPACITY {
                     backlog.pop_front();
+                    terminal_overflow.store(true, Ordering::Release);
                 }
             }
             // Release the correlated wakeup only after history persistence and
@@ -248,6 +252,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
                     let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
                     let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+                    let terminal_overflow = Arc::new(AtomicBool::new(false));
                     let state = Arc::new(Mutex::new(state));
                     let task_sink = Arc::new(SessionTaskSink {
                         session_id: session_id.clone(),
@@ -256,6 +261,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         runtime: tokio::runtime::Handle::current(),
                         terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
                         terminal_backlog: Arc::clone(&terminal_backlog),
+                        terminal_overflow: Arc::clone(&terminal_overflow),
                     });
                     server
                         .task_routes
@@ -278,6 +284,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
                             known_task_ids,
                             terminal_backlog,
+                            terminal_overflow,
                         },
                     );
                     responder
@@ -367,10 +374,18 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                                 Arc::clone(&session.task_events),
                                 Arc::clone(&session.known_task_ids),
                                 Arc::clone(&session.terminal_backlog),
+                                Arc::clone(&session.terminal_overflow),
                             )
                         });
-                    let Some((state, cwd, turns, task_events, known_task_ids, terminal_backlog)) =
-                        session
+                    let Some((
+                        state,
+                        cwd,
+                        turns,
+                        task_events,
+                        known_task_ids,
+                        terminal_backlog,
+                        terminal_overflow,
+                    )) = session
                     else {
                         return Err(agent_client_protocol::Error::invalid_params()
                             .data(format!("unknown ACP session: {session_id}")));
@@ -391,6 +406,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             task_events,
                             known_task_ids,
                             terminal_backlog,
+                            terminal_overflow,
                             text,
                             task_connection,
                             prompt_server.client,
