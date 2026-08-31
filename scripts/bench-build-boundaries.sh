@@ -17,6 +17,7 @@ Options:
   --all-targets        Pass --all-targets to Cargo checks
   --skip-focused       Skip temporary source-mtime focused-edit checks
   --allow-cargo-clean  Permit cargo clean only for an explicit /tmp target
+  --clock-smoke-test   Verify the selected clock returns subsecond timing
   --help               Show this help
 
 Normal runs do not call cargo clean. A clean measurement starts in a fresh
@@ -38,6 +39,7 @@ keep_target=0
 all_targets=0
 skip_focused=0
 allow_cargo_clean=0
+clock_smoke_test=0
 requested_packages=()
 
 while (($# > 0)); do
@@ -61,10 +63,61 @@ while (($# > 0)); do
         --all-targets) all_targets=1; shift ;;
         --skip-focused) skip_focused=1; shift ;;
         --allow-cargo-clean) allow_cargo_clean=1; shift ;;
+        --clock-smoke-test) clock_smoke_test=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) die "unknown option: $1 (try --help)" ;;
     esac
 done
+
+clock_kind=seconds
+if command -v perl >/dev/null 2>&1 &&
+    perl -MTime::HiRes -e 'exit 0' >/dev/null 2>&1; then
+    clock_kind=perl
+else
+    date_probe="$(date +%s%3N 2>/dev/null)"
+    if [[ "$date_probe" =~ ^[0-9]+$ ]]; then
+        clock_kind=date
+    elif command -v python3 >/dev/null 2>&1; then
+        clock_kind=python3
+    elif command -v ruby >/dev/null 2>&1; then
+        clock_kind=ruby
+    fi
+fi
+
+now_ms() {
+    case "$clock_kind" in
+        perl)
+            perl -MTime::HiRes -e \
+                'printf "%d\n", Time::HiRes::time() * 1000'
+            ;;
+        date)
+            date +%s%3N
+            ;;
+        python3)
+            python3 -c 'import time; print(int(time.time() * 1000))'
+            ;;
+        ruby)
+            ruby -e 'puts (Time.now.to_f * 1000).to_i'
+            ;;
+        *)
+            # Last-resort POSIX/macOS fallback: valid epoch milliseconds, but
+            # only whole-second precision. Prefer installing Perl Time::HiRes
+            # (or use a platform with GNU date) for useful warm-build timings.
+            printf '%s000\n' "$(date +%s)"
+            ;;
+    esac
+}
+
+if ((clock_smoke_test)); then
+    clock_start="$(now_ms)"
+    sleep 0.02
+    clock_end="$(now_ms)"
+    clock_elapsed=$((clock_end - clock_start))
+    ((clock_elapsed > 0)) ||
+        die "clock '$clock_kind' did not report a positive subsecond interval"
+    printf 'clock_source=%s elapsed_ms=%s\n' "$clock_kind" "$clock_elapsed"
+    exit 0
+fi
 
 command -v cargo >/dev/null 2>&1 || die "cargo is required"
 command -v jq >/dev/null 2>&1 || die "jq is required for package discovery"
@@ -147,16 +200,6 @@ else
     exec 3>&1
 fi
 printf 'package\tscenario\tstatus\telapsed_ms\tcommand\tlog\n' >&3
-
-now_ms() {
-    local value
-    value="$(date +%s%3N 2>/dev/null)"
-    if [[ "$value" =~ ^[0-9]+$ ]]; then
-        printf '%s\n' "$value"
-    else
-        printf '%s000\n' "$(date +%s)"
-    fi
-}
 
 json_packages="$(cargo metadata --manifest-path "$manifest_path" --no-deps --format-version 1 2>/dev/null)" \
     || die "cargo metadata failed"
