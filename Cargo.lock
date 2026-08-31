@@ -2972,6 +2972,7 @@ dependencies = [
  "rustcode-command",
  "rustcode-core",
  "rustcode-lifecycle",
+ "rustcode-loop-detect",
  "rustcode-session",
  "rustcode-tool-protocol",
  "rustcode-tools",
@@ -3021,6 +3022,13 @@ dependencies = [
 [[package]]
 name = "rustcode-lifecycle"
 version = "0.40.4"
+
+[[package]]
+name = "rustcode-loop-detect"
+version = "0.40.4"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "rustcode-session"
