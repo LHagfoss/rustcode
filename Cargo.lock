@@ -2971,6 +2971,7 @@ dependencies = [
  "rusqlite",
  "rustcode-command",
  "rustcode-core",
+ "rustcode-lifecycle",
  "rustcode-session",
  "rustcode-tool-protocol",
  "rustcode-tools",
@@ -3016,6 +3017,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "rustcode-lifecycle"
+version = "0.40.4"
 
 [[package]]
 name = "rustcode-session"
