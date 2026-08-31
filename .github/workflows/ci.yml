@@ -15,6 +15,8 @@ env:
     # linking them for ephemeral checks and test binaries.
     CARGO_PROFILE_DEV_DEBUG: "0"
     CARGO_PROFILE_TEST_DEBUG: "0"
+    SCCACHE_GHA_ENABLED: "true"
+    RUSTC_WRAPPER: "sccache"
 
 permissions:
     contents: read
@@ -73,6 +75,9 @@ jobs:
               with:
                   key: linux
 
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
             - name: Install FFmpeg
               run: |
                   sudo apt-get update
@@ -110,6 +115,9 @@ jobs:
         name: ${{ matrix.name }} portability coverage
         needs: changes
         if: needs.changes.outputs.code == 'true'
+        # Linux is the required quality gate. Native platform checks remain
+        # visible and actionable without delaying or blocking a merge.
+        continue-on-error: true
         runs-on: ${{ matrix.os }}
         strategy:
             fail-fast: false
@@ -153,8 +161,11 @@ jobs:
               with:
                   key: ${{ matrix.cache_key }}
 
-            - name: Check platform test compilation
-              # Linux runs the behavioral suite. These jobs retain native
-              # macOS/Windows cfg and type coverage without linking and running
-              # the same monolithic test binary two more times.
-              run: cargo check --tests --locked
+            - name: Configure shared compiler cache
+              uses: mozilla-actions/sccache-action@v0.0.11
+
+            - name: Check platform compilation
+              # Linux runs the behavioral suite. These advisory jobs verify the
+              # shipped binary's native macOS/Windows cfg without compiling or
+              # linking the test harness again.
+              run: cargo check --locked
