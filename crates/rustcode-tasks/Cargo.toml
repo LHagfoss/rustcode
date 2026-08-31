@@ -1,0 +1,7 @@
+[package]
+name = "rustcode-tasks"
+version = "0.40.4"
+edition = "2024"
+
+[dependencies]
+rustcode-command = { path = "../rustcode-command" }
