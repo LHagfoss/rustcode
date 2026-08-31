@@ -30,9 +30,9 @@ pub(crate) use dispatch::{
 };
 pub(crate) use parser::find_closing_tool_fence;
 pub(crate) use schema::{
-    MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPolicy,
-    native_tools_schema_for_context, native_tools_schema_for_context_with_sticky,
-    tool_system_prompt_for_policy,
+    MAX_MCP_NATIVE_SCHEMAS, McpSchemaSelectionStats, ToolSchemaPhase, ToolSchemaPolicy,
+    native_tools_schema_for_context, native_tools_schema_for_context_with_sticky_at,
+    tool_schema_phase, tool_system_prompt_for_policy,
 };
 
 use schema::{AGENT_TOOL_SPECS, collect_mcp_tools, schema_for_agent_tool, schema_for_tool};
@@ -44,7 +44,8 @@ use parser::repair_json;
 #[cfg(test)]
 use schema::{
     MCP_DISCOVERY_FALLBACK_COUNT, mcp_canonical_name, provider_compatible_schema,
-    schema_from_arguments, select_mcp_tools_for_context, select_mcp_tools_for_context_with_sticky,
+    schema_from_arguments, select_mcp_tools_for_context, select_mcp_tools_for_context_in_phase,
+    select_mcp_tools_for_context_with_sticky,
 };
 
 #[cfg(test)]

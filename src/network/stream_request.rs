@@ -876,9 +876,16 @@ pub async fn stream_request(
         let tool_protocol = s.active_tool_protocol();
         if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) && allow_tools {
             let session_id = s.active_session_id.clone();
-            let (schemas, selection) =
-                s.prompt_cache
-                    .native_tool_schemas(schema_policy, &aligned_messages, &session_id);
+            let workspace_root = s
+                .workspace_root
+                .clone()
+                .or_else(|| std::env::current_dir().ok());
+            let (schemas, selection) = s.prompt_cache.native_tool_schemas(
+                schema_policy,
+                &aligned_messages,
+                &session_id,
+                workspace_root.as_deref(),
+            );
             (tool_protocol, schemas, selection)
         } else {
             (
@@ -933,6 +940,9 @@ pub async fn stream_request(
                 "selected_names": mcp_selection.selected_names,
                 "max": crate::tools::MAX_MCP_NATIVE_SCHEMAS,
                 "allow_tools": allow_tools,
+                "phase": format!("{:?}", mcp_selection.phase),
+                "builtin_available": mcp_selection.builtin_available,
+                "builtin_selected": mcp_selection.builtin_selected,
             }),
         );
     }
@@ -995,6 +1005,9 @@ pub async fn stream_request(
             "tool_schema_tokens": tool_schema_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "total_estimated_prompt_tokens": estimated_prompt_tokens,
+            "tool_schema_phase": format!("{:?}", mcp_selection.phase),
+            "builtin_tools": mcp_selection.builtin_selected,
+            "available_builtin_tools": mcp_selection.builtin_available,
         }),
     );
 

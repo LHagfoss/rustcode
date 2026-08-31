@@ -296,6 +296,26 @@ fn mcp_schema_selection_has_bounded_deterministic_discovery_fallback() {
 }
 
 #[test]
+fn bootstrap_mcp_selection_does_not_flood_empty_projects_with_discovery_tools() {
+    let tools = (0..8)
+        .map(|index| {
+            (
+                format!("codebase_tool_{index}"),
+                "Generic code project result".to_string(),
+                serde_json::json!({"type":"object","properties":{}}),
+            )
+        })
+        .collect::<Vec<_>>();
+    let messages = vec![serde_json::json!({"role":"user","content":"Create a project"})];
+    let (selected, stats) =
+        select_mcp_tools_for_context_in_phase(&tools, &messages, ToolSchemaPhase::Bootstrap);
+    assert!(selected.is_empty());
+    assert_eq!(stats.fallback, 0);
+    assert_eq!(stats.omitted, tools.len());
+    assert_eq!(stats.phase, ToolSchemaPhase::Bootstrap);
+}
+
+#[test]
 fn mcp_discovery_prefers_the_socraticode_core_without_schema_flooding() {
     let names = [
         "codebase_about",
@@ -463,6 +483,77 @@ fn api_native_builtin_selection_keeps_coding_core_and_routes_specialized_tools()
         .collect::<Vec<_>>();
     assert!(media_names.contains(&"render_video"));
     assert!(media_names.contains(&"generate_music"));
+}
+
+#[test]
+fn bootstrap_schema_phase_prunes_index_tools_until_source_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("package.json"), "{}\n").unwrap();
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Create a small TypeScript app and run its tests"
+    })];
+    assert_eq!(
+        tool_schema_phase(&messages, Some(dir.path())),
+        ToolSchemaPhase::Bootstrap
+    );
+    let (schemas, stats) = native_tools_schema_for_context_with_sticky_at(
+        ToolSchemaPolicy::root(false),
+        &messages,
+        &[],
+        Some(dir.path()),
+    );
+    let names = schemas
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"run_command"));
+    assert!(names.contains(&"write_to_file"));
+    assert!(!names.contains(&"find_symbol"));
+    assert!(!names.contains(&"get_project_map"));
+    assert_eq!(stats.phase, ToolSchemaPhase::Bootstrap);
+    assert!(stats.builtin_selected < stats.builtin_available);
+    let bootstrap_schema_tokens = crate::network::compaction::estimate_tool_schema_tokens(&schemas);
+    let baseline_schema_tokens =
+        crate::network::compaction::estimate_tool_schema_tokens(&native_tools_schema(false));
+    assert!(
+        bootstrap_schema_tokens < baseline_schema_tokens * 80 / 100,
+        "bootstrap schema should materially reduce the baseline: {bootstrap_schema_tokens} vs {baseline_schema_tokens}"
+    );
+
+    for index in 0..4 {
+        std::fs::write(dir.path().join(format!("src{index}.ts")), "export {};\n").unwrap();
+    }
+    assert_eq!(
+        tool_schema_phase(&messages, Some(dir.path())),
+        ToolSchemaPhase::Established
+    );
+    let (schemas, stats) = native_tools_schema_for_context_with_sticky_at(
+        ToolSchemaPolicy::root(false),
+        &messages,
+        &[],
+        Some(dir.path()),
+    );
+    let names = schemas
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"find_symbol"));
+    assert!(names.contains(&"get_project_map"));
+    assert_eq!(stats.phase, ToolSchemaPhase::Established);
+}
+
+#[test]
+fn explicit_codebase_analysis_overrides_empty_workspace_bootstrap() {
+    let dir = tempfile::tempdir().unwrap();
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Analyze the repository's dependency graph and call graph"
+    })];
+    assert_eq!(
+        tool_schema_phase(&messages, Some(dir.path())),
+        ToolSchemaPhase::Established
+    );
 }
 
 #[test]
