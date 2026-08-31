@@ -3,3 +3,5 @@ name = "rustcode-command"
 version = "0.40.4"
 edition = "2024"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

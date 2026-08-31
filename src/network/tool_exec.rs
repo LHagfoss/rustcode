@@ -235,14 +235,18 @@ pub(crate) async fn confirm_and_execute(
                         Arc::new(move |bytes, stderr| {
                             let _ = progress_tx.send((bytes.to_vec(), stderr));
                         });
-                    crate::tools::run_command_output_with_progress(&args_owned, callback)
-                        .unwrap_or_else(|error| {
-                            crate::tools::ToolExecutionOutput::failure_with_kind(
-                                format!("error: {error}"),
-                                crate::tools::ToolErrorKind::CommandFailed,
-                                true,
-                            )
-                        })
+                    crate::tools::run_command_output_with_progress_cancellable(
+                        &args_owned,
+                        callback,
+                        Some(cancel_token_for_task),
+                    )
+                    .unwrap_or_else(|error| {
+                        crate::tools::ToolExecutionOutput::failure_with_kind(
+                            format!("error: {error}"),
+                            crate::tools::ToolErrorKind::CommandFailed,
+                            true,
+                        )
+                    })
                 } else if name_owned == "render_video" && live_key_owned.is_some() {
                     let callback: crate::tools::CommandProgressCallback =
                         Arc::new(move |bytes, stderr| {
@@ -278,6 +282,7 @@ pub(crate) async fn confirm_and_execute(
                 | "inspect_media"
                 | "validate_video_project"
                 | "render_video"
+                | "run_command"
         );
         let mut progress_open = true;
         loop {
@@ -425,6 +430,7 @@ pub(crate) async fn confirm_and_execute(
                         | "inspect_media"
                         | "validate_video_project"
                         | "render_video"
+                        | "run_command"
                 );
 
                 tokio::pin!(run_fut);
