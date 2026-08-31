@@ -39,6 +39,10 @@ pub type ProgressCallback = Arc<dyn Fn(&[u8], bool) + Send + Sync + 'static>;
 /// task registry into this crate.
 pub type StartedCallback = Arc<dyn Fn(u32) + Send + Sync + 'static>;
 
+/// Callback polled while a foreground process is running. Returning `true`
+/// requests termination of the process and its descendants.
+pub type CancellationCallback = Arc<dyn Fn() -> bool + Send + Sync + 'static>;
+
 /// Bounded output retained from one process stream.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CapturedOutput {
@@ -155,7 +159,16 @@ pub fn run_with_timeout(
     request: &CommandRequest,
     progress: Option<ProgressCallback>,
 ) -> Result<CommandOutput, String> {
-    run_internal(request, Some(request.timeout), progress, None)
+    run_internal(request, Some(request.timeout), progress, None, None)
+}
+
+/// Run a resolved command with timeout semantics and cooperative cancellation.
+pub fn run_with_timeout_cancellable(
+    request: &CommandRequest,
+    progress: Option<ProgressCallback>,
+    cancellation: Option<CancellationCallback>,
+) -> Result<CommandOutput, String> {
+    run_internal(request, Some(request.timeout), progress, None, cancellation)
 }
 
 /// Run a resolved command until it exits. This is retained for the root
@@ -165,7 +178,7 @@ pub fn run_until_exit(
     progress: Option<ProgressCallback>,
     started: Option<StartedCallback>,
 ) -> Result<CommandOutput, String> {
-    run_internal(request, None, progress, started)
+    run_internal(request, None, progress, started, None)
 }
 
 fn run_internal(
@@ -173,6 +186,7 @@ fn run_internal(
     timeout: Option<Duration>,
     progress: Option<ProgressCallback>,
     started: Option<StartedCallback>,
+    cancellation: Option<CancellationCallback>,
 ) -> Result<CommandOutput, String> {
     let mut child = build_command(request)
         .spawn()
@@ -193,9 +207,12 @@ fn run_internal(
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => {
+                    if cancellation.as_ref().is_some_and(|callback| callback()) {
+                        terminate_process_tree(&mut child, request.process_group);
+                        return Err("command cancelled by user".to_string());
+                    }
                     if start.elapsed() >= timeout {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        terminate_process_tree(&mut child, request.process_group);
                         return Err(format!(
                             "command timed out after {} ms and was killed",
                             timeout.as_millis()
@@ -220,6 +237,35 @@ fn run_internal(
         stdout,
         stderr,
     })
+}
+
+fn terminate_process_tree(child: &mut std::process::Child, process_group: bool) {
+    #[cfg(unix)]
+    if process_group {
+        // The shell is created as its own process-group leader. A negative PID
+        // targets that group, including descendants that outlive the shell.
+        if let Ok(group_id) = libc::pid_t::try_from(child.id())
+            && group_id > 0
+        {
+            // Best effort: wait below still reaps the direct child if it has
+            // already exited or the group was already gone.
+            unsafe {
+                libc::kill(-group_id, libc::SIGKILL);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        // taskkill's tree flag covers descendants even when the shell did not
+        // create a Windows process group of its own.
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &child.id().to_string()])
+            .status();
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn spawn_output_reader<R: Read + Send + 'static>(
@@ -265,14 +311,25 @@ pub fn format_bounded_output(output: &CapturedOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandRequest, MAX_OUTPUT_BYTES, ProgressCallback, StartedCallback, format_bounded_output,
-        run_until_exit, run_with_timeout,
+        CancellationCallback, CommandRequest, MAX_OUTPUT_BYTES, ProgressCallback, StartedCallback,
+        format_bounded_output, run_until_exit, run_with_timeout, run_with_timeout_cancellable,
     };
     use std::ffi::OsString;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::Duration;
+
+    static MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    struct MarkerCleanup(PathBuf);
+
+    impl Drop for MarkerCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
 
     fn request(command: &str) -> CommandRequest {
         CommandRequest {
@@ -386,5 +443,63 @@ mod tests {
             let output = run_with_timeout(&request("printf '\\377'"), None).unwrap();
             assert_eq!(output.stdout.bytes(), &[255]);
         }
+    }
+
+    #[test]
+    fn cancellation_returns_once_and_kills_the_process_group() {
+        #[cfg(not(target_os = "windows"))]
+        {
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let trigger = Arc::clone(&cancelled);
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(30));
+                trigger.store(true, Ordering::Release);
+            });
+            let callback: CancellationCallback =
+                Arc::new(move || cancelled.load(Ordering::Acquire));
+            let marker = std::env::temp_dir().join(format!(
+                "rustcode-command-cancel-marker-{}-{}",
+                std::process::id(),
+                MARKER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _cleanup = MarkerCleanup(marker.clone());
+            let mut command = request(&format!(
+                "(sleep 0.3; printf descendant > {}) & wait",
+                marker.display()
+            ));
+            command.process_group = true;
+            let error = run_with_timeout_cancellable(&command, None, Some(callback)).unwrap_err();
+            assert_eq!(error, "command cancelled by user");
+            thread::sleep(Duration::from_millis(400));
+            assert!(!marker.exists());
+        }
+    }
+
+    #[test]
+    fn timeout_kills_descendants_with_the_process_group() {
+        #[cfg(not(target_os = "windows"))]
+        {
+            let marker = format!(
+                "/tmp/rustcode-command-timeout-marker-{}",
+                std::process::id()
+            );
+            let _ = std::fs::remove_file(&marker);
+            let mut command = request(&format!("(sleep 0.3; printf descendant > {marker}) & wait"));
+            command.process_group = true;
+            command.timeout = Duration::from_millis(30);
+            let error = run_with_timeout(&command, None).unwrap_err();
+            assert_eq!(error, "command timed out after 30 ms and was killed");
+            thread::sleep(Duration::from_millis(400));
+            assert!(!std::path::Path::new(&marker).exists());
+            let _ = std::fs::remove_file(marker);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_process_tree_path_compiles_and_runs() {
+        let mut command = request("exit 0");
+        command.process_group = true;
+        assert!(run_with_timeout(&command, None).unwrap().success);
     }
 }
