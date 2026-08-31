@@ -20,6 +20,11 @@ pub const MAX_RETRIES: usize = 5;
 /// request timeout (which would kill legitimate long-running SSE streams).
 pub const HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Maximum time allowed for the first meaningful SSE event after headers.
+/// This is separate from the between-event deadline so a provider that has
+/// accepted a request but never starts generation is reported distinctly.
+pub const FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Maximum time allowed between bytes/events once an SSE response has
 /// started. This is an idle timeout, not a total completion timeout: thinking
 /// and long responses may continue indefinitely while the provider is making

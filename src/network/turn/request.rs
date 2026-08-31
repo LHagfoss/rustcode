@@ -48,6 +48,17 @@ pub(super) struct RoundResponse {
     pub native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
 }
 
+fn retryable_stream_failure(message: &str) -> bool {
+    matches!(
+        lifecycle::stream_failure_kind_from_message(message),
+        Some(
+            lifecycle::StreamFailureKind::FirstEventTimeout
+                | lifecycle::StreamFailureKind::StreamIdleTimeout
+                | lifecycle::StreamFailureKind::PrematureEof
+        )
+    )
+}
+
 pub(super) async fn collect_round(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -133,57 +144,134 @@ pub(super) async fn collect_round(
     } else {
         super::super::stream_request::ThinkingMode::Normal
     };
-    let collected = runner::collect_response(move |previous| {
-        let request_client = request_client.clone();
-        let request_state = Arc::clone(&request_state);
-        let request_cancel = request_cancel.clone();
-        let request_buffer = Arc::clone(&request_buffer);
-        let request_api_url = api_base_url.clone();
-        let request_model = model_name.clone();
-        let request_msgs = Arc::clone(&request_msgs);
-        let request_session_id = request_session_id.clone();
-        async move {
-            request_buffer.lock().await.reset();
-            let current_msgs = messages_for_response_continuation(&request_msgs, &previous);
-            let finish_reason = stream_request(
-                &request_client,
-                request_state,
-                request_cancel,
-                &request_api_url,
-                &request_model,
-                current_msgs.into_owned(),
-                Arc::clone(&request_buffer),
-                false,
-                request_allow_tools,
-                request_thinking_mode,
-                request_schema_policy,
-                Some(request_session_id.as_str()),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            let buffer = request_buffer.lock().await;
-            Ok(runner::ResponseChunk {
-                content: buffer.content.clone(),
-                finish_reason,
-                has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
-                thought_time_ms: buffer.thought_time_ms,
-                thought_tokens: buffer.thought_tokens,
-            })
+    // A body stall can happen after bytes have arrived, so the request-level
+    // retry policy cannot safely replay it. Retry once from the last coherent
+    // history checkpoint, after clearing speculative UI output. No tool has
+    // executed yet at this point, so this cannot duplicate a mutation.
+    let mut transport_retry_attempts = 0usize;
+    let collected = loop {
+        let attempt_client = request_client.clone();
+        let attempt_state = Arc::clone(&request_state);
+        let attempt_cancel = request_cancel.clone();
+        let attempt_buffer = Arc::clone(&request_buffer);
+        let attempt_api_url = api_base_url.clone();
+        let attempt_model = model_name.clone();
+        let attempt_msgs = Arc::clone(&request_msgs);
+        let attempt_session_id = request_session_id.clone();
+        let attempt = runner::collect_response(move |previous| {
+            let request_client = attempt_client.clone();
+            let request_state = Arc::clone(&attempt_state);
+            let request_cancel = attempt_cancel.clone();
+            let request_buffer = Arc::clone(&attempt_buffer);
+            let request_api_url = attempt_api_url.clone();
+            let request_model = attempt_model.clone();
+            let request_msgs = Arc::clone(&attempt_msgs);
+            let request_session_id = attempt_session_id.clone();
+            async move {
+                request_buffer.lock().await.reset();
+                let current_msgs = messages_for_response_continuation(&request_msgs, &previous);
+                let finish_reason = stream_request(
+                    &request_client,
+                    request_state,
+                    request_cancel,
+                    &request_api_url,
+                    &request_model,
+                    current_msgs.into_owned(),
+                    Arc::clone(&request_buffer),
+                    false,
+                    request_allow_tools,
+                    request_thinking_mode,
+                    request_schema_policy,
+                    Some(request_session_id.as_str()),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                let buffer = request_buffer.lock().await;
+                Ok(runner::ResponseChunk {
+                    content: buffer.content.clone(),
+                    finish_reason,
+                    has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
+                    thought_time_ms: buffer.thought_time_ms,
+                    thought_tokens: buffer.thought_tokens,
+                })
+            }
+        })
+        .await;
+        match attempt {
+            Err(error)
+                if transport_retry_attempts < 1
+                    && retryable_stream_failure(&error)
+                    && !request_cancel.is_cancelled() =>
+            {
+                transport_retry_attempts += 1;
+                crate::logger::operational_event(
+                    "turn.stream_retry",
+                    serde_json::json!({
+                        "attempt": transport_retry_attempts,
+                        "reason": lifecycle::stream_failure_kind_from_message(&error)
+                            .map(|kind| kind.to_string()),
+                        "error": error,
+                    }),
+                );
+                let mut s = request_state.lock().await;
+                s.clear_current_response();
+                s.clear_live_tool_calls();
+                s.status = crate::app::AppStatus::Streaming;
+                s.stream_tracker = Some(crate::app::StreamTracker::new());
+                drop(s);
+                continue;
+            }
+            other => break other,
         }
-    })
-    .await;
+    };
     let collected = match collected {
         Ok(result) => result,
         Err(error) => {
-            ctx.lifecycle.turn_machine.recover_error();
+            if !ctx.lifecycle.task_completed {
+                ctx.lifecycle.turn_machine.recover_error();
+            }
             dbg_log!("Stream request failed: {error}");
-            if error == "cancelled" {
+            let stream_failure_kind = lifecycle::stream_failure_kind_from_message(&error);
+            if ctx.lifecycle.task_completed {
+                // Required verification already latched completion. A later
+                // optional continuation must not turn an otherwise successful
+                // task into recovery_failed; retain the evidence and expose
+                // the transport phase as a warning in the terminal status.
+                let kind =
+                    stream_failure_kind.unwrap_or(lifecycle::StreamFailureKind::ProviderError);
+                ctx.lifecycle.stop_reason =
+                    Some(lifecycle::stop_reason_for_stream_failure(true, kind));
+                crate::logger::operational_event(
+                    "turn.completed_transport_warning",
+                    serde_json::json!({
+                        "kind": kind.to_string(),
+                        "error": error,
+                    }),
+                );
+            } else if error == "cancelled"
+                || stream_failure_kind == Some(lifecycle::StreamFailureKind::Cancelled)
+            {
                 ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Cancelled);
+            } else if let Some(kind) = stream_failure_kind
+                && kind != lifecycle::StreamFailureKind::ProviderError
+            {
+                ctx.lifecycle.stop_reason =
+                    Some(lifecycle::stop_reason_for_stream_failure(false, kind));
+                ctx.metrics.provider_errors = ctx.metrics.provider_errors.saturating_add(1);
+                crate::logger::operational_event(
+                    "turn.stream_failure",
+                    serde_json::json!({
+                        "kind": kind.to_string(),
+                        "error": error,
+                    }),
+                );
             } else {
                 record_provider_error(ctx, &error);
             }
             let mut s = state.lock().await;
-            let notice = if error == "cancelled" {
+            let notice = if error == "cancelled"
+                || stream_failure_kind == Some(lifecycle::StreamFailureKind::Cancelled)
+            {
                 "Request cancelled by user".to_string()
             } else {
                 format!("Error from LLM Provider: {error}")
@@ -253,4 +341,34 @@ pub(super) async fn collect_round(
         thought_tokens,
         native_tool_calls,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retryable_stream_failure;
+
+    #[test]
+    fn only_transport_phase_failures_are_safe_to_replay() {
+        assert!(retryable_stream_failure(
+            "stream_failure:first_event_timeout status=none bytes_received=0 events_received=0 partial_event_bytes=0"
+        ));
+        assert!(!retryable_stream_failure(
+            "stream_failure:header_timeout status=none bytes_received=0 events_received=0 partial_event_bytes=0"
+        ));
+        assert!(!retryable_stream_failure(
+            "stream_failure:connect_timeout status=none bytes_received=0 events_received=0 partial_event_bytes=0"
+        ));
+        assert!(retryable_stream_failure(
+            "stream_failure:premature_eof status=none bytes_received=32 events_received=1 partial_event_bytes=0"
+        ));
+        assert!(retryable_stream_failure(
+            "stream_failure:stream_idle_timeout status=none bytes_received=32 events_received=1 partial_event_bytes=4"
+        ));
+        assert!(!retryable_stream_failure(
+            "stream_failure:malformed_sse status=none bytes_received=32 events_received=1 partial_event_bytes=0"
+        ));
+        assert!(!retryable_stream_failure(
+            "stream_failure:cancelled status=none"
+        ));
+    }
 }

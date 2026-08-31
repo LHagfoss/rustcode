@@ -5,6 +5,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
 
+use super::lifecycle::{StreamFailure, StreamFailureKind};
 use super::retry;
 use super::stream::StreamBuffer;
 use super::{align_alternating_messages, count_tokens, parse_sse_line};
@@ -204,7 +205,26 @@ mod tests {
             .await;
 
         let error = read.await.expect_err("silent stream must not hang forever");
-        assert!(error.contains("idle timeout"), "{error}");
+        assert!(error.to_string().contains("stream_idle_timeout"), "{error}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_sse_stream_before_first_event_has_distinct_timeout() {
+        let (_writer, reader) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        let read = read_sse_line_with_state(&mut reader, &mut line, true);
+        tokio::pin!(read);
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(retry::FIRST_EVENT_TIMEOUT + std::time::Duration::from_millis(1))
+            .await;
+
+        let error = read
+            .await
+            .expect_err("first event must have a bounded wait");
+        assert_eq!(error.kind(), StreamFailureKind::FirstEventTimeout);
+        assert_eq!(error.partial_event_bytes(), 0);
     }
 
     #[tokio::test]
@@ -233,7 +253,9 @@ mod tests {
         let read_task = tokio::spawn(async move {
             let mut reader = BufReader::new(reader);
             let mut line = String::new();
-            let bytes = read_sse_line(&mut reader, &mut line).await?;
+            let bytes = read_sse_line(&mut reader, &mut line)
+                .await
+                .map_err(|error| error.to_string())?;
             Ok::<_, String>((bytes, line))
         });
 
@@ -275,7 +297,7 @@ mod tests {
             .await
             .unwrap()
             .expect_err("partial line must time out after a stall");
-        assert!(error.contains("idle timeout"), "{error}");
+        assert!(error.to_string().contains("stream_idle_timeout"), "{error}");
     }
 
     #[tokio::test]
@@ -553,25 +575,88 @@ mod tests {
     }
 }
 
+#[derive(Debug)]
+enum SseReadError {
+    Timeout {
+        kind: StreamFailureKind,
+        partial_event_bytes: usize,
+    },
+    Io(String),
+}
+
+impl SseReadError {
+    fn kind(&self) -> StreamFailureKind {
+        match self {
+            Self::Timeout { kind, .. } => *kind,
+            Self::Io(error) if error.contains("invalid UTF-8") => StreamFailureKind::MalformedSse,
+            Self::Io(_) => StreamFailureKind::ProviderError,
+        }
+    }
+
+    fn partial_event_bytes(&self) -> usize {
+        match self {
+            Self::Timeout {
+                partial_event_bytes,
+                ..
+            } => *partial_event_bytes,
+            Self::Io(_) => 0,
+        }
+    }
+}
+
+impl std::fmt::Display for SseReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout {
+                kind,
+                partial_event_bytes,
+            } => write!(
+                f,
+                "SSE stream {kind} after {partial_event_bytes} partial event bytes"
+            ),
+            Self::Io(error) => write!(f, "SSE stream read failed: {error}"),
+        }
+    }
+}
+
+/// Backwards-compatible helper used by focused parser tests.  The streaming
+/// request uses [`read_sse_line_with_state`] so the first meaningful event has
+/// its own deadline.
 async fn read_sse_line<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
     line_buf: &mut String,
-) -> Result<usize, String> {
+) -> Result<usize, SseReadError> {
+    read_sse_line_with_state(reader, line_buf, false).await
+}
+
+async fn read_sse_line_with_state<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    line_buf: &mut String,
+    waiting_for_first_event: bool,
+) -> Result<usize, SseReadError> {
     let mut bytes = Vec::new();
+    let timeout = if waiting_for_first_event {
+        retry::FIRST_EVENT_TIMEOUT
+    } else {
+        retry::STREAM_IDLE_TIMEOUT
+    };
 
     loop {
         let (chunk_len, line_complete) = {
-            let chunk =
-                match tokio::time::timeout(retry::STREAM_IDLE_TIMEOUT, reader.fill_buf()).await {
-                    Ok(Ok(chunk)) => chunk,
-                    Ok(Err(error)) => return Err(format!("SSE stream read failed: {error}")),
-                    Err(_) => {
-                        return Err(format!(
-                            "SSE stream idle timeout after {}s without provider data",
-                            retry::STREAM_IDLE_TIMEOUT.as_secs()
-                        ));
-                    }
-                };
+            let chunk = match tokio::time::timeout(timeout, reader.fill_buf()).await {
+                Ok(Ok(chunk)) => chunk,
+                Ok(Err(error)) => return Err(SseReadError::Io(error.to_string())),
+                Err(_) => {
+                    return Err(SseReadError::Timeout {
+                        kind: if waiting_for_first_event {
+                            StreamFailureKind::FirstEventTimeout
+                        } else {
+                            StreamFailureKind::StreamIdleTimeout
+                        },
+                        partial_event_bytes: bytes.len(),
+                    });
+                }
+            };
 
             if chunk.is_empty() {
                 if bytes.is_empty() {
@@ -594,8 +679,9 @@ async fn read_sse_line<R: tokio::io::AsyncBufRead + Unpin>(
         }
     }
 
-    let line = std::str::from_utf8(&bytes)
-        .map_err(|error| format!("SSE stream contained invalid UTF-8: {error}"))?;
+    let line = std::str::from_utf8(&bytes).map_err(|error| {
+        SseReadError::Io(format!("SSE stream contained invalid UTF-8: {error}"))
+    })?;
     line_buf.push_str(line);
     Ok(bytes.len())
 }
@@ -815,7 +901,7 @@ pub async fn stream_request(
     thinking_mode: ThinkingMode,
     schema_policy: crate::tools::ToolSchemaPolicy,
     expected_session_id: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, StreamFailure> {
     let aligned_messages = align_alternating_messages(messages);
     let message_count = aligned_messages.len();
 
@@ -952,8 +1038,14 @@ pub async fn stream_request(
         .and_then(|t| t.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
-    let payload_bytes = serde_json::to_vec(&payload)
-        .map_err(|error| format!("failed to serialize request payload: {error}"))?;
+    let payload_bytes = serde_json::to_vec(&payload).map_err(|error| StreamFailure {
+        kind: StreamFailureKind::ProviderError,
+        status: None,
+        detail: Some(format!("failed to serialize request payload: {error}")),
+        bytes_received: 0,
+        events_received: 0,
+        partial_event_bytes: 0,
+    })?;
     let payload_byte_count = payload_bytes.len();
     let verbose_network_logging = { state.lock().await.config.debug_verbose_network_logging };
     dbg_log!(
@@ -1032,7 +1124,7 @@ pub async fn stream_request(
     let mut attempt = 0usize;
     let response = loop {
         if cancel_token.is_cancelled() {
-            return Err("cancelled".to_string());
+            return Err(StreamFailure::new(StreamFailureKind::Cancelled));
         }
         let mut req = client
             .post(&resolved_url)
@@ -1049,7 +1141,7 @@ pub async fn stream_request(
         )
         .await;
         let send_result = match send_result {
-            None => return Err("cancelled".to_string()),
+            None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
             Some(Err(_elapsed)) => {
                 if attempt < retry::MAX_RETRIES {
                     let delay = retry::delay_for_attempt(attempt, 0);
@@ -1063,15 +1155,12 @@ pub async fn stream_request(
                         .await
                         .is_none()
                     {
-                        return Err("cancelled".to_string());
+                        return Err(StreamFailure::new(StreamFailureKind::Cancelled));
                     }
                     attempt += 1;
                     continue;
                 }
-                return Err(format!(
-                    "timed out waiting for response headers after {}s",
-                    retry::HEADER_TIMEOUT.as_secs()
-                ));
+                return Err(StreamFailure::new(StreamFailureKind::HeaderTimeout));
             }
             Some(Ok(r)) => r,
         };
@@ -1095,7 +1184,7 @@ pub async fn stream_request(
                 let status = resp.status();
                 let code = status.as_u16();
                 let err_body = match retry::race_cancellable(resp.text(), &cancel_token).await {
-                    None => return Err("cancelled".to_string()),
+                    None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
                     Some(body) => body.unwrap_or_default(),
                 };
                 if retry::is_retryable_status(code) && attempt < retry::MAX_RETRIES {
@@ -1111,7 +1200,7 @@ pub async fn stream_request(
                         .await
                         .is_none()
                     {
-                        return Err("cancelled".to_string());
+                        return Err(StreamFailure::new(StreamFailureKind::Cancelled));
                     }
                     attempt += 1;
                     continue;
@@ -1121,7 +1210,14 @@ pub async fn stream_request(
                     status,
                     err_body
                 );
-                return Err(format!("{status} - {err_body}"));
+                return Err(StreamFailure {
+                    kind: StreamFailureKind::ProviderError,
+                    status: Some(code),
+                    detail: Some(err_body),
+                    bytes_received: 0,
+                    events_received: 0,
+                    partial_event_bytes: 0,
+                });
             }
             Err(e) => {
                 if retry::is_retryable_transport(&e) && attempt < retry::MAX_RETRIES {
@@ -1137,18 +1233,30 @@ pub async fn stream_request(
                         .await
                         .is_none()
                     {
-                        return Err("cancelled".to_string());
+                        return Err(StreamFailure::new(StreamFailureKind::Cancelled));
                     }
                     attempt += 1;
                     continue;
                 }
+                let kind = if e.is_timeout() || e.is_connect() {
+                    StreamFailureKind::ConnectTimeout
+                } else {
+                    StreamFailureKind::ProviderError
+                };
                 let mut msg = format!("Request failed: {e}");
                 let mut src = std::error::Error::source(&e);
                 while let Some(cause) = src {
                     msg.push_str(&format!(": {cause}"));
                     src = cause.source();
                 }
-                return Err(msg);
+                return Err(StreamFailure {
+                    kind,
+                    status: None,
+                    detail: Some(msg),
+                    bytes_received: 0,
+                    events_received: 0,
+                    partial_event_bytes: 0,
+                });
             }
         }
     };
@@ -1161,6 +1269,8 @@ pub async fn stream_request(
     let mut line_buf = String::with_capacity(4096);
     let mut in_reasoning = false;
     let mut finish_reason: Option<String> = None;
+    let mut stream_bytes_received = 0usize;
+    let mut stream_events_received = 0usize;
 
     #[derive(Debug)]
     struct ToolAccumulator {
@@ -1181,16 +1291,36 @@ pub async fn stream_request(
         }
 
         tokio::select! {
-            r = read_sse_line(&mut reader, &mut line_buf) => {
+            r = read_sse_line_with_state(
+                &mut reader,
+                &mut line_buf,
+                stream_events_received == 0,
+            ) => {
                 match r {
                     Ok(0) => {
                         dbg_log!("stream_request: SSE stream read EOF (0 bytes)");
+                        if finish_reason.is_none() {
+                            return Err(StreamFailure {
+                                kind: StreamFailureKind::PrematureEof,
+                                status: None,
+                                detail: None,
+                                bytes_received: stream_bytes_received,
+                                events_received: stream_events_received,
+                                partial_event_bytes: 0,
+                            });
+                        }
                         break;
                     }
                     Ok(_) => {
+                        stream_bytes_received += line_buf.len();
                         let trimmed = line_buf.trim();
+                        if trimmed == "data: [DONE]" {
+                            line_buf.clear();
+                            break;
+                        }
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                stream_events_received += 1;
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array())
                                     && !choices.is_empty() {
                                         if let Some(fr) = choices[0].get("finish_reason").and_then(|f| f.as_str()) {
@@ -1443,16 +1573,28 @@ pub async fn stream_request(
                                     }
                             } else {
                                 dbg_log!("stream_request: Failed to parse JSON from data payload: '{}'", json_str);
+                                return Err(StreamFailure {
+                                    kind: StreamFailureKind::MalformedSse,
+                                    status: None,
+                                    detail: Some("invalid JSON data payload".to_string()),
+                                    bytes_received: stream_bytes_received,
+                                    events_received: stream_events_received,
+                                    partial_event_bytes: 0,
+                                });
                             }
                         }
                         line_buf.clear();
                     }
                     Err(e) => {
                         dbg_log!("stream_request: SSE read error: {}", e);
-                        if e.contains("idle timeout") {
-                            return Err(e);
-                        }
-                        break;
+                        return Err(StreamFailure {
+                            kind: e.kind(),
+                            status: None,
+                            detail: Some(e.to_string()),
+                            bytes_received: stream_bytes_received,
+                            events_received: stream_events_received,
+                            partial_event_bytes: e.partial_event_bytes(),
+                        });
                     }
                 }
             }
