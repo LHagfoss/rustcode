@@ -1651,3 +1651,15 @@ fn memory_tools_lifecycle_execution() {
     .unwrap();
     assert!(forget_res.contains("Removed"));
 }
+
+#[test]
+fn list_directory_uses_active_workspace_root_instead_of_process_cwd() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    std::fs::write(workspace.path().join("workspace-only.txt"), "content")
+        .expect("workspace marker");
+    set_active_workspace_root(Some(workspace.path().to_path_buf()));
+
+    let result = super::search::list_directory(&serde_json::json!({"path": "."}));
+    set_active_workspace_root(None);
+    assert_eq!(result.expect("workspace listing"), "workspace-only.txt");
+}

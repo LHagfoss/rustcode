@@ -8,6 +8,7 @@ members = [
     "crates/rustcode-core",
     "crates/rustcode-session",
     "crates/rustcode-tool-protocol",
+    "crates/rustcode-tools",
 ]
 resolver = "3"
 
@@ -62,6 +63,7 @@ tempfile = "3.10"
 rustcode-core = { path = "crates/rustcode-core" }
 rustcode-session = { path = "crates/rustcode-session" }
 rustcode-tool-protocol = { path = "crates/rustcode-tool-protocol" }
+rustcode-tools = { path = "crates/rustcode-tools" }
 # Optimize dependencies even in debug builds — syntect, pulldown-cmark,
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0

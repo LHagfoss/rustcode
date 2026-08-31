@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
@@ -525,70 +525,25 @@ pub fn set_active_workspace_root(root: Option<PathBuf>) {
     });
 }
 
+pub(crate) fn current_tool_context() -> rustcode_tools::ToolContext {
+    let workspace_root = ACTIVE_WORKSPACE_ROOT.with(|current| current.borrow().clone());
+    let (sandbox_dir, artifacts_dir) = get_active_session_id()
+        .map(|session_id| {
+            (
+                crate::config::get_active_session_sandbox_dir(&session_id),
+                crate::config::get_active_session_artifacts_dir(&session_id),
+            )
+        })
+        .unwrap_or((None, None));
+    rustcode_tools::ToolContext {
+        workspace_root,
+        sandbox_dir,
+        artifacts_dir,
+    }
+}
+
 pub(crate) fn resolve_tool_path(raw_path: &str) -> PathBuf {
-    let p = Path::new(raw_path);
-
-    if !p.is_absolute()
-        && let Some(root) = ACTIVE_WORKSPACE_ROOT.with(|current| current.borrow().clone())
-    {
-        return root.join(p);
-    }
-
-    // Check if the path contains a component named "sandbox"
-    let mut parts_sandbox = Vec::new();
-    let mut found_sandbox = false;
-    for component in p.components() {
-        let name = component.as_os_str();
-        if found_sandbox {
-            parts_sandbox.push(name);
-        } else if name == "sandbox" {
-            found_sandbox = true;
-        }
-    }
-
-    if found_sandbox
-        && let Some(session_id) = get_active_session_id()
-        && let Some(sandbox_dir) = crate::config::get_active_session_sandbox_dir(&session_id)
-    {
-        let mut resolved = sandbox_dir;
-        for part in parts_sandbox {
-            resolved.push(part);
-        }
-        return resolved;
-    }
-
-    // Check if the path contains a component named "artifacts"
-    let mut parts_artifacts = Vec::new();
-    let mut found_artifacts = false;
-    for component in p.components() {
-        let name = component.as_os_str();
-        if found_artifacts {
-            parts_artifacts.push(name);
-        } else if name == "artifacts" {
-            found_artifacts = true;
-        }
-    }
-
-    if found_artifacts
-        && let Some(session_id) = get_active_session_id()
-        && let Some(artifacts_dir) = crate::config::get_active_session_artifacts_dir(&session_id)
-    {
-        let mut resolved = artifacts_dir;
-        for part in parts_artifacts {
-            resolved.push(part);
-        }
-        return resolved;
-    }
-
-    if (raw_path.starts_with("~/") || raw_path == "~")
-        && let Ok(home) = std::env::var("HOME")
-    {
-        let tail = raw_path.strip_prefix('~').unwrap_or("");
-        let tail = tail.strip_prefix('/').unwrap_or(tail);
-        return PathBuf::from(home).join(tail);
-    }
-
-    PathBuf::from(raw_path)
+    rustcode_tools::resolve_tool_path_with_context(raw_path, &current_tool_context())
 }
 
 pub(crate) fn parse_json_number(v: &Value) -> Option<u64> {
