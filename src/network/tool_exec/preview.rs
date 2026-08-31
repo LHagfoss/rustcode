@@ -224,34 +224,3 @@ pub(crate) fn get_tool_project_root(
 
     None
 }
-
-pub(crate) fn resolve_bin(name: &str) -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = [
-        format!("{home}/.cargo/bin/{name}"),
-        format!("/opt/homebrew/bin/{name}"),
-        format!("/usr/local/bin/{name}"),
-        format!("/usr/bin/{name}"),
-    ];
-    for c in candidates {
-        if std::path::Path::new(&c).exists() {
-            return std::path::PathBuf::from(c);
-        }
-    }
-    std::path::PathBuf::from(name)
-}
-
-pub(crate) fn augmented_path() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let mut dirs = vec![
-        format!("{home}/.cargo/bin"),
-        "/opt/homebrew/bin".to_string(),
-        "/usr/local/bin".to_string(),
-        "/usr/bin".to_string(),
-        "/bin".to_string(),
-    ];
-    if let Ok(existing) = std::env::var("PATH") {
-        dirs.extend(existing.split(':').map(|s| s.to_string()));
-    }
-    dirs.join(":")
-}

@@ -12,6 +12,7 @@ mod mcp;
 mod memory;
 mod network;
 mod notifications;
+mod platform;
 mod raw_cli;
 mod skills;
 mod symbols;
