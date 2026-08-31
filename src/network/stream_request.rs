@@ -83,6 +83,30 @@ fn apply_profile_generation_options(
     }
 }
 
+fn apply_profile_sampling_options(
+    payload: &mut serde_json::Value,
+    profile: Option<&crate::config::ModelProfile>,
+) {
+    if let Some(temperature) = profile.and_then(|p| p.temperature) {
+        payload["temperature"] = serde_json::json!(temperature);
+    }
+    if let Some(top_p) = profile.and_then(|p| p.top_p) {
+        payload["top_p"] = serde_json::json!(top_p);
+    }
+    if let Some(top_k) = profile.and_then(|p| p.top_k) {
+        payload["top_k"] = serde_json::json!(top_k);
+    }
+    if let Some(presence_penalty) = profile.and_then(|p| p.presence_penalty) {
+        payload["presence_penalty"] = serde_json::json!(presence_penalty);
+    }
+    if let Some(force_sampling) = profile.and_then(|p| p.force_sampling) {
+        payload["force_sampling"] = serde_json::json!(force_sampling);
+    }
+    if let Some(preserve_thinking) = profile.and_then(|p| p.preserve_thinking) {
+        payload["chat_template_kwargs"]["preserve_thinking"] = serde_json::json!(preserve_thinking);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeToolChoice {
     Auto,
@@ -436,6 +460,31 @@ mod tests {
         assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
         assert_eq!(payload["reasoning_effort"], "low");
         assert_eq!(payload["thinking_budget"], RECOVERY_THINKING_BUDGET);
+    }
+
+    #[test]
+    fn profile_sampling_options_are_sent_without_changing_unspecified_defaults() {
+        let profile = crate::config::ModelProfile {
+            temperature: Some(1.0),
+            top_p: Some(0.95),
+            top_k: Some(20),
+            presence_penalty: Some(1.5),
+            frequency_penalty: Some(0.0),
+            force_sampling: Some(true),
+            preserve_thinking: Some(true),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_sampling_options(&mut payload, Some(&profile));
+
+        assert_eq!(payload["temperature"], 1.0);
+        assert_eq!(payload["top_p"], 0.95);
+        assert_eq!(payload["top_k"], 20);
+        assert_eq!(payload["presence_penalty"], 1.5);
+        assert_eq!(payload["force_sampling"], true);
+        assert_eq!(payload["chat_template_kwargs"]["preserve_thinking"], true);
+        assert!(payload.get("frequency_penalty").is_none());
     }
 
     #[test]
@@ -798,6 +847,13 @@ pub async fn stream_request(
                 enable_thinking: None,
                 reasoning_effort: None,
                 thinking_budget: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                presence_penalty: None,
+                frequency_penalty: None,
+                force_sampling: None,
+                preserve_thinking: None,
                 max_tokens: None,
                 supports_vision: None,
                 ..Default::default()
@@ -843,9 +899,15 @@ pub async fn stream_request(
     payload["messages"] = serde_json::Value::Array(aligned_messages);
 
     apply_profile_generation_options(&mut payload, profile.as_ref(), thinking_mode);
+    apply_profile_sampling_options(&mut payload, profile.as_ref());
 
     if !url.contains("generativelanguage.googleapis.com") {
-        payload["frequency_penalty"] = serde_json::json!(0.3);
+        payload["frequency_penalty"] = serde_json::json!(
+            profile
+                .as_ref()
+                .and_then(|p| p.frequency_penalty)
+                .unwrap_or(0.3)
+        );
     }
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
         let tool_choice = if thinking_mode == ThinkingMode::BoundedRecovery && allow_tools {

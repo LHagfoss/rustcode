@@ -59,6 +59,29 @@ pub struct ModelProfile {
     /// `reasoning_effort`, this is an explicit token limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_budget: Option<u32>,
+    /// Sampling temperature sent to OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// Nucleus-sampling probability sent to OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    /// Top-k sampling cutoff used by local OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    /// Presence penalty sent to OpenAI-compatible endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    /// Frequency penalty sent to OpenAI-compatible endpoints. When absent,
+    /// RustCode preserves its historical default of 0.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    /// Force stochastic sampling on servers such as oMLX that otherwise keep
+    /// their per-model greedy/default sampling policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force_sampling: Option<bool>,
+    /// Ask compatible chat templates to retain historical thinking traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserve_thinking: Option<bool>,
     /// Per-profile completion token cap sent as `max_tokens`. `None` falls
     /// back to the shared default, overriding whatever a Modelfile's
     /// `PARAMETER num_predict` says.
