@@ -34,13 +34,19 @@ pub(super) fn background_terminal_list(session_id: &str) -> String {
 
 pub(super) fn stop_background_terminals(session_id: &str) -> String {
     let result = crate::tools::stop_background_tasks(session_id);
-    match (result.stopped, result.failed) {
-        (0, 0) => "No background terminals are running.".to_string(),
-        (1, 0) => "Stopped 1 background terminal.".to_string(),
-        (stopped, 0) => format!("Stopped {stopped} background terminals."),
-        (0, failed) => format!("Failed to stop {failed} background terminal(s)."),
-        (stopped, failed) => format!(
-            "Stopped {stopped} background terminal(s); failed to stop {failed}. Use /ps to inspect the remaining tasks."
+    match (result.stopped, result.requested, result.failed) {
+        (0, 0, 0) => "No background terminals are running.".to_string(),
+        (1, 0, 0) => "Stopped 1 background terminal.".to_string(),
+        (stopped, 0, 0) => format!("Stopped {stopped} background terminals."),
+        (0, requested, 0) => format!(
+            "Stop requested for {requested} background terminal(s); they are still starting."
+        ),
+        (stopped, requested, 0) => format!(
+            "Stopped {stopped} background terminal(s); stop requested for {requested} still starting."
+        ),
+        (0, 0, failed) => format!("Failed to stop {failed} background terminal(s)."),
+        (stopped, requested, failed) => format!(
+            "Stopped {stopped} background terminal(s); stop requested for {requested}; failed to stop {failed}. Use /ps to inspect the remaining tasks."
         ),
     }
 }
