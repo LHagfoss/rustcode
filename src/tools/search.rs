@@ -7,9 +7,8 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::Stdio;
 use std::thread;
 
-// Re-exports needed by search tools
+// Re-export needed by the remaining search tools.
 pub(crate) use super::parse_json_bool;
-pub(crate) use super::resolve_tool_path;
 
 use super::{Tool, ToolCapability, ToolSafety};
 
@@ -109,7 +108,6 @@ const MAX_GREP_FILES: usize = 50;
 const MAX_GREP_BYTES: usize = 32_768;
 const MAX_SCAN_LINE_BYTES: usize = 32_768;
 const MAX_GLOB_RESULTS: usize = 200;
-const MAX_LIST_ENTRIES: usize = 10_000;
 const MAX_LINE_CHARS: usize = 1000;
 
 struct CappedRead {
@@ -606,41 +604,7 @@ pub fn glob(args: &Value) -> Result<String, String> {
 }
 
 pub fn list_directory(args: &Value) -> Result<String, String> {
-    let path = args.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-    let resolved_path = resolve_tool_path(path);
-
-    if resolved_path.is_file() {
-        return Err(format!(
-            "'{path}' is a file, not a directory - use the read_file tool instead"
-        ));
-    }
-    let entries =
-        std::fs::read_dir(&resolved_path).map_err(|e| format!("cannot read '{path}': {e}"))?;
-    let mut names: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| {
-            let mut name = e.file_name().to_string_lossy().to_string();
-            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                name.push('/');
-            }
-            name
-        })
-        .collect();
-    names.sort();
-    if names.is_empty() {
-        return Ok(format!("'{path}' is empty"));
-    }
-    let total = names.len();
-    if total > MAX_LIST_ENTRIES {
-        let mut out = names[..MAX_LIST_ENTRIES].join("\n");
-        out.push_str(&format!(
-            "\n... ({} more entries, total {total} — use grep/glob to narrow)",
-            total - MAX_LIST_ENTRIES
-        ));
-        Ok(out)
-    } else {
-        Ok(names.join("\n"))
-    }
+    rustcode_tools::search::list_directory_with_context(args, &super::current_tool_context())
 }
 
 pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
