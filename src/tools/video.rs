@@ -625,7 +625,7 @@ fn executable(name: &str) -> Option<PathBuf> {
     } else {
         None
     };
-    std::env::split_paths(&crate::network::augmented_path())
+    std::env::split_paths(&crate::platform::augmented_path())
         .flat_map(|dir| {
             executable_candidates(name, pathext.as_deref())
                 .into_iter()

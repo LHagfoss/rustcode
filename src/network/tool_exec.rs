@@ -16,8 +16,8 @@ mod preview;
 mod result;
 
 pub(crate) use preview::{
-    augmented_path, extract_diff_block, final_tool_diff, get_diff_preview, get_tool_project_root,
-    resolve_bin, tool_result_precludes_preview_fallback,
+    extract_diff_block, final_tool_diff, get_diff_preview, get_tool_project_root,
+    tool_result_precludes_preview_fallback,
 };
 pub(crate) use result::{
     bounded_tool_result_history_message, finalize_tool_result, subagent_tool_history_message,

@@ -1,37 +1,16 @@
 use super::TurnContext;
 use super::events::ToolResult;
 use super::text::strip_ansi_escapes;
+use crate::platform::{compiler_augmented_path, resolve_bin};
 use regex::Regex;
 use std::sync::LazyLock;
-
-fn augmented_path() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let common = [
-        format!("{home}/.cargo/bin"),
-        format!("{home}/.bun/bin"),
-        format!("{home}/.nvm/versions/node/current/bin"),
-        "/opt/homebrew/bin".to_string(),
-        "/usr/local/bin".to_string(),
-        "/usr/bin".to_string(),
-        "/bin".to_string(),
-    ];
-    let mut dirs = common.to_vec();
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
-            if !dirs.contains(&dir.to_string()) {
-                dirs.push(dir.to_string());
-            }
-        }
-    }
-    dirs.join(":")
-}
 
 pub(crate) async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
     if cwd.join("Cargo.toml").exists() {
         let mut cmd = tokio::process::Command::new("/bin/sh");
         cmd.args(["-c", "cargo check --message-format=json"])
             .current_dir(cwd)
-            .env("PATH", augmented_path())
+            .env("PATH", compiler_augmented_path())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -87,16 +66,16 @@ pub(crate) async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> 
             return Some(errors.join("\n"));
         }
     } else if cwd.join("biome.json").exists() || cwd.join("biome.jsonc").exists() {
-        let (runner, bin_arg) = if super::resolve_bin("bunx").exists() {
-            (super::resolve_bin("bunx"), "biome")
+        let (runner, bin_arg) = if resolve_bin("bunx").exists() {
+            (resolve_bin("bunx"), "biome")
         } else {
-            (super::resolve_bin("npx"), "@biomejs/biome")
+            (resolve_bin("npx"), "@biomejs/biome")
         };
 
         let mut cmd = tokio::process::Command::new(runner);
         cmd.args([bin_arg, "check", "."])
             .current_dir(cwd)
-            .env("PATH", augmented_path())
+            .env("PATH", compiler_augmented_path())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -126,16 +105,16 @@ pub(crate) async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> 
             }
         }
     } else if cwd.join("tsconfig.json").exists() {
-        let (runner, bin_arg) = if super::resolve_bin("bunx").exists() {
-            (super::resolve_bin("bunx"), "tsc")
+        let (runner, bin_arg) = if resolve_bin("bunx").exists() {
+            (resolve_bin("bunx"), "tsc")
         } else {
-            (super::resolve_bin("npx"), "tsc")
+            (resolve_bin("npx"), "tsc")
         };
 
         let mut cmd = tokio::process::Command::new(runner);
         cmd.args([bin_arg, "--noEmit"])
             .current_dir(cwd)
-            .env("PATH", augmented_path())
+            .env("PATH", compiler_augmented_path())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
