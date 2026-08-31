@@ -2969,6 +2969,7 @@ dependencies = [
  "reqwest 0.13.4",
  "reqwest-middleware",
  "rusqlite",
+ "rustcode-command",
  "rustcode-core",
  "rustcode-session",
  "rustcode-tool-protocol",
@@ -2999,6 +3000,10 @@ dependencies = [
  "urlencoding",
  "zip",
 ]
+
+[[package]]
+name = "rustcode-command"
+version = "0.40.4"
 
 [[package]]
 name = "rustcode-core"
