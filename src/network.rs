@@ -18,7 +18,8 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
 pub(crate) use messages::{
-    attach_request_context_tail, inject_system_reminder, trim_msgs_to_budget,
+    attach_request_context_tail, inject_bootstrap_action_nudge, inject_system_reminder,
+    trim_msgs_to_budget,
 };
 
 #[path = "network/text.rs"]
@@ -1240,7 +1241,7 @@ pub(crate) async fn prepare_turn_request(
             .map(|policy| {
                 let session_id = s.active_session_id.clone();
                 s.prompt_cache
-                    .native_tool_schemas(policy, &msgs, &session_id)
+                    .native_tool_schemas(policy, &msgs, &session_id, workspace_root.as_deref())
                     .0
             })
             .unwrap_or_default();
@@ -1263,6 +1264,11 @@ pub(crate) async fn prepare_turn_request(
     // and provider safety headroom from the active model profile. Keep this
     // final trim on the effective history budget.
     inject_system_reminder(&mut msgs);
+    let bootstrap_phase = native_schema_policy.is_some_and(|_| {
+        crate::tools::tool_schema_phase(&msgs, workspace_root.as_deref())
+            == crate::tools::ToolSchemaPhase::Bootstrap
+    });
+    inject_bootstrap_action_nudge(&mut msgs, bootstrap_phase);
     let schema_over_reserve = preflight
         .tool_schema_tokens
         .saturating_sub(context_budget.tool_reserve as usize);
