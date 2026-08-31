@@ -15,6 +15,8 @@ AGENTS.md
 .superpowers/
 docs/*
 docs/superpowers/
+!/docs/
+!/docs/*.md
 /bench/
 /tests/
 /AGENT_HARNESS_CONTRACTS.md
