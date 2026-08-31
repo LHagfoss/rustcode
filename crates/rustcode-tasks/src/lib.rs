@@ -355,16 +355,35 @@ impl TaskManager {
     }
 
     /// Start a command on a detached worker thread.
-    pub fn spawn(&self, mut spec: TaskSpec) -> Result<TaskHandle, String> {
+    pub fn spawn(&self, spec: TaskSpec) -> Result<TaskHandle, String> {
+        let id = self.allocate_id();
+        self.spawn_with_task_id(id, spec)
+    }
+
+    /// Start a command with an integration-owned ID.
+    ///
+    /// This is useful while an application migrates from an existing task
+    /// registry and must preserve IDs already visible in transcripts or CLI
+    /// output. IDs must be unique among live and recently terminal tasks.
+    pub fn spawn_with_id(
+        &self,
+        id: impl Into<TaskId>,
+        spec: TaskSpec,
+    ) -> Result<TaskHandle, String> {
+        self.spawn_with_task_id(id.into(), spec)
+    }
+
+    fn spawn_with_task_id(&self, id: TaskId, mut spec: TaskSpec) -> Result<TaskHandle, String> {
         // Background tasks must be process-group capable for the injected
         // terminator to stop descendants as well as the shell.
         spec.request.process_group = true;
-        let id = self.allocate_id();
         let handle = TaskHandle {
             id: id.clone(),
             session_id: spec.session_id.clone(),
         };
-        self.insert(id.clone(), &spec);
+        if !self.insert(id.clone(), &spec) {
+            return Err(format!("task ID '{id}' is already in use"));
+        }
 
         let manager = self.clone();
         let thread_name = format!("rustcode-task-{}", id);
@@ -496,20 +515,30 @@ impl TaskManager {
         TaskId::new(format!("task_{sequence}"))
     }
 
-    fn insert(&self, id: TaskId, spec: &TaskSpec) {
-        self.inner
-            .tasks
+    fn insert(&self, id: TaskId, spec: &TaskSpec) -> bool {
+        let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
+        if tasks.contains_key(&id) {
+            return false;
+        }
+        if self
+            .inner
+            .terminal_ids
             .lock()
-            .expect("task state mutex poisoned")
-            .insert(
-                id,
-                TaskRecord {
-                    session_id: spec.session_id.clone(),
-                    command: spec.command.clone(),
-                    started_at: Instant::now(),
-                    state: TaskState::Starting,
-                },
-            );
+            .expect("terminal task IDs mutex poisoned")
+            .contains(&id)
+        {
+            return false;
+        }
+        tasks.insert(
+            id,
+            TaskRecord {
+                session_id: spec.session_id.clone(),
+                command: spec.command.clone(),
+                started_at: Instant::now(),
+                state: TaskState::Starting,
+            },
+        );
+        true
     }
 
     fn child_started(&self, id: &TaskId, pid: u32) {

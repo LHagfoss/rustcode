@@ -1,8 +1,7 @@
 use serde_json::Value;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 mod audio;
@@ -56,8 +55,9 @@ pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
 pub(crate) use exec::{
-    CommandProgressCallback, command_confirmation_preview, command_requires_confirmation,
-    run_command_output_with_progress_cancellable, stop_background_tasks,
+    CommandProgressCallback, background_task_manager, command_confirmation_preview,
+    command_requires_confirmation, run_command_output_with_progress_cancellable,
+    stop_background_tasks,
 };
 
 pub(crate) use filesystem::edit_target_and_replacement;
@@ -404,16 +404,6 @@ fn validate_value_against_schema(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub struct BackgroundTaskInfo {
-    pub id: String,
-    pub session_id: String,
-    pub command: String,
-    pub start_time: Instant,
-    pub child_pid: Option<u32>,
-    pub cancel_sender: Option<tokio::sync::oneshot::Sender<()>>,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct BackgroundTaskSnapshot {
     pub id: String,
@@ -422,27 +412,21 @@ pub(crate) struct BackgroundTaskSnapshot {
     pub child_pid: Option<u32>,
 }
 
-pub fn get_background_tasks() -> &'static StdMutex<HashMap<String, BackgroundTaskInfo>> {
-    static TASKS: OnceLock<StdMutex<HashMap<String, BackgroundTaskInfo>>> = OnceLock::new();
-    TASKS.get_or_init(|| StdMutex::new(HashMap::new()))
-}
-
 pub(crate) fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskSnapshot> {
-    let Ok(tasks) = get_background_tasks().lock() else {
-        return Vec::new();
-    };
-    let mut snapshots = tasks
-        .values()
-        .filter(|task| task.session_id == session_id)
+    background_task_manager()
+        .list(session_id)
+        .into_iter()
         .map(|task| BackgroundTaskSnapshot {
-            id: task.id.clone(),
-            command: task.command.clone(),
-            start_time: task.start_time,
-            child_pid: task.child_pid,
+            id: task.id.to_string(),
+            command: task.command,
+            start_time: task.started_at,
+            child_pid: match task.state {
+                rustcode_tasks::TaskState::Running { pid } => Some(pid),
+                rustcode_tasks::TaskState::Starting
+                | rustcode_tasks::TaskState::CancelRequested => None,
+            },
         })
-        .collect::<Vec<_>>();
-    snapshots.sort_by_key(|task| task.start_time);
-    snapshots
+        .collect()
 }
 
 pub(crate) fn background_command_label(command: &str, max_chars: usize) -> String {
@@ -459,38 +443,30 @@ pub(crate) fn background_command_label(command: &str, max_chars: usize) -> Strin
 }
 
 pub(crate) fn has_background_tasks(session_id: &str) -> bool {
-    get_background_tasks()
-        .lock()
-        .is_ok_and(|tasks| tasks.values().any(|task| task.session_id == session_id))
+    background_task_manager().has_running(session_id)
 }
 
-fn cancelled_background_tasks() -> &'static StdMutex<HashSet<String>> {
-    static TASKS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
-    TASKS.get_or_init(|| StdMutex::new(HashSet::new()))
-}
-
-pub(crate) fn mark_background_task_cancelled(task_id: &str) {
-    if let Ok(mut tasks) = cancelled_background_tasks().lock() {
-        tasks.insert(task_id.to_owned());
-    }
-}
-
-pub(crate) fn background_task_cancelled(task_id: &str) -> bool {
-    cancelled_background_tasks()
-        .lock()
-        .is_ok_and(|tasks| tasks.contains(task_id))
-}
-
-pub(crate) fn take_background_task_cancelled(task_id: &str) -> bool {
-    cancelled_background_tasks()
-        .lock()
-        .is_ok_and(|mut tasks| tasks.remove(task_id))
-}
-
-pub(crate) fn clear_background_task_cancelled(task_id: &str) {
-    if let Ok(mut tasks) = cancelled_background_tasks().lock() {
-        tasks.remove(task_id);
-    }
+#[cfg(test)]
+pub(crate) fn spawn_background_task_for_test(
+    task_id: &str,
+    session_id: &str,
+    command: &str,
+) -> Result<(), String> {
+    background_task_manager()
+        .spawn_with_id(
+            task_id,
+            rustcode_tasks::TaskSpec::new(
+                rustcode_tasks::SessionId::new(session_id),
+                rustcode_command::CommandRequest {
+                    command: command.to_owned(),
+                    cwd: None,
+                    env: Vec::new(),
+                    timeout: std::time::Duration::from_secs(30),
+                    process_group: true,
+                },
+            ),
+        )
+        .map(|_| ())
 }
 
 type WakeupCallback = Box<dyn Fn(String, String, ToolExecutionOutput) + Send + Sync + 'static>;

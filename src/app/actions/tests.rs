@@ -30,21 +30,14 @@ fn background_terminal_commands_list_and_stop_the_active_session_only() {
     let other_session_id = "actions-background-other";
     let task_id = "actions-background-task".to_string();
     let other_task_id = "actions-background-other-task".to_string();
-    let mut tasks = crate::tools::get_background_tasks().lock().unwrap();
-    for (id, session) in [(&task_id, session_id), (&other_task_id, other_session_id)] {
-        tasks.insert(
-            id.clone(),
-            crate::tools::BackgroundTaskInfo {
-                id: id.clone(),
-                session_id: session.to_string(),
-                command: format!("cargo test --package {session}"),
-                start_time: std::time::Instant::now(),
-                child_pid: None,
-                cancel_sender: None,
-            },
-        );
-    }
-    drop(tasks);
+    let long_command = if cfg!(target_os = "windows") {
+        "ping -n 30 127.0.0.1 > NUL"
+    } else {
+        "sleep 30"
+    };
+    crate::tools::spawn_background_task_for_test(&task_id, session_id, long_command).unwrap();
+    crate::tools::spawn_background_task_for_test(&other_task_id, other_session_id, long_command)
+        .unwrap();
 
     let listed = super::background_terminal_list(session_id);
     assert!(listed.contains("1 background terminal running"));
@@ -55,15 +48,18 @@ fn background_terminal_commands_list_and_stop_the_active_session_only() {
         super::stop_background_terminals(session_id),
         "Stopped 1 background terminal."
     );
-    let tasks = crate::tools::get_background_tasks().lock().unwrap();
-    assert!(!tasks.contains_key(&task_id));
-    assert!(tasks.contains_key(&other_task_id));
-    drop(tasks);
-    crate::tools::get_background_tasks()
-        .lock()
-        .unwrap()
-        .remove(&other_task_id);
-    assert!(crate::tools::take_background_task_cancelled(&task_id));
+    for _ in 0..100 {
+        if crate::tools::background_task_snapshots(session_id).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(crate::tools::background_task_snapshots(session_id).is_empty());
+    assert_eq!(
+        crate::tools::background_task_snapshots(other_session_id).len(),
+        1
+    );
+    crate::tools::stop_background_tasks(other_session_id);
 }
 
 #[tokio::test]

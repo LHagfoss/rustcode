@@ -71,6 +71,7 @@ rustcode-tools = { path = "crates/rustcode-tools" }
 rustcode-command = { path = "crates/rustcode-command" }
 rustcode-lifecycle = { path = "crates/rustcode-lifecycle" }
 rustcode-loop-detect = { path = "crates/rustcode-loop-detect" }
+rustcode-tasks = { path = "crates/rustcode-tasks" }
 # Optimize dependencies even in debug builds — syntect, pulldown-cmark,
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0
