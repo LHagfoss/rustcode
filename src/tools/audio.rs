@@ -284,9 +284,9 @@ fn backend_search_path() -> OsString {
         search_dirs.push(PathBuf::from(&home).join(".local/share/rustcode/audio-venv/bin"));
         search_dirs.push(PathBuf::from(&home).join(".local/bin"));
     }
-    search_dirs.extend(std::env::split_paths(&crate::network::augmented_path()));
+    search_dirs.extend(std::env::split_paths(&crate::platform::augmented_path()));
     std::env::join_paths(search_dirs)
-        .unwrap_or_else(|_| OsString::from(crate::network::augmented_path()))
+        .unwrap_or_else(|_| OsString::from(crate::platform::augmented_path()))
 }
 
 fn available_executable(name: &str) -> Option<PathBuf> {

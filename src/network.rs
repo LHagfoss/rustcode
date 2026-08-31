@@ -51,9 +51,9 @@ pub(crate) use ui_adapter::{AgentUiEvent, AgentUiEventReceiver, AgentUiEventSend
 #[path = "network/tool_exec.rs"]
 pub(crate) mod tool_exec;
 pub(crate) use tool_exec::{
-    augmented_path, bounded_tool_result_history_message, confirm_and_execute, execute_tool_batch,
+    bounded_tool_result_history_message, confirm_and_execute, execute_tool_batch,
     extract_diff_block, final_tool_diff, finalize_tool_result, get_diff_preview,
-    get_tool_project_root, resolve_bin, subagent_tool_history_message, tool_result_from_execution,
+    get_tool_project_root, subagent_tool_history_message, tool_result_from_execution,
     tool_result_history_message, tool_result_precludes_preview_fallback,
 };
 

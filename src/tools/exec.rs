@@ -226,7 +226,7 @@ fn run_command_output_inner(
     // GUI/Dock launches don't inherit the shell PATH, so agent-run builds/tests
     // (cargo, npm, …) fail to find their toolchain. Seed a toolchain-aware PATH;
     // an explicit PATH in `env` below still overrides it.
-    cmd.env("PATH", crate::network::augmented_path());
+    cmd.env("PATH", crate::platform::augmented_path());
     if let Some(env_map) = env {
         for (k, v) in env_map {
             if let Some(val) = v.as_str() {
@@ -294,7 +294,7 @@ fn run_command_output_inner(
             if let Some(ref cwd_path) = resolved_cwd_clone {
                 cmd.current_dir(cwd_path);
             }
-            cmd.env("PATH", crate::network::augmented_path());
+            cmd.env("PATH", crate::platform::augmented_path());
             if let Some(env_map) = env_clone {
                 for (k, v) in env_map {
                     if let Some(val) = v.as_str() {
