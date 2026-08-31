@@ -16,6 +16,13 @@ interpretable.
 The focused-edit source timestamp is restored on success, failure, interrupt,
 or termination. No source contents are changed.
 
+Timing prefers Perl's Time::HiRes millisecond clock, which works with the Bash
+3.2 shipped by macOS and with Linux. If Perl is unavailable, the script uses a
+millisecond-capable date implementation, then Python 3 or Ruby. Its final
+POSIX fallback multiplies date +%s by 1,000; that fallback is valid but only
+whole-second-precise, so install Perl or use another high-resolution provider
+for meaningful warm-build comparisons.
+
 In the safe default mode, temporary logs are deleted at exit and the TSV marks
 their log column accordingly. Use --keep-target or --target-dir when logs must
 remain available.
@@ -57,6 +64,9 @@ directory.
 The safety guards can be smoke-tested without a build:
 
     scripts/test-bench-build-boundaries.sh
+
+The smoke test also exercises the selected millisecond clock and requires a
+positive subsecond interval.
 
 ## Comparing runs
 
