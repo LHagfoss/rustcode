@@ -1,0 +1,5 @@
+[package]
+name = "rustcode-command"
+version = "0.40.4"
+edition = "2024"
+
