@@ -98,6 +98,8 @@ pub struct TaskSpec {
     pub session_id: SessionId,
     pub command: String,
     pub request: CommandRequest,
+    /// Provider/tool correlation ID, when the caller has one.
+    pub call_id: Option<String>,
 }
 
 impl TaskSpec {
@@ -106,7 +108,13 @@ impl TaskSpec {
             session_id: session_id.into(),
             command: request.command.clone(),
             request,
+            call_id: None,
         }
+    }
+
+    pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = Some(call_id.into());
+        self
     }
 }
 
@@ -151,17 +159,20 @@ pub enum TaskEvent {
     Started {
         id: TaskId,
         session_id: SessionId,
+        call_id: Option<String>,
         pid: u32,
     },
     Finished {
         id: TaskId,
         session_id: SessionId,
+        call_id: Option<String>,
         command: String,
         output: Result<CommandOutput, String>,
     },
     Cancelled {
         id: TaskId,
         session_id: SessionId,
+        call_id: Option<String>,
         command: String,
     },
 }
@@ -178,6 +189,14 @@ impl TaskEvent {
             Self::Started { session_id, .. }
             | Self::Finished { session_id, .. }
             | Self::Cancelled { session_id, .. } => session_id,
+        }
+    }
+
+    pub fn call_id(&self) -> Option<&str> {
+        match self {
+            Self::Started { call_id, .. }
+            | Self::Finished { call_id, .. }
+            | Self::Cancelled { call_id, .. } => call_id.as_deref(),
         }
     }
 
@@ -284,6 +303,7 @@ struct Subscriber {
 
 struct TaskRecord {
     session_id: SessionId,
+    call_id: Option<String>,
     command: String,
     started_at: Instant,
     state: TaskState,
@@ -578,6 +598,7 @@ impl TaskManager {
             id,
             TaskRecord {
                 session_id: spec.session_id.clone(),
+                call_id: spec.call_id.clone(),
                 command: spec.command.clone(),
                 started_at: Instant::now(),
                 state: TaskState::Starting,
@@ -602,6 +623,7 @@ impl TaskManager {
                     started_event = Some(TaskEvent::Started {
                         id: id.clone(),
                         session_id: task.session_id.clone(),
+                        call_id: task.call_id.clone(),
                         pid,
                     });
                     false
@@ -651,6 +673,7 @@ impl TaskManager {
                     Some(TaskEvent::Cancelled {
                         id: id.clone(),
                         session_id: task.session_id,
+                        call_id: task.call_id,
                         command: task.command,
                     }),
                 )
@@ -662,6 +685,7 @@ impl TaskManager {
                     Some(TaskEvent::Finished {
                         id: id.clone(),
                         session_id: task.session_id,
+                        call_id: task.call_id,
                         command: task.command,
                         output,
                     }),
@@ -678,6 +702,7 @@ impl TaskManager {
                     publish_started_on_failure.then(|| TaskEvent::Started {
                         id: id.clone(),
                         session_id: task.session_id.clone(),
+                        call_id: task.call_id.clone(),
                         pid,
                     }),
                 )
@@ -711,12 +736,14 @@ impl TaskManager {
                 TaskEvent::Cancelled {
                     id: id.clone(),
                     session_id: task.session_id,
+                    call_id: task.call_id,
                     command: task.command,
                 }
             } else {
                 TaskEvent::Finished {
                     id: id.clone(),
                     session_id: task.session_id,
+                    call_id: task.call_id,
                     command: task.command,
                     output,
                 }
@@ -775,6 +802,7 @@ impl TaskManager {
                 session_id: SessionId::new(session_id),
                 command: command.to_owned(),
                 request: test_request(command),
+                call_id: None,
             },
         );
         id
@@ -1225,12 +1253,16 @@ mod tests {
         } else {
             "printf ok"
         });
-        let handle = manager.spawn(TaskSpec::new("a", request)).unwrap();
+        let handle = manager
+            .spawn(TaskSpec::new("a", request).with_call_id("call-1"))
+            .unwrap();
         let started = events.recv().unwrap();
-        assert!(matches!(started, TaskEvent::Started { ref id, .. } if id == handle.id()));
+        assert!(
+            matches!(started, TaskEvent::Started { ref id, ref call_id, .. } if id == handle.id() && call_id.as_deref() == Some("call-1"))
+        );
         let finished = events.recv().unwrap();
         assert!(
-            matches!(finished, TaskEvent::Finished { ref id, output: Ok(ref output), .. } if id == handle.id() && output.success)
+            matches!(finished, TaskEvent::Finished { ref id, ref call_id, output: Ok(ref output), .. } if id == handle.id() && call_id.as_deref() == Some("call-1") && output.success)
         );
         assert!(manager.list("a").is_empty());
     }
@@ -1278,6 +1310,7 @@ mod tests {
         let event = TaskEvent::Cancelled {
             id: id.clone(),
             session_id: session.clone(),
+            call_id: None,
             command: String::new(),
         };
         assert_eq!(event.task_id(), &id);

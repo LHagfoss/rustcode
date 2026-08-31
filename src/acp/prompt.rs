@@ -4,13 +4,14 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Client, ConnectionTo};
 use rustcode_tasks::{TaskEvent, TaskManager};
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use tokio::sync::Mutex;
 
 use super::permissions::AcpPolicy;
-use super::session::ScheduledSessionTurn;
+use super::session::{KnownTaskIds, ScheduledSessionTurn};
 use super::streaming::{AcpEventStream, acp_stop_reason};
 
 struct BackgroundTurnTasks {
@@ -23,7 +24,7 @@ impl BackgroundTurnTasks {
     fn new(
         manager: &TaskManager,
         session_id: &str,
-        known_task_ids: &Arc<std::sync::Mutex<HashSet<String>>>,
+        known_task_ids: &Arc<std::sync::Mutex<KnownTaskIds>>,
     ) -> Self {
         let mut existing = manager
             .list(session_id)
@@ -34,8 +35,7 @@ impl BackgroundTurnTasks {
             known_task_ids
                 .lock()
                 .expect("ACP known task IDs mutex poisoned")
-                .iter()
-                .cloned(),
+                .snapshot(),
         );
         Self {
             existing,
@@ -56,7 +56,7 @@ impl BackgroundTurnTasks {
     fn observe_event(
         &mut self,
         event: &TaskEvent,
-        known_task_ids: &Arc<std::sync::Mutex<HashSet<String>>>,
+        known_task_ids: &Arc<std::sync::Mutex<KnownTaskIds>>,
     ) -> bool {
         let id = event.task_id().to_string();
         if self.existing.contains(&id) {
@@ -100,7 +100,8 @@ pub(crate) async fn run_prompt(
     scheduled_turn: ScheduledSessionTurn,
     session_id: String,
     task_events: Arc<std::sync::Mutex<Receiver<TaskEvent>>>,
-    known_task_ids: Arc<std::sync::Mutex<HashSet<String>>>,
+    known_task_ids: Arc<std::sync::Mutex<KnownTaskIds>>,
+    terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
     text: String,
     connection: ConnectionTo<Client>,
     client: Arc<reqwest::Client>,
@@ -109,17 +110,13 @@ pub(crate) async fn run_prompt(
     let turn = scheduled_turn.begin().await;
     crate::tools::set_active_session_id(Some(session_id.clone()));
     crate::tools::set_active_workspace_root(Some(cwd.clone()));
-    let stale_events = drain_task_events(&task_events);
+    let stale_events = drain_task_events(&task_events, &terminal_backlog);
     for event in stale_events {
-        if event.is_terminal()
-            && let Some((task_id, event_session_id, output)) =
-                crate::tools::task_event_to_tool_output(event)
-        {
+        if event.is_terminal() {
             known_task_ids
                 .lock()
                 .expect("ACP known task IDs mutex poisoned")
-                .remove(&task_id);
-            record_background_completion(&state, &event_session_id, &task_id, output).await;
+                .remove(event.task_id().as_str());
         }
     }
     let prompt_tokens = text.split_whitespace().collect::<Vec<_>>();
@@ -177,9 +174,12 @@ pub(crate) async fn run_prompt(
                 return Ok(StopReason::Cancelled);
             }
             let event = loop {
-                match try_receive_task_event(&task_events) {
+                match try_receive_task_event(&task_events, &terminal_backlog) {
                     Ok(event) => break event,
                     Err(TryRecvError::Empty) => {
+                        if let Some(event) = try_receive_terminal_backlog(&terminal_backlog) {
+                            break event;
+                        }
                         tokio::select! {
                             _ = turn.cancel_token().cancelled() => {
                                 return Ok(StopReason::Cancelled);
@@ -196,22 +196,7 @@ pub(crate) async fn run_prompt(
             if turn.cancel_token().is_cancelled() {
                 return Ok(StopReason::Cancelled);
             }
-            let is_turn_event = turn_tasks.observe_event(&event, &known_task_ids);
-            if let Some((task_id, event_session_id, output)) =
-                crate::tools::task_event_to_tool_output(event)
-            {
-                record_background_completion(&state, &event_session_id, &task_id, output.clone())
-                    .await;
-                if is_turn_event {
-                    send_background_update(
-                        &connection,
-                        &session_id,
-                        &mut event_stream,
-                        &task_id,
-                        output,
-                    )?;
-                }
-            }
+            turn_tasks.observe_event(&event, &known_task_ids);
             turn_tasks.observe_live_tasks(task_manager, &session_id);
             if turn_tasks.complete() {
                 break;
@@ -246,20 +231,55 @@ pub(crate) async fn run_prompt(
 
 fn try_receive_task_event(
     task_events: &Arc<std::sync::Mutex<Receiver<TaskEvent>>>,
+    terminal_backlog: &Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
 ) -> Result<TaskEvent, TryRecvError> {
-    task_events
+    let result = task_events
         .lock()
         .expect("ACP task event mutex poisoned")
-        .try_recv()
+        .try_recv();
+    if let Ok(event) = &result
+        && event.is_terminal()
+    {
+        terminal_backlog
+            .lock()
+            .expect("ACP terminal backlog mutex poisoned")
+            .retain(|queued| queued.task_id() != event.task_id());
+    }
+    result
 }
 
-fn drain_task_events(task_events: &Arc<std::sync::Mutex<Receiver<TaskEvent>>>) -> Vec<TaskEvent> {
+fn drain_task_events(
+    task_events: &Arc<std::sync::Mutex<Receiver<TaskEvent>>>,
+    terminal_backlog: &Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
+) -> Vec<TaskEvent> {
     let receiver = task_events.lock().expect("ACP task event mutex poisoned");
     let mut events = Vec::new();
     while let Ok(event) = receiver.try_recv() {
         events.push(event);
     }
+    drop(receiver);
+    let mut backlog = terminal_backlog
+        .lock()
+        .expect("ACP terminal backlog mutex poisoned");
+    let mut seen = events
+        .iter()
+        .map(|event| event.task_id().to_string())
+        .collect::<HashSet<_>>();
+    while let Some(event) = backlog.pop_front() {
+        if seen.insert(event.task_id().to_string()) {
+            events.push(event);
+        }
+    }
     events
+}
+
+fn try_receive_terminal_backlog(
+    terminal_backlog: &Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
+) -> Option<TaskEvent> {
+    terminal_backlog
+        .lock()
+        .expect("ACP terminal backlog mutex poisoned")
+        .pop_front()
 }
 
 async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
@@ -352,64 +372,20 @@ where
     Ok(context)
 }
 
-async fn record_background_completion(
-    state: &Arc<Mutex<crate::app::AppState>>,
-    session_id: &str,
-    task_id: &str,
-    output: crate::tools::ToolExecutionOutput,
-) {
-    let mut state = state.lock().await;
-    state
-        .history
-        .push(crate::background_task_history_message(task_id, output));
-    crate::config::save_session_history(session_id, &state.history);
-}
-
-fn send_background_update(
-    connection: &ConnectionTo<Client>,
-    session_id: &str,
-    event_stream: &mut AcpEventStream,
-    task_id: &str,
-    output: crate::tools::ToolExecutionOutput,
-) -> Result<(), agent_client_protocol::Error> {
-    let result = crate::network::ToolResult {
-        tool_name: "background_task".to_owned(),
-        content: output.content,
-        diff: None,
-        file_preview: None,
-        metadata: crate::network::ToolResultMetadata {
-            call_id: Some(task_id.to_owned()),
-            success: output.success,
-            command: output.command,
-            exit_code: output.exit_code,
-            truncated: output.truncated,
-            replayed: output.replayed,
-            error_kind: output.error_kind,
-            retryable: output.retryable,
-            ..Default::default()
-        },
-    };
-    send_updates(
-        connection,
-        session_id,
-        event_stream.updates(crate::network::AgentUiEvent::ToolFinished {
-            id: task_id.to_owned(),
-            result,
-        }),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{BackgroundTurnTasks, drain_task_events};
     use rustcode_tasks::TaskEvent;
+    use std::collections::VecDeque;
     use std::sync::Arc;
 
     #[test]
     fn background_tracker_ignores_old_tasks_and_handles_cancellation() {
-        let known_task_ids = Arc::new(std::sync::Mutex::new(
-            ["old-task".to_owned()].into_iter().collect(),
-        ));
+        let known_task_ids = Arc::new(std::sync::Mutex::new({
+            let mut ids = super::super::session::KnownTaskIds::default();
+            ids.insert("old-task".to_owned());
+            ids
+        }));
         let mut tracker = BackgroundTurnTasks {
             existing: ["old-task".to_owned()].into_iter().collect(),
             pending: Default::default(),
@@ -418,6 +394,7 @@ mod tests {
         let old = TaskEvent::Finished {
             id: "old-task".into(),
             session_id: "session".into(),
+            call_id: None,
             command: "sleep 1".to_owned(),
             output: Ok(rustcode_command::CommandOutput {
                 success: true,
@@ -427,11 +404,18 @@ mod tests {
             }),
         };
         assert!(!tracker.observe_event(&old, &known_task_ids));
-        assert!(!known_task_ids.lock().unwrap().contains("old-task"));
+        assert!(
+            !known_task_ids
+                .lock()
+                .unwrap()
+                .snapshot()
+                .any(|id| id == "old-task")
+        );
 
         let started = TaskEvent::Started {
             id: "new-task".into(),
             session_id: "session".into(),
+            call_id: None,
             pid: 42,
         };
         assert!(tracker.observe_event(&started, &known_task_ids));
@@ -439,6 +423,7 @@ mod tests {
         let cancelled = TaskEvent::Cancelled {
             id: "new-task".into(),
             session_id: "session".into(),
+            call_id: None,
             command: "sleep 1".to_owned(),
         };
         assert!(tracker.observe_event(&cancelled, &known_task_ids));
@@ -452,6 +437,7 @@ mod tests {
             .send(TaskEvent::Finished {
                 id: "previous-task".into(),
                 session_id: "session".into(),
+                call_id: None,
                 command: "cargo test".to_owned(),
                 output: Ok(rustcode_command::CommandOutput {
                     success: true,
@@ -461,7 +447,10 @@ mod tests {
                 }),
             })
             .unwrap();
-        let events = drain_task_events(&Arc::new(std::sync::Mutex::new(receiver)));
+        let events = drain_task_events(
+            &Arc::new(std::sync::Mutex::new(receiver)),
+            &Arc::new(std::sync::Mutex::new(VecDeque::new())),
+        );
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].task_id().as_str(), "previous-task");
         assert!(events[0].is_terminal());

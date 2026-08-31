@@ -1,10 +1,47 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use tokio::sync::Mutex;
+
+const KNOWN_TASK_ID_CAPACITY: usize = 1024;
+
+/// Bounded set of task IDs seen by a session's router.
+///
+/// IDs are retained only to distinguish events that predate a prompt from
+/// tasks created during it. A bounded FIFO keeps an idle, long-lived session
+/// from retaining every task it has ever run.
+#[derive(Default)]
+pub(crate) struct KnownTaskIds {
+    ids: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl KnownTaskIds {
+    pub(crate) fn insert(&mut self, id: String) {
+        if !self.ids.insert(id.clone()) {
+            return;
+        }
+        self.order.push_back(id);
+        while self.order.len() > KNOWN_TASK_ID_CAPACITY {
+            if let Some(expired) = self.order.pop_front() {
+                self.ids.remove(&expired);
+            }
+        }
+    }
+
+    pub(crate) fn remove(&mut self, id: &str) {
+        self.ids.remove(id);
+        self.order.retain(|known| known != id);
+    }
+
+    pub(crate) fn snapshot(&self) -> impl Iterator<Item = String> + '_ {
+        self.ids.iter().cloned()
+    }
+}
 
 pub(crate) struct SessionTurnState {
     gate: Arc<Mutex<()>>,
@@ -118,11 +155,29 @@ pub(crate) struct AcpSession {
     /// Task IDs observed by the ACP router but not yet consumed by a prompt.
     /// Keeping this alongside the inbox prevents a completion that races a
     /// new prompt from being mistaken for work created by that prompt.
-    pub(crate) known_task_ids: Arc<std::sync::Mutex<HashSet<String>>>,
+    pub(crate) known_task_ids: Arc<std::sync::Mutex<KnownTaskIds>>,
+    pub(crate) terminal_backlog: Arc<std::sync::Mutex<VecDeque<rustcode_tasks::TaskEvent>>>,
 }
 
 pub(crate) type Sessions = Arc<Mutex<HashMap<String, AcpSession>>>;
 
 pub(crate) fn new_registry() -> Sessions {
     Arc::new(Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KNOWN_TASK_ID_CAPACITY, KnownTaskIds};
+
+    #[test]
+    fn known_task_ids_are_bounded_and_fifo() {
+        let mut ids = KnownTaskIds::default();
+        for index in 0..=KNOWN_TASK_ID_CAPACITY {
+            ids.insert(format!("task-{index}"));
+        }
+
+        assert_eq!(ids.ids.len(), KNOWN_TASK_ID_CAPACITY);
+        assert!(!ids.ids.contains("task-0"));
+        assert!(ids.ids.contains(&format!("task-{KNOWN_TASK_ID_CAPACITY}")));
+    }
 }
