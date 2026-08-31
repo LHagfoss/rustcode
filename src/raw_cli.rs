@@ -1,4 +1,6 @@
 use crate::app::{AppState, ChatMessage};
+use rustcode_tasks::{TaskEvent, TaskManager};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -80,6 +82,54 @@ fn headless_failure(ctx: &crate::network::TurnContext) -> Option<String> {
         .or_else(|| Some("turn did not complete".to_string()))
 }
 
+/// Tracks only background tasks created by one headless turn. Existing
+/// session tasks may continue independently and must not delay this turn's
+/// wakeup or have their results injected into its context.
+#[derive(Debug, Default)]
+struct BackgroundTurnTasks {
+    existing: HashSet<String>,
+    pending: HashSet<String>,
+    terminal: HashSet<String>,
+}
+
+impl BackgroundTurnTasks {
+    fn new(manager: &TaskManager, session_id: &str) -> Self {
+        Self {
+            existing: manager
+                .list(session_id)
+                .into_iter()
+                .map(|task| task.id.to_string())
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    fn observe_live_tasks(&mut self, manager: &TaskManager, session_id: &str) {
+        for task in manager.list(session_id) {
+            let id = task.id.to_string();
+            if !self.existing.contains(&id) {
+                self.pending.insert(id);
+            }
+        }
+    }
+
+    fn observe_event(&mut self, event: &TaskEvent) -> bool {
+        let id = event.task_id().to_string();
+        if self.existing.contains(&id) {
+            return false;
+        }
+        self.pending.insert(id.clone());
+        if event.is_terminal() {
+            self.terminal.insert(id);
+        }
+        true
+    }
+
+    fn complete(&self) -> bool {
+        !self.pending.is_empty() && self.pending.len() == self.terminal.len()
+    }
+}
+
 impl crate::network::policy::TurnPolicy for HeadlessPolicy {
     fn should_approve(
         &self,
@@ -126,30 +176,16 @@ pub async fn run_headless_turn(
     if !quiet {
         println!("Starting headless agent loop...");
     }
-    let (wakeup_tx, mut wakeup_rx) = tokio::sync::mpsc::unbounded_channel();
-    let callback_state = Arc::clone(&state_arc);
-    let callback_runtime = tokio::runtime::Handle::current();
-    crate::tools::register_wakeup_callback(move |session_id, task_id, output| {
-        let state = Arc::clone(&callback_state);
-        let sender = wakeup_tx.clone();
-        callback_runtime.spawn(async move {
-            let mut state = state.lock().await;
-            if state.active_session_id != session_id {
-                return;
-            }
-            state
-                .history
-                .push(background_task_history_message(&task_id, output));
-            crate::config::save_session_history(&session_id, &state.history);
-            drop(state);
-            let _ = sender.send(task_id);
-        });
-    });
+    let session_id = state_arc.lock().await.active_session_id.clone();
+    let task_manager = crate::tools::background_task_manager();
+    let task_subscription = task_manager.subscribe_session(session_id.clone());
+    let mut turn_tasks = BackgroundTurnTasks::new(task_manager, &session_id);
 
     // Drive the prompt through the same lifecycle as the interactive
     // orchestrator. A background command pauses a logical turn rather than
-    // completing it: wait for the callback, inject its terminal result, and
-    // resume with the existing budgets/verification ledger.
+    // completing it: wait for its session-scoped task event, inject the
+    // terminal result, and resume with the existing budgets/verification
+    // ledger.
     let mut ctx =
         crate::network::run_agent_turn(client, &state_arc, &cancel_token, &policy, &stream_buffer)
             .await;
@@ -158,15 +194,45 @@ pub async fn run_headless_turn(
         Some(crate::network::lifecycle::StopReason::BackgroundPending)
     ) {
         let session_id = state_arc.lock().await.active_session_id.clone();
+        turn_tasks.observe_live_tasks(task_manager, &session_id);
         loop {
-            let Some(_) = wakeup_rx.recv().await else {
-                return Err(std::io::Error::other(
-                    "background task wakeup channel closed before completion",
-                )
-                .into());
+            let first_event = loop {
+                match task_subscription.try_recv() {
+                    Ok(event) => break event,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // TaskSubscription uses a synchronous channel, but
+                        // polling it this way keeps Tokio's executor free.
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        return Err(std::io::Error::other(
+                            "background task subscription closed before completion",
+                        )
+                        .into());
+                    }
+                }
             };
-            let session_still_running = crate::tools::has_background_tasks(&session_id);
-            if !session_still_running {
+            let mut events = vec![first_event];
+            if !crate::tools::has_background_tasks(&session_id) {
+                while let Ok(event) = task_subscription.try_recv() {
+                    events.push(event);
+                }
+            }
+            for event in events {
+                let is_turn_event = turn_tasks.observe_event(&event);
+                if let Some((task_id, event_session_id, output)) = is_turn_event
+                    .then(|| crate::tools::task_event_to_tool_output(event))
+                    .flatten()
+                {
+                    let mut state = state_arc.lock().await;
+                    state
+                        .history
+                        .push(background_task_history_message(&task_id, output));
+                    crate::config::save_session_history(&event_session_id, &state.history);
+                }
+            }
+            turn_tasks.observe_live_tasks(task_manager, &session_id);
+            if turn_tasks.complete() {
                 break;
             }
         }
@@ -336,5 +402,61 @@ mod tests {
         assert!(!record.success);
         assert_eq!(record.exit_code, Some(1));
         assert_eq!(record.command.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn headless_turn_tracks_only_new_tasks_and_waits_for_all_terminals() {
+        let mut tracker = BackgroundTurnTasks {
+            existing: ["old-task".to_owned()].into_iter().collect(),
+            ..BackgroundTurnTasks::default()
+        };
+        let old = TaskEvent::Finished {
+            id: "old-task".into(),
+            session_id: "session".into(),
+            command: "sleep 1".to_owned(),
+            output: Ok(rustcode_command::CommandOutput {
+                success: true,
+                exit_code: Some(0),
+                stdout: Default::default(),
+                stderr: Default::default(),
+            }),
+        };
+        assert!(!tracker.observe_event(&old));
+
+        let first = TaskEvent::Started {
+            id: "new-a".into(),
+            session_id: "session".into(),
+            pid: 10,
+        };
+        let second = TaskEvent::Started {
+            id: "new-b".into(),
+            session_id: "session".into(),
+            pid: 11,
+        };
+        assert!(tracker.observe_event(&first));
+        assert!(tracker.observe_event(&second));
+        assert!(!tracker.complete());
+
+        let finished = TaskEvent::Finished {
+            id: "new-a".into(),
+            session_id: "session".into(),
+            command: "cargo test".to_owned(),
+            output: Ok(rustcode_command::CommandOutput {
+                success: true,
+                exit_code: Some(0),
+                stdout: Default::default(),
+                stderr: Default::default(),
+            }),
+        };
+        assert!(tracker.observe_event(&finished));
+        assert!(!tracker.complete());
+
+        let cancelled = TaskEvent::Cancelled {
+            id: "new-b".into(),
+            session_id: "session".into(),
+            command: "cargo check".to_owned(),
+        };
+        assert!(tracker.observe_event(&cancelled));
+        assert!(tracker.complete());
     }
 }

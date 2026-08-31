@@ -1,4 +1,40 @@
 use super::*;
+use rustcode_tasks::TaskEvent;
+use std::sync::mpsc::TryRecvError;
+
+fn record_active_background_task(
+    state: &mut crate::app::AppState,
+    task_id: &str,
+    output: crate::tools::ToolExecutionOutput,
+) -> bool {
+    if state.background_wakeup_ids.contains(task_id) {
+        return false;
+    }
+    state
+        .history
+        .push(crate::background_task_history_message(task_id, output));
+    crate::queue_background_wakeup(state, task_id);
+    true
+}
+
+async fn apply_background_task_event(
+    app_state: &std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    event: TaskEvent,
+) {
+    let Some((task_id, session_id, output)) = crate::tools::task_event_to_tool_output(event) else {
+        return;
+    };
+    let mut state = app_state.lock().await;
+    if state.active_session_id == session_id {
+        if record_active_background_task(&mut state, &task_id, output) {
+            crate::config::save_session_history(&session_id, &state.history);
+        }
+    } else {
+        let mut history = crate::config::load_session_history_direct(&session_id);
+        history.push(crate::background_task_history_message(&task_id, output));
+        crate::config::save_session_history(&session_id, &history);
+    }
+}
 
 impl AppRuntime {
     pub(crate) async fn run(self) -> Result<crate::ExitSummary, Box<dyn Error>> {
@@ -22,6 +58,7 @@ impl AppRuntime {
             app_event_receiver,
             agent_ui_event_sender,
             agent_ui_event_receiver,
+            task_subscriptions,
         } = self;
         let mut terminal_runtime = terminal_runtime
             .ok_or_else(|| Box::<dyn Error>::from("interactive terminal is unavailable"))?;
@@ -38,10 +75,73 @@ impl AppRuntime {
         let mut frame_stream = frame_stream;
         let mut app_event_receiver = app_event_receiver;
         let mut agent_ui_event_receiver = agent_ui_event_receiver;
+        let mut task_subscriptions = task_subscriptions;
         let update_exit;
         let mut last_progress_sent = std::time::Instant::now();
         let composer = ui::Composer::new();
         loop {
+            let active_session_id = app_state.lock().await.active_session_id.clone();
+            task_subscriptions
+                .entry(active_session_id.clone())
+                .or_insert_with(|| {
+                    crate::tools::background_task_manager()
+                        .subscribe_session(active_session_id.clone())
+                });
+            let mut task_events = Vec::new();
+            let mut disconnected_sessions = Vec::new();
+            for (session_id, subscription) in &mut task_subscriptions {
+                loop {
+                    match subscription.try_recv() {
+                        Ok(event) => task_events.push(event),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            disconnected_sessions.push(session_id.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            for event in task_events {
+                apply_background_task_event(&app_state, event).await;
+                needs_redraw = true;
+            }
+            let manager = crate::tools::background_task_manager();
+            // A task removes its record immediately before publishing the
+            // terminal event. `has_running` is synchronized with that
+            // publication, but drain once more before pruning an inactive
+            // subscription so the event that made the session quiescent is
+            // consumed instead of being dropped with its receiver.
+            let mut late_task_events = Vec::new();
+            let mut late_disconnected_sessions = Vec::new();
+            for (session_id, subscription) in &mut task_subscriptions {
+                if session_id == &active_session_id || manager.has_running(session_id) {
+                    continue;
+                }
+                loop {
+                    match subscription.try_recv() {
+                        Ok(event) => late_task_events.push(event),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            late_disconnected_sessions.push(session_id.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            for event in late_task_events {
+                apply_background_task_event(&app_state, event).await;
+                needs_redraw = true;
+            }
+            task_subscriptions.retain(|session_id, _| {
+                session_id == &active_session_id || manager.has_running(session_id)
+            });
+            for session_id in disconnected_sessions {
+                task_subscriptions.remove(&session_id);
+            }
+            for session_id in late_disconnected_sessions {
+                task_subscriptions.remove(&session_id);
+            }
+
             {
                 let mut state = app_state.lock().await;
                 if state.expire_ctrl_c_exit_arming(std::time::Instant::now()) {
@@ -235,5 +335,70 @@ impl AppRuntime {
         crate::config::flush_history();
         restore_terminal(&mut terminal_runtime, exit_summary.composer_y)?;
         Ok(exit_summary)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::record_active_background_task;
+    use crate::app::AppState;
+    use crate::tools::ToolExecutionOutput;
+
+    #[test]
+    fn active_completion_is_recorded_and_queued_once() {
+        let mut state = AppState::new();
+        state.active_session_id = "active-completion-session".to_owned();
+        let output = ToolExecutionOutput::success("cargo test passed".to_owned());
+
+        assert!(record_active_background_task(
+            &mut state,
+            "task-completed-once",
+            output.clone()
+        ));
+        assert!(!record_active_background_task(
+            &mut state,
+            "task-completed-once",
+            output
+        ));
+        assert_eq!(state.history.len(), 1);
+        assert_eq!(
+            state.pending_queue,
+            vec!["__task_wakeup__:task-completed-once".to_owned()]
+        );
+        assert!(state.background_wakeup_ids.contains("task-completed-once"));
+    }
+
+    #[test]
+    fn session_subscription_retains_inactive_completion_until_consumed() {
+        let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
+        let subscription = manager.subscribe_session("inactive-session");
+        let task = manager
+            .spawn_with_id(
+                "inactive-completion-task",
+                rustcode_tasks::TaskSpec::new(
+                    "inactive-session",
+                    rustcode_command::CommandRequest {
+                        command: if cfg!(target_os = "windows") {
+                            "echo retained".to_owned()
+                        } else {
+                            "printf retained".to_owned()
+                        },
+                        cwd: None,
+                        env: Vec::new(),
+                        timeout: std::time::Duration::from_secs(5),
+                        process_group: true,
+                    },
+                ),
+            )
+            .expect("spawn inactive task");
+
+        let mut saw_finished = false;
+        while let Ok(event) = subscription.recv() {
+            if event.task_id() == task.id() && event.is_terminal() {
+                saw_finished = true;
+                break;
+            }
+        }
+        assert!(saw_finished, "inactive session completion was retained");
     }
 }

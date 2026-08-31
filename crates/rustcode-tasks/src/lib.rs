@@ -294,6 +294,10 @@ struct Inner {
     tasks: Mutex<HashMap<TaskId, TaskRecord>>,
     subscribers: Mutex<Vec<Subscriber>>,
     terminal_ids: Mutex<TerminalIds>,
+    /// Serializes the task snapshot check with terminal event publication.
+    /// A consumer can therefore perform a final non-blocking drain after a
+    /// quiescent check without racing an already-removed task's event.
+    publication: Mutex<()>,
     next_id: AtomicU64,
 }
 
@@ -340,6 +344,7 @@ impl TaskManager {
                 tasks: Mutex::new(HashMap::new()),
                 subscribers: Mutex::new(Vec::new()),
                 terminal_ids: Mutex::new(TerminalIds::default()),
+                publication: Mutex::new(()),
                 next_id: AtomicU64::new(1),
             }),
             terminator,
@@ -454,6 +459,14 @@ impl TaskManager {
     }
 
     pub fn has_running(&self, session_id: impl AsRef<str>) -> bool {
+        // `finish` removes a task before publishing its terminal event. Hold
+        // the publication gate so a false result means no terminal event is
+        // still in flight for this session.
+        let _publication = self
+            .inner
+            .publication
+            .lock()
+            .expect("task publication mutex poisoned");
         !self.list(session_id).is_empty()
     }
 
@@ -713,6 +726,11 @@ impl TaskManager {
     }
 
     fn publish(&self, event: TaskEvent) {
+        let _publication = self
+            .inner
+            .publication
+            .lock()
+            .expect("task publication mutex poisoned");
         let mut subscribers = self
             .inner
             .subscribers
@@ -1097,6 +1115,56 @@ mod tests {
         assert!(matches!(events.recv().unwrap(), TaskEvent::Finished { .. }));
         assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
         assert_eq!(manager.cancel(&id), CancelResult::AlreadyFinished);
+    }
+
+    #[test]
+    fn quiescent_check_waits_for_terminal_publication() {
+        let manager = manager(FakeTerminator::succeeding());
+        let events = manager.subscribe_session("a");
+        let id = manager.register_for_test("a", "true");
+
+        // Hold the publication gate while a worker removes the task. This is
+        // the exact window in which an observer used to see no live task and
+        // drop its subscription before the terminal event was delivered.
+        let publication = manager
+            .inner
+            .publication
+            .lock()
+            .expect("task publication mutex poisoned");
+        let finishing = {
+            let manager = manager.clone();
+            let id = id.clone();
+            std::thread::spawn(move || manager.finish_for_test(&id, Ok(successful_output())))
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while std::time::Instant::now() < deadline {
+            if manager.list("a").is_empty() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(manager.list("a").is_empty());
+        assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let checking = {
+            let manager = manager.clone();
+            std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                result_tx.send(manager.has_running("a")).unwrap();
+            })
+        };
+        started_rx.recv().unwrap();
+        assert_eq!(result_rx.try_recv(), Err(TryRecvError::Empty));
+        drop(publication);
+
+        assert!(!result_rx.recv().unwrap());
+        checking.join().unwrap();
+        finishing.join().unwrap();
+        assert!(
+            matches!(events.recv().unwrap(), TaskEvent::Finished { id: event_id, .. } if event_id == id)
+        );
     }
 
     #[test]
