@@ -1,0 +1,9 @@
+[package]
+name = "rustcode-tool-protocol"
+version = "0.40.4"
+edition = "2024"
+
+[dependencies]
+regex = "1"
+rustcode-core = { path = "../rustcode-core" }
+serde_json = "1.0.150"
