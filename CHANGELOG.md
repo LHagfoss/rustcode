@@ -1,3 +1,21 @@
+## [v0.40.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.5) - 2026-08-31
+
+### Features
+- **Background tasks:** Add a dependency-neutral task manager and route background command lifecycle through it with session-scoped subscriptions, durable completion delivery, ACP turn resumption, and stale-event isolation ([#884](https://github.com/LHagfoss/rustcode/pull/884), [#886](https://github.com/LHagfoss/rustcode/pull/886), [#887](https://github.com/LHagfoss/rustcode/pull/887), [#888](https://github.com/LHagfoss/rustcode/pull/888); tracked by [#881](https://github.com/LHagfoss/rustcode/issues/881))
+
+### Fixes
+- **Process cancellation:** Terminate complete Unix process groups and Windows process trees when foreground commands are cancelled or time out, while preserving exactly one final tool result ([#880](https://github.com/LHagfoss/rustcode/pull/880))
+
+### Performance
+- **Build measurement:** Add a safe Cargo build-boundary benchmark harness and high-resolution timing so clean, warm, and focused rebuild costs can be measured reliably ([#875](https://github.com/LHagfoss/rustcode/pull/875), [#878](https://github.com/LHagfoss/rustcode/pull/878))
+
+### Refactoring
+- **Workspace decomposition:** Establish a thin library entry point and extract stable domain types, executable-path helpers, session persistence, tool-protocol parsing, filesystem tools, command execution, lifecycle state, and loop detection into focused workspace crates ([#871](https://github.com/LHagfoss/rustcode/pull/871), [#872](https://github.com/LHagfoss/rustcode/pull/872), [#873](https://github.com/LHagfoss/rustcode/pull/873), [#874](https://github.com/LHagfoss/rustcode/pull/874), [#876](https://github.com/LHagfoss/rustcode/pull/876), [#877](https://github.com/LHagfoss/rustcode/pull/877), [#879](https://github.com/LHagfoss/rustcode/pull/879), [#883](https://github.com/LHagfoss/rustcode/pull/883), [#885](https://github.com/LHagfoss/rustcode/pull/885); continuation of [#869](https://github.com/LHagfoss/rustcode/issues/869))
+
+### CI & Release
+- **Build coverage:** Drop Intel macOS artifacts, keep Apple Silicon macOS as the supported native target, make native portability checks advisory, and enable sccache-backed CI builds ([#868](https://github.com/LHagfoss/rustcode/pull/868), [#870](https://github.com/LHagfoss/rustcode/pull/870))
+- **Workspace CI:** Ensure changes under extracted crates and CI helpers run the required Linux test and cross-platform portability coverage ([#882](https://github.com/LHagfoss/rustcode/pull/882))
+
 ## [v0.40.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.4) - 2026-08-31
 
 ### Fixes
