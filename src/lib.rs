@@ -58,7 +58,7 @@ pub(crate) fn should_clear_mutable_viewport_before_history(
     has_pending_history
 }
 
-fn background_task_history_message(
+pub(crate) fn background_task_history_message(
     task_id: &str,
     output: crate::tools::ToolExecutionOutput,
 ) -> ChatMessage {
@@ -90,7 +90,7 @@ fn background_task_history_message(
     )
 }
 
-fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
+pub(crate) fn queue_background_wakeup(state: &mut AppState, task_id: &str) {
     if state.background_wakeup_ids.insert(task_id.to_string()) {
         state
             .pending_queue
@@ -288,39 +288,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         };
         state.request_redraw();
     });
-    // Register the background task wakeup callback
-    let state_cb = Arc::clone(&app_state);
-    let handle = tokio::runtime::Handle::current();
-    crate::tools::register_wakeup_callback(move |session_id, task_id, output| {
-        let state_clone = Arc::clone(&state_cb);
-        let handle_clone = handle.clone();
-        handle_clone.spawn(async move {
-            let mut s = state_clone.lock().await;
-            if s.active_session_id == session_id {
-                if s.background_wakeup_ids.contains(&task_id) {
-                    return;
-                }
-                // Background output can be huge (long-running servers dump MBs of
-                // logs). Head+tail truncate it like any other tool result so it
-                // doesn't bloat context and the scroll buffer.
-                s.history
-                    .push(background_task_history_message(&task_id, output));
-                crate::config::save_session_history(&session_id, &s.history);
-                // Drive a fresh model turn when a background task completes in the active session
-                // so the agent automatically receives the result and continues working.
-                queue_background_wakeup(&mut s, &task_id);
-                // Do not start an orchestrator here. This callback outlives individual
-                // turns, so capturing their cancellation token leaves future wakeups
-                // permanently cancelled after the first interrupt. The main event loop
-                // observes this queued item and starts it with the current token instead.
-            } else {
-                let mut history = crate::config::load_session_history_direct(&session_id);
-                history.push(background_task_history_message(&task_id, output));
-                crate::config::save_session_history(&session_id, &history);
-            }
-        });
-    });
-
     // Spawn startup initialization of enabled MCP servers.
     let mcp_servers = app_state.lock().await.config.mcp_servers.clone();
     let mcp_state = Arc::clone(&app_state);
