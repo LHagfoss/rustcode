@@ -89,6 +89,32 @@ fn test_context_window_optional() {
 }
 
 #[test]
+fn model_sampling_controls_round_trip_through_toml() {
+    let dir = temp_dir("sampling");
+    let mut config = AppConfig::default();
+    let profile = &mut config.models[0];
+    profile.temperature = Some(1.0);
+    profile.top_p = Some(0.95);
+    profile.top_k = Some(20);
+    profile.presence_penalty = Some(1.5);
+    profile.frequency_penalty = Some(0.0);
+    profile.force_sampling = Some(true);
+    profile.preserve_thinking = Some(true);
+
+    save_config_to(&dir, &config);
+    let (_, _, loaded) = load_config_from(&dir);
+    let profile = &loaded.models[0];
+
+    assert_eq!(profile.temperature, Some(1.0));
+    assert_eq!(profile.top_p, Some(0.95));
+    assert_eq!(profile.top_k, Some(20));
+    assert_eq!(profile.presence_penalty, Some(1.5));
+    assert_eq!(profile.frequency_penalty, Some(0.0));
+    assert_eq!(profile.force_sampling, Some(true));
+    assert_eq!(profile.preserve_thinking, Some(true));
+}
+
+#[test]
 fn context_budget_reserves_completion_thinking_tools_and_safety() {
     let mut profile = AppConfig::default().models[0].clone();
     profile.context_window = Some(4096);
