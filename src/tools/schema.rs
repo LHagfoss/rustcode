@@ -2,6 +2,7 @@ use super::{TOOLS, ToolCapability, allowed_in_plan_mode};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 /// Agent tools that live outside the `TOOLS` table. `(name, description, args)`
@@ -38,6 +39,16 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
 pub(crate) struct ToolSchemaPolicy {
     pub(crate) include_agent_tools: bool,
     pub(crate) include_mcp_tools: bool,
+}
+
+/// Request phase used to keep the initial tool menu small for new projects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ToolSchemaPhase {
+    /// The workspace has no (or only a handful of) source files.
+    Bootstrap,
+    /// Established repositories retain the broad, context-ranked menu.
+    #[default]
+    Established,
 }
 
 impl ToolSchemaPolicy {
@@ -251,6 +262,9 @@ pub(crate) struct McpSchemaSelectionStats {
     pub fallback: usize,
     pub omitted: usize,
     pub selected_names: Vec<String>,
+    pub phase: ToolSchemaPhase,
+    pub builtin_available: usize,
+    pub builtin_selected: usize,
 }
 
 const CORE_CODING_TOOLS: &[&str] = &[
@@ -274,12 +288,160 @@ const CORE_CODING_TOOLS: &[&str] = &[
     "use_skill",
 ];
 
-fn builtin_tool_is_relevant(name: &str, terms: &std::collections::HashSet<String>) -> bool {
-    if CORE_CODING_TOOLS.contains(&name) {
+const BOOTSTRAP_CODING_TOOLS: &[&str] = &[
+    "grep",
+    "glob",
+    "list_directory",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "run_command",
+    "manage_task",
+    "view_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "write_to_file",
+    "complete_task",
+    "list_skills",
+    "use_skill",
+];
+
+const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
+
+fn source_file_count(root: &Path) -> usize {
+    let mut pending = vec![root.to_path_buf()];
+    let mut count = 0;
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.')
+                || matches!(name.as_str(), "target" | "node_modules" | "vendor")
+            {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        matches!(
+                            extension,
+                            "rs" | "ts"
+                                | "tsx"
+                                | "js"
+                                | "jsx"
+                                | "py"
+                                | "go"
+                                | "java"
+                                | "c"
+                                | "h"
+                                | "cpp"
+                                | "hpp"
+                                | "swift"
+                                | "kt"
+                                | "rb"
+                                | "php"
+                                | "cs"
+                                | "vue"
+                                | "svelte"
+                        )
+                    })
+            {
+                count += 1;
+                if count > BOOTSTRAP_SOURCE_FILE_LIMIT {
+                    return count;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn explicitly_requests_codebase_analysis(messages: &[Value]) -> bool {
+    messages
+        .iter()
+        .filter_map(|message| {
+            matches!(
+                message.get("role").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+            .then(|| message.get("content").and_then(Value::as_str).unwrap_or(""))
+        })
+        .any(|content| {
+            let content = content.to_ascii_lowercase();
+            [
+                "codebase analysis",
+                "call graph",
+                "dependency graph",
+                "find symbol",
+                "impact analysis",
+                "trace callers",
+                "trace callees",
+                "refactor the existing",
+                "analyze the repository",
+                "analyze this repository",
+            ]
+            .iter()
+            .any(|needle| content.contains(needle))
+        })
+}
+
+pub(crate) fn tool_schema_phase(
+    messages: &[Value],
+    workspace_root: Option<&Path>,
+) -> ToolSchemaPhase {
+    if explicitly_requests_codebase_analysis(messages) {
+        return ToolSchemaPhase::Established;
+    }
+    workspace_root
+        .filter(|root| root.is_dir())
+        .map(|root| source_file_count(root) <= BOOTSTRAP_SOURCE_FILE_LIMIT)
+        .map_or(ToolSchemaPhase::Established, |bootstrap| {
+            if bootstrap {
+                ToolSchemaPhase::Bootstrap
+            } else {
+                ToolSchemaPhase::Established
+            }
+        })
+}
+
+fn builtin_tool_is_relevant(
+    name: &str,
+    terms: &std::collections::HashSet<String>,
+    phase: ToolSchemaPhase,
+) -> bool {
+    let coding_tools = match phase {
+        ToolSchemaPhase::Bootstrap => BOOTSTRAP_CODING_TOOLS,
+        ToolSchemaPhase::Established => CORE_CODING_TOOLS,
+    };
+    if coding_tools.contains(&name) {
         return true;
     }
     let relevant = |needles: &[&str]| needles.iter().any(|needle| terms.contains(*needle));
     match name {
+        "find_symbol" | "get_project_map" => {
+            phase == ToolSchemaPhase::Established
+                || relevant(&[
+                    "symbol",
+                    "symbols",
+                    "architecture",
+                    "dependency",
+                    "dependencies",
+                    "impact",
+                    "callers",
+                    "callees",
+                    "trace",
+                ])
+        }
         "search_web" => relevant(&[
             "web", "internet", "online", "research", "latest", "docs", "http", "https",
         ]),
@@ -301,6 +463,7 @@ fn builtin_tool_is_relevant(name: &str, terms: &std::collections::HashSet<String
 fn build_builtin_native_tools_schema(
     include_agent_tools: bool,
     terms: Option<&std::collections::HashSet<String>>,
+    phase: ToolSchemaPhase,
 ) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
@@ -308,7 +471,7 @@ fn build_builtin_native_tools_schema(
             continue;
         }
         if !(include_agent_tools && t.capabilities.contains(&ToolCapability::AgentDelegation))
-            && terms.is_some_and(|terms| !builtin_tool_is_relevant(t.name, terms))
+            && terms.is_some_and(|terms| !builtin_tool_is_relevant(t.name, terms, phase))
         {
             continue;
         }
@@ -325,10 +488,12 @@ fn build_builtin_native_tools_schema(
 }
 
 fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
-    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> =
-        LazyLock::new(|| build_builtin_native_tools_schema(false, None));
-    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> =
-        LazyLock::new(|| build_builtin_native_tools_schema(true, None));
+    static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
+        build_builtin_native_tools_schema(false, None, ToolSchemaPhase::Established)
+    });
+    static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
+        build_builtin_native_tools_schema(true, None, ToolSchemaPhase::Established)
+    });
 
     if include_agent_tools {
         WITH_AGENT_TOOLS.clone()
@@ -501,9 +666,10 @@ fn mcp_tool_relevance(
     score
 }
 
-pub(super) fn select_mcp_tools_for_context(
+pub(super) fn select_mcp_tools_for_context_in_phase(
     tools: &[(String, String, Value)],
     messages: &[Value],
+    phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
     let terms = context_terms(messages);
     let mut previous = Vec::new();
@@ -543,7 +709,7 @@ pub(super) fn select_mcp_tools_for_context(
     );
     let relevant_count = selected.len().saturating_sub(previously_used_count);
     let mut fallback_count = 0;
-    if selected.is_empty() {
+    if selected.is_empty() && phase == ToolSchemaPhase::Established {
         for preferred in MCP_DISCOVERY_CORE {
             if selected.len() >= MCP_DISCOVERY_FALLBACK_COUNT {
                 break;
@@ -577,16 +743,26 @@ pub(super) fn select_mcp_tools_for_context(
         fallback: fallback_count.min(selected.len()),
         omitted: tools.len().saturating_sub(selected.len()),
         selected_names,
+        phase,
+        ..Default::default()
     };
     (selected, stats)
 }
 
-pub(super) fn select_mcp_tools_for_context_with_sticky(
+pub(super) fn select_mcp_tools_for_context(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_in_phase(tools, messages, ToolSchemaPhase::Established)
+}
+
+pub(super) fn select_mcp_tools_for_context_with_sticky_in_phase(
     tools: &[(String, String, Value)],
     messages: &[Value],
     sticky_names: &[String],
+    phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
-    let (mut selected, mut stats) = select_mcp_tools_for_context(tools, messages);
+    let (mut selected, mut stats) = select_mcp_tools_for_context_in_phase(tools, messages, phase);
     if sticky_names.is_empty() {
         return (selected, stats);
     }
@@ -614,6 +790,19 @@ pub(super) fn select_mcp_tools_for_context_with_sticky(
     (selected, stats)
 }
 
+pub(super) fn select_mcp_tools_for_context_with_sticky(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+    sticky_names: &[String],
+) -> (Vec<usize>, McpSchemaSelectionStats) {
+    select_mcp_tools_for_context_with_sticky_in_phase(
+        tools,
+        messages,
+        sticky_names,
+        ToolSchemaPhase::Established,
+    )
+}
+
 pub(crate) fn native_tools_schema_for_context(
     policy: ToolSchemaPolicy,
     messages: &[Value],
@@ -626,15 +815,38 @@ pub(crate) fn native_tools_schema_for_context_with_sticky(
     messages: &[Value],
     sticky_names: &[String],
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
+    native_tools_schema_for_context_with_sticky_at(policy, messages, sticky_names, None)
+}
+
+pub(crate) fn native_tools_schema_for_context_with_sticky_at(
+    policy: ToolSchemaPolicy,
+    messages: &[Value],
+    sticky_names: &[String],
+    workspace_root: Option<&Path>,
+) -> (Vec<Value>, McpSchemaSelectionStats) {
+    let phase = tool_schema_phase(messages, workspace_root);
     let terms = context_terms(messages);
-    let mut tools = build_builtin_native_tools_schema(policy.include_agent_tools, Some(&terms));
+    let mut tools =
+        build_builtin_native_tools_schema(policy.include_agent_tools, Some(&terms), phase);
+    let builtin_available = TOOLS
+        .iter()
+        .filter(|tool| {
+            !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
+                && !policy.include_agent_tools)
+        })
+        .count();
+    let builtin_selected = tools.len();
     // MCP tools are selected from the current request context. The registry is
     // a HashMap, so collection is sorted before scoring and emission to keep
     // both selection and the provider-facing payload deterministic.
     let stats = if policy.include_mcp_tools {
         let mcp_tools = collect_mcp_tools();
-        let (selected, stats) =
-            select_mcp_tools_for_context_with_sticky(&mcp_tools, messages, sticky_names);
+        let (selected, stats) = select_mcp_tools_for_context_with_sticky_in_phase(
+            &mcp_tools,
+            messages,
+            sticky_names,
+            phase,
+        );
         for index in selected {
             let (name, desc, schema) = &mcp_tools[index];
             tools.push(mcp_schema_value(name, desc, schema));
@@ -644,6 +856,11 @@ pub(crate) fn native_tools_schema_for_context_with_sticky(
         McpSchemaSelectionStats::default()
     };
     tools.extend(agent_native_tools_schema(policy.include_agent_tools));
+    let mut stats = stats;
+    stats.phase = phase;
+    stats.builtin_available = builtin_available;
+    stats.builtin_selected =
+        builtin_selected + usize::from(policy.include_agent_tools) * AGENT_TOOL_SPECS.len();
     (tools, stats)
 }
 

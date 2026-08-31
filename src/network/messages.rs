@@ -193,6 +193,48 @@ pub(crate) fn inject_system_reminder(msgs: &mut [serde_json::Value]) {
     }
 }
 
+/// Keep a local model from spending multiple bootstrap turns restating a plan
+/// without touching an empty workspace. This is request-local: it does not
+/// mutate the transcript or disable configured reasoning.
+pub(crate) fn inject_bootstrap_action_nudge(msgs: &mut [serde_json::Value], bootstrap: bool) {
+    if !bootstrap {
+        return;
+    }
+    // Only the most recent assistant response can be the pending plan. Looking
+    // through the entire transcript would resurrect an old plan after the
+    // agent has already made progress with a later tool call.
+    let has_long_plan = msgs
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(|role| role.as_str()) == Some("assistant"))
+        .is_some_and(|message| {
+            message
+                .get("tool_calls")
+                .and_then(|calls| calls.as_array())
+                .is_none_or(|calls| calls.is_empty())
+                && message
+                    .get("content")
+                    .and_then(|content| content.as_str())
+                    .is_some_and(|content| crate::network::count_tokens(content) >= 512)
+        });
+    if !has_long_plan {
+        return;
+    }
+    let nudge = "BOOTSTRAP ACTION: execute the smallest concrete setup step now (for example, create the project manifest or first source file). Keep reasoning concise and do not restate the architecture plan.";
+    if let Some(last_msg) = msgs.last_mut()
+        && let Some(content) = last_msg.get_mut("content")
+    {
+        match content {
+            serde_json::Value::String(s) => *s = format!("{s}\n\n{nudge}"),
+            serde_json::Value::Array(arr) => arr.push(serde_json::json!({
+                "type": "text",
+                "text": format!("\n\n{nudge}")
+            })),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +276,51 @@ mod tests {
         let mut msgs = vec![serde_json::json!({"role": "user", "content": "hi"})];
         append_to_last_message(&mut msgs, "");
         assert_eq!(msgs[0]["content"], "hi");
+    }
+
+    #[test]
+    fn bootstrap_nudge_follows_a_long_planning_only_response() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "user", "content": "Create an app"}),
+            serde_json::json!({"role": "assistant", "content": "plan ".repeat(600)}),
+            serde_json::json!({"role": "user", "content": "continue"}),
+        ];
+        inject_bootstrap_action_nudge(&mut msgs, true);
+        assert!(
+            msgs[2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("BOOTSTRAP ACTION")
+        );
+    }
+
+    #[test]
+    fn bootstrap_nudge_does_not_change_non_bootstrap_or_tool_turns() {
+        let mut established = vec![
+            serde_json::json!({"role": "assistant", "content": "plan ".repeat(600)}),
+            serde_json::json!({"role": "user", "content": "continue"}),
+        ];
+        inject_bootstrap_action_nudge(&mut established, false);
+        assert!(
+            !established[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("BOOTSTRAP ACTION")
+        );
+
+        let mut tool_turn = vec![
+            serde_json::json!({"role": "assistant", "content": "old plan ".repeat(600)}),
+            serde_json::json!({"role": "user", "content": "continue"}),
+            serde_json::json!({"role": "assistant", "content": "plan ".repeat(600), "tool_calls": [{"id": "call-1"}]}),
+            serde_json::json!({"role": "user", "content": "continue"}),
+        ];
+        inject_bootstrap_action_nudge(&mut tool_turn, true);
+        assert!(
+            !tool_turn[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("BOOTSTRAP ACTION")
+        );
     }
 
     #[test]

@@ -928,6 +928,7 @@ impl PromptCache {
         policy: crate::tools::ToolSchemaPolicy,
         messages: &[serde_json::Value],
         session_id: &str,
+        workspace_root: Option<&std::path::Path>,
     ) -> (
         Vec<serde_json::Value>,
         crate::tools::McpSchemaSelectionStats,
@@ -943,10 +944,11 @@ impl PromptCache {
             self.mcp_selection_session_id = Some(session_id.to_string());
         }
 
-        let result = crate::tools::native_tools_schema_for_context_with_sticky(
+        let result = crate::tools::native_tools_schema_for_context_with_sticky_at(
             policy,
             messages,
             &self.mcp_selected_names,
+            workspace_root,
         );
         self.mcp_selected_names = result.1.selected_names.clone();
         result
