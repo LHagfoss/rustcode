@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 
 use tokio::sync::Mutex;
@@ -157,6 +158,7 @@ pub(crate) struct AcpSession {
     /// new prompt from being mistaken for work created by that prompt.
     pub(crate) known_task_ids: Arc<std::sync::Mutex<KnownTaskIds>>,
     pub(crate) terminal_backlog: Arc<std::sync::Mutex<VecDeque<rustcode_tasks::TaskEvent>>>,
+    pub(crate) terminal_overflow: Arc<AtomicBool>,
 }
 
 pub(crate) type Sessions = Arc<Mutex<HashMap<String, AcpSession>>>;

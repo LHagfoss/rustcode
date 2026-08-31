@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use tokio::sync::Mutex;
 
@@ -102,6 +103,7 @@ pub(crate) async fn run_prompt(
     task_events: Arc<std::sync::Mutex<Receiver<TaskEvent>>>,
     known_task_ids: Arc<std::sync::Mutex<KnownTaskIds>>,
     terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
+    terminal_overflow: Arc<AtomicBool>,
     text: String,
     connection: ConnectionTo<Client>,
     client: Arc<reqwest::Client>,
@@ -118,6 +120,10 @@ pub(crate) async fn run_prompt(
                 .expect("ACP known task IDs mutex poisoned")
                 .remove(event.task_id().as_str());
         }
+    }
+    if terminal_overflow.load(Ordering::Acquire) {
+        return Err(agent_client_protocol::Error::internal_error()
+            .data("ACP background task completion backlog overflowed; session must be reopened"));
     }
     let prompt_tokens = text.split_whitespace().collect::<Vec<_>>();
     if prompt_tokens.first() == Some(&"/memory") && prompt_tokens.len() > 1 {
@@ -172,6 +178,11 @@ pub(crate) async fn run_prompt(
         loop {
             if turn.cancel_token().is_cancelled() {
                 return Ok(StopReason::Cancelled);
+            }
+            if terminal_overflow.load(Ordering::Acquire) {
+                return Err(agent_client_protocol::Error::internal_error().data(
+                    "ACP background task completion backlog overflowed; session must be reopened",
+                ));
             }
             let event = loop {
                 match try_receive_task_event(&task_events, &terminal_backlog) {
