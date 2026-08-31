@@ -45,7 +45,7 @@ jobs:
                   fi
 
                   changed_files="$(git diff --name-only "$BASE_SHA...HEAD")"
-                  if grep -Eq '^(Cargo\.toml|Cargo\.lock|build\.rs$|src/|tests/|benches/|install\.sh$|install\.ps1$|rust-toolchain[^/]*$|\.cargo/|\.github/workflows/)' <<< "$changed_files"; then
+                  if printf '%s\n' "$changed_files" | bash scripts/ci-relevant-changes.sh; then
                       echo "Relevant code or build files changed"
                       echo "code=true" >> "$GITHUB_OUTPUT"
                   else
@@ -93,6 +93,9 @@ jobs:
 
             - name: Check shell installer syntax
               run: bash -n install.sh
+
+            - name: Check CI change matcher
+              run: bash scripts/test-ci-relevant-changes.sh
 
             - name: Clippy correctness gate
               # The codebase has an established warning baseline. Keep those
