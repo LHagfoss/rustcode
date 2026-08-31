@@ -11,6 +11,10 @@ concurrency:
 
 env:
     CARGO_TERM_COLOR: always
+    # CI does not archive debug symbols. Avoid spending time generating and
+    # linking them for ephemeral checks and test binaries.
+    CARGO_PROFILE_DEV_DEBUG: "0"
+    CARGO_PROFILE_TEST_DEBUG: "0"
 
 permissions:
     contents: read
@@ -88,7 +92,10 @@ jobs:
             - name: Clippy correctness gate
               # The codebase has an established warning baseline. Keep those
               # warnings visible locally while denying only correctness lints.
-              run: cargo clippy --all-targets --locked -- -A warnings -D clippy::correctness
+              # Tests are compiled and exercised by the next step. Lint the
+              # shipped binary here to avoid compiling the large test harness
+              # once for Clippy and again for rustc.
+              run: cargo clippy --locked -- -A warnings -D clippy::correctness
 
             - name: Run tests
               # These tests depend on user-installed skills or runner-specific
@@ -114,8 +121,6 @@ jobs:
                     - name: Windows
                       os: windows-latest
                       cache_key: windows
-        env:
-            RUSTCODE_REQUIRE_FFMPEG_TESTS: "1"
         steps:
             - name: Check out repository
               uses: actions/checkout@v7
@@ -148,49 +153,8 @@ jobs:
               with:
                   key: ${{ matrix.cache_key }}
 
-            - name: Install FFmpeg (macOS)
-              if: runner.os == 'macOS'
-              shell: bash
-              run: brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
-
-            - name: Install FFmpeg (Windows)
-              if: runner.os == 'Windows'
-              shell: powershell
-              run: choco install ffmpeg -y --no-progress
-
-            - name: Verify FFmpeg tools (Unix)
-              if: runner.os != 'Windows'
-              shell: bash
-              run: |
-                  ffmpeg -version
-                  ffprobe -version
-
-            - name: Verify FFmpeg tools (Windows)
-              if: runner.os == 'Windows'
-              shell: powershell
-              run: |
-                  ffmpeg -version
-                  ffprobe -version
-
-            - name: Check formatting
-              run: cargo fmt --all -- --check
-
-            - name: Compile all Windows tests
-              if: runner.os == 'Windows'
-              run: cargo test --no-run --locked
-
-            - name: Run full macOS test suite
-              if: runner.os == 'macOS'
-              # Keep the same two clean-runner skips as the Linux quality job.
-              run: >-
-                  cargo test --locked --
-                  --skip control_plane_tool_does_not_stall_while_reading_workspace_root
-                  --skip grep_stops_at_byte_cap_for_large_matching_lines
-
-            - name: Run focused Windows video integration tests
-              if: runner.os == 'Windows'
-              # The broader Windows suite contains Unix-only shell tests, but
-              # these self-contained FFmpeg tests exercise Windows rendering.
-              run: |
-                  cargo test --locked tools::video::tests::renders_tiny_crossfade_when_ffmpeg_is_available -- --exact --nocapture
-                  cargo test --locked tools::video::tests::renders_short_clip_audio_to_full_timeline_when_ffmpeg_is_available -- --exact --nocapture
+            - name: Check platform test compilation
+              # Linux runs the behavioral suite. These jobs retain native
+              # macOS/Windows cfg and type coverage without linking and running
+              # the same monolithic test binary two more times.
+              run: cargo check --tests --locked

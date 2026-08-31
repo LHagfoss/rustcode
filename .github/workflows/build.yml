@@ -47,9 +47,6 @@ jobs:
                     - os: macos-latest
                       target: aarch64-apple-darwin
                       name: rustcode-macos-aarch64
-                    - os: macos-15-intel
-                      target: x86_64-apple-darwin
-                      name: rustcode-macos-x86_64
                     - os: windows-latest
                       target: x86_64-pc-windows-msvc
                       name: rustcode-windows-x86_64
@@ -123,7 +120,6 @@ jobs:
                   files=(
                       rustcode-linux-x86_64.tar.gz
                       rustcode-macos-aarch64.tar.gz
-                      rustcode-macos-x86_64.tar.gz
                       rustcode-windows-x86_64.zip
                   )
                   for file in "${files[@]}"; do
@@ -150,11 +146,8 @@ jobs:
               run: |
                   # 1. Read the platform-specific hashes from the published manifest.
                   ARM_SHA256=$(awk '$2 == "rustcode-macos-aarch64.tar.gz" {print $1}' artifacts/SHA256SUMS)
-                  INTEL_SHA256=$(awk '$2 == "rustcode-macos-x86_64.tar.gz" {print $1}' artifacts/SHA256SUMS)
                   test -n "$ARM_SHA256"
-                  test -n "$INTEL_SHA256"
                   echo "Computed ARM64 SHA256: $ARM_SHA256"
-                  echo "Computed Intel SHA256: $INTEL_SHA256"
 
                   # 2. Clone your tap repository
                   git clone "https://x-access-token:${TAP_TOKEN}@github.com/${GH_USER}/homebrew-tap.git" tap-repo
@@ -168,24 +161,14 @@ jobs:
                   class Rustcode < Formula
                       desc "Local LLM Agent Harness"
                       homepage "https://github.com/${GH_USER}/rustcode"
-                      on_arm do
-                          url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
-                          sha256 "${ARM_SHA256}"
-                      end
-
-                      on_intel do
-                          url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-x86_64.tar.gz"
-                          sha256 "${INTEL_SHA256}"
-                      end
+                      url "https://github.com/${GH_USER}/rustcode/releases/download/${TAG}/rustcode-macos-aarch64.tar.gz"
+                      sha256 "${ARM_SHA256}"
+                      depends_on arch: :arm64
 
                       version "${TAG/v/}"
 
                       def install
-                          if Hardware::CPU.arm?
-                              bin.install "rustcode-macos-aarch64" => "rustcode"
-                          else
-                              bin.install "rustcode-macos-x86_64" => "rustcode"
-                          end
+                          bin.install "rustcode-macos-aarch64" => "rustcode"
                       end
                   end
                   EOF

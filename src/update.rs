@@ -123,7 +123,6 @@ fn target_asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("linux", "x86_64") => Some("rustcode-linux-x86_64.tar.gz"),
         ("macos", "aarch64") => Some("rustcode-macos-aarch64.tar.gz"),
-        ("macos", "x86_64") => Some("rustcode-macos-x86_64.tar.gz"),
         ("windows", "x86_64") => Some("rustcode-windows-x86_64.zip"),
         _ => None,
     }
@@ -615,10 +614,7 @@ mod tests {
             target_asset_name_for("macos", "aarch64"),
             Some("rustcode-macos-aarch64.tar.gz")
         );
-        assert_eq!(
-            target_asset_name_for("macos", "x86_64"),
-            Some("rustcode-macos-x86_64.tar.gz")
-        );
+        assert_eq!(target_asset_name_for("macos", "x86_64"), None);
         assert_eq!(
             target_asset_name_for("windows", "x86_64"),
             Some("rustcode-windows-x86_64.zip")
