@@ -3034,6 +3034,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustcode-tasks"
+version = "0.40.4"
+dependencies = [
+ "rustcode-command",
+]
+
+[[package]]
 name = "rustcode-tool-protocol"
 version = "0.40.4"
 dependencies = [
