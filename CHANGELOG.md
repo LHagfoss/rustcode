@@ -1,3 +1,12 @@
+## [v0.40.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.4) - 2026-08-31
+
+### Fixes
+- **Streaming recovery:** Classify SSE failures, retry recoverable body-phase interruptions once from a coherent checkpoint, and preserve verified completions when a later transport failure occurs ([#866](https://github.com/LHagfoss/rustcode/pull/866))
+- **Cross-tool verification loops:** Recognize equivalent file inspection through native tools and shell commands while grounding recovery in unchanged file revisions ([#865](https://github.com/LHagfoss/rustcode/pull/865))
+
+### Performance
+- **Phase-aware bootstrap:** Reduce tool-schema overhead in empty and near-empty workspaces, promote the full schema after source creation, and nudge planning-only bootstrap turns toward action ([#864](https://github.com/LHagfoss/rustcode/pull/864))
+
 ## [v0.40.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.3) - 2026-08-30
 
 ### Fixes
