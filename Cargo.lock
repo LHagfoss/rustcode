@@ -2970,6 +2970,7 @@ dependencies = [
  "reqwest-middleware",
  "rusqlite",
  "rustcode-core",
+ "rustcode-session",
  "scraper",
  "serde",
  "serde_json",
@@ -3004,6 +3005,17 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rustcode-session"
+version = "0.40.4"
+dependencies = [
+ "chrono",
+ "rustcode-core",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
