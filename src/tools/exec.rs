@@ -1,13 +1,17 @@
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 // Re-exports needed by exec tools
+pub(crate) use super::WAKEUP_CALLBACK;
 pub(crate) use super::get_active_session_id;
-pub(crate) use super::get_background_tasks;
 pub(crate) use super::parse_json_bool;
 pub(crate) use super::parse_json_number;
-pub(crate) use super::{BackgroundTaskInfo, WAKEUP_CALLBACK};
+
+use rustcode_tasks::{
+    CancelResult, ProcessTerminator, SessionId, TaskEvent, TaskManager, TaskSpec, TaskState,
+};
 
 use super::{Tool, ToolCapability, ToolSafety};
 
@@ -20,6 +24,88 @@ pub(crate) use policy::{
 use policy::{has_interactive_sudo, is_short_discovery_command};
 
 static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static BACKGROUND_TASK_MANAGER: OnceLock<TaskManager> = OnceLock::new();
+
+pub(crate) fn background_task_manager() -> &'static TaskManager {
+    BACKGROUND_TASK_MANAGER.get_or_init(|| {
+        let manager = TaskManager::new(Arc::new(RootProcessTerminator));
+        let subscription = manager.subscribe();
+        std::thread::Builder::new()
+            .name("rustcode-task-events".to_string())
+            .spawn(move || {
+                while let Ok(event) = subscription.recv() {
+                    dispatch_background_event(event);
+                }
+            })
+            .expect("failed to start background task event dispatcher");
+        manager
+    })
+}
+
+struct RootProcessTerminator;
+
+impl ProcessTerminator for RootProcessTerminator {
+    fn terminate(&self, pid: u32) -> bool {
+        terminate_background_pid(pid)
+    }
+}
+
+fn dispatch_background_event(event: TaskEvent) {
+    let TaskEvent::Finished {
+        id,
+        session_id,
+        command,
+        output,
+    } = event
+    else {
+        return;
+    };
+
+    let mut output = match output {
+        Ok(output) => command_output_to_tool_output(&command, output),
+        Err(error) => {
+            let error = error.strip_prefix("failed to spawn process:").map_or_else(
+                || format!("failed to wait: {error}"),
+                |cause| format!("failed to spawn:{cause}"),
+            );
+            super::ToolExecutionOutput::failure(error)
+        }
+    };
+    output.command = Some(command);
+    if let Some(callback) = WAKEUP_CALLBACK.get() {
+        callback(session_id.to_string(), id.to_string(), output);
+    }
+}
+
+fn command_output_to_tool_output(
+    command: &str,
+    output: rustcode_command::CommandOutput,
+) -> super::ToolExecutionOutput {
+    let out_str = rustcode_command::format_bounded_output(&output.stdout);
+    let err_str = rustcode_command::format_bounded_output(&output.stderr);
+    let mut full = out_str;
+    if !err_str.is_empty() {
+        if !full.is_empty() {
+            full.push('\n');
+        }
+        full.push_str("stderr:\n");
+        full.push_str(&err_str);
+    }
+    if !output.success {
+        full = format!("exit code {:?}\n{full}", output.exit_code);
+    }
+    super::ToolExecutionOutput {
+        content: full,
+        success: output.success,
+        pending: false,
+        command: Some(command.to_owned()),
+        exit_code: output.exit_code,
+        truncated: output.stdout.is_truncated() || output.stderr.is_truncated(),
+        replayed: false,
+        error_kind: (!output.success).then_some(super::ToolErrorKind::CommandFailed),
+        retryable: false,
+    }
+}
 
 fn run_command_schema() -> Value {
     serde_json::json!({
@@ -200,83 +286,13 @@ fn run_command_output_inner(
             BACKGROUND_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         );
 
-        let task_id_clone = task_id.clone();
-        let command_for_output = cmd_str.clone();
-        let mut background_request = command_request.clone();
-        background_request.process_group = true;
-        let task_id_for_started = task_id.clone();
-
-        if let Ok(mut tasks) = get_background_tasks().lock() {
-            tasks.insert(
+        let task_manager = background_task_manager();
+        task_manager
+            .spawn_with_id(
                 task_id.clone(),
-                BackgroundTaskInfo {
-                    id: task_id.clone(),
-                    session_id: session_id.clone(),
-                    command: cmd_str.clone(),
-                    start_time: std::time::Instant::now(),
-                    child_pid: None,
-                    cancel_sender: None,
-                },
-            );
-        }
-
-        std::thread::spawn(move || {
-            let started = std::sync::Arc::new(move |pid| {
-                publish_background_pid_and_cancel(
-                    &task_id_for_started,
-                    pid,
-                    terminate_background_pid,
-                );
-            });
-            let mut output =
-                match rustcode_command::run_until_exit(&background_request, None, Some(started)) {
-                    Ok(output) => {
-                        let out_str = rustcode_command::format_bounded_output(&output.stdout);
-                        let err_str = rustcode_command::format_bounded_output(&output.stderr);
-                        let mut full = out_str;
-                        if !err_str.is_empty() {
-                            if !full.is_empty() {
-                                full.push('\n');
-                            }
-                            full.push_str("stderr:");
-                            full.push('\n');
-                            full.push_str(&err_str);
-                        }
-                        if !output.success {
-                            full = format!("exit code {:?}\n{full}", output.exit_code);
-                        }
-                        super::ToolExecutionOutput {
-                            content: full,
-                            success: output.success,
-                            pending: false,
-                            command: Some(command_for_output.clone()),
-                            exit_code: output.exit_code,
-                            truncated: output.stdout.is_truncated() || output.stderr.is_truncated(),
-                            replayed: false,
-                            error_kind: (!output.success)
-                                .then_some(super::ToolErrorKind::CommandFailed),
-                            retryable: false,
-                        }
-                    }
-                    Err(e) => {
-                        let error = e.strip_prefix("failed to spawn process:").map_or_else(
-                            || format!("failed to wait: {e}"),
-                            |cause| format!("failed to spawn:{cause}"),
-                        );
-                        super::ToolExecutionOutput::failure(error)
-                    }
-                };
-            output.command = Some(command_for_output);
-
-            if let Ok(mut tasks) = get_background_tasks().lock() {
-                tasks.remove(&task_id_clone);
-            }
-
-            let cancelled = super::take_background_task_cancelled(&task_id_clone);
-            if !cancelled && let Some(cb) = WAKEUP_CALLBACK.get() {
-                cb(session_id, task_id_clone, output);
-            }
-        });
+                TaskSpec::new(SessionId::new(session_id.clone()), command_request),
+            )
+            .map_err(|error| format!("failed to start background task: {error}"))?;
 
         return Ok(super::ToolExecutionOutput {
             content: format!(
@@ -344,10 +360,9 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
         .and_then(|a| a.as_str())
         .ok_or("missing 'action' argument (must be 'list', 'status', or 'kill')")?;
 
-    let tasks_lock = get_background_tasks();
-    let mut tasks = tasks_lock
-        .lock()
-        .map_err(|e| format!("failed to lock background tasks: {e}"))?;
+    let session_id = get_active_session_id().unwrap_or_default();
+    let manager = background_task_manager();
+    let tasks = manager.list(&session_id);
 
     match action {
         "list" => {
@@ -355,15 +370,14 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 return Ok("No running background tasks.".to_string());
             }
             let mut out = String::from("Running background tasks:\n");
-            for (id, info) in tasks.iter() {
-                let elapsed = info.start_time.elapsed().as_secs();
-                let pid_str = info
-                    .child_pid
+            for info in &tasks {
+                let elapsed = info.started_at.elapsed().as_secs();
+                let pid_str = task_pid(info.state)
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "N/A".to_string());
                 out.push_str(&format!(
                     "- TaskId: {}, PID: {}, Runtime: {}s, Command: {}\n",
-                    id, pid_str, elapsed, info.command
+                    info.id, pid_str, elapsed, info.command
                 ));
             }
             out.push_str("\n(Note: You will be notified automatically with the full output when tasks complete — do NOT poll manage_task for status in a loop; stop calling tools now so execution pauses until completion.)");
@@ -375,10 +389,9 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 .and_then(|t| t.as_str())
                 .ok_or("missing 'task_id' argument for status action")?;
 
-            if let Some(info) = tasks.get(task_id) {
-                let elapsed = info.start_time.elapsed().as_secs();
-                let pid_str = info
-                    .child_pid
+            if let Some(info) = tasks.iter().find(|info| info.id.as_str() == task_id) {
+                let elapsed = info.started_at.elapsed().as_secs();
+                let pid_str = task_pid(info.state)
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "N/A".to_string());
                 Ok(format!(
@@ -397,23 +410,26 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 .and_then(|t| t.as_str())
                 .ok_or("missing 'task_id' argument for kill action")?;
 
-            if let Some(info) = tasks.remove(task_id) {
-                super::mark_background_task_cancelled(task_id);
-                if let Some(pid) = info.child_pid
-                    && !terminate_background_pid(pid)
-                {
-                    super::clear_background_task_cancelled(task_id);
-                    tasks.insert(task_id.to_owned(), info);
-                    return Err(format!("Failed to terminate task '{task_id}'."));
+            match manager.cancel_in_session(&session_id, task_id) {
+                CancelResult::Cancelled | CancelResult::Requested => {
+                    Ok(format!("Task '{task_id}' terminated successfully."))
                 }
-                Ok(format!("Task '{task_id}' terminated successfully."))
-            } else {
-                Err(format!("Task '{task_id}' not found."))
+                CancelResult::Failed => Err(format!("Failed to terminate task '{task_id}'.")),
+                CancelResult::AlreadyFinished | CancelResult::NotFound => {
+                    Err(format!("Task '{task_id}' not found."))
+                }
             }
         }
         _ => Err(format!(
             "Unknown action '{action}'. Supported actions: list, status, kill."
         )),
+    }
+}
+
+fn task_pid(state: TaskState) -> Option<u32> {
+    match state {
+        TaskState::Running { pid } => Some(pid),
+        TaskState::Starting | TaskState::Terminating { .. } | TaskState::CancelRequested => None,
     }
 }
 
@@ -442,69 +458,20 @@ fn terminate_background_pid(pid: u32) -> bool {
     false
 }
 
-/// Publish a newly spawned background PID, then apply a cancellation that may
-/// have arrived while the worker was waiting to spawn. The command crate only
-/// reports the PID; task markers and process-group termination remain root
-/// concerns.
-fn publish_background_pid_and_cancel<F>(task_id: &str, pid: u32, terminate: F) -> bool
-where
-    F: FnOnce(u32) -> bool,
-{
-    if let Ok(mut tasks) = get_background_tasks().lock()
-        && let Some(info) = tasks.get_mut(task_id)
-    {
-        info.child_pid = Some(pid);
-    }
-
-    let cancelled = super::background_task_cancelled(task_id);
-    if cancelled {
-        let _ = terminate(pid);
-    }
-    cancelled
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BackgroundStopResult {
     pub stopped: usize,
+    pub requested: usize,
     pub failed: usize,
 }
 
 pub(crate) fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
-    let candidates = {
-        let Ok(mut tasks) = get_background_tasks().lock() else {
-            return BackgroundStopResult {
-                stopped: 0,
-                failed: 1,
-            };
-        };
-        let task_ids = tasks
-            .iter()
-            .filter(|(_, task)| task.session_id == session_id)
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        for task_id in &task_ids {
-            super::mark_background_task_cancelled(task_id);
-        }
-        task_ids
-            .into_iter()
-            .filter_map(|id| tasks.remove(&id).map(|task| (id, task)))
-            .collect::<Vec<_>>()
-    };
-
-    let mut result = BackgroundStopResult::default();
-    for (task_id, task) in candidates {
-        let terminated = task.child_pid.is_none_or(terminate_background_pid);
-        if terminated {
-            result.stopped += 1;
-        } else {
-            result.failed += 1;
-            super::clear_background_task_cancelled(&task_id);
-            if let Ok(mut tasks) = get_background_tasks().lock() {
-                tasks.insert(task_id, task);
-            }
-        }
+    let summary = background_task_manager().cancel_session(session_id);
+    BackgroundStopResult {
+        stopped: summary.cancelled,
+        requested: summary.requested,
+        failed: summary.failed,
     }
-    result
 }
 
 #[cfg(test)]
@@ -512,9 +479,10 @@ mod tests {
     #[cfg(unix)]
     use super::terminate_background_pid;
     use super::{
-        command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
-        has_interactive_sudo, reject_broad_git_stage, run_command, run_command_output,
-        run_command_output_cancellable, run_command_output_with_progress,
+        command_confirmation_preview, command_confirmation_scope, command_output_to_tool_output,
+        command_requires_confirmation, has_interactive_sudo, manage_task_tool,
+        reject_broad_git_stage, run_command, run_command_output, run_command_output_cancellable,
+        run_command_output_with_progress,
     };
 
     #[cfg(unix)]
@@ -536,22 +504,181 @@ mod tests {
         assert!(!status.success());
     }
 
+    fn task_request(
+        command: &str,
+        cwd: Option<std::path::PathBuf>,
+    ) -> rustcode_command::CommandRequest {
+        rustcode_command::CommandRequest {
+            command: command.to_owned(),
+            cwd,
+            env: Vec::new(),
+            timeout: std::time::Duration::from_secs(5),
+            process_group: true,
+        }
+    }
+
     #[test]
-    fn cancellation_before_pid_publication_requests_termination() {
-        let task_id = format!("background-cancel-before-pid-{}", std::process::id());
-        crate::tools::mark_background_task_cancelled(&task_id);
-        let terminated_pid = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let captured_pid = std::sync::Arc::clone(&terminated_pid);
+    fn task_manager_root_adapter_keeps_sessions_isolated() {
+        let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
+        let session_a = manager.subscribe_session("root-session-a");
+        let session_b = manager.subscribe_session("root-session-b");
+        let first = manager
+            .spawn_with_id(
+                "root-session-task-a",
+                rustcode_tasks::TaskSpec::new(
+                    "root-session-a",
+                    task_request(
+                        if cfg!(target_os = "windows") {
+                            "echo a"
+                        } else {
+                            "printf a"
+                        },
+                        None,
+                    ),
+                ),
+            )
+            .unwrap();
+        let second = manager
+            .spawn_with_id(
+                "root-session-task-b",
+                rustcode_tasks::TaskSpec::new(
+                    "root-session-b",
+                    task_request(
+                        if cfg!(target_os = "windows") {
+                            "echo b"
+                        } else {
+                            "printf b"
+                        },
+                        None,
+                    ),
+                ),
+            )
+            .unwrap();
 
-        let cancelled = super::publish_background_pid_and_cancel(&task_id, 42, move |pid| {
-            *captured_pid.lock().unwrap() = Some(pid);
-            true
-        });
+        assert_eq!(manager.list("root-session-a").len(), 1);
+        assert_eq!(manager.list("root-session-a")[0].id, *first.id());
+        assert_eq!(manager.list("root-session-b").len(), 1);
+        assert_eq!(manager.list("root-session-b")[0].id, *second.id());
+        let first_event = session_a.recv().unwrap();
+        assert_eq!(first_event.session_id().as_str(), "root-session-a");
+        assert_eq!(
+            session_b.recv().unwrap().session_id().as_str(),
+            "root-session-b"
+        );
+    }
 
-        assert!(cancelled);
-        assert_eq!(*terminated_pid.lock().unwrap(), Some(42));
-        assert!(crate::tools::background_task_cancelled(&task_id));
-        crate::tools::take_background_task_cancelled(&task_id);
+    #[test]
+    fn task_manager_root_adapter_cancels_before_pid_without_duplicate_terminal() {
+        let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
+        let events = manager.subscribe();
+        let task = manager
+            .spawn_with_id(
+                "root-cancel-before-pid",
+                rustcode_tasks::TaskSpec::new(
+                    "root-cancel-session",
+                    task_request(
+                        "printf never-starts",
+                        Some(std::path::PathBuf::from("/path/that/does/not/exist")),
+                    ),
+                ),
+            )
+            .unwrap();
+        let result = manager.cancel(task.id());
+        assert!(matches!(
+            result,
+            rustcode_tasks::CancelResult::Requested | rustcode_tasks::CancelResult::Cancelled
+        ));
+
+        let mut terminal_events = 0;
+        while let Ok(event) = events.recv() {
+            if event.is_terminal() {
+                terminal_events += 1;
+                assert_eq!(event.task_id(), task.id());
+                break;
+            }
+        }
+        assert_eq!(terminal_events, 1);
+        assert!(manager.list("root-cancel-session").is_empty());
+    }
+
+    #[test]
+    fn task_manager_root_adapter_converts_one_completion_once() {
+        let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
+        let events = manager.subscribe();
+        let task = manager
+            .spawn_with_id(
+                "root-completion-once",
+                rustcode_tasks::TaskSpec::new(
+                    "root-completion-session",
+                    task_request(
+                        if cfg!(target_os = "windows") {
+                            "echo done"
+                        } else {
+                            "printf done"
+                        },
+                        None,
+                    ),
+                ),
+            )
+            .unwrap();
+        let mut terminal_events = Vec::new();
+        while let Ok(event) = events.recv() {
+            if event.is_terminal() {
+                terminal_events.push(event);
+                break;
+            }
+        }
+        assert_eq!(terminal_events.len(), 1);
+        match &terminal_events[0] {
+            rustcode_tasks::TaskEvent::Finished {
+                output: Ok(output), ..
+            } => {
+                let converted = command_output_to_tool_output(task.id().as_str(), output.clone());
+                assert!(converted.success);
+                assert_eq!(converted.command.as_deref(), Some(task.id().as_str()));
+                assert!(converted.content.contains("done"));
+            }
+            other => panic!("expected one successful completion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn manage_task_kill_cannot_cross_session_boundaries() {
+        let owner = "manage-owner-session";
+        let other = "manage-other-session";
+        let task_id = "manage-owned-task";
+        crate::tools::set_active_session_id(Some(owner.to_owned()));
+        crate::tools::spawn_background_task_for_test(
+            task_id,
+            owner,
+            if cfg!(target_os = "windows") {
+                "ping -n 30 127.0.0.1 > NUL"
+            } else {
+                "sleep 30"
+            },
+        )
+        .unwrap();
+        for _ in 0..100 {
+            if crate::tools::background_task_snapshots(owner)
+                .first()
+                .is_some_and(|task| task.child_pid.is_some())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        crate::tools::set_active_session_id(Some(other.to_owned()));
+        let result = manage_task_tool(&serde_json::json!({
+            "action": "kill",
+            "task_id": task_id,
+        }));
+        assert_eq!(result, Err(format!("Task '{task_id}' not found.")));
+        assert_eq!(crate::tools::background_task_snapshots(owner).len(), 1);
+
+        crate::tools::set_active_session_id(Some(owner.to_owned()));
+        crate::tools::stop_background_tasks(owner);
+        crate::tools::set_active_session_id(None);
     }
 
     #[test]
