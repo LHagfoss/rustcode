@@ -93,7 +93,7 @@ if [ "$TARGET_OS" = "macos" ]; then
     if [ "$TARGET_ARCH" = "aarch64" ]; then
         ASSET_NAME="rustcode-macos-aarch64.tar.gz"
     else
-        ASSET_NAME="rustcode-macos-x86_64.tar.gz"
+        error "Intel macOS is not distributed via prebuilt binaries. Please build with cargo install."
     fi
 elif [ "$TARGET_OS" = "linux" ]; then
     if [ "$TARGET_ARCH" = "x86_64" ]; then
