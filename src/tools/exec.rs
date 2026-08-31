@@ -1,11 +1,6 @@
 use serde_json::Value;
-use std::collections::VecDeque;
-use std::io::Read;
-use std::process::{Child, ExitStatus, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // Re-exports needed by exec tools
 pub(crate) use super::get_active_session_id;
@@ -25,29 +20,6 @@ pub(crate) use policy::{
 use policy::{has_interactive_sudo, is_short_discovery_command};
 
 static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-#[cfg(not(target_os = "windows"))]
-fn shell_command(command: &str) -> std::process::Command {
-    let bash = std::path::Path::new("/bin/bash");
-    let mut cmd = if bash.is_file() {
-        std::process::Command::new(bash)
-    } else {
-        std::process::Command::new("sh")
-    };
-    if bash.is_file() {
-        cmd.args(["-o", "pipefail", "-c", command]);
-    } else {
-        cmd.args(["-c", command]);
-    }
-    cmd
-}
-
-#[cfg(target_os = "windows")]
-fn shell_command(command: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new("cmd");
-    cmd.args(["/C", command]);
-    cmd
-}
 
 fn run_command_schema() -> Value {
     serde_json::json!({
@@ -91,64 +63,7 @@ pub const MANAGE_TASK: Tool = Tool {
     safety: ToolSafety::ProcessControl,
 };
 
-const MAX_COMMAND_OUTPUT_BYTES: usize = 100_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
-const CAPTURE_HEAD_BYTES: usize = MAX_COMMAND_OUTPUT_BYTES * 3 / 10;
-const CAPTURE_TAIL_BYTES: usize = MAX_COMMAND_OUTPUT_BYTES - CAPTURE_HEAD_BYTES;
-
-struct BoundedOutput {
-    head: Vec<u8>,
-    tail: VecDeque<u8>,
-    total_bytes: usize,
-}
-
-impl BoundedOutput {
-    fn push(&mut self, bytes: &[u8]) {
-        self.total_bytes = self.total_bytes.saturating_add(bytes.len());
-
-        let head_remaining = CAPTURE_HEAD_BYTES.saturating_sub(self.head.len());
-        let head_len = head_remaining.min(bytes.len());
-        self.head.extend_from_slice(&bytes[..head_len]);
-
-        for byte in &bytes[head_len..] {
-            if self.tail.len() == CAPTURE_TAIL_BYTES {
-                self.tail.pop_front();
-            }
-            self.tail.push_back(*byte);
-        }
-    }
-
-    fn captured_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.head.len() + self.tail.len());
-        bytes.extend_from_slice(&self.head);
-        bytes.extend(self.tail.iter().copied());
-        bytes
-    }
-
-    fn captured_len(&self) -> usize {
-        self.head.len() + self.tail.len()
-    }
-
-    fn is_truncated(&self) -> bool {
-        self.total_bytes > MAX_COMMAND_OUTPUT_BYTES
-    }
-}
-
-impl Default for BoundedOutput {
-    fn default() -> Self {
-        Self {
-            head: Vec::with_capacity(CAPTURE_HEAD_BYTES),
-            tail: VecDeque::with_capacity(CAPTURE_TAIL_BYTES),
-            total_bytes: 0,
-        }
-    }
-}
-
-struct CommandOutput {
-    status: ExitStatus,
-    stdout: BoundedOutput,
-    stderr: BoundedOutput,
-}
 
 pub fn run_command(args: &Value) -> Result<String, String> {
     run_command_output(args).map(|output| output.content)
@@ -158,7 +73,7 @@ pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOut
     run_command_output_inner(args, None)
 }
 
-pub(crate) type CommandProgressCallback = Arc<dyn Fn(&[u8], bool) + Send + Sync + 'static>;
+pub(crate) type CommandProgressCallback = rustcode_command::ProgressCallback;
 
 pub(crate) fn run_command_output_with_progress(
     args: &Value,
@@ -209,31 +124,28 @@ fn run_command_output_inner(
         return Err(format!("cwd '{}' is not a directory", cwd_path.display()));
     }
 
-    let mut cmd = if cfg!(target_os = "windows") {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", command_str]);
-        c
-    } else {
-        shell_command(command_str)
-    };
-
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null());
-    if let Some(ref cwd_path) = resolved_cwd {
-        cmd.current_dir(cwd_path);
-    }
     // GUI/Dock launches don't inherit the shell PATH, so agent-run builds/tests
     // (cargo, npm, …) fail to find their toolchain. Seed a toolchain-aware PATH;
     // an explicit PATH in `env` below still overrides it.
-    cmd.env("PATH", crate::platform::augmented_path());
+    let mut command_env = vec![(
+        std::ffi::OsString::from("PATH"),
+        std::ffi::OsString::from(crate::platform::augmented_path()),
+    )];
     if let Some(env_map) = env {
         for (k, v) in env_map {
             if let Some(val) = v.as_str() {
-                cmd.env(k, val);
+                command_env.push((k.clone().into(), val.into()));
             }
         }
     }
+
+    let command_request = rustcode_command::CommandRequest {
+        command: command_str.to_owned(),
+        cwd: resolved_cwd.clone(),
+        env: command_env,
+        timeout: Duration::from_millis(timeout_ms.max(1)),
+        process_group: false,
+    };
 
     let run_in_bg = args
         .get("background")
@@ -252,11 +164,11 @@ fn run_command_output_inner(
             BACKGROUND_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         );
 
-        let resolved_cwd_clone = resolved_cwd.clone();
-        let env_clone = env.cloned();
         let task_id_clone = task_id.clone();
-        let command_for_thread = cmd_str.clone();
         let command_for_output = cmd_str.clone();
+        let mut background_request = command_request.clone();
+        background_request.process_group = true;
+        let task_id_for_started = task_id.clone();
 
         if let Ok(mut tasks) = get_background_tasks().lock() {
             tasks.insert(
@@ -273,88 +185,52 @@ fn run_command_output_inner(
         }
 
         std::thread::spawn(move || {
-            let mut cmd = if cfg!(target_os = "windows") {
-                let mut c = std::process::Command::new("cmd");
-                c.args(["/C", &command_for_thread]);
-                c
-            } else {
-                let mut c = shell_command(&command_for_thread);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::CommandExt;
-                    c.process_group(0);
-                }
-                c
-            };
-
-            cmd.stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null());
-
-            if let Some(ref cwd_path) = resolved_cwd_clone {
-                cmd.current_dir(cwd_path);
-            }
-            cmd.env("PATH", crate::platform::augmented_path());
-            if let Some(env_map) = env_clone {
-                for (k, v) in env_map {
-                    if let Some(val) = v.as_str() {
-                        cmd.env(k, val);
-                    }
-                }
-            }
-
-            let mut output = match cmd.spawn() {
-                Ok(child) => {
-                    if let Some(pid) = Some(child.id())
-                        && let Ok(mut tasks) = get_background_tasks().lock()
-                        && let Some(info) = tasks.get_mut(&task_id_clone)
-                    {
-                        info.child_pid = Some(pid);
-                    }
-
-                    if super::background_task_cancelled(&task_id_clone) {
-                        terminate_background_pid(child.id());
-                    }
-
-                    match wait_with_bounded_output(child) {
-                        Ok(output) => {
-                            let out_str = format_bounded_output(&output.stdout);
-                            let err_str = format_bounded_output(&output.stderr);
-                            let mut full = out_str;
-                            if !err_str.is_empty() {
-                                if !full.is_empty() {
-                                    full.push('\n');
-                                }
-                                full.push_str("stderr:\n");
-                                full.push_str(&err_str);
+            let started = std::sync::Arc::new(move |pid| {
+                publish_background_pid_and_cancel(
+                    &task_id_for_started,
+                    pid,
+                    terminate_background_pid,
+                );
+            });
+            let mut output =
+                match rustcode_command::run_until_exit(&background_request, None, Some(started)) {
+                    Ok(output) => {
+                        let out_str = rustcode_command::format_bounded_output(&output.stdout);
+                        let err_str = rustcode_command::format_bounded_output(&output.stderr);
+                        let mut full = out_str;
+                        if !err_str.is_empty() {
+                            if !full.is_empty() {
+                                full.push('\n');
                             }
-                            let success = output.status.success();
-                            let exit_code = output.status.code();
-                            if !success {
-                                full = format!("exit code {exit_code:?}\n{full}");
-                            }
-                            super::ToolExecutionOutput {
-                                content: full,
-                                success,
-                                pending: false,
-                                command: Some(command_for_output.clone()),
-                                exit_code,
-                                truncated: output.stdout.is_truncated()
-                                    || output.stderr.is_truncated(),
-                                replayed: false,
-                                error_kind: (!success)
-                                    .then_some(super::ToolErrorKind::CommandFailed),
-                                retryable: false,
-                            }
+                            full.push_str("stderr:");
+                            full.push('\n');
+                            full.push_str(&err_str);
                         }
-                        Err(e) => {
-                            super::ToolExecutionOutput::failure(format!("failed to wait: {e}"))
+                        if !output.success {
+                            full = format!("exit code {:?}\n{full}", output.exit_code);
+                        }
+                        super::ToolExecutionOutput {
+                            content: full,
+                            success: output.success,
+                            pending: false,
+                            command: Some(command_for_output.clone()),
+                            exit_code: output.exit_code,
+                            truncated: output.stdout.is_truncated() || output.stderr.is_truncated(),
+                            replayed: false,
+                            error_kind: (!output.success)
+                                .then_some(super::ToolErrorKind::CommandFailed),
+                            retryable: false,
                         }
                     }
-                }
-                Err(e) => super::ToolExecutionOutput::failure(format!("failed to spawn: {e}")),
-            };
-            output.command = Some(command_for_thread);
+                    Err(e) => {
+                        let error = e.strip_prefix("failed to spawn process:").map_or_else(
+                            || format!("failed to wait: {e}"),
+                            |cause| format!("failed to spawn:{cause}"),
+                        );
+                        super::ToolExecutionOutput::failure(error)
+                    }
+                };
+            output.command = Some(command_for_output);
 
             if let Ok(mut tasks) = get_background_tasks().lock() {
                 tasks.remove(&task_id_clone);
@@ -381,16 +257,16 @@ fn run_command_output_inner(
         });
     }
 
-    let output = run_with_timeout(cmd, Duration::from_millis(timeout_ms.max(1)), progress)?;
-    let exit_code = output.status.code().unwrap_or(-1);
+    let output = rustcode_command::run_with_timeout(&command_request, progress)?;
+    let exit_code = output.exit_code.unwrap_or(-1);
 
     let mut result = String::new();
     result.push_str(&format!("exit code: {exit_code}\n"));
 
-    let failed = !output.status.success();
+    let failed = !output.success;
     let truncated = output.stdout.is_truncated() || output.stderr.is_truncated();
-    let stdout = format_bounded_output(&output.stdout);
-    let stderr = format_bounded_output(&output.stderr);
+    let stdout = rustcode_command::format_bounded_output(&output.stdout);
+    let stderr = rustcode_command::format_bounded_output(&output.stderr);
 
     if !stdout.is_empty() {
         result.push_str("stdout:\n");
@@ -526,6 +402,27 @@ fn terminate_background_pid(pid: u32) -> bool {
     false
 }
 
+/// Publish a newly spawned background PID, then apply a cancellation that may
+/// have arrived while the worker was waiting to spawn. The command crate only
+/// reports the PID; task markers and process-group termination remain root
+/// concerns.
+fn publish_background_pid_and_cancel<F>(task_id: &str, pid: u32, terminate: F) -> bool
+where
+    F: FnOnce(u32) -> bool,
+{
+    if let Ok(mut tasks) = get_background_tasks().lock()
+        && let Some(info) = tasks.get_mut(task_id)
+    {
+        info.child_pid = Some(pid);
+    }
+
+    let cancelled = super::background_task_cancelled(task_id);
+    if cancelled {
+        let _ = terminate(pid);
+    }
+    cancelled
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BackgroundStopResult {
     pub stopped: usize,
@@ -570,112 +467,6 @@ pub(crate) fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
     result
 }
 
-fn spawn_output_reader<R: Read + Send + 'static>(
-    mut reader: R,
-    progress: Option<CommandProgressCallback>,
-    is_stderr: bool,
-) -> thread::JoinHandle<BoundedOutput> {
-    thread::spawn(move || {
-        let mut output = BoundedOutput::default();
-        let mut chunk = [0u8; 4096];
-        loop {
-            match reader.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(read) => {
-                    if let Some(callback) = progress.as_ref() {
-                        callback(&chunk[..read], is_stderr);
-                    }
-                    output.push(&chunk[..read]);
-                }
-            }
-        }
-        output
-    })
-}
-
-fn wait_with_bounded_output(mut child: Child) -> Result<CommandOutput, String> {
-    let child_stdout = child.stdout.take().ok_or("no stdout pipe")?;
-    let child_stderr = child.stderr.take().ok_or("no stderr pipe")?;
-    let out_handle = spawn_output_reader(child_stdout, None, false);
-    let err_handle = spawn_output_reader(child_stderr, None, true);
-    let status = child
-        .wait()
-        .map_err(|e| format!("failed to wait on process: {e}"))?;
-    let stdout = out_handle.join().unwrap_or_default();
-    let stderr = err_handle.join().unwrap_or_default();
-    Ok(CommandOutput {
-        status,
-        stdout,
-        stderr,
-    })
-}
-
-fn run_with_timeout(
-    mut cmd: std::process::Command,
-    timeout: Duration,
-    progress: Option<CommandProgressCallback>,
-) -> Result<CommandOutput, String> {
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn process: {e}"))?;
-    let child_stdout = child.stdout.take().ok_or("no stdout pipe")?;
-    let child_stderr = child.stderr.take().ok_or("no stderr pipe")?;
-
-    let stdout_progress = progress.clone();
-    let out_handle = spawn_output_reader(child_stdout, stdout_progress, false);
-    let stderr_progress = progress;
-    let err_handle = spawn_output_reader(child_stderr, stderr_progress, true);
-
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "command timed out after {} ms and was killed",
-                        timeout.as_millis()
-                    ));
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => return Err(format!("failed to wait on process: {e}")),
-        }
-    };
-
-    let stdout = out_handle.join().unwrap_or_default();
-    let stderr = err_handle.join().unwrap_or_default();
-
-    Ok(CommandOutput {
-        status,
-        stdout,
-        stderr,
-    })
-}
-
-/// Truncates to at most `max` bytes, keeping both head and tail rather than
-/// dropping the tail wholesale — compiler errors, test failures, and stack
-/// traces overwhelmingly appear at the *end* of command output, so a
-/// head-only cut can throw away the only useful part of a failing command's
-/// output before it ever reaches the model. `keep_tail_priority` (set for a
-/// nonzero exit code) biases the split further toward the tail.
-fn format_bounded_output(output: &BoundedOutput) -> String {
-    let bytes = output.captured_bytes();
-    if !output.is_truncated() {
-        return String::from_utf8_lossy(&bytes).to_string();
-    }
-    let head_len = output.head.len();
-    let tail_len = output.tail.len();
-    let head = String::from_utf8_lossy(&bytes[..head_len]);
-    let tail = String::from_utf8_lossy(&bytes[head_len..]);
-    format!(
-        "{head}\n... (truncated, {} bytes total — showing first {head_len} and last {tail_len} bytes) ...\n{tail}\n",
-        output.total_bytes
-    )
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -703,6 +494,24 @@ mod tests {
         assert!(terminate_background_pid(child.id()));
         let status = child.wait().expect("reap terminated shell");
         assert!(!status.success());
+    }
+
+    #[test]
+    fn cancellation_before_pid_publication_requests_termination() {
+        let task_id = format!("background-cancel-before-pid-{}", std::process::id());
+        crate::tools::mark_background_task_cancelled(&task_id);
+        let terminated_pid = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let captured_pid = std::sync::Arc::clone(&terminated_pid);
+
+        let cancelled = super::publish_background_pid_and_cancel(&task_id, 42, move |pid| {
+            *captured_pid.lock().unwrap() = Some(pid);
+            true
+        });
+
+        assert!(cancelled);
+        assert_eq!(*terminated_pid.lock().unwrap(), Some(42));
+        assert!(crate::tools::background_task_cancelled(&task_id));
+        crate::tools::take_background_task_cancelled(&task_id);
     }
 
     #[test]
@@ -981,26 +790,6 @@ mod tests {
                 "must confirm potentially mutating sed command: {command}"
             );
         }
-    }
-
-    #[test]
-    fn command_output_capture_is_bounded_before_process_exit() {
-        let output = super::run_with_timeout(
-            {
-                let mut command = std::process::Command::new("sh");
-                command.args(["-c", "head -c 200000 /dev/zero"]);
-                command.stdout(std::process::Stdio::piped());
-                command.stderr(std::process::Stdio::piped());
-                command
-            },
-            std::time::Duration::from_secs(5),
-            None,
-        )
-        .expect("command output");
-
-        assert!(output.stdout.captured_len() <= super::MAX_COMMAND_OUTPUT_BYTES);
-        assert!(output.stderr.captured_len() <= super::MAX_COMMAND_OUTPUT_BYTES);
-        assert!(output.stdout.is_truncated());
     }
 
     #[test]
