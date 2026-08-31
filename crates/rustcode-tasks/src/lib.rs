@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Instant;
@@ -115,6 +115,14 @@ impl TaskSpec {
 pub enum TaskState {
     Starting,
     Running {
+        pid: u32,
+    },
+    /// The process terminator is being invoked outside the task-state mutex.
+    ///
+    /// Keeping this state prevents completion from winning while termination
+    /// is in flight; the completion is retained until the termination result
+    /// commits the terminal transition.
+    Terminating {
         pid: u32,
     },
     /// Cancellation was requested before the child PID was published.
@@ -233,13 +241,20 @@ pub enum CancelResult {
 /// Aggregate result for cancelling all tasks in a session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CancelSummary {
+    /// Tasks that had not published a PID yet; cancellation completes
+    /// asynchronously when their runner publishes a PID or exits.
     pub requested: usize,
+    /// Tasks that were already running and terminated synchronously.
     pub cancelled: usize,
     pub failed: usize,
     pub already_finished: usize,
 }
 
 /// A receiving end of the manager's event stream.
+///
+/// Each subscription has a bounded queue. A subscriber that falls behind by
+/// more than the queue capacity is dropped so task workers never block on an
+/// observer that is no longer keeping up.
 pub struct TaskSubscription {
     receiver: Receiver<TaskEvent>,
     alive: Arc<AtomicUsize>,
@@ -263,7 +278,7 @@ impl Drop for TaskSubscription {
 
 struct Subscriber {
     session_id: Option<SessionId>,
-    sender: Sender<TaskEvent>,
+    sender: mpsc::SyncSender<TaskEvent>,
     alive: Weak<AtomicUsize>,
 }
 
@@ -272,6 +287,7 @@ struct TaskRecord {
     command: String,
     started_at: Instant,
     state: TaskState,
+    completion: Option<Result<CommandOutput, String>>,
 }
 
 struct Inner {
@@ -282,6 +298,7 @@ struct Inner {
 }
 
 const TERMINAL_ID_CAPACITY: usize = 1024;
+const SUBSCRIBER_BUFFER_CAPACITY: usize = 64;
 
 /// Bounded tombstones let a cancellation racing with completion report
 /// `AlreadyFinished` without retaining every task ID forever.
@@ -340,7 +357,7 @@ impl TaskManager {
     }
 
     fn subscribe_inner(&self, session_id: Option<SessionId>) -> TaskSubscription {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(SUBSCRIBER_BUFFER_CAPACITY);
         let alive = Arc::new(AtomicUsize::new(1));
         self.inner
             .subscribers
@@ -443,8 +460,7 @@ impl TaskManager {
     /// Request cancellation of one task.
     pub fn cancel(&self, id: impl AsRef<str>) -> CancelResult {
         let id = TaskId::new(id.as_ref());
-        let mut event = None;
-        let result = {
+        let terminate_pid = {
             let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
             let Some(task) = tasks.get_mut(&id) else {
                 return if self
@@ -462,32 +478,48 @@ impl TaskManager {
             match task.state {
                 TaskState::Starting => {
                     task.state = TaskState::CancelRequested;
-                    CancelResult::Requested
+                    return CancelResult::Requested;
                 }
                 TaskState::Running { pid } => {
-                    let terminated =
-                        catch_unwind(AssertUnwindSafe(|| self.terminator.terminate(pid)))
-                            .unwrap_or(false);
-                    if terminated {
-                        let task = tasks.remove(&id).expect("task was just observed");
-                        self.remember_terminal(&id);
-                        event = Some(TaskEvent::Cancelled {
-                            id: id.clone(),
-                            session_id: task.session_id,
-                            command: task.command,
-                        });
-                        CancelResult::Cancelled
-                    } else {
-                        CancelResult::Failed
-                    }
+                    task.state = TaskState::Terminating { pid };
+                    pid
                 }
-                TaskState::CancelRequested => CancelResult::Requested,
+                TaskState::Terminating { .. } | TaskState::CancelRequested => {
+                    return CancelResult::Requested;
+                }
             }
         };
-        if let Some(event) = event {
-            self.publish(event);
+
+        // Termination can invoke an OS command (notably taskkill on Windows),
+        // so it must never run while the manager state lock is held.
+        let terminated = catch_unwind(AssertUnwindSafe(|| {
+            self.terminator.terminate(terminate_pid)
+        }))
+        .unwrap_or(false);
+        self.finish_termination(&id, terminated, false)
+    }
+
+    /// Request cancellation only when the task belongs to `session_id`.
+    ///
+    /// Task IDs are usually generated globally, but integrations may supply
+    /// legacy IDs. Checking ownership at the manager boundary prevents a
+    /// caller in one session from killing a same-named task in another.
+    pub fn cancel_in_session(
+        &self,
+        session_id: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> CancelResult {
+        let id = TaskId::new(id.as_ref());
+        {
+            let tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
+            if !tasks
+                .get(&id)
+                .is_some_and(|task| task.session_id.as_str() == session_id.as_ref())
+            {
+                return CancelResult::NotFound;
+            }
         }
-        result
+        self.cancel(id)
     }
 
     /// Request cancellation for all live tasks belonging to one session.
@@ -536,6 +568,7 @@ impl TaskManager {
                 command: spec.command.clone(),
                 started_at: Instant::now(),
                 state: TaskState::Starting,
+                completion: None,
             },
         );
         true
@@ -543,8 +576,7 @@ impl TaskManager {
 
     fn child_started(&self, id: &TaskId, pid: u32) {
         let mut started_event = None;
-        let mut cancelled_event = None;
-        {
+        let cancel_before_pid = {
             let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
             let Some(task) = tasks.get_mut(id) else {
                 // A cancellation may have committed before the runner's
@@ -559,49 +591,108 @@ impl TaskManager {
                         session_id: task.session_id.clone(),
                         pid,
                     });
+                    false
                 }
                 TaskState::CancelRequested => {
-                    let terminated =
-                        catch_unwind(AssertUnwindSafe(|| self.terminator.terminate(pid)))
-                            .unwrap_or(false);
-                    if terminated {
-                        let task = tasks.remove(id).expect("task was just observed");
-                        self.remember_terminal(id);
-                        cancelled_event = Some(TaskEvent::Cancelled {
-                            id: id.clone(),
-                            session_id: task.session_id,
-                            command: task.command,
-                        });
-                    } else {
-                        task.state = TaskState::Running { pid };
-                        started_event = Some(TaskEvent::Started {
-                            id: id.clone(),
-                            session_id: task.session_id.clone(),
-                            pid,
-                        });
-                    }
+                    task.state = TaskState::Terminating { pid };
+                    true
                 }
-                TaskState::Running { .. } => {
+                TaskState::Terminating { .. } | TaskState::Running { .. } => {
                     // A runner must publish its PID only once.  Keeping the
                     // first state is safer than emitting duplicate Started.
+                    false
                 }
             }
-        }
+        };
         if let Some(event) = started_event {
             self.publish(event);
         }
-        if let Some(event) = cancelled_event {
+        if cancel_before_pid {
+            let terminated =
+                catch_unwind(AssertUnwindSafe(|| self.terminator.terminate(pid))).unwrap_or(false);
+            // The runner cannot finish before this callback returns, but use
+            // the same race-safe transition helper as ordinary cancellation.
+            let _ = self.finish_termination(id, terminated, true);
+        }
+    }
+
+    fn finish_termination(
+        &self,
+        id: &TaskId,
+        terminated: bool,
+        publish_started_on_failure: bool,
+    ) -> CancelResult {
+        let (result, event) = {
+            let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
+            let Some(task) = tasks.get_mut(id) else {
+                return CancelResult::AlreadyFinished;
+            };
+            if !matches!(task.state, TaskState::Terminating { .. }) {
+                return CancelResult::NotFound;
+            }
+            if terminated {
+                let task = tasks.remove(id).expect("task was just observed");
+                self.remember_terminal(id);
+                (
+                    CancelResult::Cancelled,
+                    Some(TaskEvent::Cancelled {
+                        id: id.clone(),
+                        session_id: task.session_id,
+                        command: task.command,
+                    }),
+                )
+            } else if let Some(output) = task.completion.take() {
+                let task = tasks.remove(id).expect("task was just observed");
+                self.remember_terminal(id);
+                (
+                    CancelResult::Failed,
+                    Some(TaskEvent::Finished {
+                        id: id.clone(),
+                        session_id: task.session_id,
+                        command: task.command,
+                        output,
+                    }),
+                )
+            } else {
+                // Failed termination leaves the process running so its
+                // eventual completion can still be reported accurately.
+                let TaskState::Terminating { pid } = task.state else {
+                    unreachable!();
+                };
+                task.state = TaskState::Running { pid };
+                (
+                    CancelResult::Failed,
+                    publish_started_on_failure.then(|| TaskEvent::Started {
+                        id: id.clone(),
+                        session_id: task.session_id.clone(),
+                        pid,
+                    }),
+                )
+            }
+        };
+        if let Some(event) = event {
             self.publish(event);
         }
+        result
     }
 
     fn finish(&self, id: &TaskId, output: Result<CommandOutput, String>) {
         let event = {
             let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
-            let Some(task) = tasks.remove(id) else {
+            let Some(task) = tasks.get_mut(id) else {
                 // Cancellation already committed the terminal transition.
                 return;
             };
+            if matches!(task.state, TaskState::Terminating { .. }) {
+                // A running-task cancellation performs the potentially
+                // blocking terminator call outside this mutex. Retain the
+                // completion until that call commits the race outcome.
+                if task.completion.is_none() {
+                    task.completion = Some(output);
+                }
+                return;
+            }
+            let task = tasks.remove(id).expect("task was just observed");
             self.remember_terminal(id);
             if matches!(task.state, TaskState::CancelRequested) {
                 TaskEvent::Cancelled {
@@ -641,7 +732,11 @@ impl TaskManager {
             {
                 return true;
             }
-            subscriber.sender.send(event.clone()).is_ok()
+            // Never let a slow observer stall task lifecycle transitions.
+            // A full queue means this observer has fallen behind; dropping
+            // it is explicit backpressure and leaves future subscriptions
+            // unaffected.
+            subscriber.sender.try_send(event.clone()).is_ok()
         });
     }
 
@@ -738,6 +833,20 @@ mod tests {
         }
     }
 
+    struct BlockingTerminator {
+        entered: Arc<std::sync::Barrier>,
+        release: Arc<std::sync::Barrier>,
+        result: bool,
+    }
+
+    impl ProcessTerminator for BlockingTerminator {
+        fn terminate(&self, _pid: u32) -> bool {
+            self.entered.wait();
+            self.release.wait();
+            self.result
+        }
+    }
+
     fn manager(terminator: Arc<FakeTerminator>) -> TaskManager {
         TaskManager::new(terminator)
     }
@@ -789,6 +898,17 @@ mod tests {
     }
 
     #[test]
+    fn slow_subscribers_are_dropped_when_their_bounded_queue_is_full() {
+        let manager = manager(FakeTerminator::succeeding());
+        let _subscription = manager.subscribe();
+        for index in 0..=SUBSCRIBER_BUFFER_CAPACITY {
+            let id = manager.register_for_test("a", &format!("command-{index}"));
+            manager.mark_started_for_test(&id, index as u32 + 100);
+        }
+        assert_eq!(manager.subscriber_count_for_test(), 0);
+    }
+
+    #[test]
     fn list_and_running_status_are_session_scoped() {
         let manager = manager(FakeTerminator::succeeding());
         let a = manager.register_for_test("a", "one");
@@ -831,6 +951,123 @@ mod tests {
         manager.finish_for_test(&id, Ok(successful_output()));
         assert_eq!(terminator.called_pids(), vec![43]);
         assert_eq!(manager.cancel(&id), CancelResult::AlreadyFinished);
+    }
+
+    #[test]
+    fn cancel_in_session_rejects_other_session_without_terminating() {
+        let terminator = FakeTerminator::succeeding();
+        let manager = manager(terminator.clone());
+        let id = manager.register_for_test("owner", "sleep");
+        manager.mark_started_for_test(&id, 45);
+        let events = manager.subscribe();
+        assert_eq!(
+            manager.cancel_in_session("other", &id),
+            CancelResult::NotFound
+        );
+        assert!(manager.list("owner")[0].state == TaskState::Running { pid: 45 });
+        assert!(terminator.called_pids().is_empty());
+        assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            manager.cancel_in_session("owner", &id),
+            CancelResult::Cancelled
+        );
+    }
+
+    #[test]
+    fn cancellation_does_not_hold_state_lock_during_termination() {
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let terminator = Arc::new(BlockingTerminator {
+            entered: entered.clone(),
+            release: release.clone(),
+            result: true,
+        });
+        let manager = TaskManager::new(terminator);
+        let events = manager.subscribe();
+        let id = manager.register_for_test("a", "sleep");
+        manager.mark_started_for_test(&id, 46);
+        assert!(matches!(events.recv().unwrap(), TaskEvent::Started { .. }));
+
+        let cancelling = {
+            let manager = manager.clone();
+            let id = id.clone();
+            std::thread::spawn(move || manager.cancel(&id))
+        };
+        entered.wait();
+        assert_eq!(
+            manager.list("a")[0].state,
+            TaskState::Terminating { pid: 46 }
+        );
+        release.wait();
+        assert_eq!(cancelling.join().unwrap(), CancelResult::Cancelled);
+        assert!(matches!(
+            events.recv().unwrap(),
+            TaskEvent::Cancelled { .. }
+        ));
+    }
+
+    #[test]
+    fn cancel_before_pid_does_not_hold_state_lock_during_termination() {
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let terminator = Arc::new(BlockingTerminator {
+            entered: entered.clone(),
+            release: release.clone(),
+            result: true,
+        });
+        let manager = TaskManager::new(terminator);
+        let events = manager.subscribe();
+        let id = manager.register_for_test("a", "sleep");
+        assert_eq!(manager.cancel(&id), CancelResult::Requested);
+
+        let starting = {
+            let manager = manager.clone();
+            let id = id.clone();
+            std::thread::spawn(move || manager.mark_started_for_test(&id, 48))
+        };
+        entered.wait();
+        assert_eq!(
+            manager.list("a")[0].state,
+            TaskState::Terminating { pid: 48 }
+        );
+        release.wait();
+        starting.join().unwrap();
+        assert!(matches!(
+            events.recv().unwrap(),
+            TaskEvent::Cancelled { .. }
+        ));
+    }
+
+    #[test]
+    fn completion_waits_for_termination_and_still_emits_once() {
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let terminator = Arc::new(BlockingTerminator {
+            entered: entered.clone(),
+            release: release.clone(),
+            result: false,
+        });
+        let manager = TaskManager::new(terminator);
+        let events = manager.subscribe();
+        let id = manager.register_for_test("a", "sleep");
+        manager.mark_started_for_test(&id, 47);
+        let _ = events.recv();
+
+        let cancelling = {
+            let manager = manager.clone();
+            let id = id.clone();
+            std::thread::spawn(move || manager.cancel(&id))
+        };
+        entered.wait();
+        manager.finish_for_test(&id, Ok(successful_output()));
+        assert_eq!(
+            manager.list("a")[0].state,
+            TaskState::Terminating { pid: 47 }
+        );
+        release.wait();
+        assert_eq!(cancelling.join().unwrap(), CancelResult::Failed);
+        assert!(matches!(events.recv().unwrap(), TaskEvent::Finished { .. }));
+        assert_eq!(events.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
@@ -954,6 +1191,16 @@ mod tests {
         assert_eq!(manager.cancel(&id), CancelResult::Requested);
         assert_eq!(manager.cancel(&id), CancelResult::Requested);
         assert_eq!(manager.list("a")[0].state, TaskState::CancelRequested);
+    }
+
+    #[test]
+    fn cancel_session_reports_pre_pid_requests_separately() {
+        let manager = manager(FakeTerminator::succeeding());
+        let _id = manager.register_for_test("a", "long");
+        let summary = manager.cancel_session("a");
+        assert_eq!(summary.requested, 1);
+        assert_eq!(summary.cancelled, 0);
+        assert_eq!(summary.failed, 0);
     }
 
     #[test]

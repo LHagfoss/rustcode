@@ -410,7 +410,7 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
                 .and_then(|t| t.as_str())
                 .ok_or("missing 'task_id' argument for kill action")?;
 
-            match manager.cancel(task_id) {
+            match manager.cancel_in_session(&session_id, task_id) {
                 CancelResult::Cancelled | CancelResult::Requested => {
                     Ok(format!("Task '{task_id}' terminated successfully."))
                 }
@@ -429,7 +429,7 @@ pub fn manage_task_tool(args: &Value) -> Result<String, String> {
 fn task_pid(state: TaskState) -> Option<u32> {
     match state {
         TaskState::Running { pid } => Some(pid),
-        TaskState::Starting | TaskState::CancelRequested => None,
+        TaskState::Starting | TaskState::Terminating { .. } | TaskState::CancelRequested => None,
     }
 }
 
@@ -461,13 +461,15 @@ fn terminate_background_pid(pid: u32) -> bool {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BackgroundStopResult {
     pub stopped: usize,
+    pub requested: usize,
     pub failed: usize,
 }
 
 pub(crate) fn stop_background_tasks(session_id: &str) -> BackgroundStopResult {
     let summary = background_task_manager().cancel_session(session_id);
     BackgroundStopResult {
-        stopped: summary.cancelled + summary.requested,
+        stopped: summary.cancelled,
+        requested: summary.requested,
         failed: summary.failed,
     }
 }
@@ -478,8 +480,9 @@ mod tests {
     use super::terminate_background_pid;
     use super::{
         command_confirmation_preview, command_confirmation_scope, command_output_to_tool_output,
-        command_requires_confirmation, has_interactive_sudo, reject_broad_git_stage, run_command,
-        run_command_output, run_command_output_cancellable, run_command_output_with_progress,
+        command_requires_confirmation, has_interactive_sudo, manage_task_tool,
+        reject_broad_git_stage, run_command, run_command_output, run_command_output_cancellable,
+        run_command_output_with_progress,
     };
 
     #[cfg(unix)]
@@ -637,6 +640,45 @@ mod tests {
             }
             other => panic!("expected one successful completion, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn manage_task_kill_cannot_cross_session_boundaries() {
+        let owner = "manage-owner-session";
+        let other = "manage-other-session";
+        let task_id = "manage-owned-task";
+        crate::tools::set_active_session_id(Some(owner.to_owned()));
+        crate::tools::spawn_background_task_for_test(
+            task_id,
+            owner,
+            if cfg!(target_os = "windows") {
+                "ping -n 30 127.0.0.1 > NUL"
+            } else {
+                "sleep 30"
+            },
+        )
+        .unwrap();
+        for _ in 0..100 {
+            if crate::tools::background_task_snapshots(owner)
+                .first()
+                .is_some_and(|task| task.child_pid.is_some())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        crate::tools::set_active_session_id(Some(other.to_owned()));
+        let result = manage_task_tool(&serde_json::json!({
+            "action": "kill",
+            "task_id": task_id,
+        }));
+        assert_eq!(result, Err(format!("Task '{task_id}' not found.")));
+        assert_eq!(crate::tools::background_task_snapshots(owner).len(), 1);
+
+        crate::tools::set_active_session_id(Some(owner.to_owned()));
+        crate::tools::stop_background_tasks(owner);
+        crate::tools::set_active_session_id(None);
     }
 
     #[test]

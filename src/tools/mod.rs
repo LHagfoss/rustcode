@@ -423,6 +423,7 @@ pub(crate) fn background_task_snapshots(session_id: &str) -> Vec<BackgroundTaskS
             child_pid: match task.state {
                 rustcode_tasks::TaskState::Running { pid } => Some(pid),
                 rustcode_tasks::TaskState::Starting
+                | rustcode_tasks::TaskState::Terminating { .. }
                 | rustcode_tasks::TaskState::CancelRequested => None,
             },
         })

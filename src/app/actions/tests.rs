@@ -39,6 +39,16 @@ fn background_terminal_commands_list_and_stop_the_active_session_only() {
     crate::tools::spawn_background_task_for_test(&other_task_id, other_session_id, long_command)
         .unwrap();
 
+    for _ in 0..100 {
+        if crate::tools::background_task_snapshots(session_id)
+            .first()
+            .is_some_and(|task| task.child_pid.is_some())
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
     let listed = super::background_terminal_list(session_id);
     assert!(listed.contains("1 background terminal running"));
     assert!(listed.contains(&task_id));
