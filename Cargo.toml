@@ -11,6 +11,7 @@ members = [
     "crates/rustcode-tools",
     "crates/rustcode-command",
     "crates/rustcode-lifecycle",
+    "crates/rustcode-tasks",
 ]
 resolver = "3"
 
