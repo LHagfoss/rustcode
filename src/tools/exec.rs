@@ -70,7 +70,24 @@ pub fn run_command(args: &Value) -> Result<String, String> {
 }
 
 pub(super) fn run_command_output(args: &Value) -> Result<super::ToolExecutionOutput, String> {
-    run_command_output_inner(args, None)
+    run_command_output_inner(args, None, None)
+}
+
+pub(crate) fn run_command_output_cancellable(
+    args: &Value,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+) -> Result<super::ToolExecutionOutput, String> {
+    match run_command_output_inner(args, None, cancel_token) {
+        Ok(output) => Ok(output),
+        Err(error) if error == "command cancelled by user" => {
+            Ok(super::ToolExecutionOutput::failure_with_kind(
+                "error: tool execution cancelled by user".to_string(),
+                super::ToolErrorKind::Cancelled,
+                true,
+            ))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) type CommandProgressCallback = rustcode_command::ProgressCallback;
@@ -79,12 +96,31 @@ pub(crate) fn run_command_output_with_progress(
     args: &Value,
     progress: CommandProgressCallback,
 ) -> Result<super::ToolExecutionOutput, String> {
-    run_command_output_inner(args, Some(progress))
+    run_command_output_inner(args, Some(progress), None)
+}
+
+pub(crate) fn run_command_output_with_progress_cancellable(
+    args: &Value,
+    progress: CommandProgressCallback,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+) -> Result<super::ToolExecutionOutput, String> {
+    match run_command_output_inner(args, Some(progress), cancel_token) {
+        Ok(output) => Ok(output),
+        Err(error) if error == "command cancelled by user" => {
+            Ok(super::ToolExecutionOutput::failure_with_kind(
+                "error: tool execution cancelled by user".to_string(),
+                super::ToolErrorKind::Cancelled,
+                true,
+            ))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn run_command_output_inner(
     args: &Value,
     progress: Option<CommandProgressCallback>,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
 ) -> Result<super::ToolExecutionOutput, String> {
     let command_str = args
         .get("command")
@@ -144,7 +180,7 @@ fn run_command_output_inner(
         cwd: resolved_cwd.clone(),
         env: command_env,
         timeout: Duration::from_millis(timeout_ms.max(1)),
-        process_group: false,
+        process_group: true,
     };
 
     let run_in_bg = args
@@ -257,7 +293,11 @@ fn run_command_output_inner(
         });
     }
 
-    let output = rustcode_command::run_with_timeout(&command_request, progress)?;
+    let cancellation = cancel_token.map(|token| {
+        std::sync::Arc::new(move || token.is_cancelled()) as rustcode_command::CancellationCallback
+    });
+    let output =
+        rustcode_command::run_with_timeout_cancellable(&command_request, progress, cancellation)?;
     let exit_code = output.exit_code.unwrap_or(-1);
 
     let mut result = String::new();
@@ -474,7 +514,7 @@ mod tests {
     use super::{
         command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
         has_interactive_sudo, reject_broad_git_stage, run_command, run_command_output,
-        run_command_output_with_progress,
+        run_command_output_cancellable, run_command_output_with_progress,
     };
 
     #[cfg(unix)]
@@ -542,6 +582,29 @@ mod tests {
                 .iter()
                 .any(|(text, stderr)| *stderr && text.contains("err"))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellable_run_command_returns_one_cancelled_result() {
+        let token = tokio_util::sync::CancellationToken::new();
+        let trigger = token.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            trigger.cancel();
+        });
+        let output = run_command_output_cancellable(
+            &serde_json::json!({"command": "sleep 0.3"}),
+            Some(token),
+        )
+        .expect("cancellation should be represented as a tool result");
+
+        assert!(!output.success);
+        assert_eq!(
+            output.error_kind,
+            Some(super::super::ToolErrorKind::Cancelled)
+        );
+        assert_eq!(output.content, "error: tool execution cancelled by user");
     }
 
     #[test]

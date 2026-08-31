@@ -146,7 +146,7 @@ pub(crate) fn execute_with_metadata_cancellable(
     }
 
     if name == "run_command" {
-        return match exec::run_command_output(args) {
+        return match exec::run_command_output_cancellable(args, cancel_token) {
             Ok(output) => output,
             Err(error) => ToolExecutionOutput::failure_with_kind(
                 as_error_message(&error),
