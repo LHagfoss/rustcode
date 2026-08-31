@@ -373,6 +373,13 @@ where
             context = &mut run => break context,
             event = receiver.recv() => {
                 let Some(event) = event else { continue };
+                if matches!(
+                    &event,
+                    crate::network::AgentUiEvent::Cancelled { .. }
+                        | crate::network::AgentUiEvent::Error { .. }
+                ) {
+                    crate::tools::abort_background_starts(session_id);
+                }
                 send_updates(connection, session_id, event_stream.updates(event))?;
             }
         }
@@ -474,7 +481,25 @@ fn send_updates(
     updates: Vec<SessionUpdate>,
 ) -> Result<(), agent_client_protocol::Error> {
     for update in updates {
-        connection.send_notification(SessionNotification::new(session_id.to_owned(), update))?;
+        let pending_call_id = match &update {
+            SessionUpdate::ToolCallUpdate(update)
+                if update.fields.status
+                    == Some(agent_client_protocol::schema::v1::ToolCallStatus::InProgress) =>
+            {
+                Some(update.tool_call_id.to_string())
+            }
+            _ => None,
+        };
+        let result =
+            connection.send_notification(SessionNotification::new(session_id.to_owned(), update));
+        if pending_call_id.is_some() {
+            // The pending history result is the start barrier: release only
+            // after its ACP notification was accepted by the connection.
+            crate::tools::release_background_start(
+                pending_call_id.as_deref().expect("pending call ID missing"),
+            );
+        }
+        result?;
     }
     Ok(())
 }

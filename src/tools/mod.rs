@@ -55,8 +55,9 @@ pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
 pub use rustcode_core::ToolErrorKind;
 
 pub(crate) use exec::{
-    CommandProgressCallback, background_task_manager, command_confirmation_preview,
-    command_requires_confirmation, run_command_output_with_progress_cancellable,
+    CommandProgressCallback, abort_background_starts, background_task_manager,
+    command_confirmation_preview, command_requires_confirmation, release_background_start,
+    run_command_output_with_progress_cancellable,
     run_command_output_with_progress_cancellable_for_call, stop_background_tasks,
     task_event_to_tool_output,
 };

@@ -1,6 +1,7 @@
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 // Re-exports needed by exec tools
@@ -9,7 +10,8 @@ pub(crate) use super::parse_json_bool;
 pub(crate) use super::parse_json_number;
 
 use rustcode_tasks::{
-    CancelResult, ProcessTerminator, SessionId, TaskEvent, TaskManager, TaskSpec, TaskState,
+    CancelResult, ProcessTerminator, SessionId, TaskEvent, TaskManager, TaskSpec, TaskStartBarrier,
+    TaskState,
 };
 
 use super::{Tool, ToolCapability, ToolSafety};
@@ -24,6 +26,66 @@ use policy::{has_interactive_sudo, is_short_discovery_command};
 
 static BACKGROUND_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static BACKGROUND_TASK_MANAGER: OnceLock<TaskManager> = OnceLock::new();
+static BACKGROUND_START_BARRIERS: OnceLock<Mutex<HashMap<String, (String, TaskStartBarrier)>>> =
+    OnceLock::new();
+const BACKGROUND_START_BARRIER_CAPACITY: usize = 1024;
+
+fn background_start_barriers() -> &'static Mutex<HashMap<String, (String, TaskStartBarrier)>> {
+    BACKGROUND_START_BARRIERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn register_background_start(session_id: &str, call_id: &str) -> TaskStartBarrier {
+    let barrier = TaskStartBarrier::new();
+    let mut barriers = background_start_barriers()
+        .lock()
+        .expect("background start barrier mutex poisoned");
+    if barriers.len() >= BACKGROUND_START_BARRIER_CAPACITY {
+        if let Some(key) = barriers.keys().next().cloned() {
+            if let Some((_, expired)) = barriers.remove(&key) {
+                expired.release();
+            }
+        }
+    }
+    if let Some((_, previous)) =
+        barriers.insert(call_id.to_owned(), (session_id.to_owned(), barrier.clone()))
+    {
+        previous.release();
+    }
+    barrier
+}
+
+pub(crate) fn release_background_start(call_id: &str) -> bool {
+    let barrier = background_start_barriers()
+        .lock()
+        .expect("background start barrier mutex poisoned")
+        .remove(call_id)
+        .map(|(_, barrier)| barrier);
+    if let Some(barrier) = barrier {
+        barrier.release();
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn abort_background_starts(session_id: &str) {
+    let barriers = {
+        let mut all = background_start_barriers()
+            .lock()
+            .expect("background start barrier mutex poisoned");
+        let keys = all
+            .iter()
+            .filter(|(_, (owner, _))| owner == session_id)
+            .map(|(call_id, _)| call_id.clone())
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|call_id| all.remove(&call_id).map(|(_, barrier)| barrier))
+            .collect::<Vec<_>>()
+    };
+    for barrier in barriers {
+        barrier.release();
+    }
+}
 
 pub(crate) fn background_task_manager() -> &'static TaskManager {
     BACKGROUND_TASK_MANAGER.get_or_init(|| TaskManager::new(Arc::new(RootProcessTerminator)))
@@ -322,9 +384,21 @@ fn run_command_output_inner(
         let task_spec = call_id
             .map(|call_id| task_spec.clone().with_call_id(call_id))
             .unwrap_or(task_spec);
-        task_manager
-            .spawn_with_id(task_id.clone(), task_spec)
-            .map_err(|error| format!("failed to start background task: {error}"))?;
+        let start_barrier = call_id
+            .filter(|_| crate::acp::is_acp_session(&session_id))
+            .map(|call_id| register_background_start(&session_id, call_id));
+        let has_start_barrier = start_barrier.is_some();
+        let spawn_result = if let Some(barrier) = start_barrier {
+            task_manager.spawn_with_id_and_start_barrier(task_id.clone(), task_spec, barrier)
+        } else {
+            task_manager.spawn_with_id(task_id.clone(), task_spec)
+        };
+        if let Err(error) = spawn_result {
+            if has_start_barrier && let Some(call_id) = call_id {
+                release_background_start(call_id);
+            }
+            return Err(format!("failed to start background task: {error}"));
+        }
 
         return Ok(super::ToolExecutionOutput {
             content: format!(
