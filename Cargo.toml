@@ -3,6 +3,10 @@ name = "rustcode"
 version = "0.40.4"
 edition = "2024"
 
+[workspace]
+members = ["crates/rustcode-core"]
+resolver = "3"
+
 [[bin]]
 name = "rustcode"
 path = "src/main.rs"
@@ -51,6 +55,7 @@ libc = "0.2"
 tar = "0.4"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tempfile = "3.10"
+rustcode-core = { path = "crates/rustcode-core" }
 # Optimize dependencies even in debug builds — syntect, pulldown-cmark,
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0

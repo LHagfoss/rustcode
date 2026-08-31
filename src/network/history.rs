@@ -1,5 +1,5 @@
 use crate::app::{ChatMessage, ToolResultRecord};
-use crate::tools::ToolCall;
+use crate::tools::{ToolCall, resolve_tool_calls};
 
 pub const MAX_CONTEXT_FRAGMENT_CHARS: usize = 16 * 1024;
 pub const MAX_CONTEXT_TAIL_CHARS: usize = 48 * 1024;
@@ -30,7 +30,7 @@ fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
     match message.role.as_str() {
         "user" => HistoryEntry::User(&message.content),
         "assistant" => {
-            let calls = message.resolved_tool_calls(crate::config::ToolProtocol::Json);
+            let calls = resolve_tool_calls(message, crate::config::ToolProtocol::Json);
             if calls.len() == 1 {
                 HistoryEntry::ToolCall(calls.into_iter().next().expect("one call"))
             } else {
