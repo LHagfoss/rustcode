@@ -5,28 +5,213 @@ mod session;
 mod streaming;
 
 pub(crate) use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, InitializeRequest, InitializeResponse,
-    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionConfigId,
+    AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse,
+    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
+    PromptResponse, SessionCapabilities, SessionCloseCapabilities, SessionConfigId,
     SessionConfigKind, SessionConfigOptionCategory, SessionConfigOptionValue,
-    SessionConfigSelectOptions, SessionUpdate, SetSessionConfigOptionRequest,
+    SessionConfigSelectOptions, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionConfigOptionResponse, StopReason,
 };
-use agent_client_protocol::{Agent, Stdio};
+use agent_client_protocol::{Agent, Client, Stdio};
+use rustcode_tasks::TaskEvent;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 pub(crate) use config::{build_session_config_options, handle_set_config_option};
 pub(crate) use permissions::{ApprovalRequirement, approval_requirement};
 pub(crate) use prompt::prompt_text;
-pub(crate) use session::{AcpSession, SessionTurnState, Sessions, new_registry};
+pub(crate) use session::{AcpSession, KnownTaskIds, SessionTurnState, Sessions, new_registry};
 pub(crate) use streaming::{AcpEventStream, acp_stop_reason};
+
+const ACP_TERMINAL_LEDGER_CAPACITY: usize = 1024;
+const ACP_TERMINAL_BACKLOG_CAPACITY: usize = 256;
+static ACTIVE_ACP_SESSIONS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn is_acp_session(session_id: &str) -> bool {
+    ACTIVE_ACP_SESSIONS
+        .get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+        .lock()
+        .expect("ACP session registry mutex poisoned")
+        .contains(session_id)
+}
+
+fn mark_acp_session(session_id: &str) {
+    ACTIVE_ACP_SESSIONS
+        .get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+        .lock()
+        .expect("ACP session registry mutex poisoned")
+        .insert(session_id.to_owned());
+}
+
+fn unmark_acp_session(session_id: &str) {
+    if let Some(sessions) = ACTIVE_ACP_SESSIONS.get() {
+        sessions
+            .lock()
+            .expect("ACP session registry mutex poisoned")
+            .remove(session_id);
+    }
+}
+
+#[derive(Default)]
+struct TerminalLedger {
+    ids: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl TerminalLedger {
+    fn claim(&mut self, id: &str) -> bool {
+        if !self.ids.insert(id.to_owned()) {
+            return false;
+        }
+        self.order.push_back(id.to_owned());
+        while self.order.len() > ACP_TERMINAL_LEDGER_CAPACITY {
+            if let Some(expired) = self.order.pop_front() {
+                self.ids.remove(&expired);
+            }
+        }
+        true
+    }
+}
+
+struct SessionTaskSink {
+    session_id: String,
+    state: Arc<Mutex<crate::app::AppState>>,
+    connection: agent_client_protocol::ConnectionTo<Client>,
+    runtime: tokio::runtime::Handle,
+    terminal_ledger: std::sync::Mutex<TerminalLedger>,
+    terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
+    terminal_overflow: Arc<AtomicBool>,
+}
+
+impl SessionTaskSink {
+    fn handle_terminal(
+        &self,
+        event: TaskEvent,
+        prompt_sender: std::sync::mpsc::SyncSender<TaskEvent>,
+    ) {
+        let id = event.task_id().to_string();
+        if !self
+            .terminal_ledger
+            .lock()
+            .expect("ACP terminal ledger mutex poisoned")
+            .claim(&id)
+        {
+            return;
+        }
+        let Some((task_id, event_session_id, output)) =
+            crate::tools::task_event_to_tool_output(event.clone())
+        else {
+            return;
+        };
+        let call_id = event
+            .call_id()
+            .map(str::to_owned)
+            .unwrap_or_else(|| task_id.clone());
+        let state = Arc::clone(&self.state);
+        let connection = self.connection.clone();
+        let session_id = self.session_id.clone();
+        let terminal_backlog = Arc::clone(&self.terminal_backlog);
+        let terminal_overflow = Arc::clone(&self.terminal_overflow);
+        self.runtime.spawn(async move {
+            {
+                let mut state = state.lock().await;
+                state
+                    .history
+                    .push(crate::background_task_history_message_with_call_id(
+                        &task_id,
+                        output.clone(),
+                        Some(call_id.clone()),
+                    ));
+                crate::config::save_session_history(&event_session_id, &state.history);
+            }
+            let update = SessionUpdate::ToolCallUpdate(
+                agent_client_protocol::schema::v1::ToolCallUpdate::new(
+                    call_id,
+                    agent_client_protocol::schema::v1::ToolCallUpdateFields::new()
+                        .status(if output.success {
+                            agent_client_protocol::schema::v1::ToolCallStatus::Completed
+                        } else {
+                            agent_client_protocol::schema::v1::ToolCallStatus::Failed
+                        })
+                        .raw_output(serde_json::json!({
+                            "content": output.content,
+                            "exitCode": output.exit_code,
+                            "changedPaths": [],
+                            "truncated": output.truncated,
+                        })),
+                ),
+            );
+            let _ = connection.send_notification(SessionNotification::new(session_id, update));
+            // Do not expose the fallback event until its history and ACP
+            // notification have been handled. This keeps a prompt that wins
+            // the receive race from resuming before durable completion.
+            {
+                let mut backlog = terminal_backlog
+                    .lock()
+                    .expect("ACP terminal backlog mutex poisoned");
+                backlog.push_back(event.clone());
+                while backlog.len() > ACP_TERMINAL_BACKLOG_CAPACITY {
+                    backlog.pop_front();
+                    terminal_overflow.store(true, Ordering::Release);
+                }
+            }
+            // Release the correlated wakeup only after history persistence and
+            // the ACP notification have been scheduled, so a continuation
+            // cannot race ahead of its durable tool evidence.
+            let _ = prompt_sender.try_send(event);
+        });
+    }
+}
+
+#[derive(Clone)]
+struct TaskRoute {
+    sender: std::sync::mpsc::SyncSender<TaskEvent>,
+    known_task_ids: Arc<std::sync::Mutex<KnownTaskIds>>,
+    sink: Option<Arc<SessionTaskSink>>,
+}
+
+type TaskRoutes = Arc<std::sync::Mutex<HashMap<String, TaskRoute>>>;
+
+fn route_task_event(routes: &TaskRoutes, event: TaskEvent) {
+    let session_id = event.session_id().to_string();
+    let mut routes = routes.lock().expect("ACP task routes mutex poisoned");
+    let Some(route) = routes.get(&session_id) else {
+        return;
+    };
+    route
+        .known_task_ids
+        .lock()
+        .expect("ACP known task IDs mutex poisoned")
+        .insert(event.task_id().to_string());
+    if event.is_terminal()
+        && let Some(sink) = &route.sink
+    {
+        sink.handle_terminal(event, route.sender.clone());
+        return;
+    }
+    match route.sender.try_send(event) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+            routes.remove(&session_id);
+        }
+        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+            // Terminal events are already persisted and retained in the
+            // bounded sink backlog. Keep the route alive so the prompt can
+            // consume the coalesced completion once its queue drains.
+        }
+    }
+}
 
 #[derive(Clone)]
 struct AcpServer {
     sessions: Sessions,
     client: Arc<reqwest::Client>,
     auto_approve: bool,
+    task_routes: TaskRoutes,
 }
 
 impl AcpServer {
@@ -37,10 +222,24 @@ impl AcpServer {
             .map_err(|error| {
                 agent_client_protocol::Error::internal_error().data(error.to_string())
             })?;
+        let task_routes = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let task_subscription = crate::tools::background_task_manager().subscribe();
+        let router_routes = Arc::clone(&task_routes);
+        std::thread::Builder::new()
+            .name("rustcode-acp-task-router".to_owned())
+            .spawn(move || {
+                while let Ok(event) = task_subscription.recv() {
+                    route_task_event(&router_routes, event);
+                }
+            })
+            .map_err(|error| {
+                agent_client_protocol::Error::internal_error().data(error.to_string())
+            })?;
         Ok(Self {
             sessions: new_registry(),
             client: Arc::new(client),
             auto_approve,
+            task_routes,
         })
     }
 }
@@ -59,8 +258,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
         .on_receive_request(
             async |request: InitializeRequest, responder, _connection| {
                 responder.respond(
-                    InitializeResponse::new(request.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new()),
+                    InitializeResponse::new(request.protocol_version).agent_capabilities(
+                        AgentCapabilities::new().session_capabilities(
+                            SessionCapabilities::new().close(SessionCloseCapabilities::new()),
+                        ),
+                    ),
                 )
             },
             agent_client_protocol::on_receive_request!(),
@@ -74,16 +276,69 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     state.raw_cli_mode = false;
                     state.workspace_root = Some(request.cwd.clone());
                     let config_options = build_session_config_options(&state);
+                    let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
+                    let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
+                    let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+                    let terminal_overflow = Arc::new(AtomicBool::new(false));
+                    let state = Arc::new(Mutex::new(state));
+                    let task_sink = Arc::new(SessionTaskSink {
+                        session_id: session_id.clone(),
+                        state: Arc::clone(&state),
+                        connection: _connection.clone(),
+                        runtime: tokio::runtime::Handle::current(),
+                        terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
+                        terminal_backlog: Arc::clone(&terminal_backlog),
+                        terminal_overflow: Arc::clone(&terminal_overflow),
+                    });
+                    mark_acp_session(&session_id);
+                    server
+                        .task_routes
+                        .lock()
+                        .expect("ACP task routes mutex poisoned")
+                        .insert(
+                            session_id.clone(),
+                            TaskRoute {
+                                sender: task_sender,
+                                known_task_ids: Arc::clone(&known_task_ids),
+                                sink: Some(task_sink),
+                            },
+                        );
                     server.sessions.lock().await.insert(
                         session_id.clone(),
                         AcpSession {
-                            state: Arc::new(Mutex::new(state)),
+                            state,
                             cwd: request.cwd,
                             turns: Arc::new(SessionTurnState::new()),
+                            task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
+                            known_task_ids,
+                            terminal_backlog,
+                            terminal_overflow,
                         },
                     );
                     responder
                         .respond(NewSessionResponse::new(session_id).config_options(config_options))
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: CloseSessionRequest, responder, _connection| {
+                    let session_id = request.session_id.to_string();
+                    server
+                        .task_routes
+                        .lock()
+                        .expect("ACP task routes mutex poisoned")
+                        .remove(&session_id);
+                    let session = server.sessions.lock().await.remove(&session_id);
+                    unmark_acp_session(&session_id);
+                    if let Some(session) = session {
+                        session.turns.cancel_active().await;
+                    }
+                    crate::tools::abort_background_starts(&session_id);
+                    crate::tools::stop_background_tasks(&session_id);
+                    responder.respond(CloseSessionResponse::new())
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -125,6 +380,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     if let Some(turns) = turns {
                         turns.cancel_active().await;
                     }
+                    crate::tools::abort_background_starts(notification.session_id.0.as_ref());
                     Ok(())
                 }
             },
@@ -146,9 +402,22 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                                 Arc::clone(&session.state),
                                 session.cwd.clone(),
                                 Arc::clone(&session.turns),
+                                Arc::clone(&session.task_events),
+                                Arc::clone(&session.known_task_ids),
+                                Arc::clone(&session.terminal_backlog),
+                                Arc::clone(&session.terminal_overflow),
                             )
                         });
-                    let Some((state, cwd, turns)) = session else {
+                    let Some((
+                        state,
+                        cwd,
+                        turns,
+                        task_events,
+                        known_task_ids,
+                        terminal_backlog,
+                        terminal_overflow,
+                    )) = session
+                    else {
                         return Err(agent_client_protocol::Error::invalid_params()
                             .data(format!("unknown ACP session: {session_id}")));
                     };
@@ -165,6 +434,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             cwd,
                             scheduled_turn,
                             session_id.clone(),
+                            task_events,
+                            known_task_ids,
+                            terminal_backlog,
+                            terminal_overflow,
                             text,
                             task_connection,
                             prompt_server.client,
@@ -187,6 +460,35 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_close({
+            let server = server.clone();
+            async move |_connection| {
+                let route_ids = server
+                    .task_routes
+                    .lock()
+                    .expect("ACP task routes mutex poisoned")
+                    .drain()
+                    .map(|(session_id, _)| session_id)
+                    .collect::<Vec<_>>();
+                let sessions = server
+                    .sessions
+                    .lock()
+                    .await
+                    .drain()
+                    .map(|(session_id, session)| (session_id, session.turns))
+                    .collect::<Vec<_>>();
+                for (session_id, turns) in sessions {
+                    unmark_acp_session(&session_id);
+                    turns.cancel_active().await;
+                }
+                for session_id in route_ids {
+                    unmark_acp_session(&session_id);
+                    crate::tools::abort_background_starts(&session_id);
+                    crate::tools::stop_background_tasks(&session_id);
+                }
+                Ok(())
+            }
+        })
         .connect_to(Stdio::new())
         .await?;
     Ok(())
@@ -196,6 +498,79 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+
+    fn task_event(session_id: &str, task_id: &str) -> TaskEvent {
+        TaskEvent::Finished {
+            id: task_id.into(),
+            session_id: session_id.into(),
+            call_id: None,
+            command: "cargo test".to_owned(),
+            output: Ok(rustcode_command::CommandOutput {
+                success: true,
+                exit_code: Some(0),
+                stdout: Default::default(),
+                stderr: Default::default(),
+            }),
+        }
+    }
+
+    #[test]
+    fn acp_task_router_isolates_session_events() {
+        let routes = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (a_sender, a_receiver) = std::sync::mpsc::sync_channel(2);
+        let (b_sender, b_receiver) = std::sync::mpsc::sync_channel(2);
+        routes.lock().unwrap().insert(
+            "a".to_owned(),
+            TaskRoute {
+                sender: a_sender,
+                known_task_ids: Arc::new(std::sync::Mutex::new(KnownTaskIds::default())),
+                sink: None,
+            },
+        );
+        routes.lock().unwrap().insert(
+            "b".to_owned(),
+            TaskRoute {
+                sender: b_sender,
+                known_task_ids: Arc::new(std::sync::Mutex::new(KnownTaskIds::default())),
+                sink: None,
+            },
+        );
+
+        route_task_event(&routes, task_event("a", "task-a"));
+        assert_eq!(a_receiver.try_recv().unwrap().task_id().as_str(), "task-a");
+        assert!(b_receiver.try_recv().is_err());
+        route_task_event(&routes, task_event("b", "task-b"));
+        assert_eq!(b_receiver.try_recv().unwrap().task_id().as_str(), "task-b");
+    }
+
+    #[test]
+    fn acp_task_router_removes_disconnected_bounded_route() {
+        let routes = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        routes.lock().unwrap().insert(
+            "closed".to_owned(),
+            TaskRoute {
+                sender,
+                known_task_ids: Arc::new(std::sync::Mutex::new(KnownTaskIds::default())),
+                sink: None,
+            },
+        );
+        drop(receiver);
+
+        route_task_event(&routes, task_event("closed", "task-closed"));
+
+        assert!(!routes.lock().unwrap().contains_key("closed"));
+    }
+
+    #[test]
+    fn acp_terminal_ledger_is_bounded() {
+        let mut ledger = TerminalLedger::default();
+        for index in 0..(ACP_TERMINAL_LEDGER_CAPACITY + 1) {
+            assert!(ledger.claim(&format!("task-{index}")));
+        }
+        assert_eq!(ledger.ids.len(), ACP_TERMINAL_LEDGER_CAPACITY);
+        assert!(!ledger.ids.contains("task-0"));
+    }
 
     #[test]
     fn extracts_text_blocks_from_prompt() {
@@ -581,6 +956,29 @@ mod tests {
             [SessionUpdate::ToolCall(call)]
                 if call.tool_call_id.to_string() == "call-1"
                     && call.status == agent_client_protocol::schema::v1::ToolCallStatus::InProgress
+        ));
+
+        let pending = stream.updates(crate::network::AgentUiEvent::ToolFinished {
+            id: "call-1".to_string(),
+            result: crate::network::events::ToolResult {
+                tool_name: "run_command".to_string(),
+                content: "Task started in background".to_string(),
+                diff: None,
+                file_preview: None,
+                metadata: crate::network::events::ToolResultMetadata {
+                    pending: true,
+                    call_id: Some("call-1".to_string()),
+                    arguments_hash: "hash".to_string(),
+                    ..Default::default()
+                },
+            },
+        });
+        assert!(matches!(
+            pending.as_slice(),
+            [SessionUpdate::ToolCallUpdate(update)]
+                if update.tool_call_id.to_string() == "call-1"
+                    && update.fields.status
+                        == Some(agent_client_protocol::schema::v1::ToolCallStatus::InProgress)
         ));
 
         let finished = stream.updates(crate::network::AgentUiEvent::ToolFinished {

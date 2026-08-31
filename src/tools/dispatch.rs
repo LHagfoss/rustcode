@@ -29,6 +29,15 @@ pub(crate) fn execute_with_metadata_cancellable(
     args: &Value,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
 ) -> ToolExecutionOutput {
+    execute_with_metadata_cancellable_for_call(name, args, cancel_token, None)
+}
+
+pub(crate) fn execute_with_metadata_cancellable_for_call(
+    name: &str,
+    args: &Value,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
+) -> ToolExecutionOutput {
     if let Some(kind) = match name {
         "generate_sound_effect" => Some(audio::GenerationKind::Sfx),
         "generate_music" => Some(audio::GenerationKind::Music),
@@ -146,7 +155,7 @@ pub(crate) fn execute_with_metadata_cancellable(
     }
 
     if name == "run_command" {
-        return match exec::run_command_output_cancellable(args, cancel_token) {
+        return match exec::run_command_output_with_call_id(args, cancel_token, call_id) {
             Ok(output) => output,
             Err(error) => ToolExecutionOutput::failure_with_kind(
                 as_error_message(&error),

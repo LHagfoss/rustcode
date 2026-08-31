@@ -62,6 +62,14 @@ pub(crate) fn background_task_history_message(
     task_id: &str,
     output: crate::tools::ToolExecutionOutput,
 ) -> ChatMessage {
+    background_task_history_message_with_call_id(task_id, output, None)
+}
+
+pub(crate) fn background_task_history_message_with_call_id(
+    task_id: &str,
+    output: crate::tools::ToolExecutionOutput,
+    call_id: Option<String>,
+) -> ChatMessage {
     let command = output
         .command
         .as_deref()
@@ -86,7 +94,7 @@ pub(crate) fn background_task_history_message(
             },
         },
         &prefix,
-        None,
+        call_id,
     )
 }
 
