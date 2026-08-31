@@ -50,6 +50,19 @@ else
     fail "benchmark help is available"
 fi
 
+clock_output="$("$benchmark" --clock-smoke-test 2>&1)" || {
+    fail "millisecond clock reports a positive subsecond interval: $clock_output"
+    clock_output=""
+}
+if [[ -n "$clock_output" ]]; then
+    clock_elapsed="${clock_output##*elapsed_ms=}"
+    if [[ "$clock_elapsed" =~ ^[1-9][0-9]*$ ]]; then
+        pass "millisecond clock reports a positive subsecond interval ($clock_output)"
+    else
+        fail "millisecond clock reports a positive subsecond interval (unexpected: $clock_output)"
+    fi
+fi
+
 expect_rejection "path traversal is rejected after canonicalization" \
     --target-dir "/tmp/../var/tmp/rustcode-build-boundary-smoke.$$" \
     --allow-cargo-clean
