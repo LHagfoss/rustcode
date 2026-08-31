@@ -119,6 +119,13 @@ pub(crate) fn map_agent_event(event: AgentEvent) -> Option<AgentUiEvent> {
 
 fn history_tool_result_event(message: &ChatMessage) -> Option<AgentUiEvent> {
     let record = message.tool_result.as_ref()?;
+    // ACP's server-owned task sink emits terminal background updates directly
+    // and persists this synthetic evidence for the model. Replaying the
+    // synthetic history row on every continuation would send a duplicate
+    // terminal update for the original provider call ID.
+    if record.tool_name == "background_task" {
+        return None;
+    }
     let id = message
         .tool_call_id
         .clone()
@@ -549,6 +556,24 @@ mod tests {
             Some(AgentUiEvent::TextDelta {
                 text: "final response".to_owned()
             })
+        );
+    }
+
+    #[test]
+    fn synthetic_background_completion_history_is_not_replayed_to_acp() {
+        let message = crate::background_task_history_message_with_call_id(
+            "task-fast",
+            crate::tools::ToolExecutionOutput::success("done".to_owned()),
+            Some("call-bg".to_owned()),
+        );
+
+        assert!(
+            message.tool_result.is_some(),
+            "completion must remain model history"
+        );
+        assert!(
+            super::history_tool_result_event(&message).is_none(),
+            "the sink already emitted the terminal ACP update"
         );
     }
 }
