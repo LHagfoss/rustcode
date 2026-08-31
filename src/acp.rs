@@ -28,6 +28,33 @@ pub(crate) use streaming::{AcpEventStream, acp_stop_reason};
 
 const ACP_TERMINAL_LEDGER_CAPACITY: usize = 1024;
 const ACP_TERMINAL_BACKLOG_CAPACITY: usize = 256;
+static ACTIVE_ACP_SESSIONS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn is_acp_session(session_id: &str) -> bool {
+    ACTIVE_ACP_SESSIONS
+        .get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+        .lock()
+        .expect("ACP session registry mutex poisoned")
+        .contains(session_id)
+}
+
+fn mark_acp_session(session_id: &str) {
+    ACTIVE_ACP_SESSIONS
+        .get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+        .lock()
+        .expect("ACP session registry mutex poisoned")
+        .insert(session_id.to_owned());
+}
+
+fn unmark_acp_session(session_id: &str) {
+    if let Some(sessions) = ACTIVE_ACP_SESSIONS.get() {
+        sessions
+            .lock()
+            .expect("ACP session registry mutex poisoned")
+            .remove(session_id);
+    }
+}
 
 #[derive(Default)]
 struct TerminalLedger {
@@ -263,6 +290,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         terminal_backlog: Arc::clone(&terminal_backlog),
                         terminal_overflow: Arc::clone(&terminal_overflow),
                     });
+                    mark_acp_session(&session_id);
                     server
                         .task_routes
                         .lock()
@@ -304,9 +332,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         .expect("ACP task routes mutex poisoned")
                         .remove(&session_id);
                     let session = server.sessions.lock().await.remove(&session_id);
+                    unmark_acp_session(&session_id);
                     if let Some(session) = session {
                         session.turns.cancel_active().await;
                     }
+                    crate::tools::abort_background_starts(&session_id);
                     crate::tools::stop_background_tasks(&session_id);
                     responder.respond(CloseSessionResponse::new())
                 }
@@ -350,6 +380,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     if let Some(turns) = turns {
                         turns.cancel_active().await;
                     }
+                    crate::tools::abort_background_starts(notification.session_id.0.as_ref());
                     Ok(())
                 }
             },
@@ -446,10 +477,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     .drain()
                     .map(|(session_id, session)| (session_id, session.turns))
                     .collect::<Vec<_>>();
-                for (_, turns) in sessions {
+                for (session_id, turns) in sessions {
+                    unmark_acp_session(&session_id);
                     turns.cancel_active().await;
                 }
                 for session_id in route_ids {
+                    unmark_acp_session(&session_id);
+                    crate::tools::abort_background_starts(&session_id);
                     crate::tools::stop_background_tasks(&session_id);
                 }
                 Ok(())

@@ -102,6 +102,48 @@ pub struct TaskSpec {
     pub call_id: Option<String>,
 }
 
+/// Gate terminal publication until an integration has exposed the task's
+/// initial in-progress state. The timeout guarantees a failed publisher
+/// cannot strand a detached worker indefinitely.
+#[derive(Clone)]
+pub struct TaskStartBarrier {
+    state: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl TaskStartBarrier {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+        }
+    }
+
+    /// Release the gate. Releasing more than once is harmless.
+    pub fn release(&self) {
+        let (released, wakeup) = &*self.state;
+        *released.lock().expect("task start barrier mutex poisoned") = true;
+        wakeup.notify_all();
+    }
+
+    fn wait(&self) {
+        const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+        let (released, wakeup) = &*self.state;
+        let released = released.lock().expect("task start barrier mutex poisoned");
+        if *released {
+            return;
+        }
+        let (guard, _) = wakeup
+            .wait_timeout_while(released, MAX_WAIT, |released| !*released)
+            .expect("task start barrier mutex poisoned");
+        drop(guard);
+    }
+}
+
+impl Default for TaskStartBarrier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskSpec {
     pub fn new(session_id: impl Into<SessionId>, request: CommandRequest) -> Self {
         Self {
@@ -308,6 +350,7 @@ struct TaskRecord {
     started_at: Instant,
     state: TaskState,
     completion: Option<Result<CommandOutput, String>>,
+    start_barrier: Option<TaskStartBarrier>,
 }
 
 struct Inner {
@@ -399,7 +442,7 @@ impl TaskManager {
     /// Start a command on a detached worker thread.
     pub fn spawn(&self, spec: TaskSpec) -> Result<TaskHandle, String> {
         let id = self.allocate_id();
-        self.spawn_with_task_id(id, spec)
+        self.spawn_with_task_id(id, spec, None)
     }
 
     /// Start a command with an integration-owned ID.
@@ -412,10 +455,27 @@ impl TaskManager {
         id: impl Into<TaskId>,
         spec: TaskSpec,
     ) -> Result<TaskHandle, String> {
-        self.spawn_with_task_id(id.into(), spec)
+        self.spawn_with_task_id(id.into(), spec, None)
     }
 
-    fn spawn_with_task_id(&self, id: TaskId, mut spec: TaskSpec) -> Result<TaskHandle, String> {
+    /// Start a task whose terminal event is held until `start_barrier` is
+    /// released. This lets protocol adapters publish the initial in-progress
+    /// tool result before a very fast command can complete.
+    pub fn spawn_with_id_and_start_barrier(
+        &self,
+        id: impl Into<TaskId>,
+        spec: TaskSpec,
+        start_barrier: TaskStartBarrier,
+    ) -> Result<TaskHandle, String> {
+        self.spawn_with_task_id(id.into(), spec, Some(start_barrier))
+    }
+
+    fn spawn_with_task_id(
+        &self,
+        id: TaskId,
+        mut spec: TaskSpec,
+        start_barrier: Option<TaskStartBarrier>,
+    ) -> Result<TaskHandle, String> {
         // Background tasks must be process-group capable for the injected
         // terminator to stop descendants as well as the shell.
         spec.request.process_group = true;
@@ -423,7 +483,11 @@ impl TaskManager {
             id: id.clone(),
             session_id: spec.session_id.clone(),
         };
-        if !self.insert(id.clone(), &spec) {
+        let barrier_for_error = start_barrier.clone();
+        if !self.insert(id.clone(), &spec, start_barrier) {
+            if let Some(barrier) = barrier_for_error {
+                barrier.release();
+            }
             return Err(format!("task ID '{id}' is already in use"));
         }
 
@@ -447,6 +511,9 @@ impl TaskManager {
         });
 
         if let Err(error) = spawn_result {
+            if let Some(barrier) = barrier_for_error {
+                barrier.release();
+            }
             self.finish(
                 &handle.id,
                 Err(format!("failed to start task thread: {error}")),
@@ -580,7 +647,7 @@ impl TaskManager {
         TaskId::new(format!("task_{sequence}"))
     }
 
-    fn insert(&self, id: TaskId, spec: &TaskSpec) -> bool {
+    fn insert(&self, id: TaskId, spec: &TaskSpec, start_barrier: Option<TaskStartBarrier>) -> bool {
         let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
         if tasks.contains_key(&id) {
             return false;
@@ -603,6 +670,7 @@ impl TaskManager {
                 started_at: Instant::now(),
                 state: TaskState::Starting,
                 completion: None,
+                start_barrier,
             },
         );
         true
@@ -657,7 +725,7 @@ impl TaskManager {
         terminated: bool,
         publish_started_on_failure: bool,
     ) -> CancelResult {
-        let (result, event) = {
+        let (result, event, barrier) = {
             let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
             let Some(task) = tasks.get_mut(id) else {
                 return CancelResult::AlreadyFinished;
@@ -676,6 +744,7 @@ impl TaskManager {
                         call_id: task.call_id,
                         command: task.command,
                     }),
+                    task.start_barrier,
                 )
             } else if let Some(output) = task.completion.take() {
                 let task = tasks.remove(id).expect("task was just observed");
@@ -689,6 +758,7 @@ impl TaskManager {
                         command: task.command,
                         output,
                     }),
+                    task.start_barrier,
                 )
             } else {
                 // Failed termination leaves the process running so its
@@ -705,17 +775,18 @@ impl TaskManager {
                         call_id: task.call_id.clone(),
                         pid,
                     }),
+                    None,
                 )
             }
         };
         if let Some(event) = event {
-            self.publish(event);
+            self.publish_after_barrier(event, barrier);
         }
         result
     }
 
     fn finish(&self, id: &TaskId, output: Result<CommandOutput, String>) {
-        let event = {
+        let (event, barrier) = {
             let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
             let Some(task) = tasks.get_mut(id) else {
                 // Cancellation already committed the terminal transition.
@@ -732,7 +803,8 @@ impl TaskManager {
             }
             let task = tasks.remove(id).expect("task was just observed");
             self.remember_terminal(id);
-            if matches!(task.state, TaskState::CancelRequested) {
+            let barrier = task.start_barrier;
+            let event = if matches!(task.state, TaskState::CancelRequested) {
                 TaskEvent::Cancelled {
                     id: id.clone(),
                     session_id: task.session_id,
@@ -747,9 +819,25 @@ impl TaskManager {
                     command: task.command,
                     output,
                 }
-            }
+            };
+            (event, barrier)
         };
-        self.publish(event);
+        self.publish_after_barrier(event, barrier);
+    }
+
+    fn publish_after_barrier(&self, event: TaskEvent, barrier: Option<TaskStartBarrier>) {
+        let Some(barrier) = barrier else {
+            self.publish(event);
+            return;
+        };
+        let manager = self.clone();
+        thread::Builder::new()
+            .name("rustcode-task-terminal-barrier".to_owned())
+            .spawn(move || {
+                barrier.wait();
+                manager.publish(event);
+            })
+            .expect("failed to spawn task terminal barrier worker");
     }
 
     fn publish(&self, event: TaskEvent) {
@@ -804,6 +892,7 @@ impl TaskManager {
                 request: test_request(command),
                 call_id: None,
             },
+            None,
         );
         id
     }
@@ -877,6 +966,51 @@ mod tests {
             self.calls.lock().unwrap().push(pid);
             self.result.load(Ordering::Acquire)
         }
+    }
+
+    #[test]
+    fn start_barrier_orders_fast_terminal_event_after_release() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let events = manager.subscribe();
+        let barrier = TaskStartBarrier::new();
+        manager
+            .spawn_with_id_and_start_barrier(
+                "barrier-fast",
+                TaskSpec::new("session", test_request("printf done")),
+                barrier.clone(),
+            )
+            .unwrap();
+
+        assert!(matches!(events.recv().unwrap(), TaskEvent::Started { .. }));
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+
+        barrier.release();
+        assert!(matches!(events.recv().unwrap(), TaskEvent::Finished { .. }));
+    }
+
+    #[test]
+    fn cancellation_terminal_event_also_waits_for_start_barrier() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let events = manager.subscribe();
+        let barrier = TaskStartBarrier::new();
+        let handle = manager
+            .spawn_with_id_and_start_barrier(
+                "barrier-cancel",
+                TaskSpec::new("session", test_request("sleep 5")),
+                barrier.clone(),
+            )
+            .unwrap();
+
+        assert!(matches!(events.recv().unwrap(), TaskEvent::Started { .. }));
+        assert_eq!(manager.cancel(handle.id()), CancelResult::Cancelled);
+        assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+
+        barrier.release();
+        assert!(matches!(
+            events.recv().unwrap(),
+            TaskEvent::Cancelled { .. }
+        ));
     }
 
     struct BlockingTerminator {
