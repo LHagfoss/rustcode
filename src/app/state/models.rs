@@ -1,5 +1,8 @@
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+pub use rustcode_core::{
+    ChatMessage, History, TokenUsage, ToolCallRef, ToolResultRecord, Verbosity,
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum AppStatus {
@@ -224,15 +227,6 @@ impl PendingQuestion {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TokenUsage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cached_tokens: Option<u32>,
-}
-
 /// Approximate token count accumulated during the current streaming reply.
 /// Updated incrementally as SSE chunks arrive; used to compute Tokens/s in the footer.
 pub const TOKENS_PER_CHAR_APPROX: f64 = 0.25;
@@ -327,10 +321,6 @@ impl StreamTracker {
     }
 }
 
-fn current_timestamp() -> String {
-    chrono::Local::now().format("%H:%M").to_string()
-}
-
 pub fn random_tip_index() -> usize {
     use rand::RngExt;
     let mut rng = rand::rng();
@@ -350,230 +340,6 @@ pub const TIPS: &[&str] = &[
     "Type /info for basic info, or /help for all commands and keybindings",
 ];
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_usage: Option<TokenUsage>,
-    #[serde(default = "current_timestamp")]
-    pub timestamp: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_time_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thought_time_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thought_tokens: Option<u32>,
-    #[serde(skip)]
-    pub diff: Option<String>,
-    /// Ephemeral normal code preview for newly written files. It is derived
-    /// from the tool arguments and intentionally not persisted in history.
-    #[serde(skip)]
-    pub file_preview: Option<(String, String)>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_result: Option<ToolResultRecord>,
-    /// Structured tool calls this assistant message made, in order. Present only
-    /// when the provider returned real function calls; the text protocols write
-    /// calls as prose, which has no identity to record.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tool_calls: Vec<ToolCallRef>,
-    /// For a `tool` message: the id of the call this result answers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-}
-
-/// The durable conversation history with a cheap mutation marker. The marker
-/// lets request preparation and the UI distinguish an unchanged snapshot
-/// without comparing every message.
-#[derive(Clone, Debug, Default)]
-pub struct History {
-    messages: Arc<Vec<ChatMessage>>,
-    revision: u64,
-    last_rewrite_revision: u64,
-}
-
-impl History {
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    pub fn is_append_only_since(&self, revision: u64) -> bool {
-        self.last_rewrite_revision <= revision
-    }
-
-    pub fn snapshot(&self) -> History {
-        self.clone()
-    }
-
-    pub fn replace(&mut self, messages: Vec<ChatMessage>) {
-        self.messages = Arc::new(messages);
-        self.bump_rewrite();
-    }
-
-    pub fn as_mut_vec(&mut self) -> &mut Vec<ChatMessage> {
-        self.bump_rewrite();
-        Arc::make_mut(&mut self.messages)
-    }
-
-    pub fn into_vec(self) -> Vec<ChatMessage> {
-        Arc::try_unwrap(self.messages).unwrap_or_else(|messages| messages.as_ref().clone())
-    }
-
-    fn bump(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
-    }
-
-    fn bump_rewrite(&mut self) {
-        self.bump();
-        self.last_rewrite_revision = self.revision;
-    }
-
-    pub fn push(&mut self, message: ChatMessage) {
-        Arc::make_mut(&mut self.messages).push(message);
-        self.bump();
-    }
-
-    pub fn clear(&mut self) {
-        if !self.messages.is_empty() {
-            Arc::make_mut(&mut self.messages).clear();
-            self.bump_rewrite();
-        }
-    }
-
-    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, ChatMessage>
-    where
-        R: std::ops::RangeBounds<usize>,
-    {
-        self.bump_rewrite();
-        Arc::make_mut(&mut self.messages).drain(range)
-    }
-
-    pub fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&ChatMessage) -> bool,
-    {
-        Arc::make_mut(&mut self.messages).retain(f);
-        self.bump_rewrite();
-    }
-
-    pub fn as_slice(&self) -> &[ChatMessage] {
-        &self.messages
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [ChatMessage] {
-        self.bump_rewrite();
-        Arc::make_mut(&mut self.messages).as_mut_slice()
-    }
-}
-
-impl From<Vec<ChatMessage>> for History {
-    fn from(messages: Vec<ChatMessage>) -> Self {
-        Self {
-            messages: Arc::new(messages),
-            revision: 0,
-            last_rewrite_revision: 0,
-        }
-    }
-}
-
-impl PartialEq for History {
-    fn eq(&self, other: &Self) -> bool {
-        self.messages == other.messages
-    }
-}
-
-impl Eq for History {}
-
-impl std::ops::Deref for History {
-    type Target = [ChatMessage];
-
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
-    }
-}
-
-impl std::ops::DerefMut for History {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_slice()
-    }
-}
-
-impl Extend<ChatMessage> for History {
-    fn extend<T: IntoIterator<Item = ChatMessage>>(&mut self, iter: T) {
-        let before = self.messages.len();
-        Arc::make_mut(&mut self.messages).extend(iter);
-        if self.messages.len() != before {
-            self.bump();
-        }
-    }
-}
-
-impl<'a> IntoIterator for &'a History {
-    type Item = &'a ChatMessage;
-    type IntoIter = std::slice::Iter<'a, ChatMessage>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.messages.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut History {
-    type Item = &'a mut ChatMessage;
-    type IntoIter = std::slice::IterMut<'a, ChatMessage>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_mut_slice().iter_mut()
-    }
-}
-
-impl std::iter::FromIterator<ChatMessage> for History {
-    fn from_iter<T: IntoIterator<Item = ChatMessage>>(iter: T) -> Self {
-        Self::from(iter.into_iter().collect::<Vec<_>>())
-    }
-}
-
-/// Identity of one structured tool call, kept so a result can name the call it
-/// answers when the transcript is replayed to the provider.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolCallRef {
-    pub id: String,
-    pub name: String,
-    /// Arguments exactly as the provider sent them, so the replayed call is
-    /// byte-identical to the one the model made.
-    pub arguments: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolResultRecord {
-    pub tool_name: String,
-    pub arguments_hash: String,
-    pub success: bool,
-    #[serde(default)]
-    pub pending: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    pub exit_code: Option<i32>,
-    pub changed_paths: Vec<String>,
-    pub truncated: bool,
-    pub full_output_artifact: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_kind: Option<String>,
-    #[serde(default)]
-    pub retryable: bool,
-    #[serde(default)]
-    pub replayed: bool,
-}
-
-impl ToolResultRecord {
-    /// Convert the backwards-compatible persisted spelling back to the typed
-    /// error contract when a reloaded session needs machine-readable state.
-    pub fn parsed_error_kind(&self) -> Option<crate::tools::ToolErrorKind> {
-        self.error_kind
-            .as_deref()
-            .and_then(crate::tools::ToolErrorKind::from_persisted)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CachedReadOutput {
     pub(crate) replayable_content: Option<String>,
@@ -583,76 +349,6 @@ pub(crate) struct CachedReadOutput {
     pub(crate) full_output_artifact: Option<String>,
     pub(crate) error_kind: Option<crate::tools::ToolErrorKind>,
     pub(crate) retryable: bool,
-}
-
-impl ChatMessage {
-    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: role.into(),
-            content: content.into(),
-            token_usage: None,
-            timestamp: current_timestamp(),
-            response_time_ms: None,
-            thought_time_ms: None,
-            thought_tokens: None,
-            diff: None,
-            file_preview: None,
-            tool_result: None,
-            tool_calls: Vec::new(),
-            tool_call_id: None,
-        }
-    }
-
-    /// Attach the structured calls this assistant message made.
-    pub fn with_tool_calls(mut self, calls: Vec<ToolCallRef>) -> Self {
-        self.tool_calls = calls;
-        self
-    }
-
-    /// Mark this tool result as the answer to `call_id`.
-    pub fn answering(mut self, call_id: Option<String>) -> Self {
-        self.tool_call_id = call_id;
-        self
-    }
-
-    pub fn with_diff(mut self, diff: Option<String>) -> Self {
-        self.diff = diff;
-        self
-    }
-
-    pub fn with_file_preview(mut self, preview: Option<(String, String)>) -> Self {
-        self.file_preview = preview;
-        self
-    }
-
-    pub fn with_tool_result(mut self, record: ToolResultRecord) -> Self {
-        self.tool_result = Some(record);
-        self
-    }
-
-    /// Resolves tool calls from structured `tool_calls` fields (ApiNative) if present,
-    /// or parses tool calls from text content for text protocols.
-    pub fn resolved_tool_calls(
-        &self,
-        protocol: crate::config::ToolProtocol,
-    ) -> Vec<crate::tools::ToolCall> {
-        if !self.tool_calls.is_empty() {
-            self.tool_calls
-                .iter()
-                .filter_map(|tc| {
-                    let args =
-                        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-                    Some(crate::tools::ToolCall {
-                        name: tc.name.clone(),
-                        arguments: args,
-                        call_id: Some(tc.id.clone()),
-                    })
-                })
-                .collect()
-        } else {
-            crate::tools::parse_tool_calls(&self.content, protocol)
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -966,14 +662,6 @@ pub enum HoverTarget {
     ScrollPill,
     /// A code block's `[Copy]` badge, at this screen row.
     CopyBadge(u16),
-}
-
-#[derive(Debug, PartialEq, Clone, Hash, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Verbosity {
-    Low,
-    #[default]
-    High,
 }
 
 /// Presentation-only state for a tool invocation that has not produced its

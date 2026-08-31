@@ -4,6 +4,8 @@ use serde_millis;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub use rustcode_core::{AgentMode, ToolProtocol};
+
 pub const MAX_CONTEXT_TOKENS: u32 = 2048;
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 8192;
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 40;
@@ -282,25 +284,6 @@ impl ModelProfile {
         }
         None
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum ToolProtocol {
-    #[default]
-    Json,
-    Native,
-    /// True API function-calling: the tool schema is sent in the request's
-    /// `tools` field and the model replies with a structured `tool_calls`
-    /// field instead of text.
-    ///
-    /// Used automatically for providers known to implement it, because a call
-    /// the provider returns as data cannot be confused with prose — a model
-    /// writing tool calls as text can just as easily write their results, and
-    /// nothing in the transcript contradicts it. The text protocols remain for
-    /// servers without function calling.
-    ApiNative,
 }
 
 /// Hosts whose OpenAI-compatible endpoints are known to implement function
@@ -596,15 +579,6 @@ fn default_subagent_concurrency_limit() -> usize {
 
 fn default_theme() -> String {
     "default".to_string()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum AgentMode {
-    #[default]
-    Build,
-    Plan,
 }
 
 #[allow(dead_code)]

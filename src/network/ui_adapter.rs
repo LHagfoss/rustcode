@@ -1,7 +1,7 @@
 use super::events::{AgentEvent, FinishReason, ToolResult, ToolResultMetadata};
 use super::policy::TurnPolicy;
 use crate::app::{AppState, ChatMessage};
-use crate::tools::ToolCall;
+use crate::tools::{ToolCall, resolve_tool_calls};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -239,7 +239,7 @@ async fn publish_snapshot(
                 .iter()
                 .rev()
                 .find(|message| message.role == "assistant")
-                .map(|message| message.resolved_tool_calls(protocol))
+                .map(|message| resolve_tool_calls(message, protocol))
                 .filter(|calls| !calls.is_empty())
                 .unwrap_or_else(|| crate::tools::parse_tool_calls(&response, protocol))
         };
