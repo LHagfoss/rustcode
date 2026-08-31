@@ -52,7 +52,8 @@ use schema::{
 mod tests;
 
 #[allow(unused_imports)]
-pub use envelope::{ToolCallEnvelope, ToolErrorKind, ToolResultEnvelope};
+pub use envelope::{ToolCallEnvelope, ToolResultEnvelope};
+pub use rustcode_core::ToolErrorKind;
 
 pub(crate) use exec::{
     CommandProgressCallback, command_confirmation_preview, command_requires_confirmation,
@@ -71,6 +72,29 @@ pub struct ToolCall {
     /// Provider/native identity when the source supplied one. Text protocols
     /// leave this unset and the execution boundary supplies a local identity.
     pub call_id: Option<String>,
+}
+
+/// Resolve structured calls recorded in history, falling back to the parser
+/// used by the selected text protocol. This behavior-specific adapter stays in
+/// the tools crate so the core message type remains independent of dispatch
+/// and parser implementation details.
+pub(crate) fn resolve_tool_calls(
+    message: &rustcode_core::ChatMessage,
+    protocol: crate::config::ToolProtocol,
+) -> Vec<ToolCall> {
+    if !message.tool_calls.is_empty() {
+        message
+            .tool_calls
+            .iter()
+            .map(|call| ToolCall {
+                name: call.name.clone(),
+                arguments: serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null),
+                call_id: Some(call.id.clone()),
+            })
+            .collect()
+    } else {
+        parse_tool_calls(&message.content, protocol)
+    }
 }
 
 /// Authoritative facts returned by a tool invocation alongside its display

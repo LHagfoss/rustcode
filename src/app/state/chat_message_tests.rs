@@ -1,5 +1,6 @@
 use super::{ChatMessage, ToolCallRef};
 use crate::config::ToolProtocol;
+use crate::tools::resolve_tool_calls;
 
 #[test]
 fn resolved_tool_calls_prefers_structured_tool_calls() {
@@ -11,7 +12,7 @@ fn resolved_tool_calls_prefers_structured_tool_calls() {
         },
     ]);
 
-    let calls = msg.resolved_tool_calls(ToolProtocol::ApiNative);
+    let calls = resolve_tool_calls(&msg, ToolProtocol::ApiNative);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "read_file");
     assert_eq!(calls[0].arguments["path"], "src/main.rs");
@@ -24,7 +25,7 @@ fn resolved_tool_calls_falls_back_to_parsing_content_text() {
         "```tool\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"foo\"}}\n```",
     );
 
-    let calls = msg.resolved_tool_calls(ToolProtocol::Json);
+    let calls = resolve_tool_calls(&msg, ToolProtocol::Json);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "grep");
 }
