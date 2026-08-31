@@ -12,6 +12,8 @@ pub(crate) use agent_client_protocol::schema::v1::{
     SetSessionConfigOptionResponse, StopReason,
 };
 use agent_client_protocol::{Agent, Stdio};
+use rustcode_tasks::TaskEvent;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -22,11 +24,45 @@ pub(crate) use prompt::prompt_text;
 pub(crate) use session::{AcpSession, SessionTurnState, Sessions, new_registry};
 pub(crate) use streaming::{AcpEventStream, acp_stop_reason};
 
+struct TaskRoute {
+    sender: std::sync::mpsc::SyncSender<TaskEvent>,
+    known_task_ids: Arc<std::sync::Mutex<HashSet<String>>>,
+}
+
+type TaskRoutes = Arc<std::sync::Mutex<HashMap<String, TaskRoute>>>;
+
+fn route_task_event(routes: &TaskRoutes, event: TaskEvent) {
+    let session_id = event.session_id().to_string();
+    let mut routes = routes.lock().expect("ACP task routes mutex poisoned");
+    let Some(route) = routes.get(&session_id) else {
+        return;
+    };
+    route
+        .known_task_ids
+        .lock()
+        .expect("ACP known task IDs mutex poisoned")
+        .insert(event.task_id().to_string());
+    match route.sender.try_send(event) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+            routes.remove(&session_id);
+        }
+        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+            // The per-session queue is deliberately bounded. Dropping the
+            // route makes the prompt fail fast on the next receive instead of
+            // allowing a slow ACP session to stall the shared router or hang
+            // forever waiting for an event that could not be queued.
+            routes.remove(&session_id);
+        }
+    }
+}
+
 #[derive(Clone)]
 struct AcpServer {
     sessions: Sessions,
     client: Arc<reqwest::Client>,
     auto_approve: bool,
+    task_routes: TaskRoutes,
 }
 
 impl AcpServer {
@@ -37,10 +73,24 @@ impl AcpServer {
             .map_err(|error| {
                 agent_client_protocol::Error::internal_error().data(error.to_string())
             })?;
+        let task_routes = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let task_subscription = crate::tools::background_task_manager().subscribe();
+        let router_routes = Arc::clone(&task_routes);
+        std::thread::Builder::new()
+            .name("rustcode-acp-task-router".to_owned())
+            .spawn(move || {
+                while let Ok(event) = task_subscription.recv() {
+                    route_task_event(&router_routes, event);
+                }
+            })
+            .map_err(|error| {
+                agent_client_protocol::Error::internal_error().data(error.to_string())
+            })?;
         Ok(Self {
             sessions: new_registry(),
             client: Arc::new(client),
             auto_approve,
+            task_routes,
         })
     }
 }
@@ -74,12 +124,27 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     state.raw_cli_mode = false;
                     state.workspace_root = Some(request.cwd.clone());
                     let config_options = build_session_config_options(&state);
+                    let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
+                    let known_task_ids = Arc::new(std::sync::Mutex::new(HashSet::new()));
+                    server
+                        .task_routes
+                        .lock()
+                        .expect("ACP task routes mutex poisoned")
+                        .insert(
+                            session_id.clone(),
+                            TaskRoute {
+                                sender: task_sender,
+                                known_task_ids: Arc::clone(&known_task_ids),
+                            },
+                        );
                     server.sessions.lock().await.insert(
                         session_id.clone(),
                         AcpSession {
                             state: Arc::new(Mutex::new(state)),
                             cwd: request.cwd,
                             turns: Arc::new(SessionTurnState::new()),
+                            task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
+                            known_task_ids,
                         },
                     );
                     responder
@@ -146,9 +211,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                                 Arc::clone(&session.state),
                                 session.cwd.clone(),
                                 Arc::clone(&session.turns),
+                                Arc::clone(&session.task_events),
+                                Arc::clone(&session.known_task_ids),
                             )
                         });
-                    let Some((state, cwd, turns)) = session else {
+                    let Some((state, cwd, turns, task_events, known_task_ids)) = session else {
                         return Err(agent_client_protocol::Error::invalid_params()
                             .data(format!("unknown ACP session: {session_id}")));
                     };
@@ -165,6 +232,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             cwd,
                             scheduled_turn,
                             session_id.clone(),
+                            task_events,
+                            known_task_ids,
                             text,
                             task_connection,
                             prompt_server.client,
@@ -196,6 +265,65 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+
+    fn task_event(session_id: &str, task_id: &str) -> TaskEvent {
+        TaskEvent::Finished {
+            id: task_id.into(),
+            session_id: session_id.into(),
+            command: "cargo test".to_owned(),
+            output: Ok(rustcode_command::CommandOutput {
+                success: true,
+                exit_code: Some(0),
+                stdout: Default::default(),
+                stderr: Default::default(),
+            }),
+        }
+    }
+
+    #[test]
+    fn acp_task_router_isolates_session_events() {
+        let routes = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (a_sender, a_receiver) = std::sync::mpsc::sync_channel(2);
+        let (b_sender, b_receiver) = std::sync::mpsc::sync_channel(2);
+        routes.lock().unwrap().insert(
+            "a".to_owned(),
+            TaskRoute {
+                sender: a_sender,
+                known_task_ids: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            },
+        );
+        routes.lock().unwrap().insert(
+            "b".to_owned(),
+            TaskRoute {
+                sender: b_sender,
+                known_task_ids: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            },
+        );
+
+        route_task_event(&routes, task_event("a", "task-a"));
+        assert_eq!(a_receiver.try_recv().unwrap().task_id().as_str(), "task-a");
+        assert!(b_receiver.try_recv().is_err());
+        route_task_event(&routes, task_event("b", "task-b"));
+        assert_eq!(b_receiver.try_recv().unwrap().task_id().as_str(), "task-b");
+    }
+
+    #[test]
+    fn acp_task_router_removes_disconnected_bounded_route() {
+        let routes = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        routes.lock().unwrap().insert(
+            "closed".to_owned(),
+            TaskRoute {
+                sender,
+                known_task_ids: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            },
+        );
+        drop(receiver);
+
+        route_task_event(&routes, task_event("closed", "task-closed"));
+
+        assert!(!routes.lock().unwrap().contains_key("closed"));
+    }
 
     #[test]
     fn extracts_text_blocks_from_prompt() {

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use tokio::sync::Mutex;
 
@@ -112,6 +114,11 @@ pub(crate) struct AcpSession {
     pub(crate) state: Arc<Mutex<crate::app::AppState>>,
     pub(crate) cwd: PathBuf,
     pub(crate) turns: Arc<SessionTurnState>,
+    pub(crate) task_events: Arc<std::sync::Mutex<Receiver<rustcode_tasks::TaskEvent>>>,
+    /// Task IDs observed by the ACP router but not yet consumed by a prompt.
+    /// Keeping this alongside the inbox prevents a completion that races a
+    /// new prompt from being mistaken for work created by that prompt.
+    pub(crate) known_task_ids: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 pub(crate) type Sessions = Arc<Mutex<HashMap<String, AcpSession>>>;
