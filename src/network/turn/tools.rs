@@ -498,6 +498,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut grounded_recovery = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
+            let mut cross_turn_authoritative_progress = false;
             let mut cross_turn_target_files = Vec::new();
             let mut cross_turn_tool_count = 0;
             let executed = results.len();
@@ -705,6 +706,15 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 // "no workspace diff" as "no progress".
                 cross_turn_made_progress |= assessment.meaningful;
                 cross_turn_had_edits |= is_mutating_tool(&name);
+                // A successful verification or other novel command result is
+                // authoritative evidence even when it leaves the workspace
+                // unchanged. Do not compare its reasoning with a stale plan
+                // from before the evidence was produced.
+                cross_turn_authoritative_progress |= matches!(
+                    assessment.reason,
+                    loop_detect::ProgressReason::Verification
+                        | loop_detect::ProgressReason::NewInformation
+                );
                 if let Some(target_file) = target_file {
                     cross_turn_target_files.push(target_file.to_string());
                 }
@@ -770,16 +780,20 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>();
-                let cross_turn_status = ctx.recovery.reasoning_loop_detector.record_turn_evidence(
-                    &loop_detect::TurnEvidence {
-                        reasoning: &ctx.response.final_content,
-                        target_files: &target_file_refs,
-                        made_progress: cross_turn_made_progress,
-                        had_edits: cross_turn_had_edits,
-                        tool_count: cross_turn_tool_count,
-                        no_progress_streak: ctx.progress.ledger.no_progress_streak(),
-                    },
-                );
+                let cross_turn_status = ctx
+                    .recovery
+                    .reasoning_loop_detector
+                    .record_turn_evidence_after_progress(
+                        &loop_detect::TurnEvidence {
+                            reasoning: &ctx.response.final_content,
+                            target_files: &target_file_refs,
+                            made_progress: cross_turn_made_progress,
+                            had_edits: cross_turn_had_edits,
+                            tool_count: cross_turn_tool_count,
+                            no_progress_streak: ctx.progress.ledger.no_progress_streak(),
+                        },
+                        cross_turn_authoritative_progress,
+                    );
                 if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = cross_turn_status {
                     ctx.recovery.reasoning_loops_detected += 1;
                     dbg_log!("Cross-turn reasoning loop detected: {reason}");
