@@ -110,12 +110,6 @@ fn apply_profile_sampling_options(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeToolChoice {
-    Auto,
-    Required,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThinkingMode {
     Normal,
     BoundedRecovery,
@@ -126,14 +120,10 @@ fn apply_api_native_tools(
     payload: &mut serde_json::Value,
     schema: Vec<serde_json::Value>,
     allow_tools: bool,
-    choice: NativeToolChoice,
 ) {
     if allow_tools && !schema.is_empty() {
         payload["tools"] = serde_json::Value::Array(schema);
-        payload["tool_choice"] = serde_json::json!(match choice {
-            NativeToolChoice::Auto => "auto",
-            NativeToolChoice::Required => "required",
-        });
+        payload["tool_choice"] = serde_json::json!("auto");
     }
 }
 
@@ -1127,7 +1117,7 @@ mod tests {
             "function": {"name": "view_file"}
         })];
 
-        apply_api_native_tools(&mut payload, schema, false, NativeToolChoice::Auto);
+        apply_api_native_tools(&mut payload, schema, false);
 
         assert!(payload.get("tools").is_none());
         assert!(payload.get("tool_choice").is_none());
@@ -1141,23 +1131,23 @@ mod tests {
             "function": {"name": "view_file"}
         })];
 
-        apply_api_native_tools(&mut payload, schema, true, NativeToolChoice::Auto);
+        apply_api_native_tools(&mut payload, schema, true);
 
         assert_eq!(payload["tools"].as_array().map(Vec::len), Some(1));
         assert_eq!(payload["tool_choice"], "auto");
     }
 
     #[test]
-    fn recovery_tool_requests_require_a_tool_call() {
+    fn recovery_tool_requests_allow_a_final_answer() {
         let mut payload = serde_json::json!({});
         let schema = vec![serde_json::json!({
             "type": "function",
             "function": {"name": "view_file"}
         })];
 
-        apply_api_native_tools(&mut payload, schema, true, NativeToolChoice::Required);
+        apply_api_native_tools(&mut payload, schema, true);
 
-        assert_eq!(payload["tool_choice"], "required");
+        assert_eq!(payload["tool_choice"], "auto");
     }
 
     #[test]
@@ -1643,17 +1633,11 @@ pub async fn stream_request(
         );
     }
     if matches!(tool_protocol, crate::config::ToolProtocol::ApiNative) {
-        let tool_choice = if thinking_mode == ThinkingMode::BoundedRecovery && allow_tools {
-            NativeToolChoice::Required
-        } else {
-            NativeToolChoice::Auto
-        };
-        apply_api_native_tools(
-            &mut payload,
-            native_tool_schemas.clone(),
-            allow_tools,
-            tool_choice,
-        );
+        // A recovery turn may legitimately be the final answer for a
+        // read-only task. Keep tools available, but do not require a tool call
+        // after the recovery prompt explicitly asks for prose when no action
+        // remains.
+        apply_api_native_tools(&mut payload, native_tool_schemas.clone(), allow_tools);
         crate::logger::operational_event(
             "mcp.native_schema_selection",
             serde_json::json!({

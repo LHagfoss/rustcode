@@ -73,7 +73,7 @@ pub(crate) struct HeadlessPolicy {
 }
 
 fn headless_failure(ctx: &crate::network::TurnContext) -> Option<String> {
-    if ctx.lifecycle.task_completed {
+    if ctx.lifecycle.task_completed || can_finish_after_reasoning_recovery(ctx) {
         return None;
     }
     ctx.lifecycle
@@ -81,6 +81,31 @@ fn headless_failure(ctx: &crate::network::TurnContext) -> Option<String> {
         .as_ref()
         .map(ToString::to_string)
         .or_else(|| Some("turn did not complete".to_string()))
+}
+
+/// A reasoning-loop escalation can be a valid terminal answer for a read-only
+/// headless turn: recovery is bounded, the response is honest about stopping,
+/// and no workspace mutation needs to be reported as complete. Keep all other
+/// escalation paths incomplete, especially forced finals after tool loops.
+fn can_finish_after_reasoning_recovery(ctx: &crate::network::TurnContext) -> bool {
+    if !matches!(
+        ctx.lifecycle.stop_reason.as_ref(),
+        Some(crate::network::lifecycle::StopReason::LoopEscalation)
+    ) || ctx.recovery.reasoning_recovery_attempts < crate::network::MAX_REASONING_RECOVERY_ROUNDS
+        || ctx.recovery.force_final
+        || ctx.progress.made_edits
+        || ctx.progress.failed_mutations > 0
+        || !ctx.progress.changed_paths.is_empty()
+    {
+        return false;
+    }
+
+    let promoted = crate::network::text::promote_bare_thought_markers(&ctx.response.final_content);
+    let prose = crate::network::text::strip_tool_call_syntax(
+        &crate::network::text::strip_think_blocks(&promoted),
+    );
+    let trimmed = prose.trim();
+    !trimmed.is_empty() && !trimmed.starts_with("[harness:")
 }
 
 /// Tracks only background tasks created by one headless turn. Existing
@@ -377,6 +402,39 @@ mod tests {
 
         ctx.lifecycle.task_completed = true;
         assert!(headless_failure(&ctx).is_none());
+    }
+
+    #[test]
+    fn exhausted_reasoning_recovery_can_return_an_honest_read_only_response() {
+        let mut ctx = crate::network::TurnContext::default();
+        ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::LoopEscalation);
+        ctx.recovery.reasoning_recovery_attempts = 1;
+        ctx.response.final_content =
+            "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there.".to_string();
+
+        assert!(headless_failure(&ctx).is_none());
+        assert!(!ctx.lifecycle.task_completed);
+    }
+
+    #[test]
+    fn reasoning_recovery_without_usable_content_stays_incomplete() {
+        let mut ctx = crate::network::TurnContext::default();
+        ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::LoopEscalation);
+        ctx.recovery.reasoning_recovery_attempts = 1;
+        ctx.response.final_content = "<think>still reasoning</think>".to_string();
+
+        assert_eq!(headless_failure(&ctx).as_deref(), Some("loop_escalation"));
+    }
+
+    #[test]
+    fn forced_tool_loop_final_remains_incomplete_even_with_prose() {
+        let mut ctx = crate::network::TurnContext::default();
+        ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::LoopEscalation);
+        ctx.recovery.reasoning_recovery_attempts = 1;
+        ctx.recovery.force_final = true;
+        ctx.response.final_content = "I stopped safely.".to_string();
+
+        assert_eq!(headless_failure(&ctx).as_deref(), Some("loop_escalation"));
     }
 
     #[test]
