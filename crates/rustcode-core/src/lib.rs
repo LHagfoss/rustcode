@@ -22,6 +22,36 @@ pub struct TokenUsage {
     pub cached_tokens: Option<u32>,
 }
 
+/// Completeness of the output delivered to the model for one tool result.
+///
+/// This is deliberately separate from the presentation used by the terminal:
+/// a collapsed UI row must never make a complete result look truncated (or
+/// vice versa) when the conversation is replayed to a provider.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultCompleteness {
+    #[default]
+    Complete,
+    /// The requested range was complete, but the caller deliberately limited
+    /// it (for example, an explicit end_line before the end of a file).
+    UserLimited,
+    /// The read window omitted content because of the line safety cap.
+    LineTruncated,
+    /// Output was bounded by a byte/line payload limit after execution.
+    ByteTruncated,
+}
+
+impl ToolResultCompleteness {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::UserLimited => "user_limited",
+            Self::LineTruncated => "line_truncated",
+            Self::ByteTruncated => "byte_truncated",
+        }
+    }
+}
+
 /// Identity of one structured tool call, retained for transcript replay.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallRef {
@@ -123,6 +153,10 @@ pub struct ToolResultRecord {
     pub exit_code: Option<i32>,
     pub changed_paths: Vec<String>,
     pub truncated: bool,
+    /// Machine-readable completeness of the model-facing output. Older
+    /// sessions omit this field and deserialize as `complete`.
+    #[serde(default)]
+    pub completeness: ToolResultCompleteness,
     pub full_output_artifact: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<String>,
@@ -133,6 +167,16 @@ pub struct ToolResultRecord {
 }
 
 impl ToolResultRecord {
+    /// Map records from before the completeness field was introduced to an
+    /// honest state instead of treating their old `truncated` bit as complete.
+    pub fn resolved_completeness(&self) -> ToolResultCompleteness {
+        if self.completeness == ToolResultCompleteness::Complete && self.truncated {
+            ToolResultCompleteness::ByteTruncated
+        } else {
+            self.completeness
+        }
+    }
+
     /// Convert a persisted spelling to the typed error contract.
     pub fn parsed_error_kind(&self) -> Option<ToolErrorKind> {
         self.error_kind

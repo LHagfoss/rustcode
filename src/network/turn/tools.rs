@@ -91,6 +91,22 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             _ => None,
         })
         .collect::<Vec<_>>();
+    let parsed_tool_calls = parsed_tool_calls
+        .into_iter()
+        .map(|mut call| {
+            if let Some(canonical) = crate::tools::resolve_builtin_tool_alias(&call.name) {
+                crate::logger::operational_event(
+                    "tools.alias_applied",
+                    serde_json::json!({
+                        "alias": call.name,
+                        "canonical": canonical,
+                    }),
+                );
+                call.name = canonical.to_string();
+            }
+            call
+        })
+        .collect::<Vec<_>>();
 
     // A provider length stop is not evidence that a structured call is
     // complete. Some providers emit syntactically valid JSON before cutting

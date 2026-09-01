@@ -2,6 +2,99 @@ use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prom
 use super::*;
 
 #[test]
+fn model_result_contract_distinguishes_read_completeness_states() {
+    let complete = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1, "end_line": 15}),
+        crate::tools::ToolExecutionOutput::success(
+            "[File: src/lib.rs, Lines 1 to 15 of 15]\n1: fn main() {}".to_string(),
+        ),
+        None,
+    );
+    assert_eq!(
+        complete.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::Complete
+    );
+
+    let user_limited = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1, "end_line": 1}),
+        crate::tools::ToolExecutionOutput::success(
+            "[File: src/lib.rs, Lines 1 to 1 of 15]\n1: fn main() {}\n... end of requested range; the file continues to line 15 ...".to_string(),
+        ),
+        None,
+    );
+    assert_eq!(
+        user_limited.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::UserLimited
+    );
+
+    let line_truncated = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs"}),
+        crate::tools::ToolExecutionOutput {
+            content: "[Truncated: lines 801-1000 of 1000]".to_string(),
+            truncated: true,
+            ..crate::tools::ToolExecutionOutput::success(String::new())
+        },
+        None,
+    );
+    assert_eq!(
+        line_truncated.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::LineTruncated
+    );
+
+    let byte_truncated = tool_result_from_execution(
+        "run_command",
+        &serde_json::json!({"command": "yes"}),
+        crate::tools::ToolExecutionOutput {
+            content: "[Output truncated: 100 bytes total]".to_string(),
+            truncated: true,
+            ..crate::tools::ToolExecutionOutput::success(String::new())
+        },
+        None,
+    );
+    assert_eq!(
+        byte_truncated.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::ByteTruncated
+    );
+}
+
+#[test]
+fn structured_tool_replay_keeps_metadata_out_of_ui_content_but_in_model_payload() {
+    let message = tool_result_history_message(
+        ToolResult {
+            tool_name: "view_file".to_string(),
+            content: "[File: x, Lines 1 to 15 of 15]".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                call_id: Some("call-1".to_string()),
+                arguments_hash: "hash".to_string(),
+                success: true,
+                completeness: rustcode_core::ToolResultCompleteness::Complete,
+                ..Default::default()
+            },
+        },
+        Some("call-1".to_string()),
+    );
+    assert!(!message.content.contains("result_metadata"));
+    let history = vec![
+        ChatMessage::new("user", "read x"),
+        ChatMessage::new("assistant", "").with_tool_calls(vec![crate::app::ToolCallRef {
+            id: "call-1".to_string(),
+            name: "view_file".to_string(),
+            arguments: "{\"path\":\"x\"}".to_string(),
+        }]),
+        message,
+    ];
+    let messages = history::to_messages(&history, "system");
+    let model_content = messages[3]["content"].as_str().expect("tool content");
+    assert!(model_content.contains("result_metadata"));
+    assert!(model_content.contains("arguments_hash"));
+}
+
+#[test]
 fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields() {
     let mut state = AppState::new();
     let mut context = TurnContext::with_max_tool_rounds(7);
@@ -3929,6 +4022,7 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         error_kind: Some("command_failed".to_string()),
         changed_paths: vec!["src/parser/legacy.rs".to_string()],
         truncated: false,
+        completeness: rustcode_core::ToolResultCompleteness::Complete,
         full_output_artifact: None,
         replayed: false,
         retryable: false,

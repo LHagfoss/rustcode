@@ -20,6 +20,11 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         "{} tokens",
         crate::network::compaction::estimate_tokens(&prompt)
     );
+    assert!(prompt.len() <= super::schema::BASE_PROMPT_MAX_BYTES);
+    assert!(
+        crate::network::compaction::estimate_tokens(&prompt)
+            <= super::schema::BASE_PROMPT_MAX_TOKENS
+    );
     for required in [
         "sandbox/",
         "background",
@@ -36,6 +41,19 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         assert!(prompt.contains(required), "missing {required:?}");
     }
 }
+
+#[test]
+fn api_native_prompt_and_tool_schema_are_measured_separately() {
+    let prompt = super::tool_system_prompt(
+        false,
+        crate::config::ToolProtocol::ApiNative,
+        crate::config::AgentMode::Build,
+    );
+    let schema = serde_json::to_string(&super::native_tools_schema(false)).unwrap();
+    assert!(prompt.len() <= super::schema::BASE_PROMPT_MAX_BYTES);
+    assert!(schema.len() > 1_000);
+    assert!(crate::network::compaction::estimate_tokens(&schema) > 0);
+}
 use super::*;
 
 #[test]
@@ -48,6 +66,27 @@ fn tools_have_unique_names() {
         TOOLS.len(),
         "duplicate tool names in TOOLS registry"
     );
+}
+
+#[test]
+fn conservative_builtin_aliases_recover_common_call_spellings() {
+    assert_eq!(resolve_builtin_tool_alias("read"), Some("view_file"));
+    assert_eq!(resolve_builtin_tool_alias("write"), Some("write_to_file"));
+    assert_eq!(
+        resolve_builtin_tool_alias("write_file"),
+        Some("write_to_file")
+    );
+    assert_eq!(resolve_builtin_tool_alias("bash"), Some("run_command"));
+}
+
+#[test]
+fn aliases_do_not_claim_canonical_or_unknown_names() {
+    // Canonical names are never rewritten, and arbitrary/MCP-like names are
+    // left for strict validation rather than guessed at.
+    assert_eq!(resolve_builtin_tool_alias("view_file"), None);
+    assert_eq!(resolve_builtin_tool_alias("write_to_file"), None);
+    assert_eq!(resolve_builtin_tool_alias("mcp__server__write"), None);
+    assert_eq!(resolve_builtin_tool_alias("write_filee"), None);
 }
 
 #[test]
