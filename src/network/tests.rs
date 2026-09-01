@@ -19,9 +19,13 @@ fn model_result_contract_distinguishes_read_completeness_states() {
     let user_limited = tool_result_from_execution(
         "view_file",
         &serde_json::json!({"path": "src/lib.rs", "start_line": 1, "end_line": 1}),
-        crate::tools::ToolExecutionOutput::success(
-            "[File: src/lib.rs, Lines 1 to 1 of 15]\n1: fn main() {}\n... end of requested range; the file continues to line 15 ...".to_string(),
-        ),
+        crate::tools::ToolExecutionOutput {
+            completeness: rustcode_core::ToolResultCompleteness::UserLimited,
+            ..crate::tools::ToolExecutionOutput::success(
+                "[File: src/lib.rs, Lines 1 to 1 of 15]\n1: fn main() {}\nunchanged wording"
+                    .to_string(),
+            )
+        },
         None,
     );
     assert_eq!(
@@ -35,6 +39,7 @@ fn model_result_contract_distinguishes_read_completeness_states() {
         crate::tools::ToolExecutionOutput {
             content: "[Truncated: lines 801-1000 of 1000]".to_string(),
             truncated: true,
+            completeness: rustcode_core::ToolResultCompleteness::LineTruncated,
             ..crate::tools::ToolExecutionOutput::success(String::new())
         },
         None,
@@ -50,6 +55,7 @@ fn model_result_contract_distinguishes_read_completeness_states() {
         crate::tools::ToolExecutionOutput {
             content: "[Output truncated: 100 bytes total]".to_string(),
             truncated: true,
+            completeness: rustcode_core::ToolResultCompleteness::ByteTruncated,
             ..crate::tools::ToolExecutionOutput::success(String::new())
         },
         None,
@@ -888,6 +894,7 @@ fn execution_metadata_does_not_parse_spoofed_display_text() {
             command: None,
             exit_code: None,
             truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
             replayed: false,
             error_kind: None,
             retryable: false,
@@ -933,6 +940,7 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             command: None,
             exit_code: Some(23),
             truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
             replayed: false,
             error_kind: Some(crate::tools::ToolErrorKind::CommandFailed),
             retryable: false,
@@ -967,6 +975,7 @@ fn subagent_history_preserves_bounded_execution_metadata() {
             command: None,
             exit_code: None,
             truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
             replayed: false,
             error_kind: Some(crate::tools::ToolErrorKind::Internal),
             retryable: false,

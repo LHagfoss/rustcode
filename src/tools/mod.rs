@@ -135,6 +135,9 @@ pub(crate) struct ToolExecutionOutput {
     pub(crate) command: Option<String>,
     pub(crate) exit_code: Option<i32>,
     pub(crate) truncated: bool,
+    /// Machine-readable completeness of the output delivered by the tool.
+    /// This must be set by the execution layer, never inferred from display text.
+    pub(crate) completeness: rustcode_core::ToolResultCompleteness,
     /// True when the harness served a bounded cached read instead of running
     /// the tool again. This is execution state, not display prose.
     pub(crate) replayed: bool,
@@ -151,6 +154,7 @@ impl ToolExecutionOutput {
             command: None,
             exit_code: None,
             truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
             replayed: false,
             error_kind: None,
             retryable: false,
@@ -165,6 +169,7 @@ impl ToolExecutionOutput {
             command: None,
             exit_code: None,
             truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
             replayed: false,
             error_kind: Some(ToolErrorKind::Internal),
             retryable: false,
