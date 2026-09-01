@@ -496,6 +496,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut failure_replan = None;
             let mut evidence_recovery = None;
             let mut grounded_recovery = None;
+            let mut cross_tool_inspection_cycle = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
             let mut cross_turn_authoritative_progress = false;
@@ -652,6 +653,38 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     && let Some(call) = call
                     && let Some((path, start_line, end_line)) =
                         loop_detect::read_target(&call.name, &call.arguments)
+                {
+                    let (_, category) = loop_detect::signatures(&call.name, &call.arguments);
+                    if category.starts_with("read:") {
+                        let inspection_target =
+                            format!("{category}:{}:{}", start_line, end_line.unwrap_or_default());
+                        if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = ctx
+                            .recovery
+                            .reasoning_loop_detector
+                            .record_inspection_evidence(&loop_detect::InspectionEvidence {
+                                tool_name: &call.name,
+                                target: &inspection_target,
+                                unchanged: !is_mutating_tool(&name),
+                                incomplete: metadata.truncated
+                                    || matches!(
+                                        metadata.completeness,
+                                        rustcode_core::ToolResultCompleteness::LineTruncated
+                                            | rustcode_core::ToolResultCompleteness::ByteTruncated
+                                    ),
+                                corruption_claim:
+                                    loop_detect::claims_corrupt_or_incomplete_inspection(
+                                        &ctx.response.final_content,
+                                    ),
+                            })
+                        {
+                            cross_tool_inspection_cycle = Some((reason, path));
+                        }
+                    }
+                }
+                if metadata.success
+                    && let Some(call) = call
+                    && let Some((path, start_line, end_line)) =
+                        loop_detect::read_target(&call.name, &call.arguments)
                     && let Some(recovery) = ctx.progress.file_evidence.record_read_with_kind(
                         &path,
                         start_line,
@@ -757,6 +790,30 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     answered_call,
                 ));
+            }
+
+            // A successful verification in the same batch is authoritative
+            // progress and invalidates any stale inspection-cycle signal.
+            if cross_turn_authoritative_progress {
+                cross_tool_inspection_cycle = None;
+            }
+            if let Some((reason, path)) = cross_tool_inspection_cycle {
+                ctx.recovery.reasoning_loops_detected += 1;
+                crate::logger::operational_event(
+                    reason,
+                    serde_json::json!({
+                        "round": ctx.budget.tool_rounds,
+                        "reason": reason,
+                        "target": path,
+                    }),
+                );
+                if evidence_recovery.is_none() {
+                    evidence_recovery = Some((
+                        loop_detect::ProgressReason::NoNewInformation,
+                        ctx.recovery.reasoning_recovery_attempts as usize + 1,
+                        format!("cross-tool inspection cycle: {reason}"),
+                    ));
+                }
             }
 
             if background_pending {

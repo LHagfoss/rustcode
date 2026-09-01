@@ -132,6 +132,7 @@ impl AcpEventStream {
                             "exitCode": result.metadata.exit_code,
                             "changedPaths": result.metadata.changed_paths,
                             "truncated": result.metadata.truncated,
+                            "completeness": result.metadata.completeness.as_str(),
                         })),
                 )));
                 updates

@@ -221,6 +221,78 @@ fn equivalent_native_and_shell_reads_warn_before_result_grounded_recovery() {
 }
 
 #[test]
+fn cross_tool_incomplete_inspection_cycle_is_detected_but_progressive_ranges_are_safe() {
+    let mut detector = ReasoningLoopDetector::default();
+    let target = "read:src/config.ts#0";
+    let claim = "The file still appears truncated and possibly corrupt; inspect it again.";
+
+    for (tool, incomplete) in [("view_file", true), ("run_command", true)] {
+        assert_eq!(
+            detector.record_inspection_evidence(&InspectionEvidence {
+                tool_name: tool,
+                target,
+                unchanged: true,
+                incomplete,
+                corruption_claim: true,
+            }),
+            ReasoningLoopStatus::Ok
+        );
+    }
+    assert_eq!(
+        detector.record_inspection_evidence(&InspectionEvidence {
+            tool_name: "run_command",
+            target,
+            unchanged: true,
+            incomplete: true,
+            corruption_claim: true,
+        }),
+        ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TOOL_INSPECTION_CYCLE)
+    );
+
+    detector.reset();
+    for target in ["read:src/config.ts#0", "read:src/config.ts#4"] {
+        assert_eq!(
+            detector.record_inspection_evidence(&InspectionEvidence {
+                tool_name: "view_file",
+                target,
+                unchanged: true,
+                incomplete: true,
+                corruption_claim: true,
+            }),
+            ReasoningLoopStatus::Ok
+        );
+    }
+    assert_eq!(
+        detector.record_inspection_evidence(&InspectionEvidence {
+            tool_name: "run_command",
+            target: "read:src/config.ts#4",
+            unchanged: true,
+            incomplete: false,
+            corruption_claim: false,
+        }),
+        ReasoningLoopStatus::Ok
+    );
+    assert!(claims_corrupt_or_incomplete_inspection(claim));
+}
+
+#[test]
+fn successful_verification_does_not_trigger_cross_tool_inspection_cycle() {
+    let mut detector = ReasoningLoopDetector::default();
+    for tool in ["view_file", "run_command", "run_command"] {
+        assert_eq!(
+            detector.record_inspection_evidence(&InspectionEvidence {
+                tool_name: tool,
+                target: "read:src/config.ts#0",
+                unchanged: true,
+                incomplete: false,
+                corruption_claim: false,
+            }),
+            ReasoningLoopStatus::Ok
+        );
+    }
+}
+
+#[test]
 fn replayed_cross_tool_sequence_recovers_before_sixth_inspection() {
     let mut ledger = FileEvidenceLedger::default();
     ledger.record_mutation("src/config.ts", Some("one\ntwo\nthree\n"));
