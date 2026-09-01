@@ -1,4 +1,5 @@
 use crate::tools::ToolCall;
+use rustcode_core::ToolResultCompleteness;
 
 /// Structured result produced by a tool execution.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +32,7 @@ impl ToolResult {
             changed_paths: self.metadata.changed_paths.clone(),
             output: self.content.clone(),
             truncated: self.metadata.truncated,
+            completeness: self.metadata.completeness,
             full_output_artifact: self.metadata.full_output_artifact.clone(),
             replayed: self.metadata.replayed,
         }
@@ -48,6 +50,7 @@ pub(crate) struct ToolResultMetadata {
     pub exit_code: Option<i32>,
     pub changed_paths: Vec<String>,
     pub truncated: bool,
+    pub completeness: ToolResultCompleteness,
     pub full_output_artifact: Option<String>,
     pub replayed: bool,
     pub error_kind: Option<crate::tools::ToolErrorKind>,

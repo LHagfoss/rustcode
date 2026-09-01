@@ -7,8 +7,10 @@ mod tokens;
 #[allow(unused_imports)]
 pub use budget::{PreflightBudget, calculate_preflight_budget};
 pub(crate) use compact::SUMMARY_MARKER;
+pub(crate) use compact::valid_compaction_boundary;
 pub use compact::{
     force_compact, force_compact_with_budget, maybe_compact, maybe_compact_with_local_policy,
+    maybe_compact_with_local_policy_and_usage,
 };
 #[allow(unused_imports)]
 pub use memory::{
@@ -539,12 +541,13 @@ mod tests {
     #[tokio::test]
     async fn explicit_local_model_hint_skips_summary_request() {
         let mut history = vec![ChatMessage::new("user", "keep this task")];
-        history.extend((0..20).map(|index| {
-            ChatMessage::new(
+        for index in 0..10 {
+            history.push(ChatMessage::new("user", format!("follow-up {index}")));
+            history.push(ChatMessage::new(
                 "assistant",
                 format!("fact {index}: {}", "detail ".repeat(120)),
-            )
-        }));
+            ));
+        }
 
         let compacted = maybe_compact_with_local_policy(
             &reqwest::Client::new(),

@@ -1,5 +1,6 @@
 use crate::app::{AppState, TokenUsage};
 use futures_util::StreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -140,6 +141,340 @@ const RECOVERY_THINKING_BUDGET: u32 = 1024;
 const RECOVERY_MAX_TOKENS: u32 = 1024;
 const MAX_NATIVE_TOOL_ARGUMENT_BYTES: usize = 40 * 1024;
 const MAX_INVALID_ARGUMENT_PREVIEW_BYTES: usize = 1024;
+const MAX_TOOL_CALL_INDEX: usize = 127;
+const MAX_PROVIDER_TRACE_EVENTS: usize = 256;
+const MAX_PROVIDER_TRACE_BYTES: usize = 64 * 1024;
+const PROVIDER_TRACE_METADATA_RESERVE: usize = 4096;
+const MAX_PROVIDER_TRACE_CHOICES_PER_EVENT: usize = 8;
+const MAX_PROVIDER_TRACE_TOOL_CALLS_PER_CHOICE: usize = 64;
+
+fn structural_string(value: Option<&str>) -> serde_json::Value {
+    let Some(value) = value else {
+        return serde_json::json!({"present": false});
+    };
+    // A short non-reversible fingerprint lets a bug report show whether two
+    // deltas carried the same opaque ID/name without copying provider data.
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    serde_json::json!({
+        "present": true,
+        "bytes": value.len(),
+        "fingerprint": format!("{hash:016x}"),
+    })
+}
+
+fn safe_finish_reason(value: Option<&str>) -> Option<&'static str> {
+    match value {
+        None => None,
+        Some("stop") => Some("stop"),
+        Some("length") => Some("length"),
+        Some("tool_calls") => Some("tool_calls"),
+        Some("function_call") => Some("function_call"),
+        Some("content_filter") => Some("content_filter"),
+        Some(_) => Some("other"),
+    }
+}
+
+/// Convert one provider event into metadata suitable for a bug report. This
+/// intentionally never copies content, prompts, headers, or argument values.
+fn sanitized_provider_stream_event(
+    line_bytes: usize,
+    value: &serde_json::Value,
+) -> serde_json::Value {
+    let choices = value
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .map(|choices| {
+            choices
+                .iter()
+                .take(MAX_PROVIDER_TRACE_CHOICES_PER_EVENT)
+                .map(|choice| {
+                    let delta = choice.get("delta");
+                    let tool_calls = delta
+                        .and_then(|delta| delta.get("tool_calls"))
+                        .and_then(|tool_calls| tool_calls.as_array())
+                        .map(|tool_calls| {
+                            tool_calls
+                                .iter()
+                                .take(MAX_PROVIDER_TRACE_TOOL_CALLS_PER_CHOICE)
+                                .map(|tool_call| {
+                                    let function = tool_call.get("function");
+                                    let arguments = function
+                                        .and_then(|function| function.get("arguments"))
+                                        .and_then(|arguments| arguments.as_str());
+                                    serde_json::json!({
+                                        "index": tool_call.get("index").and_then(|index| index.as_u64()),
+                                        "id": structural_string(tool_call.get("id").and_then(|id| id.as_str())),
+                                        "name": structural_string(function.and_then(|function| function.get("name")).and_then(|name| name.as_str())),
+                                        "arguments_bytes": arguments.map_or(0, str::len),
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "finish_reason": safe_finish_reason(choice.get("finish_reason").and_then(|reason| reason.as_str())),
+                        "content_bytes": delta
+                            .and_then(|delta| delta.get("content").or_else(|| delta.get("text")))
+                            .and_then(|content| content.as_str())
+                            .map_or(0, str::len),
+                        "reasoning_bytes": delta
+                            .and_then(|delta| delta.get("reasoning").or_else(|| delta.get("reasoning_content")).or_else(|| delta.get("thought")).or_else(|| delta.get("thinking")))
+                            .and_then(|reasoning| reasoning.as_str())
+                            .map_or(0, str::len),
+                        "tool_calls": tool_calls,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let usage = value.get("usage").and_then(|usage| {
+        let number = |name| usage.get(name).and_then(|value| value.as_u64());
+        if number("prompt_tokens").is_some()
+            || number("completion_tokens").is_some()
+            || number("total_tokens").is_some()
+        {
+            Some(serde_json::json!({
+                "prompt_tokens": number("prompt_tokens"),
+                "completion_tokens": number("completion_tokens"),
+                "total_tokens": number("total_tokens"),
+                "cached_tokens": usage.get("prompt_tokens_details")
+                    .and_then(|details| details.get("cached_tokens"))
+                    .and_then(|value| value.as_u64())
+                    .or_else(|| number("cached_tokens")),
+            }))
+        } else {
+            None
+        }
+    });
+    serde_json::json!({
+        "bytes": line_bytes,
+        "choices": choices,
+        "usage": usage,
+    })
+}
+
+struct ProviderStreamTrace {
+    enabled: bool,
+    session_id: String,
+    model: String,
+    assistant_turn: usize,
+    events: Vec<serde_json::Value>,
+    event_bytes: usize,
+    dropped_events: usize,
+    finish_reason: Option<&'static str>,
+    response_status: Option<u16>,
+}
+
+impl ProviderStreamTrace {
+    fn new(enabled: bool, session_id: &str, model: &str, assistant_turn: usize) -> Self {
+        Self {
+            enabled,
+            session_id: session_id.chars().take(128).collect(),
+            model: model.chars().take(128).collect(),
+            assistant_turn,
+            events: Vec::new(),
+            event_bytes: 0,
+            dropped_events: 0,
+            finish_reason: None,
+            response_status: None,
+        }
+    }
+
+    fn response_headers(&mut self, status: u16) {
+        self.response_status = Some(status);
+    }
+
+    fn record(&mut self, line_bytes: usize, value: &serde_json::Value) {
+        if !self.enabled {
+            return;
+        }
+        let mut event = sanitized_provider_stream_event(line_bytes, value);
+        event["sequence"] = serde_json::json!(self.events.len() + self.dropped_events + 1);
+        if self.events.len() >= MAX_PROVIDER_TRACE_EVENTS {
+            self.dropped_events += 1;
+            return;
+        }
+        let event_bytes = serde_json::to_vec(&event).map_or(0, |bytes| bytes.len());
+        if self.event_bytes.saturating_add(event_bytes)
+            > MAX_PROVIDER_TRACE_BYTES.saturating_sub(PROVIDER_TRACE_METADATA_RESERVE)
+        {
+            self.dropped_events += 1;
+            return;
+        }
+        self.event_bytes = self.event_bytes.saturating_add(event_bytes);
+        if let Some(reason) = event["choices"].as_array().and_then(|choices| {
+            choices
+                .iter()
+                .find_map(|choice| choice["finish_reason"].as_str())
+        }) {
+            self.finish_reason = Some(match reason {
+                "stop" => "stop",
+                "length" => "length",
+                "tool_calls" => "tool_calls",
+                "function_call" => "function_call",
+                "content_filter" => "content_filter",
+                _ => "other",
+            });
+        }
+        self.events.push(event);
+    }
+
+    fn record_malformed(&mut self, line_bytes: usize) {
+        if !self.enabled {
+            return;
+        }
+        let mut event = sanitized_provider_stream_event(line_bytes, &serde_json::json!({}));
+        event["sequence"] = serde_json::json!(self.events.len() + self.dropped_events + 1);
+        event["malformed_json"] = serde_json::json!(true);
+        let event_bytes = serde_json::to_vec(&event).map_or(0, |bytes| bytes.len());
+        if self.events.len() >= MAX_PROVIDER_TRACE_EVENTS
+            || self.event_bytes.saturating_add(event_bytes)
+                > MAX_PROVIDER_TRACE_BYTES.saturating_sub(PROVIDER_TRACE_METADATA_RESERVE)
+        {
+            self.dropped_events += 1;
+            return;
+        }
+        self.event_bytes = self.event_bytes.saturating_add(event_bytes);
+        self.events.push(event);
+    }
+
+    #[cfg(test)]
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "session_id": self.session_id,
+            "model": self.model,
+            "assistant_turn": self.assistant_turn,
+            "response_status": self.response_status,
+            "finish_reason": self.finish_reason,
+            "events": self.events,
+            "event_count": self.events.len(),
+            "dropped_events": self.dropped_events,
+            "trace_bytes": self.event_bytes,
+        })
+    }
+}
+
+impl Drop for ProviderStreamTrace {
+    fn drop(&mut self) {
+        if self.enabled {
+            crate::logger::operational_event(
+                "provider.stream_trace",
+                serde_json::json!({
+                    "session_id": self.session_id,
+                    "model": self.model,
+                    "assistant_turn": self.assistant_turn,
+                    "response_status": self.response_status,
+                    "finish_reason": self.finish_reason,
+                    "events": self.events,
+                    "event_count": self.events.len(),
+                    "dropped_events": self.dropped_events,
+                    "trace_bytes": self.event_bytes,
+                    "max_events": MAX_PROVIDER_TRACE_EVENTS,
+                    "max_bytes": MAX_PROVIDER_TRACE_BYTES,
+                }),
+            );
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ToolAccumulatorSet {
+    calls: Vec<ToolAccumulator>,
+    by_index: HashMap<usize, usize>,
+    by_id: HashMap<String, usize>,
+}
+
+#[derive(Debug)]
+struct ToolAccumulator {
+    index: Option<usize>,
+    id: String,
+    name: String,
+    arguments: String,
+    argument_bytes: usize,
+    arguments_overflowed: bool,
+}
+
+impl ToolAccumulator {
+    fn new() -> Self {
+        Self {
+            index: None,
+            id: String::new(),
+            name: String::new(),
+            arguments: String::new(),
+            argument_bytes: 0,
+            arguments_overflowed: false,
+        }
+    }
+}
+
+impl ToolAccumulatorSet {
+    /// Resolve a streamed tool call without treating a missing index as index
+    /// zero. Providers commonly omit `index` while still sending stable IDs.
+    /// If neither identity is present, each delta gets a new accumulator: this
+    /// deliberately fails closed instead of guessing that unrelated fragments
+    /// belong to one JSON document.
+    fn resolve(&mut self, index: Option<usize>, id: Option<&str>) -> usize {
+        let index = index.map(|index| index.min(MAX_TOOL_CALL_INDEX));
+        let call_index = index
+            .and_then(|index| self.by_index.get(&index).copied())
+            .or_else(|| id.and_then(|id| self.by_id.get(id).copied()))
+            .unwrap_or_else(|| {
+                let index = self.calls.len();
+                self.calls.push(ToolAccumulator::new());
+                index
+            });
+
+        if let Some(index) = index {
+            self.by_index.insert(index, call_index);
+        }
+        if let Some(id) = id.filter(|id| !id.is_empty()) {
+            self.by_id.insert(id.to_owned(), call_index);
+        }
+        call_index
+    }
+
+    fn add_delta(&mut self, tc: &serde_json::Value) -> usize {
+        let index = tc
+            .get("index")
+            .and_then(|index| index.as_u64())
+            .map(|index| index as usize);
+        let id = tc.get("id").and_then(|id| id.as_str());
+        let call_index = self.resolve(index, id);
+        let acc = &mut self.calls[call_index];
+        if let Some(index) = index {
+            acc.index = Some(index.min(MAX_TOOL_CALL_INDEX));
+        }
+        if acc.id.is_empty() {
+            if let Some(id) = id.filter(|id| !id.is_empty()) {
+                acc.id = id.to_owned();
+            }
+        }
+        if acc.name.is_empty() {
+            if let Some(name) = tc
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(|name| name.as_str())
+            {
+                acc.name = name.to_owned();
+            }
+        }
+        if let Some(arguments) = tc
+            .get("function")
+            .and_then(|function| function.get("arguments"))
+            .and_then(|arguments| arguments.as_str())
+        {
+            acc.argument_bytes = acc.argument_bytes.saturating_add(arguments.len());
+            if append_bounded_native_arguments(&mut acc.arguments, arguments) {
+                acc.arguments_overflowed = true;
+            }
+        }
+        call_index
+    }
+}
 
 fn clamp_request_max_tokens(max_tokens: u32, thinking_mode: ThinkingMode) -> u32 {
     if thinking_mode == ThinkingMode::BoundedRecovery {
@@ -413,6 +748,154 @@ mod tests {
             &"repeat/".repeat(MAX_NATIVE_TOOL_ARGUMENT_BYTES)
         ));
         assert_eq!(arguments.len(), MAX_NATIVE_TOOL_ARGUMENT_BYTES);
+    }
+
+    #[test]
+    fn native_tool_calls_without_indices_use_distinct_ids() {
+        let mut calls = ToolAccumulatorSet::default();
+        calls.add_delta(&serde_json::json!({
+            "id": "call-write",
+            "function": {"name": "write_to_file", "arguments": "{\"path\":\"a\"}"}
+        }));
+        calls.add_delta(&serde_json::json!({
+            "id": "call-run",
+            "function": {"name": "run_command", "arguments": "{\"command\":\"pwd\"}"}
+        }));
+
+        assert_eq!(calls.calls.len(), 2);
+        assert_eq!(calls.calls[0].id, "call-write");
+        assert_eq!(calls.calls[0].name, "write_to_file");
+        assert_eq!(calls.calls[1].id, "call-run");
+        assert_eq!(calls.calls[1].name, "run_command");
+        assert_eq!(calls.calls[0].arguments, r#"{"path":"a"}"#);
+        assert_eq!(calls.calls[1].arguments, r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn native_tool_call_fragments_by_id_append_to_one_call() {
+        let mut calls = ToolAccumulatorSet::default();
+        calls.add_delta(&serde_json::json!({
+            "id": "call-1",
+            "function": {"name": "run_command", "arguments": "{\"command\":"}
+        }));
+        calls.add_delta(&serde_json::json!({
+            "id": "call-1",
+            "function": {"arguments": "\"pwd\"}"}
+        }));
+
+        assert_eq!(calls.calls.len(), 1);
+        assert_eq!(calls.calls[0].id, "call-1");
+        assert_eq!(calls.calls[0].name, "run_command");
+        assert_eq!(calls.calls[0].arguments, r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn native_tool_call_late_index_keeps_id_accumulator() {
+        let mut calls = ToolAccumulatorSet::default();
+        calls.add_delta(&serde_json::json!({
+            "id": "call-1",
+            "function": {"name": "grep", "arguments": "{\"pattern\":"}
+        }));
+        calls.add_delta(&serde_json::json!({
+            "index": 0,
+            "id": "call-1",
+            "function": {"arguments": "\"needle\"}"}
+        }));
+
+        assert_eq!(calls.calls.len(), 1);
+        assert_eq!(calls.calls[0].arguments, r#"{"pattern":"needle"}"#);
+        assert_eq!(calls.by_index.get(&0), Some(&0));
+    }
+
+    #[test]
+    fn native_tool_calls_keep_index_order_even_if_first_delta_is_late() {
+        let mut calls = ToolAccumulatorSet::default();
+        calls.add_delta(&serde_json::json!({
+            "index": 1,
+            "id": "call-1",
+            "function": {"name": "second", "arguments": "{}"}
+        }));
+        calls.add_delta(&serde_json::json!({
+            "index": 0,
+            "id": "call-0",
+            "function": {"name": "first", "arguments": "{}"}
+        }));
+
+        let mut order: Vec<_> = (0..calls.calls.len()).collect();
+        order.sort_by_key(|&position| {
+            let call = &calls.calls[position];
+            (
+                call.index.is_none(),
+                call.index.unwrap_or(usize::MAX),
+                position,
+            )
+        });
+        assert_eq!(order, vec![1, 0]);
+        assert_eq!(calls.calls[order[0]].name, "first");
+        assert_eq!(calls.calls[order[1]].name, "second");
+    }
+
+    #[test]
+    fn native_tool_call_without_identity_fails_closed_per_delta() {
+        let mut calls = ToolAccumulatorSet::default();
+        calls.add_delta(&serde_json::json!({
+            "function": {"name": "first", "arguments": "{}"}
+        }));
+        calls.add_delta(&serde_json::json!({
+            "function": {"name": "second", "arguments": "{}"}
+        }));
+
+        assert_eq!(calls.calls.len(), 2);
+        assert_eq!(calls.calls[0].name, "first");
+        assert_eq!(calls.calls[1].name, "second");
+    }
+
+    #[test]
+    fn provider_trace_redacts_content_arguments_and_secrets() {
+        let value = serde_json::json!({
+            "authorization": "Bearer super-secret-token",
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "delta": {
+                    "content": "private prompt text",
+                    "tool_calls": [{
+                        "index": 3,
+                        "id": "call-3",
+                        "function": {
+                            "name": "run_command",
+                            "arguments": "{\"command\":\"cat super-secret-file\"}"
+                        }
+                    }]
+                }
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+        });
+        let mut trace = ProviderStreamTrace::new(true, "session-1", "model", 2);
+        trace.record(321, &value);
+        let summary = trace.summary().to_string();
+
+        assert!(!summary.contains("super-secret-token"));
+        assert!(!summary.contains("private prompt text"));
+        assert!(!summary.contains("super-secret-file"));
+        assert!(summary.contains("arguments_bytes"));
+        assert!(summary.contains("tool_calls"));
+        assert!(summary.contains("\"index\":3"));
+        assert!(summary.contains("\"present\":true"));
+    }
+
+    #[test]
+    fn provider_trace_is_bounded_by_event_count_and_bytes() {
+        let value = serde_json::json!({
+            "choices": [{"delta": {"tool_calls": [{"index": 0, "id": "x", "function": {"name": "grep", "arguments": "{}"}}]}}]
+        });
+        let mut trace = ProviderStreamTrace::new(true, "session", "model", 1);
+        for _ in 0..(MAX_PROVIDER_TRACE_EVENTS + 100) {
+            trace.record(100, &value);
+        }
+        let summary = trace.summary();
+        assert!(summary["event_count"].as_u64().unwrap() <= MAX_PROVIDER_TRACE_EVENTS as u64);
+        assert!(summary["trace_bytes"].as_u64().unwrap() <= MAX_PROVIDER_TRACE_BYTES as u64);
+        assert!(summary["dropped_events"].as_u64().unwrap() > 0);
     }
 
     #[tokio::test]
@@ -1169,6 +1652,30 @@ pub async fn stream_request(
             .find(|m| m.url == url || m.name == s.model_name || m.endpoint_url() == resolved_url)
             .and_then(|m| m.resolved_api_key())
     };
+    let (trace_session_id, assistant_turn) = {
+        let s = state.lock().await;
+        let assistant_turn = s
+            .history
+            .iter()
+            .filter(|message| message.role == "assistant")
+            .count()
+            + 1;
+        (
+            expected_session_id
+                .unwrap_or(&s.active_session_id)
+                .to_owned(),
+            assistant_turn,
+        )
+    };
+    // The trace is deliberately tied to the existing verbose network-debug
+    // switch. Its Drop implementation flushes a bounded summary even when a
+    // stream exits through a timeout, cancellation, or parse error.
+    let mut stream_trace = ProviderStreamTrace::new(
+        verbose_network_logging,
+        &trace_session_id,
+        model,
+        assistant_turn,
+    );
 
     let mut attempt = 0usize;
     let response = loop {
@@ -1215,6 +1722,7 @@ pub async fn stream_request(
         };
         match send_result {
             Ok(resp) if resp.status().is_success() => {
+                stream_trace.response_headers(resp.status().as_u16());
                 dbg_log!(
                     "stream_request: Received response status: {}",
                     resp.status()
@@ -1232,6 +1740,7 @@ pub async fn stream_request(
             Ok(resp) => {
                 let status = resp.status();
                 let code = status.as_u16();
+                stream_trace.response_headers(code);
                 let err_body = match retry::race_cancellable(resp.text(), &cancel_token).await {
                     None => return Err(StreamFailure::new(StreamFailureKind::Cancelled)),
                     Some(body) => body.unwrap_or_default(),
@@ -1255,9 +1764,9 @@ pub async fn stream_request(
                     continue;
                 }
                 dbg_log!(
-                    "stream_request: Request failed with status {}. Body: {}",
+                    "stream_request: Request failed with status {} (error_body_bytes={})",
                     status,
-                    err_body
+                    err_body.len()
                 );
                 return Err(StreamFailure {
                     kind: StreamFailureKind::ProviderError,
@@ -1321,15 +1830,7 @@ pub async fn stream_request(
     let mut stream_bytes_received = 0usize;
     let mut stream_events_received = 0usize;
 
-    #[derive(Debug)]
-    struct ToolAccumulator {
-        id: String,
-        name: String,
-        arguments: String,
-        argument_bytes: usize,
-        arguments_overflowed: bool,
-    }
-    let mut accumulators: Vec<ToolAccumulator> = Vec::new();
+    let mut accumulators = ToolAccumulatorSet::default();
     let mut tool_argument_limit_reached = false;
     let mut fences = ToolFenceCounter::default();
     let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
@@ -1373,6 +1874,7 @@ pub async fn stream_request(
                         if let Some(json_str) = parse_sse_line(trimmed) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                                 stream_events_received += 1;
+                                stream_trace.record(line_buf.len(), &val);
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array())
                                     && !choices.is_empty() {
                                         if let Some(fr) = choices[0].get("finish_reason").and_then(|f| f.as_str()) {
@@ -1392,36 +1894,10 @@ pub async fn stream_request(
                                              .and_then(|c| c.as_str());
 
                                          if let Some(tool_calls) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
-                                             const MAX_TOOL_CALL_INDEX: usize = 127;
                                              for tc in tool_calls {
-                                                 let mut idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                                                 if idx > MAX_TOOL_CALL_INDEX {
-                                                     eprintln!("Warning: tool call index {} exceeds max allowed ({}), clamping.", idx, MAX_TOOL_CALL_INDEX);
-                                                     idx = idx.min(MAX_TOOL_CALL_INDEX);
-                                                 }
-                                                 while accumulators.len() <= idx {
-                                                     accumulators.push(ToolAccumulator {
-                                                         id: String::new(),
-                                                         name: String::new(),
-                                                         arguments: String::new(),
-                                                         argument_bytes: 0,
-                                                         arguments_overflowed: false,
-                                                     });
-                                                 }
-                                                 let acc = &mut accumulators[idx];
-                                                 if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
-                                                      acc.id.push_str(id);
-                                                 }
-                                                 if let Some(name) = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()) {
-                                                     acc.name.push_str(name);
-                                                 }
-                                                 if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()) {
-                                                     acc.argument_bytes = acc.argument_bytes.saturating_add(args.len());
-                                                     if append_bounded_native_arguments(&mut acc.arguments, args) {
-                                                         acc.arguments_overflowed = true;
-                                                         tool_argument_limit_reached = true;
-                                                     }
-                                                 }
+                                                 let idx = accumulators.add_delta(tc);
+                                                 let acc = &accumulators.calls[idx];
+                                                 tool_argument_limit_reached |= acc.arguments_overflowed;
                                                  if !quiet && !acc.name.is_empty() {
                                                      let parsed_args = parse_speculative_arguments(&acc.arguments);
                                                      let id_opt = if acc.id.is_empty() { None } else { Some(acc.id.as_str()) };
@@ -1528,6 +2004,7 @@ pub async fn stream_request(
                                         }
                                         let runaway = fences.push(&chunk) > runaway_limit
                                             || accumulators
+                                                .calls
                                                 .iter()
                                                 .filter(|acc| !acc.name.is_empty())
                                                 .count()
@@ -1581,7 +2058,7 @@ pub async fn stream_request(
                                                 "stream.runaway_cut",
                                                 serde_json::json!({ "limit": runaway_limit }),
                                             );
-                                            accumulators.truncate(runaway_limit);
+                                            accumulators.calls.truncate(runaway_limit);
                                             line_buf.clear();
                                             break;
                                         }
@@ -1635,7 +2112,11 @@ pub async fn stream_request(
                                         );
                                     }
                             } else {
-                                dbg_log!("stream_request: Failed to parse JSON from data payload: '{}'", json_str);
+                                stream_trace.record_malformed(line_buf.len());
+                                dbg_log!(
+                                    "stream_request: Failed to parse JSON from data payload (bytes={})",
+                                    json_str.len()
+                                );
                                 return Err(StreamFailure {
                                     kind: StreamFailureKind::MalformedSse,
                                     status: None,
@@ -1698,7 +2179,19 @@ pub async fn stream_request(
 
     let mut streamed_call_ids: Vec<String> = Vec::new();
     let mut native_tool_calls: Vec<crate::tools::ToolCallEnvelope> = Vec::new();
-    for (position, acc) in accumulators.iter().enumerate() {
+    let mut call_order: Vec<usize> = (0..accumulators.calls.len()).collect();
+    // Indexed streams have a provider-defined response order. Unidentified
+    // deltas retain arrival order and are placed after identified calls.
+    call_order.sort_by_key(|&position| {
+        let acc = &accumulators.calls[position];
+        (
+            acc.index.is_none(),
+            acc.index.unwrap_or(usize::MAX),
+            position,
+        )
+    });
+    for (position, call_index) in call_order.into_iter().enumerate() {
+        let acc = &accumulators.calls[call_index];
         if acc.name.is_empty() {
             continue;
         }

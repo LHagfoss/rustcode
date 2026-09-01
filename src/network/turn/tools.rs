@@ -91,6 +91,57 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             _ => None,
         })
         .collect::<Vec<_>>();
+    let parsed_tool_calls = parsed_tool_calls
+        .into_iter()
+        .map(|mut call| {
+            if let Some(canonical) = crate::tools::resolve_builtin_tool_alias(&call.name) {
+                crate::logger::operational_event(
+                    "tools.alias_applied",
+                    serde_json::json!({
+                        "alias": call.name,
+                        "canonical": canonical,
+                    }),
+                );
+                call.name = canonical.to_string();
+            }
+            call
+        })
+        .collect::<Vec<_>>();
+
+    // A provider length stop is not evidence that a structured call is
+    // complete. Some providers emit syntactically valid JSON before cutting
+    // the response, leaving arguments silently truncated. Fail every call in
+    // this response closed and persist the complete assistant/call + result
+    // transaction so the next request can safely re-issue a smaller call.
+    if response_finish_reason == Some("length") && !parsed_tool_calls.is_empty() {
+        let call_refs = call_refs_for(&parsed_tool_calls, &ctx.response.streamed_call_ids);
+        let mut s = state.lock().await;
+        let mut message = ChatMessage::new("assistant", &ctx.response.final_content)
+            .with_tool_calls(call_refs.clone());
+        message.response_time_ms = Some(turn_response_time_ms);
+        message.token_usage = turn_token_usage;
+        message.thought_time_ms = thought_time_ms;
+        message.thought_tokens = thought_tokens;
+        s.history.push(message);
+        ctx.response.final_content_persisted = true;
+        s.history.extend(unanswered_call_results_with_kind(
+            &call_refs,
+            "provider stopped at the output limit; the call was not executed",
+            crate::tools::ToolErrorKind::OutputLimit,
+        ));
+        s.history.push(ChatMessage::new(
+            "system",
+            "[Tool calls rejected: the provider stopped at the output limit before the complete tool request was available. No tool ran. Reissue one smaller, complete tool call.]",
+        ));
+        crate::config::save_history(&s.history);
+        s.clear_current_response();
+        s.status = AppStatus::Streaming;
+        s.stream_tracker = Some(StreamTracker::new());
+        drop(s);
+        ctx.budget.tool_rounds += 1;
+        return ToolHandlingOutcome::Continue;
+    }
+
     let requested_calls = parsed_tool_calls.len();
     let (parsed_tool_calls, dropped_calls) = crate::tools::truncate_tool_batch(parsed_tool_calls);
     if dropped_calls > 0 {

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 similar = { version = "3.1.1", features = ["inline"] }
 serde_json = "1.0.150"
+rustcode-core = { path = "../rustcode-core" }
 
 [dev-dependencies]
 tempfile = "3.10"

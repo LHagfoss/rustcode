@@ -91,6 +91,40 @@ pub(crate) fn resolve_tool_calls(
     }
 }
 
+/// Resolve only conservative aliases for built-in tools. An alias is ignored
+/// when its spelling is already claimed by an agent/MCP tool, so a third-party
+/// tool can never be shadowed by a convenience name.
+pub(crate) fn resolve_builtin_tool_alias(name: &str) -> Option<&'static str> {
+    let canonical = match name {
+        "read" => "view_file",
+        "write" | "write_file" => "write_to_file",
+        "bash" => "run_command",
+        _ => return None,
+    };
+    let mcp_claims_name = crate::mcp::get_mcp_registry()
+        .lock()
+        .ok()
+        .is_some_and(|registry| {
+            registry.values().any(|client| {
+                client
+                    .get_tools()
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            })
+        });
+    if TOOLS.iter().any(|tool| tool.name == name)
+        || AGENT_TOOL_SPECS.iter().any(|(tool, _, _)| *tool == name)
+        || mcp_claims_name
+    {
+        return None;
+    }
+    TOOLS
+        .iter()
+        .any(|tool| tool.name == canonical)
+        .then_some(canonical)
+}
+
 /// Authoritative facts returned by a tool invocation alongside its display
 /// text. Consumers must not reconstruct these fields from `content`.
 #[derive(Debug, Clone, PartialEq, Eq)]
