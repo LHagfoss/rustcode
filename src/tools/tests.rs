@@ -762,14 +762,17 @@ fn diagnose_reports_schema_guidance_for_an_invalid_edit_shape() {
 
 #[test]
 fn validation_error_names_schema_path_and_valid_example() {
-    let error = validate_tool_calls(&[ToolCall {
-        name: "replace_file_content".to_string(),
-        arguments: serde_json::json!({
-            "path": "src/store.ts",
-            "edits": "[]"
-        }),
-        call_id: None,
-    }])
+    let error = validate_tool_calls(
+        &[ToolCall {
+            name: "replace_file_content".to_string(),
+            arguments: serde_json::json!({
+                "path": "src/store.ts",
+                "edits": "[]"
+            }),
+            call_id: None,
+        }],
+        MAX_MUTATING_CALLS_PER_RESPONSE,
+    )
     .expect_err("a stringified edits array must remain invalid");
 
     assert!(
@@ -885,7 +888,7 @@ fn test_extract_tool_call_keeps_legitimate_name_argument() {
         "spotify"
     );
     // And the full validation path accepts it.
-    validate_tool_calls(&calls).unwrap();
+    validate_tool_calls(&calls, MAX_MUTATING_CALLS_PER_RESPONSE).unwrap();
 }
 
 #[test]
@@ -1346,13 +1349,16 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
     };
 
     // Under the limit: nothing is touched.
-    let (kept, dropped) = truncate_tool_batch(vec![call("grep"), call("view_file")]);
+    let (kept, dropped) = truncate_tool_batch(
+        vec![call("grep"), call("view_file")],
+        MAX_MUTATING_CALLS_PER_RESPONSE,
+    );
     assert_eq!(kept.len(), 2);
     assert_eq!(dropped, 0);
 
     // Reads fan out freely: ten searches are one thought, not ten.
     let reads: Vec<ToolCall> = (0..10).map(|_| call("grep")).collect();
-    let (kept, dropped) = truncate_tool_batch(reads);
+    let (kept, dropped) = truncate_tool_batch(reads, MAX_MUTATING_CALLS_PER_RESPONSE);
     assert_eq!(kept.len(), 10);
     assert_eq!(dropped, 0);
 
@@ -1367,15 +1373,30 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
         call("run_command"),
         call("grep"),
     ];
-    let (kept, dropped) = truncate_tool_batch(over);
+    let (kept, dropped) = truncate_tool_batch(over, MAX_MUTATING_CALLS_PER_RESPONSE);
     assert_eq!(kept.len(), MAX_MUTATING_CALLS_PER_RESPONSE + 1);
     assert_eq!(dropped, 5);
     assert_eq!(kept[0].name, "grep");
     assert_eq!(kept[1].name, "run_command");
 
+    // A profile override permits a bounded larger prefix while retaining
+    // response order and the same read behavior.
+    let over = vec![
+        call("grep"),
+        call("run_command"),
+        call("write_to_file"),
+        call("run_command"),
+        call("write_to_file"),
+    ];
+    let (kept, dropped) = truncate_tool_batch(over, 3);
+    assert_eq!(kept.len(), 4);
+    assert_eq!(dropped, 1);
+    assert_eq!(kept[1].name, "run_command");
+    assert_eq!(kept[3].name, "run_command");
+
     // The absolute ceiling still applies to a runaway response.
     let runaway: Vec<ToolCall> = (0..50).map(|_| call("grep")).collect();
-    let (kept, dropped) = truncate_tool_batch(runaway);
+    let (kept, dropped) = truncate_tool_batch(runaway, MAX_MUTATING_CALLS_PER_RESPONSE);
     assert_eq!(kept.len(), MAX_TOOL_CALLS_PER_RESPONSE);
     assert_eq!(dropped, 50 - MAX_TOOL_CALLS_PER_RESPONSE);
 }
@@ -1389,12 +1410,15 @@ fn truncate_allows_multiple_skills_and_parallel_reads() {
     };
 
     // Multiple use_skill calls and read tools run together in parallel.
-    let (kept, dropped) = truncate_tool_batch(vec![
-        call("use_skill"),
-        call("use_skill"),
-        call("grep"),
-        call("run_command"),
-    ]);
+    let (kept, dropped) = truncate_tool_batch(
+        vec![
+            call("use_skill"),
+            call("use_skill"),
+            call("grep"),
+            call("run_command"),
+        ],
+        MAX_MUTATING_CALLS_PER_RESPONSE,
+    );
     assert_eq!(kept.len(), 4);
     assert_eq!(dropped, 0);
 }
@@ -1405,29 +1429,35 @@ fn validation_accepts_string_encoded_integers_like_the_handlers() {
     // providers that send integers as strings; validation must accept the
     // same shape end to end.
     assert!(
-        validate_tool_calls(&[ToolCall {
-            name: "replace_file_content".to_string(),
-            arguments: serde_json::json!({
-                "path": "src/store.ts",
-                "old_string": "old",
-                "new_string": "new",
-                "start_line": "500"
-            }),
-            call_id: None,
-        }])
+        validate_tool_calls(
+            &[ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/store.ts",
+                    "old_string": "old",
+                    "new_string": "new",
+                    "start_line": "500"
+                }),
+                call_id: None,
+            }],
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
         .is_ok()
     );
     assert!(
-        validate_tool_calls(&[ToolCall {
-            name: "replace_file_content".to_string(),
-            arguments: serde_json::json!({
-                "path": "src/store.ts",
-                "old_string": "old",
-                "new_string": "new",
-                "start_line": "not-a-number"
-            }),
-            call_id: None,
-        }])
+        validate_tool_calls(
+            &[ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/store.ts",
+                    "old_string": "old",
+                    "new_string": "new",
+                    "start_line": "not-a-number"
+                }),
+                call_id: None,
+            }],
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
         .is_err()
     );
 }
@@ -1458,25 +1488,37 @@ fn validation_rejects_unknown_duplicate_and_mixed_calls() {
         arguments: serde_json::json!({"pattern": "TODO"}),
         call_id: None,
     };
-    assert!(validate_tool_calls(std::slice::from_ref(&valid)).is_ok());
     assert!(
-        validate_tool_calls(&[ToolCall {
-            name: "replace_file_content".to_string(),
-            arguments: serde_json::json!({
-                "path": "src/store.ts",
-                "edits": [{"old_string": "old", "new_string": "new"}]
-            }),
-            call_id: None,
-        }])
+        validate_tool_calls(
+            std::slice::from_ref(&valid),
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
         .is_ok()
     );
-    assert!(validate_tool_calls(&[valid.clone(), valid]).is_err());
     assert!(
-        validate_tool_calls(&[ToolCall {
-            name: "not_registered".to_string(),
-            arguments: serde_json::json!({}),
-            call_id: None,
-        }])
+        validate_tool_calls(
+            &[ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/store.ts",
+                    "edits": [{"old_string": "old", "new_string": "new"}]
+                }),
+                call_id: None,
+            }],
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
+        .is_ok()
+    );
+    assert!(validate_tool_calls(&[valid.clone(), valid], MAX_MUTATING_CALLS_PER_RESPONSE).is_err());
+    assert!(
+        validate_tool_calls(
+            &[ToolCall {
+                name: "not_registered".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: None,
+            }],
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
         .is_err()
     );
     let calls = (0..=MAX_TOOL_CALLS_PER_RESPONSE)
@@ -1486,30 +1528,54 @@ fn validation_rejects_unknown_duplicate_and_mixed_calls() {
             call_id: None,
         })
         .collect::<Vec<_>>();
-    assert!(validate_tool_calls(&calls).is_err());
+    assert!(validate_tool_calls(&calls, MAX_MUTATING_CALLS_PER_RESPONSE).is_err());
     assert!(
-        validate_tool_calls(&[ToolCall {
-            name: "run_command".to_string(),
-            arguments: serde_json::json!({}),
-            call_id: None,
-        }])
+        validate_tool_calls(
+            &[ToolCall {
+                name: "run_command".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: None,
+            }],
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
         .is_err()
     );
     assert!(
-        validate_tool_calls(&[
-            ToolCall {
-                name: "use_skill".to_string(),
-                arguments: serde_json::json!({"name": "x"}),
-                call_id: None,
-            },
-            ToolCall {
-                name: "grep".to_string(),
-                arguments: serde_json::json!({"pattern": "x"}),
-                call_id: None,
-            },
-        ])
+        validate_tool_calls(
+            &[
+                ToolCall {
+                    name: "use_skill".to_string(),
+                    arguments: serde_json::json!({"name": "x"}),
+                    call_id: None,
+                },
+                ToolCall {
+                    name: "grep".to_string(),
+                    arguments: serde_json::json!({"pattern": "x"}),
+                    call_id: None,
+                },
+            ],
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
         .is_ok()
     );
+}
+
+#[test]
+fn validation_enforces_the_resolved_mutation_limit() {
+    let calls = [
+        ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": "true"}),
+            call_id: None,
+        },
+        ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": "true", "timeout_ms": 1}),
+            call_id: None,
+        },
+    ];
+    assert!(validate_tool_calls(&calls, 2).is_ok());
+    assert!(validate_tool_calls(&calls, 1).is_err());
 }
 
 #[test]

@@ -994,7 +994,13 @@ mod tests {
             }),
             call_id: None,
         };
-        assert!(super::super::validate_tool_calls(&[valid]).is_ok());
+        assert!(
+            super::super::validate_tool_calls(
+                &[valid],
+                super::super::MAX_MUTATING_CALLS_PER_RESPONSE,
+            )
+            .is_ok()
+        );
         let invalid = super::super::ToolCall {
             name: "generate_music".to_string(),
             arguments: serde_json::json!({
@@ -1004,7 +1010,13 @@ mod tests {
             }),
             call_id: None,
         };
-        assert!(super::super::validate_tool_calls(&[invalid]).is_err());
+        assert!(
+            super::super::validate_tool_calls(
+                &[invalid],
+                super::super::MAX_MUTATING_CALLS_PER_RESPONSE,
+            )
+            .is_err()
+        );
     }
 
     #[test]

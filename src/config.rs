@@ -15,6 +15,11 @@ pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
 /// call; a smaller cap keeps local agent turns responsive while final prose
 /// still uses the profile's full completion budget.
 pub const DEFAULT_TOOL_ROUND_MAX_TOKENS: u32 = 8192;
+/// Safe default for workspace-changing calls emitted in one model response.
+pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 1;
+/// Keep profile overrides bounded even when a config typo requests an
+/// unreasonably large mutation batch.
+pub const MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE: usize = 8;
 
 pub const MODELS_FILE: &str = "models.json";
 pub const CONFIG_FILE: &str = "config.json";
@@ -109,6 +114,10 @@ pub struct ModelProfile {
     /// Conservative safety margin for provider chat-template framing and tokenizer variations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_overhead_margin: Option<u32>,
+    /// Maximum number of workspace-changing tool calls accepted from one
+    /// response. Omitted profiles retain the safe one-call default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mutating_calls_per_response: Option<usize>,
 }
 
 /// Provider-specific spelling for an output token limit.
@@ -160,6 +169,16 @@ pub struct ContextBudget {
 }
 
 impl ModelProfile {
+    /// Resolve the per-profile mutation policy once at the orchestration
+    /// boundary. Zero is treated as an omitted value, and overrides cannot
+    /// exceed the small hard cap used to contain configuration mistakes.
+    pub fn max_mutating_calls_per_response(&self) -> usize {
+        self.max_mutating_calls_per_response
+            .filter(|limit| *limit > 0)
+            .unwrap_or(DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE)
+            .min(MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE)
+    }
+
     /// Return the completion cap for one request. Tool-enabled requests are
     /// deliberately bounded for every model: a long speculative generation is
     /// expensive and cannot be useful until it produces an action.
