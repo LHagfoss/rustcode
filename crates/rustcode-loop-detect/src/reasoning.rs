@@ -268,6 +268,25 @@ impl ReasoningLoopDetector {
         ReasoningLoopStatus::Ok
     }
 
+    /// Record a turn after an authoritative, non-mutating result such as a
+    /// successful verification or a user-visible smoke test.
+    ///
+    /// Such a result is progress even though it leaves the workspace
+    /// unchanged. Clear the stale plan history before the next turn is
+    /// compared, while leaving ordinary repeated verification to the caller's
+    /// existing progress/repetition guards.
+    pub fn record_turn_evidence_after_progress(
+        &mut self,
+        evidence: &TurnEvidence<'_>,
+        authoritative_progress: bool,
+    ) -> ReasoningLoopStatus {
+        if authoritative_progress {
+            self.reset();
+            return ReasoningLoopStatus::Ok;
+        }
+        self.record_turn_evidence(evidence)
+    }
+
     /// Record turn reasoning to detect "plan -> inspect -> same plan" cycles across turns.
     pub fn record_turn_reasoning(
         &mut self,
