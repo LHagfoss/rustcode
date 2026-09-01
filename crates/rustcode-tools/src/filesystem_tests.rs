@@ -11,12 +11,17 @@ fn a_read_that_ends_where_asked_is_not_reported_as_truncated() {
     std::fs::write(&file, "// scratch\nuse std::fs;\nfn main() {}\n").expect("write");
     let path = file.to_string_lossy().to_string();
 
-    let ranged = view_file_tool(&serde_json::json!({
+    let ranged_output = view_file_output(&serde_json::json!({
         "path": path,
         "start_line": 1,
         "end_line": 1,
     }))
     .expect("read");
+    assert_eq!(
+        ranged_output.completeness,
+        rustcode_core::ToolResultCompleteness::UserLimited
+    );
+    let ranged = ranged_output.content;
     assert!(ranged.contains("1: // scratch"), "got: {ranged}");
     assert!(!ranged.contains("truncated"), "got: {ranged}");
     assert!(
@@ -25,7 +30,12 @@ fn a_read_that_ends_where_asked_is_not_reported_as_truncated() {
     );
 
     // A read the tool itself cut short still says so.
-    let whole = view_file_tool(&serde_json::json!({ "path": path })).expect("read");
+    let whole_output = view_file_output(&serde_json::json!({ "path": path })).expect("read");
+    assert_eq!(
+        whole_output.completeness,
+        rustcode_core::ToolResultCompleteness::Complete
+    );
+    let whole = whole_output.content;
     assert!(!whole.contains("truncated"), "got: {whole}");
     assert!(!whole.contains("continues"), "got: {whole}");
 }
@@ -99,7 +109,13 @@ fn a_read_cut_short_by_the_default_window_names_the_omitted_range() {
     // No end_line given: the tool applies its default window and must
     // clearly flag the read as incomplete. The inclusive window contains
     // exactly DEFAULT_READ_WINDOW_LINES lines.
-    let out = view_file_tool(&serde_json::json!({ "path": path, "start_line": 1 })).expect("read");
+    let output = view_file_output(&serde_json::json!({ "path": path, "start_line": 1 }))
+        .expect("read");
+    assert_eq!(
+        output.completeness,
+        rustcode_core::ToolResultCompleteness::LineTruncated
+    );
+    let out = output.content;
     assert!(out.contains("[Truncated:"), "got: {out}");
     let window_end = DEFAULT_READ_WINDOW_LINES;
     let expected_next = window_end + 1;
@@ -142,12 +158,17 @@ fn an_oversized_explicit_range_is_bounded_and_reported_as_capped_not_complete() 
     std::fs::write(&file, &content).expect("write");
     let path = file.to_string_lossy().to_string();
 
-    let out = view_file_tool(&serde_json::json!({
+    let output = view_file_output(&serde_json::json!({
         "path": path,
         "start_line": 1,
         "end_line": total_lines,
     }))
     .expect("read");
+    assert_eq!(
+        output.completeness,
+        rustcode_core::ToolResultCompleteness::LineTruncated
+    );
+    let out = output.content;
 
     let window_end = DEFAULT_READ_WINDOW_LINES;
     // Bounded to the cap, not the requested end_line.
