@@ -233,8 +233,7 @@ fn native_google_endpoint_resolves_camel_case_output_limit_without_model_lookup(
     );
 
     let compatible = ModelProfile {
-        url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-            .to_string(),
+        url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".to_string(),
         ..ModelProfile::default()
     };
     assert!(!compatible.is_google_native_endpoint());
