@@ -541,12 +541,13 @@ mod tests {
     #[tokio::test]
     async fn explicit_local_model_hint_skips_summary_request() {
         let mut history = vec![ChatMessage::new("user", "keep this task")];
-        history.extend((0..20).map(|index| {
-            ChatMessage::new(
+        for index in 0..10 {
+            history.push(ChatMessage::new("user", format!("follow-up {index}")));
+            history.push(ChatMessage::new(
                 "assistant",
                 format!("fact {index}: {}", "detail ".repeat(120)),
-            )
-        }));
+            ));
+        }
 
         let compacted = maybe_compact_with_local_policy(
             &reqwest::Client::new(),

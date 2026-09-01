@@ -491,7 +491,8 @@ pub(crate) fn bounded_recent_suffix_start(
         .iter()
         .map(estimate_message_tokens)
         .sum::<usize>();
-    while start > 0 && tokens > token_limit {
+    // Keep at least the newest message even when it alone exceeds the suffix budget.
+    while start + 1 < history.len() && tokens > token_limit {
         start += 1;
         tokens = history[start..].iter().map(estimate_message_tokens).sum();
     }
@@ -876,6 +877,16 @@ mod preserved_user_request_tests {
 
         assert_eq!(valid_compaction_boundary(&history, 2), 0);
         assert_eq!(valid_compaction_boundary(&history, 3), 3);
+    }
+
+    #[test]
+    fn bounded_suffix_always_keeps_the_newest_oversized_message() {
+        let history = vec![
+            ChatMessage::new("user", "old task"),
+            ChatMessage::new("assistant", "x".repeat(20_000)),
+        ];
+
+        assert_eq!(bounded_recent_suffix_start(&history, 1, 1), 0);
     }
 
     #[test]
