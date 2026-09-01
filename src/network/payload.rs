@@ -2,38 +2,6 @@ use crate::app::AppState;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-#[derive(Debug, serde::Deserialize)]
-struct QuotaBucket {
-    #[serde(rename = "modelId")]
-    model_id: Option<String>,
-    #[serde(rename = "remainingFraction")]
-    remaining_fraction: Option<f64>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct QuotaPayload {
-    #[serde(alias = "quotaBuckets")]
-    buckets: Option<Vec<QuotaBucket>>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct RateLimitWindow {
-    used_percent: Option<f64>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct RateLimitsPayload {
-    #[serde(alias = "primary_window")]
-    primary: Option<RateLimitWindow>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct StatusResponse {
-    quota: Option<QuotaPayload>,
-    #[serde(alias = "rate_limit")]
-    rate_limits: Option<RateLimitsPayload>,
-}
-
 pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppState>>) {
     let (url, model_name, api_key_opt) = {
         let s = state.lock().await;
@@ -71,22 +39,27 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
     let Ok(res) = req.send().await else {
         return;
     };
-    let Ok(status) = res.json::<StatusResponse>().await else {
+    let Ok(json) = res.json::<serde_json::Value>().await else {
         return;
     };
 
-    if let Some(quota_buckets) = status.quota.and_then(|q| q.buckets) {
+    let quota_obj = json.get("quota");
+    let buckets_arr = quota_obj
+        .and_then(|q| q.get("buckets").or_else(|| q.get("quotaBuckets")))
+        .and_then(|b| b.as_array());
+
+    if let Some(quota_buckets) = buckets_arr {
         let mut matched_pct = None;
         for bucket in quota_buckets {
-            if let Some(model_id) = bucket.model_id
-                && let Some(fraction) = bucket.remaining_fraction
+            if let Some(model_id) = bucket.get("modelId").and_then(|m| m.as_str())
+                && let Some(fraction) = bucket.get("remainingFraction").and_then(|f| f.as_f64())
             {
                 let pct = (fraction * 100.0) as f32;
                 if matched_pct.is_none() {
                     matched_pct = Some(pct);
                 }
                 if model_id == model_name
-                    || model_name.contains(&model_id)
+                    || model_name.contains(model_id)
                     || model_id.contains(&model_name)
                 {
                     matched_pct = Some(pct);
@@ -105,10 +78,13 @@ pub async fn fetch_model_quota(client: &reqwest::Client, state: &Arc<Mutex<AppSt
     // The ChatGPT/Codex usage response reports account-wide rate limits rather
     // than per-model Gemini-style buckets. Use the primary window for the
     // footer quota indicator; /status and /quota display both windows.
-    if let Some(used_percent) = status
-        .rate_limits
-        .and_then(|r| r.primary)
-        .and_then(|p| p.used_percent)
+    let primary_window = json
+        .get("rate_limits")
+        .and_then(|r| r.get("primary"))
+        .or_else(|| json.get("rate_limit").and_then(|r| r.get("primary_window")));
+    if let Some(used_percent) = primary_window
+        .and_then(|p| p.get("used_percent"))
+        .and_then(|v| v.as_f64())
     {
         let mut s = state.lock().await;
         s.model_quota_remaining = Some((100.0 - used_percent).clamp(0.0, 100.0) as f32);
