@@ -941,7 +941,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
 - Use native `grep`/`glob` for exact discovery and `rg` through `run_command` for advanced searches. Use SocratiCode `codebase_*` tools for semantic relationships, not exact text. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
-- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel. Wait for dependent results. Keep writes, commands, and delegation grounded in observed results and at most 4 such calls per response.\n\
+- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel. Wait for dependent results. Emit at most one workspace-changing call, command, or delegation per response, and wait for its result before issuing another.\n\
 - Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; do not retrieve the same range again with `cat`, `sed`, or `awk`.\n\
 - Match project style and mirror neighboring code patterns (signatures, state/locks, errors).\n\
 - Prefer the smallest focused sequence: locate, inspect, change, verify.\n\
@@ -970,7 +970,7 @@ If the request context names a skill, load it first. For a likely specialized wo
                 ```tool\n\
                 {\"name\": \"tool_name\", \"arguments\": {...}}\n\
                 ```\n\n\
-                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Several fences are allowed: independent reads run in parallel, while workspace changes/commands run serially; ground each call in results already received.\n\n"
+                Rules: keys are \"name\" and \"arguments\"; argument values use their proper JSON types. Use only the ```tool fence (never ```tool_code, ```json, or another fence) and never duplicate a call. Several fences are allowed only for independent reads, which run in parallel. Emit a workspace change or command alone and wait for its result.\n\n"
             );
         }
         crate::config::ToolProtocol::Native => {
@@ -982,7 +982,7 @@ If the request context names a skill, load it first. For a likely specialized wo
         }
         crate::config::ToolProtocol::ApiNative => {
             p.push_str(
-                "Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. When complete, reply with a plain-text summary and no tool call.\n\n"
+                "Tools use the API's native function-calling interface: invoke them directly; do NOT print tool calls as text or JSON. Multiple calls in one response are allowed only for independent reads. Emit a workspace change or command alone and wait for its result. When complete, reply with a plain-text summary and no tool call.\n\n"
             );
         }
     }
