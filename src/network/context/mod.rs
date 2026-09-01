@@ -608,6 +608,7 @@ mod tests {
                 "system",
                 format!("{ORIGINAL_TASK_MARKER}\noriginal objective"),
             ),
+            ChatMessage::new("user", "do not change the public API"),
             ChatMessage::new("user", "current follow-up"),
         ];
         history.extend(
@@ -620,6 +621,10 @@ mod tests {
 
         assert!(history.iter().any(|message| {
             message.content == format!("{ORIGINAL_TASK_MARKER}\noriginal objective")
+        }));
+        assert!(history.iter().any(|message| {
+            message.content
+                == format!("{PRESERVED_USER_REQUEST_MARKER}\ndo not change the public API")
         }));
     }
 }
