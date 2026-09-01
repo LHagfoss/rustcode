@@ -1386,7 +1386,7 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
         call("run_command"),
         call("write_to_file"),
         call("run_command"),
-        call("grep"),
+        call("write_to_file"),
     ];
     let (kept, dropped) = truncate_tool_batch(over, 3);
     assert_eq!(kept.len(), 4);
