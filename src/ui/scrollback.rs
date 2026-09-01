@@ -512,14 +512,16 @@ impl TranscriptCursor {
             .strip_prefix(&self.committed_stream)
             .unwrap_or(stream);
         let stable = if let Some(start) = stream_holdback_start(pending) {
-            pending[..start].to_owned()
+            &pending[..start]
+        } else if let Some(last_newline) = pending.rfind('\n') {
+            &pending[..last_newline]
         } else {
-            split_stable_rows(pending).0.join("\n")
+            ""
         };
         if stable.is_empty() {
             String::new()
         } else if stable.ends_with('\n') {
-            stable
+            stable.to_owned()
         } else {
             format!("{stable}\n")
         }

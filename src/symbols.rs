@@ -82,7 +82,7 @@ fn extract_signature(node_text: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SupportedLanguage {
     Rust,
     Python,
@@ -225,6 +225,12 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
     }
 
     // 3. Incrementally parse and update changed files
+    let mut parser = Parser::new();
+    let mut current_lang: Option<SupportedLanguage> = None;
+    let mut query_cache: std::collections::HashMap<SupportedLanguage, (Query, usize)> =
+        std::collections::HashMap::new();
+    let mut cursor = QueryCursor::new();
+
     for (abs_path, rel_path, mtime_secs, lang) in files {
         // Check if we already indexed this version
         let already_indexed: bool = conn
@@ -240,12 +246,30 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
         }
 
         let ts_lang = lang.tree_sitter_language();
-        let query_str = lang.query_str();
-        let query = match Query::new(&ts_lang, query_str) {
-            Ok(q) => q,
-            Err(e) => {
-                eprintln!("failed to compile tree-sitter query for {:?}: {e}", lang);
+        if current_lang != Some(lang) {
+            if parser.set_language(&ts_lang).is_err() {
                 continue;
+            }
+            current_lang = Some(lang);
+        }
+
+        let (query, name_capture_idx) = match query_cache.entry(lang) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let query_str = lang.query_str();
+                match Query::new(&ts_lang, query_str) {
+                    Ok(q) => {
+                        let name_idx = match q.capture_names().iter().position(|r| *r == "name") {
+                            Some(idx) => idx,
+                            None => continue,
+                        };
+                        e.insert((q, name_idx))
+                    }
+                    Err(e) => {
+                        eprintln!("failed to compile tree-sitter query for {:?}: {e}", lang);
+                        continue;
+                    }
+                }
             }
         };
 
@@ -254,11 +278,6 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
             Ok(c) => c,
             Err(_) => continue,
         };
-
-        let mut parser = Parser::new();
-        if parser.set_language(&ts_lang).is_err() {
-            continue;
-        }
 
         let tree = match parser.parse(&content, None) {
             Some(t) => t,
@@ -271,12 +290,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
             params![&root_str, &rel_path],
         );
 
-        let Some(name_capture_idx) = query.capture_names().iter().position(|r| *r == "name") else {
-            continue;
-        };
-
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
+        let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
 
         while let Some(m) = matches.next() {
             for cap in m.captures {
@@ -291,7 +305,7 @@ pub fn update_index(root_dir: &Path) -> Result<(), String> {
                 // Locate the @name sibling or child node to get the symbol's name
                 let mut name = String::new();
                 for sibling_cap in m.captures {
-                    if sibling_cap.index as usize == name_capture_idx {
+                    if sibling_cap.index as usize == *name_capture_idx {
                         let name_node = sibling_cap.node;
                         if name_node.start_byte() >= node.start_byte()
                             && name_node.end_byte() <= node.end_byte()
