@@ -172,7 +172,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             "tools.batch_truncated",
             serde_json::json!({
                 "requested": requested_calls,
-                "executed": parsed_tool_calls.len(),
+                "kept": parsed_tool_calls.len(),
                 "dropped": dropped_calls,
                 "max_mutating_calls": max_mutating_calls,
                 "max_mutating_calls_source": mutation_limit_source,

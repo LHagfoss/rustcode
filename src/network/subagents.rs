@@ -78,6 +78,22 @@ fn subagent_history_message(
     }
 }
 
+fn prepare_subagent_tool_batch(
+    parsed_calls: &mut Vec<(crate::tools::ToolCall, Option<String>)>,
+    max_mutating_calls: usize,
+) -> (usize, usize, Result<(), String>) {
+    let requested_calls = parsed_calls.len();
+    let policy_calls = parsed_calls
+        .iter()
+        .map(|(call, _)| call.clone())
+        .collect::<Vec<_>>();
+    let (kept_policy_calls, dropped_calls) =
+        crate::tools::truncate_tool_batch(policy_calls, max_mutating_calls);
+    parsed_calls.truncate(kept_policy_calls.len());
+    let validation = crate::tools::validate_tool_calls(&kept_policy_calls, max_mutating_calls);
+    (requested_calls, dropped_calls, validation)
+}
+
 pub(crate) async fn run_subagent(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -108,7 +124,13 @@ pub(crate) async fn run_subagent(
             return Err(format!("error: no subagent with id {agent_id}"));
         }
 
-        let (api_base_url, model_name, budget_token_limit, workspace_root) = {
+        let (
+            api_base_url,
+            model_name,
+            budget_token_limit,
+            max_mutating_calls,
+            workspace_root,
+        ) = {
             let s = state.lock().await;
             let subagent = s
                 .subagents
@@ -138,7 +160,17 @@ pub(crate) async fn run_subagent(
                         s.active_context_budget().history_tokens,
                     )
                 });
-            (api_base_url, model_name, budget, s.workspace_root.clone())
+            let max_mutating_calls = profile
+                .as_ref()
+                .map(|profile| profile.max_mutating_calls_per_response())
+                .unwrap_or(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE);
+            (
+                api_base_url,
+                model_name,
+                budget,
+                max_mutating_calls,
+                s.workspace_root.clone(),
+            )
         };
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
 
@@ -284,6 +316,21 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         };
 
         if !parsed_calls.is_empty() {
+            let (requested_calls, dropped_calls, validation) =
+                prepare_subagent_tool_batch(&mut parsed_calls, max_mutating_calls);
+            let kept_calls = parsed_calls.len();
+            if dropped_calls > 0 {
+                crate::logger::operational_event(
+                    "subagent.batch_truncated",
+                    serde_json::json!({
+                        "agent_id": agent_id,
+                        "requested": requested_calls,
+                        "kept": kept_calls,
+                        "dropped": dropped_calls,
+                        "max_mutating_calls": max_mutating_calls,
+                    }),
+                );
+            }
             let call_refs = parsed_calls
                 .iter()
                 .filter_map(|(call, call_id)| {
@@ -303,26 +350,53 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 }
             }
 
-            for (index, (tool_call, call_id)) in parsed_calls.iter().enumerate() {
-                let name = &tool_call.name;
-                let args = &tool_call.arguments;
-                if let Err(reason) = crate::tools::validate_tool_calls(
-                    std::slice::from_ref(tool_call),
-                    crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE,
-                ) {
+            if let Err(reason) = validation {
+                let mut s = state.lock().await;
+                for (tool_call, call_id) in &parsed_calls {
                     let execution = crate::tools::ToolExecutionOutput::failure_with_kind(
-                        format!("error: tool call rejected before execution: {reason}"),
+                        format!("error: tool batch rejected before execution: {reason}"),
                         crate::tools::ToolErrorKind::Validation,
                         false,
                     );
-                    let message =
-                        subagent_tool_history_message(name, args, execution, None, call_id.clone());
-                    let mut s = state.lock().await;
+                    let message = subagent_tool_history_message(
+                        &tool_call.name,
+                        &tool_call.arguments,
+                        execution,
+                        None,
+                        call_id.clone(),
+                    );
                     if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
                         Arc::make_mut(&mut a.history).push(message);
                     }
-                    continue;
                 }
+                if dropped_calls > 0
+                    && let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id)
+                {
+                    Arc::make_mut(&mut a.history).push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "[Subagent tool batch kept {kept_calls} of {requested_calls} calls and dropped {dropped_calls}; the kept batch failed validation: {reason}]"
+                        ),
+                    ));
+                }
+                continue;
+            }
+
+            if dropped_calls > 0 {
+                let mut s = state.lock().await;
+                if let Some(a) = s.subagents.iter_mut().find(|a| a.id == agent_id) {
+                    Arc::make_mut(&mut a.history).push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "[Subagent tool batch kept {kept_calls} of {requested_calls} calls and dropped {dropped_calls}; continue from the real results and emit the next action after them. The resolved mutation limit is {max_mutating_calls}.]"
+                        ),
+                    ));
+                }
+            }
+
+            for (index, (tool_call, call_id)) in parsed_calls.iter().enumerate() {
+                let name = &tool_call.name;
+                let args = &tool_call.arguments;
                 let (exact, category) = loop_detect::signatures(name, args);
                 if let loop_detect::LoopStatus::Abort(repeats) =
                     loop_detector.check_tool(name, &exact, &category)
@@ -929,6 +1003,40 @@ mod tests {
         state.model_name = "subagent-test-model".to_owned();
         state.delegation_active = true;
         Arc::new(Mutex::new(state))
+    }
+
+    #[test]
+    fn subagent_batches_are_truncated_and_validated_before_execution() {
+        let call = |name: &str, arguments: serde_json::Value| crate::tools::ToolCall {
+            name: name.to_owned(),
+            arguments,
+            call_id: None,
+        };
+        let mut calls = vec![
+            (call("grep", serde_json::json!({"pattern": "TODO"})), None),
+            (
+                call("run_command", serde_json::json!({"command": "true"})),
+                None,
+            ),
+            (
+                call("run_command", serde_json::json!({"command": "false"})),
+                None,
+            ),
+        ];
+
+        let (requested, dropped, validation) =
+            prepare_subagent_tool_batch(&mut calls, 1);
+        assert_eq!((requested, calls.len(), dropped), (3, 2, 1));
+        assert!(validation.is_ok());
+
+        calls.push((
+            call("run_command", serde_json::json!({"command": "false"})),
+            None,
+        ));
+        let (requested, dropped, validation) =
+            prepare_subagent_tool_batch(&mut calls, 2);
+        assert_eq!((requested, calls.len(), dropped), (3, 3, 0));
+        assert!(validation.is_ok());
     }
 
     #[test]
