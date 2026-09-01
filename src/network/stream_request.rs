@@ -137,6 +137,17 @@ fn apply_api_native_tools(
 }
 
 const RECOVERY_THINKING_BUDGET: u32 = 1024;
+const RECOVERY_MAX_TOKENS: u32 = 1024;
+const MAX_NATIVE_TOOL_ARGUMENT_BYTES: usize = 40 * 1024;
+const MAX_INVALID_ARGUMENT_PREVIEW_BYTES: usize = 1024;
+
+fn clamp_request_max_tokens(max_tokens: u32, thinking_mode: ThinkingMode) -> u32 {
+    if thinking_mode == ThinkingMode::BoundedRecovery {
+        max_tokens.min(RECOVERY_MAX_TOKENS)
+    } else {
+        max_tokens
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct BoundedReasoningChunk {
@@ -390,6 +401,20 @@ mod tests {
         assert!(payload.get("thinking_budget").is_none());
     }
 
+    #[test]
+    fn native_tool_argument_accumulation_has_a_hard_byte_limit() {
+        let mut arguments = String::new();
+        assert!(!append_bounded_native_arguments(
+            &mut arguments,
+            "{\"path\":\""
+        ));
+        assert!(append_bounded_native_arguments(
+            &mut arguments,
+            &"repeat/".repeat(MAX_NATIVE_TOOL_ARGUMENT_BYTES)
+        ));
+        assert_eq!(arguments.len(), MAX_NATIVE_TOOL_ARGUMENT_BYTES);
+    }
+
     #[tokio::test]
     async fn native_schema_tokens_are_in_prompt_and_total_usage_estimates() {
         let messages = vec![serde_json::json!({
@@ -482,6 +507,14 @@ mod tests {
         assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
         assert_eq!(payload["reasoning_effort"], "low");
         assert_eq!(payload["thinking_budget"], RECOVERY_THINKING_BUDGET);
+        assert_eq!(
+            clamp_request_max_tokens(16_000, ThinkingMode::BoundedRecovery),
+            RECOVERY_MAX_TOKENS
+        );
+        assert_eq!(
+            clamp_request_max_tokens(16_000, ThinkingMode::Normal),
+            16_000
+        );
     }
 
     #[test]
@@ -721,17 +754,32 @@ pub(crate) fn request_debug_log_line(
     }
 }
 
-/// Preserve malformed native arguments for validation and model feedback
-/// instead of silently turning them into an empty object. This keeps the raw
-/// provider failure visible while ensuring the call cannot execute.
+fn invalid_argument_marker(raw: &str, error: impl Into<String>) -> serde_json::Value {
+    let preview_end = raw.floor_char_boundary(raw.len().min(MAX_INVALID_ARGUMENT_PREVIEW_BYTES));
+    serde_json::json!({
+        "_invalid_arguments": {
+            "original_bytes": raw.len(),
+            "preview": &raw[..preview_end],
+            "truncated": raw.len() > preview_end,
+        },
+        "_parse_error": error.into(),
+    })
+}
+
+fn append_bounded_native_arguments(target: &mut String, chunk: &str) -> bool {
+    let remaining = MAX_NATIVE_TOOL_ARGUMENT_BYTES.saturating_sub(target.len());
+    let keep = chunk.floor_char_boundary(chunk.len().min(remaining));
+    target.push_str(&chunk[..keep]);
+    keep < chunk.len()
+}
+
+/// Preserve bounded malformed-argument metadata for validation and model
+/// feedback. Raw provider output is never replayed wholesale into history.
 pub(crate) fn parse_native_tool_arguments(raw: &str) -> serde_json::Value {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value) if value.is_object() => value,
-        Ok(value) => serde_json::json!({ "_invalid_arguments": value }),
-        Err(error) => serde_json::json!({
-            "_invalid_arguments": raw,
-            "_parse_error": error.to_string(),
-        }),
+        Ok(_) => invalid_argument_marker(raw, "tool arguments must be a JSON object"),
+        Err(error) => invalid_argument_marker(raw, error.to_string()),
     }
 }
 
@@ -917,7 +965,7 @@ pub async fn stream_request(
             })
             .cloned()
     };
-    let max_tokens = profile
+    let mut max_tokens = profile
         .as_ref()
         .map(|p| p.completion_token_limit(allow_tools))
         .unwrap_or_else(|| {
@@ -947,6 +995,7 @@ pub async fn stream_request(
             .context_budget()
             .completion_reserve
         });
+    max_tokens = clamp_request_max_tokens(max_tokens, thinking_mode);
     // Recovery keeps reasoning enabled but applies a small client-side bound:
     // it exists to produce the next action, not another full planning turn.
     let thinking_budget = if thinking_mode == ThinkingMode::BoundedRecovery {
@@ -1277,8 +1326,11 @@ pub async fn stream_request(
         id: String,
         name: String,
         arguments: String,
+        argument_bytes: usize,
+        arguments_overflowed: bool,
     }
     let mut accumulators: Vec<ToolAccumulator> = Vec::new();
+    let mut tool_argument_limit_reached = false;
     let mut fences = ToolFenceCounter::default();
     let mut reasoning_detector = super::loop_detect::ReasoningLoopDetector::default();
     let runaway_limit = crate::tools::MAX_TOOL_CALLS_PER_RESPONSE;
@@ -1352,6 +1404,8 @@ pub async fn stream_request(
                                                          id: String::new(),
                                                          name: String::new(),
                                                          arguments: String::new(),
+                                                         argument_bytes: 0,
+                                                         arguments_overflowed: false,
                                                      });
                                                  }
                                                  let acc = &mut accumulators[idx];
@@ -1362,7 +1416,11 @@ pub async fn stream_request(
                                                      acc.name.push_str(name);
                                                  }
                                                  if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()) {
-                                                     acc.arguments.push_str(args);
+                                                     acc.argument_bytes = acc.argument_bytes.saturating_add(args.len());
+                                                     if append_bounded_native_arguments(&mut acc.arguments, args) {
+                                                         acc.arguments_overflowed = true;
+                                                         tool_argument_limit_reached = true;
+                                                     }
                                                  }
                                                  if !quiet && !acc.name.is_empty() {
                                                      let parsed_args = parse_speculative_arguments(&acc.arguments);
@@ -1374,6 +1432,11 @@ pub async fn stream_request(
                                                      s.update_speculative_live_tool_call(id_opt, &acc.name, &parsed_args);
                                                  }
                                              }
+                                         }
+                                         if tool_argument_limit_reached {
+                                             finish_reason = Some("tool_arguments_limit".to_string());
+                                             line_buf.clear();
+                                             break;
                                          }
 
                                          let mut chunk = String::new();
@@ -1640,7 +1703,18 @@ pub async fn stream_request(
             continue;
         }
 
-        let args_json = parse_native_tool_arguments(&acc.arguments);
+        let args_json = if acc.arguments_overflowed {
+            serde_json::json!({
+                "_invalid_arguments": {
+                    "original_bytes_at_least": acc.argument_bytes,
+                    "max_bytes": MAX_NATIVE_TOOL_ARGUMENT_BYTES,
+                    "truncated": true,
+                },
+                "_parse_error": "tool arguments exceeded the local streaming limit",
+            })
+        } else {
+            parse_native_tool_arguments(&acc.arguments)
+        };
 
         let call_id = if acc.id.is_empty() {
             format!("call_{position}")
