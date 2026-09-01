@@ -177,14 +177,13 @@ impl ModelProfile {
     /// wins; otherwise recognize only a stable endpoint dialect and keep the
     /// generic OpenAI-compatible field for local gateways and other proxies.
     pub fn resolved_output_token_field(&self) -> OutputTokenField {
-        self.output_token_field
-            .unwrap_or_else(|| {
-                if self.is_google_native_endpoint() {
-                    OutputTokenField::GoogleMaxOutputTokens
-                } else {
-                    OutputTokenField::MaxTokens
-                }
-            })
+        self.output_token_field.unwrap_or_else(|| {
+            if self.is_google_native_endpoint() {
+                OutputTokenField::GoogleMaxOutputTokens
+            } else {
+                OutputTokenField::MaxTokens
+            }
+        })
     }
 
     /// Whether this profile points at Google's native Generative Language
