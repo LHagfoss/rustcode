@@ -491,10 +491,11 @@ fn deterministic_context_record(history: &[ChatMessage], max_chars: usize) -> St
         .format_record(max_chars)
 }
 
-pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, budget: u32) {
+pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, budget: u32) -> bool {
     if history.is_empty() {
-        return;
+        return false;
     }
+    let before = history.clone();
 
     // Strip <think> blocks from all assistant messages first to free up budget.
     for m in history.iter_mut() {
@@ -517,7 +518,7 @@ pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, bu
     }
     let mut total: u32 = tokens.iter().sum();
     if total <= budget {
-        return;
+        return *history != before;
     }
 
     dbg_log!(
@@ -564,6 +565,7 @@ pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, bu
             "hard_trim": false,
         }),
     );
+    *history != before
 }
 
 /// Extract a context length from ollama's /api/show `model_info` blob;
@@ -959,7 +961,7 @@ pub(crate) async fn prepare_turn_request(
         let mut working_history = captured_history;
 
         // Lock released here: this await performs I/O.
-        let compacted = compaction::maybe_compact_with_local_policy(
+        let summarized_or_pruned = compaction::maybe_compact_with_local_policy(
             client,
             &api_url,
             &model_name,
@@ -969,6 +971,12 @@ pub(crate) async fn prepare_turn_request(
             local_model,
         )
         .await;
+        // Run the deterministic safety reduction in the same canonical
+        // pipeline and persist it. Request assembly should consume history,
+        // not silently rewrite a second throwaway copy on every tool round.
+        let deterministically_compacted =
+            compact_history_to_budget(working_history.as_mut_vec(), budget as u32).await;
+        let compacted = summarized_or_pruned || deterministically_compacted;
 
         // Merge policy for history appended while the lock was down (a tool
         // result or a user message can land mid-compaction):
@@ -1125,8 +1133,6 @@ pub(crate) async fn prepare_turn_request(
         context_section.push_str("\n\n");
         context_section.push_str(&instructions);
     }
-
-    compact_history_to_budget(history_snapshot.as_mut_vec(), budget_token_limit).await;
 
     if image_fallback::has_image_markers(&history_snapshot) {
         let active_profile = active_profile.ok_or_else(|| {
