@@ -1,3 +1,22 @@
+## [v0.40.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.6) - 2026-09-01
+
+### Features
+- **Generation limits:** Allow ordinary requests to use provider defaults, select output-token fields by provider capability or explicit profile override, and keep tool and recovery rounds safely bounded ([#907](https://github.com/LHagfoss/rustcode/pull/907); tracked by [#904](https://github.com/LHagfoss/rustcode/issues/904))
+- **Mutation policy:** Make the per-response mutation limit configurable per model profile while retaining the safe default of one and enforcing the same policy for root and subagent turns ([#908](https://github.com/LHagfoss/rustcode/pull/908); tracked by [#905](https://github.com/LHagfoss/rustcode/issues/905))
+
+### Fixes
+- **Provider streaming:** Reassemble native streamed tool calls by index or stable ID, record bounded sanitized structural traces, and reject length-stopped calls before execution ([#902](https://github.com/LHagfoss/rustcode/pull/902); tracked by [#896](https://github.com/LHagfoss/rustcode/issues/896), [#897](https://github.com/LHagfoss/rustcode/issues/897), and [#901](https://github.com/LHagfoss/rustcode/issues/901))
+- **Tool contracts:** Persist explicit completeness for file, search, glob, and directory results; preserve it through replay and truncation without inferring state from rendered text ([#902](https://github.com/LHagfoss/rustcode/pull/902), [#906](https://github.com/LHagfoss/rustcode/pull/906); tracked by [#898](https://github.com/LHagfoss/rustcode/issues/898) and [#903](https://github.com/LHagfoss/rustcode/issues/903))
+- **Tool execution safety:** Bound agent-generated tool calls and serialize workspace-changing operations so each mutation is grounded in the prior result ([#894](https://github.com/LHagfoss/rustcode/pull/894), [#895](https://github.com/LHagfoss/rustcode/pull/895))
+- **Quota parsing:** Restore resilient provider quota deserialization for schema drift ([#893](https://github.com/LHagfoss/rustcode/pull/893))
+
+### Performance
+- **Context and prompt efficiency:** Unify compaction, use provider usage at valid turn boundaries, retain deterministic file inventories, reduce the base prompt, and recover safe conventional tool aliases ([#891](https://github.com/LHagfoss/rustcode/pull/891), [#902](https://github.com/LHagfoss/rustcode/pull/902); tracked by [#899](https://github.com/LHagfoss/rustcode/issues/899) and [#900](https://github.com/LHagfoss/rustcode/issues/900))
+- **Runtime allocations:** Reduce symbol parsing, streaming, and quota-deserialization allocation overhead ([#892](https://github.com/LHagfoss/rustcode/pull/892))
+
+### Documentation
+- **Runtime architecture:** Document task lifecycle and ACP runtime behavior ([#890](https://github.com/LHagfoss/rustcode/pull/890))
+
 ## [v0.40.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.5) - 2026-08-31
 
 ### Features
@@ -1093,21 +1112,3 @@
 
 ## [v0.1.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.1.12) - 2026-07-16
 - Initial release
-## [v0.40.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.6) - 2026-09-01
-
-### Features
-- **Generation limits:** Allow ordinary requests to use provider defaults, select output-token fields by provider capability or explicit profile override, and keep tool and recovery rounds safely bounded ([#907](https://github.com/LHagfoss/rustcode/pull/907); tracked by [#904](https://github.com/LHagfoss/rustcode/issues/904))
-- **Mutation policy:** Make the per-response mutation limit configurable per model profile while retaining the safe default of one and enforcing the same policy for root and subagent turns ([#908](https://github.com/LHagfoss/rustcode/pull/908); tracked by [#905](https://github.com/LHagfoss/rustcode/issues/905))
-
-### Fixes
-- **Provider streaming:** Reassemble native streamed tool calls by index or stable ID, record bounded sanitized structural traces, and reject length-stopped calls before execution ([#902](https://github.com/LHagfoss/rustcode/pull/902); tracked by [#896](https://github.com/LHagfoss/rustcode/issues/896), [#897](https://github.com/LHagfoss/rustcode/issues/897), and [#901](https://github.com/LHagfoss/rustcode/issues/901))
-- **Tool contracts:** Persist explicit completeness for file, search, glob, and directory results; preserve it through replay and truncation without inferring state from rendered text ([#902](https://github.com/LHagfoss/rustcode/pull/902), [#906](https://github.com/LHagfoss/rustcode/pull/906); tracked by [#898](https://github.com/LHagfoss/rustcode/issues/898) and [#903](https://github.com/LHagfoss/rustcode/issues/903))
-- **Tool execution safety:** Bound agent-generated tool calls and serialize workspace-changing operations so each mutation is grounded in the prior result ([#894](https://github.com/LHagfoss/rustcode/pull/894), [#895](https://github.com/LHagfoss/rustcode/pull/895))
-- **Quota parsing:** Restore resilient provider quota deserialization for schema drift ([#893](https://github.com/LHagfoss/rustcode/pull/893))
-
-### Performance
-- **Context and prompt efficiency:** Unify compaction, use provider usage at valid turn boundaries, retain deterministic file inventories, reduce the base prompt, and recover safe conventional tool aliases ([#891](https://github.com/LHagfoss/rustcode/pull/891), [#902](https://github.com/LHagfoss/rustcode/pull/902); tracked by [#899](https://github.com/LHagfoss/rustcode/issues/899) and [#900](https://github.com/LHagfoss/rustcode/issues/900))
-- **Runtime allocations:** Reduce symbol parsing, streaming, and quota-deserialization allocation overhead ([#892](https://github.com/LHagfoss/rustcode/pull/892))
-
-### Documentation
-- **Runtime architecture:** Document task lifecycle and ACP runtime behavior ([#890](https://github.com/LHagfoss/rustcode/pull/890))
