@@ -1,3 +1,8 @@
+## [v0.40.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.7) - 2026-09-01
+
+### Fixes
+- **Agent recovery:** Clear stale pre-verification reasoning after authoritative or novel command evidence so a successful verification-to-summary transition is not misclassified as a reasoning loop, while retaining repeated-verification protection ([#911](https://github.com/LHagfoss/rustcode/pull/911); tracked by [#910](https://github.com/LHagfoss/rustcode/issues/910))
+
 ## [v0.40.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.6) - 2026-09-01
 
 ### Features
