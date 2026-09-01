@@ -962,9 +962,14 @@ fn history_uses_the_bounded_tool_result_without_retruncating_it() {
 }
 
 #[test]
-fn malformed_native_arguments_are_preserved_for_validation() {
-    let value = parse_native_tool_arguments("{\"pattern\":");
-    assert!(value.get("_invalid_arguments").is_some());
+fn malformed_native_arguments_are_bounded_for_validation() {
+    let raw = format!("{{\"pattern\":\"{}", "repeat/".repeat(4_000));
+    let value = parse_native_tool_arguments(&raw);
+    let invalid = &value["_invalid_arguments"];
+    assert_eq!(invalid["original_bytes"], raw.len());
+    assert_eq!(invalid["truncated"], true);
+    assert!(invalid["preview"].as_str().unwrap().len() <= 1024);
+    assert!(value.to_string().len() < 2_000);
     assert!(value.get("_parse_error").is_some());
 }
 
@@ -2271,6 +2276,7 @@ fn identical_malformed_tool_calls_are_counted_as_repeats() {
     ));
     assert_eq!(ctx.recovery.consecutive_malformed_calls, 2);
     assert_eq!(ctx.metrics.malformed_calls, 2);
+    assert!(ctx.recovery.last_malformed_call.as_ref().unwrap().len() < 64);
     assert!(!super::turn_engine::record_malformed_call(
         &mut ctx,
         "ignored for parsed calls",
