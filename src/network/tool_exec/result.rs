@@ -4,6 +4,7 @@ use super::super::events::{ToolResult, ToolResultMetadata};
 use super::super::is_mutating_tool;
 use super::super::output::truncate_tool_output_for_message;
 use super::preview::get_file_preview;
+use rustcode_core::ToolResultCompleteness;
 
 pub(crate) fn stable_arguments_hash(arguments: &serde_json::Value) -> String {
     use std::hash::{Hash, Hasher};
@@ -18,6 +19,17 @@ pub(crate) fn tool_result_from_execution(
     execution: crate::tools::ToolExecutionOutput,
     diff: Option<String>,
 ) -> ToolResult {
+    let completeness = if execution.truncated {
+        if tool_name == "view_file" {
+            ToolResultCompleteness::LineTruncated
+        } else {
+            ToolResultCompleteness::ByteTruncated
+        }
+    } else if tool_name == "view_file" && execution.content.contains("end of requested range") {
+        ToolResultCompleteness::UserLimited
+    } else {
+        ToolResultCompleteness::Complete
+    };
     let changed_paths = if is_mutating_tool(tool_name) && execution.success {
         args.get("path")
             .or_else(|| args.get("output_path"))
@@ -41,6 +53,7 @@ pub(crate) fn tool_result_from_execution(
             exit_code: execution.exit_code,
             changed_paths,
             truncated: execution.truncated,
+            completeness,
             full_output_artifact: None,
             replayed: execution.replayed,
             error_kind: if execution.pending || execution.success {
@@ -72,6 +85,7 @@ pub(crate) fn finalize_tool_result_for_prefix(
     result.content = bounded.content;
     if bounded.truncated {
         result.metadata.truncated = true;
+        result.metadata.completeness = ToolResultCompleteness::ByteTruncated;
         result.metadata.full_output_artifact = bounded.full_output_artifact;
         if result.metadata.error_kind.is_none() {
             result.metadata.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
@@ -122,6 +136,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
             exit_code: envelope.exit_code,
             changed_paths: envelope.changed_paths,
             truncated: envelope.truncated,
+            completeness: envelope.completeness,
             full_output_artifact: envelope.full_output_artifact,
             error_kind: envelope.error_kind.map(|kind| kind.as_str().to_string()),
             retryable: envelope.retryable,

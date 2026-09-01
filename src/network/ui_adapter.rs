@@ -147,6 +147,7 @@ fn history_tool_result_event(
             exit_code: record.exit_code,
             changed_paths: record.changed_paths.clone(),
             truncated: record.truncated,
+            completeness: record.resolved_completeness(),
             full_output_artifact: record.full_output_artifact.clone(),
             replayed: record.replayed,
             error_kind: record.parsed_error_kind(),
