@@ -47,10 +47,14 @@ pub struct TurnEvidence<'a> {
 #[derive(Debug, Clone)]
 pub struct InspectionEvidence<'a> {
     pub tool_name: &'a str,
-    /// A normalized path plus read region (for example, `src/config.ts#0`).
-    /// Callers should use the same semantic region key as their tool-call
-    /// signature so progressive range inspection remains distinct.
+    /// A canonical path plus exact read region (for example,
+    /// `read:src/config.ts:1:full`). Callers should use the same semantic
+    /// region key for native and shell reads so progressive inspection
+    /// remains distinct.
     pub target: &'a str,
+    /// Model response/tool-batch number. Multiple calls in one response share
+    /// this value and must not satisfy a cross-turn repetition threshold.
+    pub turn_id: u64,
     pub unchanged: bool,
     pub incomplete: bool,
     pub corruption_claim: bool,
@@ -60,6 +64,7 @@ pub struct InspectionEvidence<'a> {
 struct InspectionRecord {
     tool_name: String,
     target: String,
+    turn_id: u64,
     incomplete: bool,
     corruption_claim: bool,
 }
@@ -323,6 +328,7 @@ impl ReasoningLoopDetector {
         self.recent_inspections.push_back(InspectionRecord {
             tool_name: evidence.tool_name.to_lowercase(),
             target,
+            turn_id: evidence.turn_id,
             incomplete: evidence.incomplete,
             corruption_claim: evidence.corruption_claim,
         });
@@ -340,7 +346,11 @@ impl ReasoningLoopDetector {
             .rev()
             .take_while(|record| &record.target == last_target)
             .collect::<Vec<_>>();
-        if same_target.len() < 3 {
+        let distinct_turns = same_target
+            .iter()
+            .map(|record| record.turn_id)
+            .collect::<HashSet<_>>();
+        if distinct_turns.len() < 3 {
             return ReasoningLoopStatus::Ok;
         }
         let distinct_tools = same_target
@@ -357,8 +367,8 @@ impl ReasoningLoopDetector {
             .count();
         let cross_tool_cycle =
             distinct_tools.len() >= 2 && (incomplete_count >= 2 || corruption_claim_count >= 2);
-        let repeated_corruption_claim = corruption_claim_count >= 3;
-        if cross_tool_cycle || repeated_corruption_claim {
+        if cross_tool_cycle {
+            self.recent_inspections.clear();
             return ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TOOL_INSPECTION_CYCLE);
         }
         ReasoningLoopStatus::Ok
