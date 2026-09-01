@@ -874,8 +874,7 @@ mod tests {
         assert!(res.contains("MATCH one"), "got: {res}");
         assert!(res.contains("truncated at 1 matching lines"), "got: {res}");
         assert!(!res.contains("MATCH two"), "got: {res}");
-        let capped =
-            grep_one_file_output(&path_str, &file, &re, 1).expect("grep should succeed");
+        let capped = grep_one_file_output(&path_str, &file, &re, 1).expect("grep should succeed");
         assert_eq!(capped.completeness, ToolResultCompleteness::ByteTruncated);
 
         // Exactly at the cap there is no truncation notice at all.
@@ -900,10 +899,7 @@ mod tests {
             "pattern": "*.txt",
         }))
         .expect("glob should succeed");
-        assert_eq!(
-            capped.completeness,
-            ToolResultCompleteness::ByteTruncated
-        );
+        assert_eq!(capped.completeness, ToolResultCompleteness::ByteTruncated);
         assert!(capped.content.contains("truncated at 200 results"));
 
         let exhaustive_dir = tempfile::tempdir().expect("tempdir");
