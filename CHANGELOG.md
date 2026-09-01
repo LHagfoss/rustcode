@@ -1,3 +1,9 @@
+## [v0.40.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.8) - 2026-09-01
+
+### Fixes
+- **Tool result contracts:** Mark bounded model-visible tool results explicitly incomplete and preserve that state through replay, compaction, subagents, and ACP output ([#915](https://github.com/LHagfoss/rustcode/issues/915)).
+- **Inspection-loop recovery:** Detect repeated cross-tool inspection of unchanged targets across distinct model turns without interrupting progressive range reads or successful verification ([#916](https://github.com/LHagfoss/rustcode/issues/916)).
+
 ## [v0.40.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.7) - 2026-09-01
 
 ### Fixes
