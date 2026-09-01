@@ -149,7 +149,7 @@ fn context_budget_reserves_completion_thinking_tools_and_safety() {
 
 #[test]
 fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
-    let profile = ModelProfile {
+    let mut profile = ModelProfile {
         name: "local-ollama".to_string(),
         url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
         model: "qwen2.5:32b".to_string(),
@@ -190,7 +190,7 @@ fn ordinary_unconfigured_output_uses_provider_default_but_tools_are_bounded() {
 
 #[test]
 fn output_token_field_override_and_legacy_cap_are_backward_compatible() {
-    let mut profile = ModelProfile {
+    let profile = ModelProfile {
         context_window: Some(128_000),
         max_tokens: Some(16_000),
         output_token_field: Some(OutputTokenField::MaxCompletionTokens),
