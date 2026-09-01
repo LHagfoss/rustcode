@@ -3062,6 +3062,7 @@ dependencies = [
 name = "rustcode-tools"
 version = "0.40.5"
 dependencies = [
+ "rustcode-core",
  "serde_json",
  "similar",
  "tempfile",

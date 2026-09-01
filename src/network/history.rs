@@ -173,7 +173,14 @@ pub(crate) fn to_messages(
         messages.push(match entry {
         HistoryEntry::ToolResult { tool_name, content, metadata } => {
             let metadata_line = metadata
-                .map(|value| format!("\nmetadata: {}", serde_json::to_string(value).unwrap_or_default()))
+                .map(|value| {
+                    let mut value = value.clone();
+                    value.completeness = value.resolved_completeness();
+                    format!(
+                        "\nmetadata: {}",
+                        serde_json::to_string(&value).unwrap_or_default()
+                    )
+                })
                 .unwrap_or_default();
             serde_json::json!({
                 "role": "user",
@@ -264,6 +271,20 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
                 .split_once(": ")
                 .map(|(_, rest)| rest.to_string())
                 .unwrap_or_else(|| message.content.clone());
+            // Native providers receive only this content field for a tool
+            // answer. Keep the terminal's presentation text unchanged, but
+            // include the durable execution contract in the model payload so
+            // completeness cannot be inferred from a collapsed UI row.
+            let content = if let Some(metadata) = message.tool_result.as_ref() {
+                let mut metadata = metadata.clone();
+                metadata.completeness = metadata.resolved_completeness();
+                format!(
+                    "{content}\n[result_metadata: {}]",
+                    serde_json::to_string(&metadata).unwrap_or_default()
+                )
+            } else {
+                content
+            };
             Some(serde_json::json!({
                 "role": "tool",
                 "tool_call_id": call_id,

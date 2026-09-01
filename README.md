@@ -14,6 +14,7 @@ Now supports ollama or openai compatible APIs.
 
 - [Background tasks and cancellation](docs/background-tasks.md)
 - [ACP server integration](docs/acp.md)
+- [Provider stream traces](docs/provider-stream-traces.md)
 - [Runtime and workspace architecture](docs/architecture.md)
 - [Build-boundary benchmark](scripts/bench-build-boundaries.md)
 

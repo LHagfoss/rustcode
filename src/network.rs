@@ -451,9 +451,7 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
             &history[index],
         ))
         .unwrap_or(u32::MAX);
-        if suffix_messages < crate::network::compaction::KEEP_RECENT_TURNS
-            || suffix_tokens.saturating_add(message_tokens) <= keep_target
-        {
+        if suffix_messages == 0 || suffix_tokens.saturating_add(message_tokens) <= keep_target {
             suffix_start = index;
             suffix_tokens = suffix_tokens.saturating_add(message_tokens);
             suffix_messages += 1;
@@ -465,15 +463,10 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
         return false;
     }
 
-    // Never split an old conversation in the middle of a user turn when a
-    // clean boundary is available. The retained suffix therefore keeps the
+    // Never split an old conversation in the middle of a user turn or a
+    // structured tool transaction. The retained suffix therefore keeps the
     // current follow-up and its recent tool activity together.
-    let boundary = (0..=suffix_start)
-        .rev()
-        .find(|&index| {
-            history[index].role == "user" && !history[index].content.starts_with("<tool_result>")
-        })
-        .unwrap_or(suffix_start);
+    let boundary = crate::network::compaction::valid_compaction_boundary(history, suffix_start);
     if boundary == 0 {
         return false;
     }
@@ -938,7 +931,15 @@ pub(crate) async fn prepare_turn_request(
     // under a short lock, compact the owned copy with the lock released, then
     // re-acquire and merge the result back in.
     {
-        let (api_url, model_name, budget, local_model, active_session_id, captured_history) = {
+        let (
+            api_url,
+            model_name,
+            budget,
+            local_model,
+            active_session_id,
+            captured_history,
+            provider_usage,
+        ) = {
             let s = state.lock().await;
             let local_model = s
                 .active_model_profile()
@@ -954,6 +955,7 @@ pub(crate) async fn prepare_turn_request(
                 local_model,
                 s.active_session_id.clone(),
                 s.history.clone(),
+                s.current_token_usage.clone(),
             )
         };
         let pre_len = captured_history.len();
@@ -961,7 +963,7 @@ pub(crate) async fn prepare_turn_request(
         let mut working_history = captured_history;
 
         // Lock released here: this await performs I/O.
-        let summarized_or_pruned = compaction::maybe_compact_with_local_policy(
+        let summarized_or_pruned = compaction::maybe_compact_with_local_policy_and_usage(
             client,
             &api_url,
             &model_name,
@@ -969,6 +971,7 @@ pub(crate) async fn prepare_turn_request(
             budget,
             cancel_token,
             local_model,
+            provider_usage.as_ref(),
         )
         .await;
         // Run the deterministic safety reduction in the same canonical
@@ -1462,6 +1465,7 @@ pub(crate) fn unanswered_call_results_with_kind(
                         error_kind,
                         crate::tools::ToolErrorKind::Cancelled
                             | crate::tools::ToolErrorKind::Internal
+                            | crate::tools::ToolErrorKind::OutputLimit
                     ),
                     ..Default::default()
                 })
