@@ -19,16 +19,18 @@ pub(crate) fn tool_result_from_execution(
     execution: crate::tools::ToolExecutionOutput,
     diff: Option<String>,
 ) -> ToolResult {
+    // The execution layer owns completeness. Preserve the more specific
+    // filesystem classification and only strengthen a legacy/ambiguous
+    // `truncated` bit; never inspect human-facing output text here.
     let completeness = if execution.truncated {
-        if tool_name == "view_file" {
-            ToolResultCompleteness::LineTruncated
-        } else {
-            ToolResultCompleteness::ByteTruncated
+        match execution.completeness {
+            ToolResultCompleteness::Complete | ToolResultCompleteness::UserLimited => {
+                ToolResultCompleteness::ByteTruncated
+            }
+            completeness => completeness,
         }
-    } else if tool_name == "view_file" && execution.content.contains("end of requested range") {
-        ToolResultCompleteness::UserLimited
     } else {
-        ToolResultCompleteness::Complete
+        execution.completeness
     };
     let changed_paths = if is_mutating_tool(tool_name) && execution.success {
         args.get("path")

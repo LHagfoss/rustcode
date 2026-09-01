@@ -1,6 +1,8 @@
 use serde_json::Value;
 use std::path::PathBuf;
 
+use rustcode_core::ToolResultCompleteness;
+
 use crate::{coerce_array, parse_json_number, resolve_tool_path};
 
 pub fn delete_file_schema() -> Value {
@@ -108,6 +110,7 @@ struct ReplacementChunk {
 pub struct ViewFileOutput {
     pub content: String,
     pub truncated: bool,
+    pub completeness: ToolResultCompleteness,
 }
 
 fn resolve(path: &str) -> PathBuf {
@@ -227,6 +230,7 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
         return super::search::list_directory(args).map(|content| ViewFileOutput {
             content,
             truncated: false,
+            completeness: ToolResultCompleteness::Complete,
         });
     }
     let parse_index = |name: &str| -> Result<Option<usize>, String> {
@@ -299,6 +303,7 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
                 path, byte_offset
             ),
             truncated: false,
+            completeness: ToolResultCompleteness::Complete,
         });
     }
 
@@ -381,9 +386,18 @@ end_line={total} (or a smaller end_line to read it in chunks).]\n"
         }
     }
 
+    let completeness = if actual_end == total {
+        ToolResultCompleteness::Complete
+    } else if cap_applied || requested_end.is_none() {
+        ToolResultCompleteness::LineTruncated
+    } else {
+        ToolResultCompleteness::UserLimited
+    };
+
     Ok(ViewFileOutput {
         content: out,
         truncated: actual_end < total && (cap_applied || requested_end.is_none()),
+        completeness,
     })
 }
 

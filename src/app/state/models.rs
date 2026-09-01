@@ -346,6 +346,7 @@ pub(crate) struct CachedReadOutput {
     pub(crate) success: bool,
     pub(crate) exit_code: Option<i32>,
     pub(crate) truncated: bool,
+    pub(crate) completeness: rustcode_core::ToolResultCompleteness,
     pub(crate) full_output_artifact: Option<String>,
     pub(crate) error_kind: Option<crate::tools::ToolErrorKind>,
     pub(crate) retryable: bool,

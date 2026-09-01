@@ -137,6 +137,7 @@ pub(crate) fn view_file_output(args: &Value) -> Result<super::ToolExecutionOutpu
         command: None,
         exit_code: None,
         truncated: output.truncated,
+        completeness: output.completeness,
         replayed: false,
         error_kind: None,
         retryable: false,
