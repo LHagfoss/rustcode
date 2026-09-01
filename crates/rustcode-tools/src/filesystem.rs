@@ -227,10 +227,10 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
         .ok_or("missing 'path' argument")?;
     let resolved_path = resolve(path);
     if resolved_path.is_dir() {
-        return super::search::list_directory(args).map(|content| ViewFileOutput {
-            content,
-            truncated: false,
-            completeness: ToolResultCompleteness::Complete,
+        return super::search::list_directory_output(args).map(|output| ViewFileOutput {
+            content: output.content,
+            truncated: output.completeness != ToolResultCompleteness::Complete,
+            completeness: output.completeness,
         });
     }
     let parse_index = |name: &str| -> Result<Option<usize>, String> {

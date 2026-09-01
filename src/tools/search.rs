@@ -7,10 +7,12 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::Stdio;
 use std::thread;
 
+use rustcode_core::ToolResultCompleteness;
+
 // Re-export needed by the remaining search tools.
 pub(crate) use super::parse_json_bool;
 
-use super::{Tool, ToolCapability, ToolSafety};
+use super::{Tool, ToolCapability, ToolExecutionOutput, ToolSafety};
 
 fn grep_schema() -> Value {
     serde_json::json!({
@@ -113,6 +115,26 @@ const MAX_LINE_CHARS: usize = 1000;
 struct CappedRead {
     bytes: Vec<u8>,
     truncated: bool,
+}
+
+pub(crate) struct SearchOutput {
+    pub(crate) content: String,
+    pub(crate) completeness: ToolResultCompleteness,
+}
+
+fn execution_output(output: SearchOutput) -> super::ToolExecutionOutput {
+    super::ToolExecutionOutput {
+        content: output.content,
+        success: true,
+        pending: false,
+        command: None,
+        exit_code: None,
+        truncated: output.completeness != ToolResultCompleteness::Complete,
+        completeness: output.completeness,
+        replayed: false,
+        error_kind: None,
+        retryable: false,
+    }
 }
 
 fn read_capped<R: Read>(mut reader: R, cap: usize) -> CappedRead {
@@ -249,7 +271,7 @@ fn try_ripgrep(
     root: &str,
     include: Option<&str>,
     ignore_case: bool,
-) -> Option<Result<String, String>> {
+) -> Option<Result<SearchOutput, String>> {
     let mut cmd = std::process::Command::new("rg");
     cmd.arg("--line-number")
         .arg("--color=never")
@@ -295,18 +317,25 @@ fn try_ripgrep(
     let stdout = String::from_utf8_lossy(&stdout_capture.bytes);
     if stdout.trim().is_empty() {
         if stdout_truncated {
-            return Some(Ok(format!(
-                "ripgrep output exceeded the {} KB capture limit; matches may be incomplete. Narrow 'pattern' or 'include'.",
-                MAX_GREP_BYTES / 1024
-            )));
+            return Some(Ok(SearchOutput {
+                content: format!(
+                    "ripgrep output exceeded the {} KB capture limit; matches may be incomplete. Narrow 'pattern' or 'include'.",
+                    MAX_GREP_BYTES / 1024
+                ),
+                completeness: ToolResultCompleteness::ByteTruncated,
+            }));
         }
-        return Some(Ok(no_matches_message(pattern, root, include)));
+        return Some(Ok(SearchOutput {
+            content: no_matches_message(pattern, root, include),
+            completeness: ToolResultCompleteness::Complete,
+        }));
     }
 
     let mut out = String::new();
     let mut files_hit = 0usize;
     let mut total_lines = 0usize;
     let mut current_file_has_header = false;
+    let mut capped = stdout_truncated;
 
     for line in stdout.lines() {
         if line.is_empty() {
@@ -323,6 +352,7 @@ fn try_ripgrep(
                 if total_lines >= MAX_GREP_LINES
                     || out.len() + line_formatted.len() >= MAX_GREP_BYTES
                 {
+                    capped = true;
                     let cap_desc = if total_lines >= MAX_GREP_LINES {
                         format!("{MAX_GREP_LINES} lines")
                     } else {
@@ -342,6 +372,7 @@ fn try_ripgrep(
 
         files_hit += 1;
         if files_hit > MAX_GREP_FILES {
+            capped = true;
             break;
         }
         let file_header = if line.ends_with(':') {
@@ -362,17 +393,31 @@ fn try_ripgrep(
 
     let root_path = std::path::Path::new(root);
     if root_path.is_file() {
-        Some(Ok(out.trim_end().to_string()))
+        Some(Ok(SearchOutput {
+            content: out.trim_end().to_string(),
+            completeness: capped.then_some(ToolResultCompleteness::ByteTruncated).unwrap_or(
+                ToolResultCompleteness::Complete,
+            ),
+        }))
     } else {
-        Some(Ok(format!(
-            "matches for '{pattern}' under '{root}' ({} file(s)):\n{}",
-            files_hit,
-            out.trim_end()
-        )))
+        Some(Ok(SearchOutput {
+            content: format!(
+                "matches for '{pattern}' under '{root}' ({} file(s)):\n{}",
+                files_hit,
+                out.trim_end()
+            ),
+            completeness: capped.then_some(ToolResultCompleteness::ByteTruncated).unwrap_or(
+                ToolResultCompleteness::Complete,
+            ),
+        }))
     }
 }
 
 pub fn grep(args: &Value) -> Result<String, String> {
+    grep_output(args).map(|output| output.content)
+}
+
+pub(crate) fn grep_output(args: &Value) -> Result<SearchOutput, String> {
     let pattern = args
         .get("pattern")
         .and_then(|p| p.as_str())
@@ -398,7 +443,7 @@ pub fn grep(args: &Value) -> Result<String, String> {
 
     let root_path = std::path::Path::new(root);
     if root_path.is_file() {
-        return grep_one_file(root, root_path, &re, MAX_GREP_LINES);
+        return grep_one_file_output(root, root_path, &re, MAX_GREP_LINES);
     }
     if !root_path.is_dir() {
         return Err(format!("'{root}' is not a file or directory"));
@@ -416,6 +461,7 @@ pub fn grep(args: &Value) -> Result<String, String> {
     let mut total_lines = 0usize;
     let mut files_hit = 0usize;
     let mut incomplete = false;
+    let mut capped = false;
 
     for entry in walker {
         let Ok(entry) = entry else { continue };
@@ -443,6 +489,7 @@ pub fn grep(args: &Value) -> Result<String, String> {
                 if !wrote_header {
                     files_hit += 1;
                     if files_hit > MAX_GREP_FILES {
+                        capped = true;
                         stop_search = true;
                         return false;
                     }
@@ -462,6 +509,7 @@ pub fn grep(args: &Value) -> Result<String, String> {
                         "\n(truncated — {} matching lines across {} files, stopping at cap of {cap_desc} / {MAX_GREP_FILES} files; narrow 'pattern' or 'include')\n",
                         total_lines, files_hit
                     ));
+                    capped = true;
                     stop_search = true;
                     return false;
                 }
@@ -475,6 +523,7 @@ pub fn grep(args: &Value) -> Result<String, String> {
             Err(_) => incomplete = true,
         }
         if stop_search {
+            capped = true;
             break;
         }
         let _ = file_lines;
@@ -482,23 +531,38 @@ pub fn grep(args: &Value) -> Result<String, String> {
 
     if out.is_empty() {
         if incomplete {
-            return Ok(format!(
-                "fallback search may be incomplete; some input exceeded the per-line limit or could not be read while searching for '{pattern}' under '{root}'"
-            ));
+            return Ok(SearchOutput {
+                content: format!(
+                    "fallback search may be incomplete; some input exceeded the per-line limit or could not be read while searching for '{pattern}' under '{root}'"
+                ),
+                completeness: ToolResultCompleteness::ByteTruncated,
+            });
         }
-        Ok(no_matches_message(pattern, root, include))
+        Ok(SearchOutput {
+            content: no_matches_message(pattern, root, include),
+            completeness: ToolResultCompleteness::Complete,
+        })
     } else {
         if incomplete {
             out.push_str(
                 "\n(fallback search may be incomplete; some input exceeded the per-line limit or could not be read)\n",
             );
         }
-        Ok(format!(
-            "matches for '{pattern}' under '{root}' ({} file(s)):\n{}",
-            files_hit,
-            out.trim_end()
-        ))
+        Ok(SearchOutput {
+            content: format!(
+                "matches for '{pattern}' under '{root}' ({} file(s)):\n{}",
+                files_hit,
+                out.trim_end()
+            ),
+            completeness: (incomplete || capped)
+                .then_some(ToolResultCompleteness::ByteTruncated)
+                .unwrap_or(ToolResultCompleteness::Complete),
+        })
     }
+}
+
+pub(crate) fn grep_execution_output(args: &Value) -> Result<super::ToolExecutionOutput, String> {
+    grep_output(args).map(execution_output)
 }
 
 fn grep_one_file(
@@ -507,9 +571,19 @@ fn grep_one_file(
     re: &Regex,
     max_lines: usize,
 ) -> Result<String, String> {
+    grep_one_file_output(path_str, path, re, max_lines).map(|output| output.content)
+}
+
+fn grep_one_file_output(
+    path_str: &str,
+    path: &std::path::Path,
+    re: &Regex,
+    max_lines: usize,
+) -> Result<SearchOutput, String> {
     let file = File::open(path).map_err(|e| format!("cannot read '{path_str}': {e}"))?;
     let mut out = String::new();
     let mut hits = 0usize;
+    let mut capped = false;
     let report = scan_file_lines(BufReader::new(file), |line_number, line| {
         if re.is_match(line) {
             hits += 1;
@@ -518,10 +592,12 @@ fn grep_one_file(
             }
             let line_formatted = format!("  {}: {}\n", line_number, truncate_line(line));
             if hits > max_lines {
+                capped = true;
                 out.push_str(&format!("(truncated at {max_lines} matching lines)\n"));
                 return false;
             }
             if out.len() + line_formatted.len() >= MAX_GREP_BYTES {
+                capped = true;
                 out.push_str(&format!("(truncated at {} KB)\n", MAX_GREP_BYTES / 1024));
                 return false;
             }
@@ -536,13 +612,28 @@ fn grep_one_file(
         );
     }
     if hits == 0 {
-        Ok(format!("no matches for '{}' in '{path_str}'", re.as_str()))
+        Ok(SearchOutput {
+            content: format!("no matches for '{}' in '{path_str}'", re.as_str()),
+            completeness: report
+                .truncated_line
+                .then_some(ToolResultCompleteness::ByteTruncated)
+                .unwrap_or(ToolResultCompleteness::Complete),
+        })
     } else {
-        Ok(out.trim_end().to_string())
+        Ok(SearchOutput {
+            content: out.trim_end().to_string(),
+            completeness: (capped || report.truncated_line)
+                .then_some(ToolResultCompleteness::ByteTruncated)
+                .unwrap_or(ToolResultCompleteness::Complete),
+        })
     }
 }
 
 pub fn glob(args: &Value) -> Result<String, String> {
+    glob_output(args).map(|output| output.content)
+}
+
+pub(crate) fn glob_output(args: &Value) -> Result<SearchOutput, String> {
     let pattern = args
         .get("pattern")
         .and_then(|p| p.as_str())
@@ -581,30 +672,65 @@ pub fn glob(args: &Value) -> Result<String, String> {
             .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
         if set.is_match(rel.as_str()) || set.is_match(path.to_string_lossy().as_ref()) {
             matched.push(path.to_string_lossy().to_string());
-            if matched.len() >= MAX_GLOB_RESULTS {
+            if matched.len() > MAX_GLOB_RESULTS {
                 break;
             }
         }
     }
 
     if matched.is_empty() {
-        Ok(format!("no files matched '{pattern}' under '{root}'"))
+        Ok(SearchOutput {
+            content: format!("no files matched '{pattern}' under '{root}'"),
+            completeness: ToolResultCompleteness::Complete,
+        })
     } else {
+        let capped = matched.len() > MAX_GLOB_RESULTS;
+        if capped {
+            matched.truncate(MAX_GLOB_RESULTS);
+        }
         matched.sort();
         let mut out = format!(
             "{} file(s) matched '{pattern}' under '{root}':\n",
             matched.len()
         );
         out.push_str(&matched.join("\n"));
-        if matched.len() >= MAX_GLOB_RESULTS {
+        if capped {
             out.push_str(&format!("\n(truncated at {MAX_GLOB_RESULTS} results)"));
         }
-        Ok(out)
+        Ok(SearchOutput {
+            content: out,
+            completeness: capped
+                .then_some(ToolResultCompleteness::ByteTruncated)
+                .unwrap_or(ToolResultCompleteness::Complete),
+        })
     }
 }
 
+pub(crate) fn glob_execution_output(args: &Value) -> Result<super::ToolExecutionOutput, String> {
+    glob_output(args).map(execution_output)
+}
+
 pub fn list_directory(args: &Value) -> Result<String, String> {
-    rustcode_tools::search::list_directory_with_context(args, &super::current_tool_context())
+    list_directory_output(args).map(|output| output.content)
+}
+
+pub(crate) fn list_directory_output(args: &Value) -> Result<ToolExecutionOutput, String> {
+    let output = rustcode_tools::search::list_directory_output_with_context(
+        args,
+        &super::current_tool_context(),
+    )?;
+    Ok(ToolExecutionOutput {
+        content: output.content,
+        success: true,
+        pending: false,
+        command: None,
+        exit_code: None,
+        truncated: output.completeness != ToolResultCompleteness::Complete,
+        completeness: output.completeness,
+        replayed: false,
+        error_kind: None,
+        retryable: false,
+    })
 }
 
 pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
@@ -719,17 +845,22 @@ mod tests {
         }
         std::fs::write(&file, content).expect("write");
 
-        let res = grep(&serde_json::json!({
+        let output = grep_output(&serde_json::json!({
             "path": file.to_string_lossy().to_string(),
             "pattern": "MATCH",
         }))
         .expect("grep should succeed");
+        let res = output.content;
 
         assert!(
             res.contains("truncated") && res.contains("32 KB"),
             "got: {res}"
         );
         assert!(res.contains("matches may be incomplete"), "got: {res}");
+        assert_eq!(
+            output.completeness,
+            ToolResultCompleteness::ByteTruncated
+        );
     }
 
     #[test]
@@ -746,13 +877,52 @@ mod tests {
         assert!(res.contains("MATCH one"), "got: {res}");
         assert!(res.contains("truncated at 1 matching lines"), "got: {res}");
         assert!(!res.contains("MATCH two"), "got: {res}");
+        let capped = grep_one_file_output(&path_str, &file, &re, 1).expect("grep should succeed");
+        assert_eq!(
+            capped.completeness,
+            ToolResultCompleteness::ByteTruncated
+        );
 
         // Exactly at the cap there is no truncation notice at all.
-        let res = grep_one_file(&path_str, &file, &re, 2).expect("grep should succeed");
+        let output = grep_one_file_output(&path_str, &file, &re, 2).expect("grep should succeed");
+        let res = output.content;
         assert!(
             res.contains("MATCH one") && res.contains("MATCH two"),
             "got: {res}"
         );
         assert!(!res.contains("truncated"), "got: {res}");
+        assert_eq!(output.completeness, ToolResultCompleteness::Complete);
+    }
+
+    #[test]
+    fn glob_distinguishes_exhaustive_results_from_capped_results() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for index in 0..=MAX_GLOB_RESULTS {
+            std::fs::write(dir.path().join(format!("file-{index}.txt")), "content")
+                .expect("write");
+        }
+        let capped = glob_output(&serde_json::json!({
+            "path": dir.path().to_string_lossy().to_string(),
+            "pattern": "*.txt",
+        }))
+        .expect("glob should succeed");
+        assert_eq!(
+            capped.completeness,
+            ToolResultCompleteness::ByteTruncated
+        );
+        assert!(capped.content.contains("truncated at 200 results"));
+
+        let exhaustive_dir = tempfile::tempdir().expect("tempdir");
+        for index in 0..2 {
+            std::fs::write(exhaustive_dir.path().join(format!("file-{index}.txt")), "content")
+                .expect("write");
+        }
+        let exhaustive = glob_output(&serde_json::json!({
+            "path": exhaustive_dir.path().to_string_lossy().to_string(),
+            "pattern": "*.txt",
+        }))
+        .expect("glob should succeed");
+        assert_eq!(exhaustive.completeness, ToolResultCompleteness::Complete);
+        assert!(!exhaustive.content.contains("truncated"));
     }
 }
