@@ -165,9 +165,8 @@ fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
 }
 
 #[test]
-fn reasoning_model_tool_round_cap_preserves_full_final_cap() {
+fn every_model_tool_round_cap_preserves_full_final_cap() {
     let profile = ModelProfile {
-        enable_thinking: Some(true),
         context_window: Some(128_000),
         max_tokens: Some(16_000),
         ..ModelProfile::default()

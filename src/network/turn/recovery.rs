@@ -1,21 +1,25 @@
 use super::TurnContext;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+fn malformed_call_fingerprint(raw_content: &str, calls: &[crate::tools::ToolCall]) -> String {
+    let mut hasher = DefaultHasher::new();
+    if calls.is_empty() {
+        raw_content.trim().hash(&mut hasher);
+    } else {
+        for call in calls {
+            call.name.hash(&mut hasher);
+            call.arguments.to_string().hash(&mut hasher);
+        }
+    }
+    format!("malformed:{:016x}", hasher.finish())
+}
 
 pub(crate) fn record_malformed_call(
     ctx: &mut TurnContext,
     raw_content: &str,
     calls: &[crate::tools::ToolCall],
 ) -> bool {
-    let fingerprint = if calls.is_empty() {
-        raw_content.trim().to_string()
-    } else {
-        serde_json::to_string(
-            &calls
-                .iter()
-                .map(|call| serde_json::json!({"name": call.name, "arguments": call.arguments}))
-                .collect::<Vec<_>>(),
-        )
-        .unwrap_or_else(|_| raw_content.trim().to_string())
-    };
+    let fingerprint = malformed_call_fingerprint(raw_content, calls);
     let repeated = ctx.recovery.last_malformed_call.as_deref() == Some(fingerprint.as_str());
     ctx.recovery.consecutive_malformed_calls = if repeated {
         ctx.recovery.consecutive_malformed_calls.saturating_add(1)
