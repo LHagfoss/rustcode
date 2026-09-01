@@ -631,12 +631,13 @@ fn render_summary_message(message: &ChatMessage) -> String {
                 .join(", ")
         };
         content.push_str(&format!(
-            "\n[execution metadata: success={}, error_kind={}, retryable={}, exit_code={:?}, truncated={}, replayed={}, changed_paths={paths}]",
+            "\n[execution metadata: success={}, error_kind={}, retryable={}, exit_code={:?}, truncated={}, completeness={}, replayed={}, changed_paths={paths}]",
             record.success,
             error,
             record.retryable,
             record.exit_code,
             record.truncated,
+            record.resolved_completeness().as_str(),
             record.replayed,
         ));
     }

@@ -2,7 +2,7 @@ use crate::app::ChatMessage;
 
 use super::super::events::{ToolResult, ToolResultMetadata};
 use super::super::is_mutating_tool;
-use super::super::output::truncate_tool_output_for_message;
+use super::super::output::{INCOMPLETE_TOOL_RESULT_MARKER, truncate_tool_output_for_message};
 use super::preview::get_file_preview;
 use rustcode_core::ToolResultCompleteness;
 
@@ -79,6 +79,7 @@ pub(crate) fn finalize_tool_result_for_prefix(
     deferred_notice: Option<&str>,
     prefix: &str,
 ) -> ToolResult {
+    normalize_incomplete_metadata(&mut result);
     if let Some(notice) = deferred_notice {
         result.content.push_str("\n\n");
         result.content.push_str(notice);
@@ -93,7 +94,35 @@ pub(crate) fn finalize_tool_result_for_prefix(
             result.metadata.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
         }
     }
+    normalize_incomplete_metadata(&mut result);
     result
+}
+
+/// Keep the model-facing transcript honest even when a result was bounded by
+/// a lower-level tool or reconstructed from an older/replayed history record.
+/// The typed field is authoritative, while this compact marker makes the same
+/// fact unambiguous in providers that reason primarily from result text.
+fn normalize_incomplete_metadata(result: &mut ToolResult) {
+    let completeness = if result.metadata.truncated
+        && result.metadata.completeness == ToolResultCompleteness::Complete
+    {
+        ToolResultCompleteness::ByteTruncated
+    } else {
+        result.metadata.completeness
+    };
+    result.metadata.completeness = completeness;
+    if matches!(
+        completeness,
+        ToolResultCompleteness::LineTruncated | ToolResultCompleteness::ByteTruncated
+    ) {
+        result.metadata.truncated = true;
+        if !result.content.contains(INCOMPLETE_TOOL_RESULT_MARKER) {
+            result.content.push_str(&format!(
+                "\n\n{INCOMPLETE_TOOL_RESULT_MARKER} completeness={}; content is partial and must not be treated as complete.]",
+                completeness.as_str()
+            ));
+        }
+    }
 }
 
 pub(crate) fn finalize_tool_result(
@@ -113,10 +142,11 @@ pub(crate) fn tool_result_history_message(
 }
 
 pub(crate) fn tool_result_history_message_with_prefix(
-    result: ToolResult,
+    mut result: ToolResult,
     prefix: &str,
     answered_call: Option<String>,
 ) -> ChatMessage {
+    normalize_incomplete_metadata(&mut result);
     let envelope = result.execution_envelope();
     let ToolResult {
         tool_name,

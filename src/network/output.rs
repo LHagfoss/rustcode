@@ -3,6 +3,7 @@ use std::{fs::OpenOptions, io::Write};
 
 const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_TOOL_OUTPUT_LINES: usize = 1000;
+pub(crate) const INCOMPLETE_TOOL_RESULT_MARKER: &str = "[tool_result_incomplete:";
 static NEXT_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct BoundedToolOutput {
@@ -29,7 +30,9 @@ pub(crate) fn truncate_tool_output_for_message(
     message_prefix: &str,
 ) -> BoundedToolOutput {
     let max_bytes = MAX_TOOL_OUTPUT_BYTES.saturating_sub(message_prefix.len());
-    let max_lines = MAX_TOOL_OUTPUT_LINES.saturating_sub(message_prefix.matches('\n').count());
+    // Leave room for the bounded-output explanation and its machine-readable
+    // incomplete marker in the final model-visible message.
+    let max_lines = MAX_TOOL_OUTPUT_LINES.saturating_sub(message_prefix.matches('\n').count() + 2);
     let bytes = result.len();
     let lines: Vec<&str> = result.lines().collect();
     let line_count = lines.len();
@@ -64,7 +67,7 @@ pub(crate) fn truncate_tool_output_for_message(
         let omitted_lines = line_count.saturating_sub(head_count + tail_count);
         let omitted_bytes = bytes.saturating_sub(head.len() + tail.len());
         let mut output = format!(
-            "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]"
+            "{head}\n\n... [{omitted_lines} lines / {omitted_bytes} bytes truncated] ...\n\n{tail}\n\n[Output truncated: {bytes} bytes total, {line_count} lines.{path_note}]\n\n{INCOMPLETE_TOOL_RESULT_MARKER} completeness=byte_truncated; content is partial and must not be treated as complete.]"
         );
 
         if output.len() <= max_bytes {
@@ -79,10 +82,16 @@ pub(crate) fn truncate_tool_output_for_message(
         } else if tail_count > 0 {
             tail_count -= 1;
         } else {
-            while !output.is_char_boundary(max_bytes) {
+            let marker = format!(
+                "{INCOMPLETE_TOOL_RESULT_MARKER} completeness=byte_truncated; content is partial and must not be treated as complete.]"
+            );
+            let content_budget = max_bytes.saturating_sub(marker.len() + 2);
+            while !output.is_char_boundary(content_budget) {
                 output.pop();
             }
-            output.truncate(max_bytes);
+            output.truncate(content_budget);
+            output.push_str("\n\n");
+            output.push_str(&marker);
             return BoundedToolOutput {
                 content: output,
                 truncated: true,
