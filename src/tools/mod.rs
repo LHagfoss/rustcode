@@ -190,7 +190,10 @@ impl ToolExecutionOutput {
 /// not to ration throughput: a model planning six edits ahead is predicting file
 /// contents it has not read. Shell commands may still chain with any normal
 /// operator because they are one call.
-pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize = 1;
+/// Backwards-compatible name for the safe default. Runtime orchestration
+/// resolves the active profile's limit and passes it to policy functions.
+pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize =
+    crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE;
 
 /// Absolute ceiling on calls from one response, whatever their kind. Reads are
 /// cheap and safe to fan out — searching six paths at once is one thought, not
@@ -209,7 +212,10 @@ pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 32;
 ///
 /// A control-plane call (`use_skill`) must execute alone, so it is either the
 /// entire kept batch — when it leads — or the boundary the prefix stops at.
-pub fn truncate_tool_batch(mut calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize) {
+pub fn truncate_tool_batch(
+    mut calls: Vec<ToolCall>,
+    max_mutating_calls: usize,
+) -> (Vec<ToolCall>, usize) {
     let total = calls.len();
     let is_control = |call: &ToolCall| matches!(tool_safety(&call.name), ToolSafety::ControlPlane);
 
@@ -226,7 +232,7 @@ pub fn truncate_tool_batch(mut calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize) {
             }
             if !supports_parallel_execution(&call.name) {
                 mutating += 1;
-                if mutating > MAX_MUTATING_CALLS_PER_RESPONSE {
+                if mutating > max_mutating_calls {
                     kept = index;
                     break;
                 }
@@ -242,7 +248,7 @@ pub fn truncate_tool_batch(mut calls: Vec<ToolCall>) -> (Vec<ToolCall>, usize) {
 /// Validate parsed calls before they reach an executor. Text protocols are
 /// intentionally permissive while parsing, but execution must be strict and
 /// fail closed when the model emits an unknown tool or malformed arguments.
-pub fn validate_tool_calls(calls: &[ToolCall]) -> Result<(), String> {
+pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Result<(), String> {
     if calls.len() > MAX_TOOL_CALLS_PER_RESPONSE {
         return Err(format!(
             "too many tool calls in one response ({}; maximum is {}); chain related shell operations inside one run_command and emit the next action after receiving results",
@@ -287,6 +293,16 @@ pub fn validate_tool_calls(calls: &[ToolCall]) -> Result<(), String> {
                 call.name
             ));
         }
+    }
+
+    let mutating = calls
+        .iter()
+        .filter(|call| !supports_parallel_execution(&call.name))
+        .count();
+    if mutating > max_mutating_calls {
+        return Err(format!(
+            "too many workspace-changing tool calls in one response ({mutating}; maximum is {max_mutating_calls}); emit the next action after receiving the previous result"
+        ));
     }
 
     Ok(())

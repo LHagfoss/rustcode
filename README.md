@@ -142,6 +142,20 @@ Writes use a temporary file and replacement so an interrupted save does not
 leave a truncated configuration. On Unix, the file is written with owner-only
 permissions because model profiles may contain API keys.
 
+Each model profile may optionally set `max_mutating_calls_per_response` to a
+bounded value when its provider is trusted to emit independent edits. Omit the
+field to retain the safe default of one; zero is normalized to that default and
+values above the hard cap are clamped. Calls still execute sequentially and the
+absolute per-response tool-call ceiling remains in force:
+
+```toml
+[[models]]
+name = "trusted-model"
+url = "https://example.invalid/v1"
+model = "trusted-model"
+max_mutating_calls_per_response = 2
+```
+
 ### Project configuration
 
 Create a project-local override with:
