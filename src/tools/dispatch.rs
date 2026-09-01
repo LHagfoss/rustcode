@@ -1,7 +1,7 @@
 use super::schema::{mcp_canonical_name_for_clients, mcp_raw_name_is_unique};
 use super::{
     CommandProgressCallback, TOOLS, ToolErrorKind, ToolExecutionOutput, audio, exec, filesystem,
-    video,
+    search, video,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -126,6 +126,7 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                                 command: None,
                                 exit_code: None,
                                 truncated: false,
+                                completeness: rustcode_core::ToolResultCompleteness::Complete,
                                 replayed: false,
                                 error_kind: (!success).then_some(ToolErrorKind::McpFailed),
                                 retryable: false,
@@ -138,6 +139,7 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                                 command: None,
                                 exit_code: None,
                                 truncated: false,
+                                completeness: rustcode_core::ToolResultCompleteness::Complete,
                                 replayed: false,
                                 error_kind: (!success).then_some(ToolErrorKind::McpFailed),
                                 retryable: false,
@@ -173,6 +175,7 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                 command: None,
                 exit_code: None,
                 truncated: output.truncated,
+                completeness: output.completeness,
                 replayed: false,
                 error_kind: None,
                 retryable: false,
@@ -183,6 +186,21 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                 false,
             ),
         };
+    }
+    if matches!(name, "grep" | "glob" | "list_directory") {
+        let result = match name {
+            "grep" => search::grep_execution_output(args),
+            "glob" => search::glob_execution_output(args),
+            "list_directory" => search::list_directory_output(args),
+            _ => unreachable!(),
+        };
+        return result.unwrap_or_else(|error| {
+            ToolExecutionOutput::failure_with_kind(
+                as_error_message(&error),
+                ToolErrorKind::InvalidArguments,
+                false,
+            )
+        });
     }
 
     match TOOLS.iter().find(|t| t.name == name) {
