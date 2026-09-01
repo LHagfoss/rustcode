@@ -109,8 +109,8 @@ fn a_read_cut_short_by_the_default_window_names_the_omitted_range() {
     // No end_line given: the tool applies its default window and must
     // clearly flag the read as incomplete. The inclusive window contains
     // exactly DEFAULT_READ_WINDOW_LINES lines.
-    let output = view_file_output(&serde_json::json!({ "path": path, "start_line": 1 }))
-        .expect("read");
+    let output =
+        view_file_output(&serde_json::json!({ "path": path, "start_line": 1 })).expect("read");
     assert_eq!(
         output.completeness,
         rustcode_core::ToolResultCompleteness::LineTruncated

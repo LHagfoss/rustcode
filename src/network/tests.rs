@@ -22,7 +22,8 @@ fn model_result_contract_distinguishes_read_completeness_states() {
         crate::tools::ToolExecutionOutput {
             completeness: rustcode_core::ToolResultCompleteness::UserLimited,
             ..crate::tools::ToolExecutionOutput::success(
-                "[File: src/lib.rs, Lines 1 to 1 of 15]\n1: fn main() {}\nunchanged wording".to_string(),
+                "[File: src/lib.rs, Lines 1 to 1 of 15]\n1: fn main() {}\nunchanged wording"
+                    .to_string(),
             )
         },
         None,
