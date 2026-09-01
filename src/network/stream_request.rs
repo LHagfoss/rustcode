@@ -484,6 +484,16 @@ fn clamp_request_max_tokens(max_tokens: u32, thinking_mode: ThinkingMode) -> u32
     }
 }
 
+fn apply_output_token_limit(
+    payload: &mut serde_json::Value,
+    field: crate::config::OutputTokenField,
+    limit: Option<u32>,
+) {
+    if let Some(limit) = limit {
+        payload[field.wire_name()] = serde_json::json!(limit);
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct BoundedReasoningChunk {
     text: String,
@@ -1001,6 +1011,90 @@ mod tests {
     }
 
     #[test]
+    fn output_limit_policy_omits_unconfigured_normal_cap() {
+        let profile = crate::config::ModelProfile {
+            context_window: Some(128_000),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_output_token_limit(
+            &mut payload,
+            profile.resolved_output_token_field(),
+            profile.output_token_limit(false, false),
+        );
+        assert!(payload.get("max_tokens").is_none());
+        assert!(payload.get("max_completion_tokens").is_none());
+        assert!(payload.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn output_limit_policy_selects_explicit_openai_compatible_field() {
+        let profile = crate::config::ModelProfile {
+            context_window: Some(128_000),
+            max_tokens: Some(16_000),
+            output_token_field: Some(crate::config::OutputTokenField::MaxCompletionTokens),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_output_token_limit(
+            &mut payload,
+            profile.resolved_output_token_field(),
+            profile.output_token_limit(false, false),
+        );
+        assert_eq!(payload["max_completion_tokens"], 16_000);
+        assert!(payload.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn tool_output_limit_is_present_when_profile_uses_provider_default() {
+        let profile = crate::config::ModelProfile {
+            context_window: Some(128_000),
+            output_token_field: Some(crate::config::OutputTokenField::MaxOutputTokens),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_output_token_limit(
+            &mut payload,
+            profile.resolved_output_token_field(),
+            profile.output_token_limit(true, false),
+        );
+        assert_eq!(payload["max_output_tokens"], 8192);
+        assert!(payload.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn native_google_payload_uses_max_output_tokens_capability_field() {
+        let profile = crate::config::ModelProfile {
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
+                .to_string(),
+            context_window: Some(128_000),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_output_token_limit(
+            &mut payload,
+            profile.resolved_output_token_field(),
+            profile.output_token_limit(true, false),
+        );
+        assert_eq!(payload["maxOutputTokens"], 8192);
+        assert!(payload.get("max_tokens").is_none());
+        assert!(payload.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn bounded_recovery_keeps_output_cap_separate_and_small() {
+        let profile = crate::config::ModelProfile {
+            context_window: Some(128_000),
+            max_tokens: Some(16_000),
+            ..crate::config::ModelProfile::default()
+        };
+        let limit = profile
+            .output_token_limit(false, true)
+            .map(|value| clamp_request_max_tokens(value, ThinkingMode::BoundedRecovery));
+        assert_eq!(limit, Some(RECOVERY_MAX_TOKENS));
+    }
+
+    #[test]
     fn profile_sampling_options_are_sent_without_changing_unspecified_defaults() {
         let profile = crate::config::ModelProfile {
             temperature: Some(1.0),
@@ -1479,6 +1573,19 @@ pub async fn stream_request(
             .completion_reserve
         });
     max_tokens = clamp_request_max_tokens(max_tokens, thinking_mode);
+    let output_token_field = profile
+        .as_ref()
+        .map(crate::config::ModelProfile::resolved_output_token_field)
+        .unwrap_or(crate::config::OutputTokenField::MaxTokens);
+    let output_token_limit = profile
+        .as_ref()
+        .and_then(|p| {
+            p.output_token_limit(allow_tools, thinking_mode == ThinkingMode::BoundedRecovery)
+        })
+        .map(|limit| clamp_request_max_tokens(limit, thinking_mode))
+        .or_else(|| {
+            (allow_tools || thinking_mode == ThinkingMode::BoundedRecovery).then_some(max_tokens)
+        });
     // Recovery keeps reasoning enabled but applies a small client-side bound:
     // it exists to produce the next action, not another full planning turn.
     let thinking_budget = if thinking_mode == ThinkingMode::BoundedRecovery {
@@ -1519,9 +1626,10 @@ pub async fn stream_request(
         "stream_options": {
             "include_usage": true
         },
-        "max_tokens": max_tokens,
     });
     payload["messages"] = serde_json::Value::Array(aligned_messages);
+
+    apply_output_token_limit(&mut payload, output_token_field, output_token_limit);
 
     apply_profile_generation_options(&mut payload, profile.as_ref(), thinking_mode);
     apply_profile_sampling_options(&mut payload, profile.as_ref());
@@ -1612,7 +1720,16 @@ pub async fn stream_request(
             "tool_schema_tokens": tool_schema_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "total_estimated_prompt_tokens": estimated_prompt_tokens,
-            "max_tokens": max_tokens,
+            "output_token_field": output_token_limit.map(|_| output_token_field),
+            "output_token_limit": output_token_limit,
+            "output_token_limit_source":
+                if profile.as_ref().is_some_and(|p| p.max_tokens.is_some()) {
+                    "profile"
+                } else if output_token_limit.is_some() {
+                    "client_safety"
+                } else {
+                    "provider_default"
+                },
             "soft_context_target": profile.as_ref().map(|p| p.context_budget().soft_context_target),
             "hard_effective_limit": profile.as_ref().map(|p| p.context_budget().hard_effective_limit),
             "context_window": profile.as_ref().map(|p| p.context_budget().context_window),
@@ -2100,9 +2217,10 @@ pub async fn stream_request(
                                                 "completion_tokens": c,
                                                 "total_tokens": t,
                                                 "cached_tokens": cached,
-                                                "requested_max_tokens": max_tokens,
+                                                "requested_max_tokens": output_token_limit,
                                                 "thinking_budget": thinking_budget,
-                                                "completion_limit_reached": c >= u64::from(max_tokens),
+                                                "completion_limit_reached": output_token_limit
+                                                    .is_some_and(|limit| c >= u64::from(limit)),
                                                 "estimated_prompt_tokens": estimated_prompt_tokens,
                                                 "tool_schema_tokens": tool_schema_tokens,
                                                 "total_estimated_prompt_tokens": estimated_prompt_tokens,
