@@ -84,11 +84,15 @@ pub struct ModelProfile {
     /// Ask compatible chat templates to retain historical thinking traces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preserve_thinking: Option<bool>,
-    /// Per-profile completion token cap sent as `max_tokens`. `None` falls
-    /// back to the shared default, overriding whatever a Modelfile's
-    /// `PARAMETER num_predict` says.
+    /// Per-profile completion token cap. `None` lets ordinary responses use
+    /// the provider/model default; tool and recovery rounds still receive a
+    /// bounded client-side cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Wire field used when an explicit output cap must be sent. This is an
+    /// endpoint capability/dialect override, not a model-name lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_token_field: Option<OutputTokenField>,
     /// Whether this model accepts image input. `None` means unsupported until
     /// the profile is explicitly configured, avoiding a provider failure as a
     /// capability probe.
@@ -105,6 +109,31 @@ pub struct ModelProfile {
     /// Conservative safety margin for provider chat-template framing and tokenizer variations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_overhead_margin: Option<u32>,
+}
+
+/// Provider-specific spelling for an output token limit.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputTokenField {
+    MaxTokens,
+    MaxCompletionTokens,
+    MaxOutputTokens,
+}
+
+impl OutputTokenField {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::MaxTokens => "max_tokens",
+            Self::MaxCompletionTokens => "max_completion_tokens",
+            Self::MaxOutputTokens => "max_output_tokens",
+        }
+    }
+}
+
+impl std::fmt::Display for OutputTokenField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.wire_name())
+    }
 }
 
 /// Fallback `max_tokens` used when a `ModelProfile` doesn't set its own.
@@ -138,6 +167,25 @@ impl ModelProfile {
             configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
         } else {
             configured
+        }
+    }
+
+    /// Resolve the endpoint's output-limit field. The generic default keeps
+    /// local gateways and OpenAI-compatible providers working without a
+    /// brittle table keyed by marketing model names.
+    pub fn resolved_output_token_field(&self) -> OutputTokenField {
+        self.output_token_field
+            .unwrap_or(OutputTokenField::MaxTokens)
+    }
+
+    /// Return the wire output cap for one request. Context reserves remain
+    /// independent: an unset ordinary response uses the provider default,
+    /// while tool and recovery rounds retain a hard client-side ceiling.
+    pub fn output_token_limit(&self, allow_tools: bool, bounded_recovery: bool) -> Option<u32> {
+        if self.max_tokens.is_some() || allow_tools || bounded_recovery {
+            Some(self.completion_token_limit(allow_tools))
+        } else {
+            None
         }
     }
 
