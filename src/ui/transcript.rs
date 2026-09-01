@@ -92,17 +92,20 @@ impl TranscriptModel {
     /// stream. Provider deltas are cumulative in `AppState`, so appending here
     /// would duplicate content on every redraw.
     pub(crate) fn replace_live_text(&mut self, text: &str) {
-        self.live = if text.is_empty() {
-            None
+        if text.is_empty() {
+            self.live = None;
+        } else if let Some(HistoryCell::Assistant { content, .. }) = self.live.as_mut() {
+            content.clear();
+            content.push_str(text);
         } else {
-            Some(HistoryCell::Assistant {
+            self.live = Some(HistoryCell::Assistant {
                 content: text.to_owned(),
                 token_usage: None,
                 response_time_ms: None,
                 thought_time_ms: None,
                 thought_tokens: None,
-            })
-        };
+            });
+        }
     }
 
     pub(crate) fn live_text(&self) -> Option<&str> {
