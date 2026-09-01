@@ -156,7 +156,7 @@ impl ToolExecutionOutput {
 /// not to ration throughput: a model planning six edits ahead is predicting file
 /// contents it has not read. Shell commands may still chain with any normal
 /// operator because they are one call.
-pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
+pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize = 1;
 
 /// Absolute ceiling on calls from one response, whatever their kind. Reads are
 /// cheap and safe to fan out — searching six paths at once is one thought, not
