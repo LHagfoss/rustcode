@@ -18,6 +18,8 @@ const SUMMARY_PRIOR_MAX_BYTES: usize = 24 * 1024;
 /// Provider output is requested at 1024 tokens; 16 KiB is a generous defensive
 /// byte ceiling for providers that ignore that limit.
 pub(super) const SUMMARY_OUTPUT_MAX_BYTES: usize = 16 * 1024;
+const PRESERVED_USER_REQUEST_MAX_TOKENS: usize = 20_000;
+const PRESERVED_USER_REQUEST_BUDGET_DIVISOR: usize = 5;
 
 /// Total wall-clock budget for a non-streaming summary request, including
 /// connection, response headers, body transfer, and JSON decoding. Twenty-five
@@ -164,6 +166,7 @@ pub async fn maybe_compact_with_local_policy(
         model,
         history,
         summarize_count,
+        Some(budget),
         Some(cancel_token),
     )
     .await
@@ -258,8 +261,16 @@ pub async fn force_compact_with_budget(
         return Err("Not enough messages to compact.".to_string());
     }
 
-    let result =
-        force_compact_internal(client, url, model, history, summarize_count, cancel_token).await;
+    let result = force_compact_internal(
+        client,
+        url,
+        model,
+        history,
+        summarize_count,
+        budget,
+        cancel_token,
+    )
+    .await;
     let after_tokens: usize = history.iter().map(estimate_message_tokens).sum();
     if after_tokens < before_tokens {
         LAST_COMPACTION_RECLAIMED.store(
@@ -276,6 +287,7 @@ async fn force_compact_internal(
     model: &str,
     history: &mut Vec<ChatMessage>,
     summarize_count: usize,
+    budget: Option<usize>,
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(), String> {
     // Incremental compaction: if a prior summary already sits at the front of the
@@ -343,6 +355,15 @@ async fn force_compact_internal(
         tail.iter()
             .any(|m| m.role == "system" && m.content == format!("{ORIGINAL_TASK_MARKER}\n{task}"))
     });
+    let preserved_user_requests = collect_preserved_user_requests(
+        &history[..summarize_count],
+        &tail,
+        pinned_task.as_deref(),
+        budget
+            .map(|tokens| tokens / PRESERVED_USER_REQUEST_BUDGET_DIVISOR)
+            .unwrap_or(PRESERVED_USER_REQUEST_MAX_TOKENS)
+            .min(PRESERVED_USER_REQUEST_MAX_TOKENS),
+    );
 
     // Replace the summarized range with a single summary message.
     history.clear();
@@ -360,6 +381,12 @@ async fn force_compact_internal(
             format!("{ORIGINAL_TASK_MARKER}\n{task}"),
         ));
     }
+    for request in preserved_user_requests {
+        history.push(ChatMessage::new(
+            "system",
+            format!("{PRESERVED_USER_REQUEST_MARKER}\n{request}"),
+        ));
+    }
     history.extend(tail);
 
     Ok(())
@@ -369,6 +396,60 @@ async fn force_compact_internal(
 /// prior summaries during incremental compaction.
 pub(crate) const SUMMARY_MARKER: &str = "[Session History Summary]";
 pub(super) const ORIGINAL_TASK_MARKER: &str = "[Original task — do not lose sight of this]";
+pub(super) const PRESERVED_USER_REQUEST_MARKER: &str = "[Preserved user request]";
+
+fn collect_preserved_user_requests(
+    summarized: &[ChatMessage],
+    tail: &[ChatMessage],
+    pinned_task: Option<&str>,
+    token_budget: usize,
+) -> Vec<String> {
+    if token_budget == 0 {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    for message in summarized {
+        let content = if message.role == "user" && !message.content.starts_with("<tool_result>") {
+            Some(message.content.as_str())
+        } else if message.role == "system"
+            && message.content.starts_with(PRESERVED_USER_REQUEST_MARKER)
+        {
+            message
+                .content
+                .strip_prefix(PRESERVED_USER_REQUEST_MARKER)
+                .map(str::trim_start)
+        } else {
+            None
+        };
+        let Some(content) = content else { continue };
+        if content.is_empty()
+            || pinned_task == Some(content)
+            || tail
+                .iter()
+                .any(|message| message.role == "user" && message.content == content)
+            || candidates
+                .iter()
+                .any(|existing: &String| existing == content)
+        {
+            continue;
+        }
+        candidates.push(content.to_string());
+    }
+
+    let mut selected = Vec::new();
+    let mut used = 0usize;
+    for request in candidates.into_iter().rev() {
+        let tokens = estimate_message_tokens(&ChatMessage::new("user", request.clone()));
+        if used.saturating_add(tokens) > token_budget {
+            continue;
+        }
+        used = used.saturating_add(tokens);
+        selected.push(request);
+    }
+    selected.reverse();
+    selected
+}
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
     if value.len() <= max_bytes {
@@ -577,4 +658,46 @@ async fn generate_summary(
         .await
         .ok()
         .flatten()
+}
+
+#[cfg(test)]
+mod preserved_user_request_tests {
+    use super::*;
+
+    #[test]
+    fn keeps_recent_authoritative_user_wording_within_budget() {
+        let summarized = vec![
+            ChatMessage::new("user", "original goal"),
+            ChatMessage::new("assistant", "working"),
+            ChatMessage::new("user", "do not change the public API"),
+            ChatMessage::new("user", "also keep the wire format stable"),
+        ];
+        let tail = vec![ChatMessage::new("user", "current follow-up")];
+
+        let preserved =
+            collect_preserved_user_requests(&summarized, &tail, Some("original goal"), 100);
+
+        assert_eq!(
+            preserved,
+            vec![
+                "do not change the public API".to_string(),
+                "also keep the wire format stable".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn carries_preserved_requests_across_later_compactions_without_duplicates() {
+        let summarized = vec![
+            ChatMessage::new(
+                "system",
+                format!("{PRESERVED_USER_REQUEST_MARKER}\nkeep this exact constraint"),
+            ),
+            ChatMessage::new("user", "keep this exact constraint"),
+        ];
+
+        let preserved = collect_preserved_user_requests(&summarized, &[], None, 100);
+
+        assert_eq!(preserved, vec!["keep this exact constraint".to_string()]);
+    }
 }
