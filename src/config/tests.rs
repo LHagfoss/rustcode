@@ -220,6 +220,45 @@ fn output_token_field_override_and_legacy_cap_are_backward_compatible() {
 }
 
 #[test]
+fn native_google_endpoint_resolves_camel_case_output_limit_without_model_lookup() {
+    let native = ModelProfile {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
+            .to_string(),
+        ..ModelProfile::default()
+    };
+    assert!(native.is_google_native_endpoint());
+    assert_eq!(
+        native.resolved_output_token_field(),
+        OutputTokenField::GoogleMaxOutputTokens
+    );
+
+    let compatible = ModelProfile {
+        url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+            .to_string(),
+        ..ModelProfile::default()
+    };
+    assert!(!compatible.is_google_native_endpoint());
+    assert_eq!(
+        compatible.resolved_output_token_field(),
+        OutputTokenField::MaxTokens
+    );
+}
+
+#[test]
+fn explicit_output_field_overrides_native_google_capability() {
+    let profile = ModelProfile {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
+            .to_string(),
+        output_token_field: Some(OutputTokenField::MaxOutputTokens),
+        ..ModelProfile::default()
+    };
+    assert_eq!(
+        profile.resolved_output_token_field(),
+        OutputTokenField::MaxOutputTokens
+    );
+}
+
+#[test]
 fn context_budget_scales_without_double_reserving_large_or_small_windows() {
     let mut profile = AppConfig::default().models[0].clone();
     profile.max_tokens = Some(u32::MAX);
