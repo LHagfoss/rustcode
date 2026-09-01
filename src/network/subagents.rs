@@ -306,9 +306,10 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
             for (index, (tool_call, call_id)) in parsed_calls.iter().enumerate() {
                 let name = &tool_call.name;
                 let args = &tool_call.arguments;
-                if let Err(reason) =
-                    crate::tools::validate_tool_calls(std::slice::from_ref(tool_call))
-                {
+                if let Err(reason) = crate::tools::validate_tool_calls(
+                    std::slice::from_ref(tool_call),
+                    crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE,
+                ) {
                     let execution = crate::tools::ToolExecutionOutput::failure_with_kind(
                         format!("error: tool call rejected before execution: {reason}"),
                         crate::tools::ToolErrorKind::Validation,

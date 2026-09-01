@@ -56,7 +56,24 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
 ) -> ToolHandlingOutcome {
     // Phase 3: normalize provider output into protocol-independent events.
-    let protocol = { state.lock().await.active_tool_protocol() };
+    let (protocol, max_mutating_calls, mutation_limit_source) = {
+        let state = state.lock().await;
+        let profile = state.active_model_profile();
+        let mutation_limit_source = profile
+            .as_ref()
+            .and_then(|profile| profile.max_mutating_calls_per_response)
+            .filter(|limit| *limit > 0)
+            .map(|_| "profile")
+            .unwrap_or("default");
+        (
+            state.active_tool_protocol(),
+            profile
+                .as_ref()
+                .map(|profile| profile.max_mutating_calls_per_response())
+                .unwrap_or(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE),
+            mutation_limit_source,
+        )
+    };
     let model_response = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
         let typed_calls = native_tool_calls
             .into_iter()
@@ -143,7 +160,8 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     }
 
     let requested_calls = parsed_tool_calls.len();
-    let (parsed_tool_calls, dropped_calls) = crate::tools::truncate_tool_batch(parsed_tool_calls);
+    let (parsed_tool_calls, dropped_calls) =
+        crate::tools::truncate_tool_batch(parsed_tool_calls, max_mutating_calls);
     if dropped_calls > 0 {
         dbg_log!(
             "Oversized batch: running {} of {} requested tool calls",
@@ -156,12 +174,14 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 "requested": requested_calls,
                 "executed": parsed_tool_calls.len(),
                 "dropped": dropped_calls,
+                "max_mutating_calls": max_mutating_calls,
+                "max_mutating_calls_source": mutation_limit_source,
             }),
         );
         ctx.response.final_content = truncated_batch_summary(&parsed_tool_calls, dropped_calls);
     }
     let oversized_batch = dropped_calls > 0;
-    if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls) {
+    if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls, max_mutating_calls) {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
         }
@@ -194,7 +214,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             format!(
                 " This response contained {requested_calls} separate tool calls; the leading {} were kept and the rest dropped, then the remainder failed validation, so nothing ran and nothing it claimed about their results happened. Start again from the last real tool result. Reads may be issued together; keep calls that change the workspace to at most {} per response so each one is grounded in the previous result.",
                 parsed_tool_calls.len(),
-                crate::tools::MAX_MUTATING_CALLS_PER_RESPONSE
+                max_mutating_calls
             )
         } else {
             ctx.recovery.oversized_batch_rejections = 0;
@@ -362,7 +382,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                                 format!(
                                     "[{dropped_calls} of the {requested_calls} tool calls in that response were dropped; only the first {} ran. Their results follow — plan the next step from those, not from what the response predicted. Reads may be issued together; keep calls that change the workspace to at most {} per response.]",
                                     tool_calls.len(),
-                                    crate::tools::MAX_MUTATING_CALLS_PER_RESPONSE
+                                    max_mutating_calls
                                 ),
                             ));
                 }
@@ -423,6 +443,11 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 "tools.batch.finish",
                 serde_json::json!({
                     "count": results.len(),
+                    "requested": requested_calls,
+                    "executed": results.len(),
+                    "dropped": dropped_calls,
+                    "max_mutating_calls": max_mutating_calls,
+                    "max_mutating_calls_source": mutation_limit_source,
                     "successes": results.iter().filter(|result| result.metadata.success).count(),
                     "failed": results.iter().filter(|result| !result.metadata.success).count(),
                     "changed_paths": results.iter().map(|result| result.metadata.changed_paths.len()).sum::<usize>(),
