@@ -1063,6 +1063,25 @@ mod tests {
     }
 
     #[test]
+    fn native_google_payload_uses_max_output_tokens_capability_field() {
+        let profile = crate::config::ModelProfile {
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
+                .to_string(),
+            context_window: Some(128_000),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_output_token_limit(
+            &mut payload,
+            profile.resolved_output_token_field(),
+            profile.output_token_limit(true, false),
+        );
+        assert_eq!(payload["maxOutputTokens"], 8192);
+        assert!(payload.get("max_tokens").is_none());
+        assert!(payload.get("max_output_tokens").is_none());
+    }
+
+    #[test]
     fn bounded_recovery_keeps_output_cap_separate_and_small() {
         let profile = crate::config::ModelProfile {
             context_window: Some(128_000),

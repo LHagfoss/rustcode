@@ -118,6 +118,8 @@ pub enum OutputTokenField {
     MaxTokens,
     MaxCompletionTokens,
     MaxOutputTokens,
+    /// Google Generative Language native `generationConfig` spelling.
+    GoogleMaxOutputTokens,
 }
 
 impl OutputTokenField {
@@ -126,6 +128,7 @@ impl OutputTokenField {
             Self::MaxTokens => "max_tokens",
             Self::MaxCompletionTokens => "max_completion_tokens",
             Self::MaxOutputTokens => "max_output_tokens",
+            Self::GoogleMaxOutputTokens => "maxOutputTokens",
         }
     }
 }
@@ -170,12 +173,27 @@ impl ModelProfile {
         }
     }
 
-    /// Resolve the endpoint's output-limit field. The generic default keeps
-    /// local gateways and OpenAI-compatible providers working without a
-    /// brittle table keyed by marketing model names.
+    /// Resolve the endpoint's output-limit field. Explicit profile metadata
+    /// wins; otherwise recognize only a stable endpoint dialect and keep the
+    /// generic OpenAI-compatible field for local gateways and other proxies.
     pub fn resolved_output_token_field(&self) -> OutputTokenField {
         self.output_token_field
-            .unwrap_or(OutputTokenField::MaxTokens)
+            .unwrap_or_else(|| {
+                if self.is_google_native_endpoint() {
+                    OutputTokenField::GoogleMaxOutputTokens
+                } else {
+                    OutputTokenField::MaxTokens
+                }
+            })
+    }
+
+    /// Whether this profile points at Google's native Generative Language
+    /// endpoint rather than its OpenAI-compatible `/openai/` adapter.
+    pub fn is_google_native_endpoint(&self) -> bool {
+        let url = self.url.to_ascii_lowercase();
+        let is_google = url.contains("generativelanguage.googleapis.com");
+        let is_native_path = url.contains(":generatecontent") || url.contains("/generatecontent");
+        is_google && !url.contains("/openai/") && is_native_path
     }
 
     /// Return the wire output cap for one request. Context reserves remain
