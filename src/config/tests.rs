@@ -115,6 +115,41 @@ fn model_sampling_controls_round_trip_through_toml() {
 }
 
 #[test]
+fn mutation_limit_defaults_overrides_and_caps_safely() {
+    let mut profile = ModelProfile::default();
+    assert_eq!(
+        profile.max_mutating_calls_per_response(),
+        DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+
+    profile.max_mutating_calls_per_response = Some(3);
+    assert_eq!(profile.max_mutating_calls_per_response(), 3);
+
+    profile.max_mutating_calls_per_response = Some(0);
+    assert_eq!(
+        profile.max_mutating_calls_per_response(),
+        DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+
+    profile.max_mutating_calls_per_response = Some(usize::MAX);
+    assert_eq!(
+        profile.max_mutating_calls_per_response(),
+        MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE
+    );
+}
+
+#[test]
+fn mutation_limit_round_trips_through_toml() {
+    let dir = temp_dir("mutation-limit");
+    let mut config = AppConfig::default();
+    config.models[0].max_mutating_calls_per_response = Some(3);
+    save_config_to(&dir, &config);
+
+    let (_, _, loaded) = load_config_from(&dir);
+    assert_eq!(loaded.models[0].max_mutating_calls_per_response, Some(3));
+}
+
+#[test]
 fn context_budget_reserves_completion_thinking_tools_and_safety() {
     let mut profile = AppConfig::default().models[0].clone();
     profile.context_window = Some(4096);
