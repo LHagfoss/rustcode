@@ -651,19 +651,17 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .unwrap_or_else(|| name.clone());
                 if metadata.success
                     && let Some(call) = call
-                    && let Some((path, start_line, end_line)) =
-                        loop_detect::read_target(&call.name, &call.arguments)
+                    && let Some(path) = loop_detect::inspection_target(&call.name, &call.arguments)
                 {
                     let (_, category) = loop_detect::signatures(&call.name, &call.arguments);
                     if category.starts_with("read:") {
-                        let inspection_target =
-                            format!("{category}:{}:{}", start_line, end_line.unwrap_or_default());
                         if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = ctx
                             .recovery
                             .reasoning_loop_detector
                             .record_inspection_evidence(&loop_detect::InspectionEvidence {
                                 tool_name: &call.name,
-                                target: &inspection_target,
+                                target: &path,
+                                turn_id: ctx.budget.tool_rounds as u64,
                                 unchanged: !is_mutating_tool(&name),
                                 incomplete: metadata.truncated
                                     || matches!(
@@ -925,6 +923,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ctx.recovery.loop_recovery_attempts += 1;
                         ctx.metrics.evidence_recoveries += 1;
                         ctx.recovery.loop_detector.reset();
+                        ctx.recovery.reasoning_loop_detector.reset();
                         s.history.push(ChatMessage::new(
                             "system",
                             format!("{evidence}\n{LOOP_RECOVERY_PROMPT}"),

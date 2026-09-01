@@ -223,14 +223,15 @@ fn equivalent_native_and_shell_reads_warn_before_result_grounded_recovery() {
 #[test]
 fn cross_tool_incomplete_inspection_cycle_is_detected_but_progressive_ranges_are_safe() {
     let mut detector = ReasoningLoopDetector::default();
-    let target = "read:src/config.ts#0";
+    let target = "read:src/config.ts:1:full";
     let claim = "The file still appears truncated and possibly corrupt; inspect it again.";
 
-    for (tool, incomplete) in [("view_file", true), ("run_command", true)] {
+    for (turn_id, (tool, incomplete)) in [(1, ("view_file", true)), (2, ("run_command", true))] {
         assert_eq!(
             detector.record_inspection_evidence(&InspectionEvidence {
                 tool_name: tool,
                 target,
+                turn_id,
                 unchanged: true,
                 incomplete,
                 corruption_claim: true,
@@ -242,19 +243,35 @@ fn cross_tool_incomplete_inspection_cycle_is_detected_but_progressive_ranges_are
         detector.record_inspection_evidence(&InspectionEvidence {
             tool_name: "run_command",
             target,
+            turn_id: 3,
             unchanged: true,
             incomplete: true,
             corruption_claim: true,
         }),
         ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TOOL_INSPECTION_CYCLE)
     );
+    assert_eq!(
+        detector.record_inspection_evidence(&InspectionEvidence {
+            tool_name: "view_file",
+            target,
+            turn_id: 4,
+            unchanged: true,
+            incomplete: false,
+            corruption_claim: false,
+        }),
+        ReasoningLoopStatus::Ok
+    );
 
     detector.reset();
-    for target in ["read:src/config.ts#0", "read:src/config.ts#4"] {
+    for (turn_id, target) in [
+        (1, "read:src/config.ts:1:full"),
+        (2, "read:src/config.ts:801:full"),
+    ] {
         assert_eq!(
             detector.record_inspection_evidence(&InspectionEvidence {
                 tool_name: "view_file",
                 target,
+                turn_id,
                 unchanged: true,
                 incomplete: true,
                 corruption_claim: true,
@@ -265,7 +282,8 @@ fn cross_tool_incomplete_inspection_cycle_is_detected_but_progressive_ranges_are
     assert_eq!(
         detector.record_inspection_evidence(&InspectionEvidence {
             tool_name: "run_command",
-            target: "read:src/config.ts#4",
+            target: "read:src/config.ts:801:full",
+            turn_id: 3,
             unchanged: true,
             incomplete: false,
             corruption_claim: false,
@@ -276,20 +294,66 @@ fn cross_tool_incomplete_inspection_cycle_is_detected_but_progressive_ranges_are
 }
 
 #[test]
-fn successful_verification_does_not_trigger_cross_tool_inspection_cycle() {
+fn same_batch_inspections_do_not_trigger_cross_tool_inspection_cycle() {
     let mut detector = ReasoningLoopDetector::default();
     for tool in ["view_file", "run_command", "run_command"] {
         assert_eq!(
             detector.record_inspection_evidence(&InspectionEvidence {
                 tool_name: tool,
-                target: "read:src/config.ts#0",
+                target: "read:src/config.ts:1:full",
+                turn_id: 1,
                 unchanged: true,
-                incomplete: false,
-                corruption_claim: false,
+                incomplete: true,
+                corruption_claim: true,
             }),
             ReasoningLoopStatus::Ok
         );
     }
+}
+
+#[test]
+fn same_tool_corruption_claims_do_not_trigger_cross_tool_inspection_cycle() {
+    let mut detector = ReasoningLoopDetector::default();
+    for turn_id in 1..=3 {
+        assert_eq!(
+            detector.record_inspection_evidence(&InspectionEvidence {
+                tool_name: "view_file",
+                target: "read:src/config.ts:1:full",
+                turn_id,
+                unchanged: true,
+                incomplete: true,
+                corruption_claim: true,
+            }),
+            ReasoningLoopStatus::Ok
+        );
+    }
+}
+
+#[test]
+fn native_and_shell_inspection_targets_share_full_and_explicit_regions() {
+    let native_full =
+        inspection_target("view_file", &json!({"path": "/tmp/project/src/config.ts"}));
+    let shell_full = inspection_target(
+        "run_command",
+        &json!({"command": "cat /tmp/project/src/config.ts"}),
+    );
+    assert_eq!(native_full, shell_full);
+
+    let native_region = inspection_target(
+        "view_file",
+        &json!({"path": "/tmp/project/src/config.ts", "start_line": 1, "end_line": 120}),
+    );
+    let shell_region = inspection_target(
+        "run_command",
+        &json!({"command": "sed -n '1,120p' /tmp/project/src/config.ts"}),
+    );
+    assert_eq!(native_region, shell_region);
+
+    let later_region = inspection_target(
+        "view_file",
+        &json!({"path": "/tmp/project/src/config.ts", "start_line": 121, "end_line": 240}),
+    );
+    assert_ne!(native_region, later_region);
 }
 
 #[test]

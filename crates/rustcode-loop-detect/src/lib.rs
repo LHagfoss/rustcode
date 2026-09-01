@@ -233,6 +233,15 @@ pub fn read_target(name: &str, args: &Value) -> Option<(String, usize, Option<us
     Some((normalize_shell_read_path(&tokens, path), start, end))
 }
 
+/// Return a canonical identity for a native or shell read. Keep an omitted
+/// end distinct from an explicit range end so full-file reads match each other
+/// without collapsing progressive range reads into one target.
+pub fn inspection_target(name: &str, args: &Value) -> Option<String> {
+    let (path, start, end) = read_target(name, args)?;
+    let end = end.map_or_else(|| "full".to_string(), |end| end.to_string());
+    Some(format!("read:{path}:{start}:{end}"))
+}
+
 /// Whether a recognized read command returns file content. `wc` and `od`
 /// provide useful integrity metadata but must not make recovery claim that
 /// the complete source range was shown to the model.
