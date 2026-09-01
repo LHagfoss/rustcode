@@ -7,6 +7,7 @@ pub const DIAG_CYCLE: &str = "reasoning_loop.cycle";
 pub const DIAG_CROSS_TURN_SAME_PLAN: &str = "reasoning_loop.cross_turn_same_plan";
 pub const DIAG_SAME_FILES_NO_PROGRESS: &str = "reasoning_loop.same_files_no_progress";
 pub const DIAG_SEMANTIC_NO_PROGRESS: &str = "reasoning_loop.semantic_no_progress";
+pub const DIAG_CROSS_TOOL_INSPECTION_CYCLE: &str = "reasoning_loop.cross_tool_inspection_cycle";
 pub const DIAG_RECOVERY_EXHAUSTED: &str = "reasoning_loop.recovery_exhausted";
 
 /// Status returned by reasoning repetition checks.
@@ -40,6 +41,34 @@ pub struct TurnEvidence<'a> {
     pub no_progress_streak: usize,
 }
 
+/// Evidence from one read/inspection result. This is kept separate from
+/// turn-level reasoning so a cross-tool cycle can be recognized even when a
+/// model paraphrases its plan on every round.
+#[derive(Debug, Clone)]
+pub struct InspectionEvidence<'a> {
+    pub tool_name: &'a str,
+    /// A canonical path plus exact read region (for example,
+    /// `read:src/config.ts:1:full`). Callers should use the same semantic
+    /// region key for native and shell reads so progressive inspection
+    /// remains distinct.
+    pub target: &'a str,
+    /// Model response/tool-batch number. Multiple calls in one response share
+    /// this value and must not satisfy a cross-turn repetition threshold.
+    pub turn_id: u64,
+    pub unchanged: bool,
+    pub incomplete: bool,
+    pub corruption_claim: bool,
+}
+
+#[derive(Debug, Clone)]
+struct InspectionRecord {
+    tool_name: String,
+    target: String,
+    turn_id: u64,
+    incomplete: bool,
+    corruption_claim: bool,
+}
+
 /// Detects pathological repetition in model reasoning/thinking streams and cross-turn plans.
 #[derive(Debug, Clone, Default)]
 pub struct ReasoningLoopDetector {
@@ -65,6 +94,10 @@ pub struct ReasoningLoopDetector {
     consecutive_hesitation_turns: usize,
     /// Consecutive turns re-inspecting the same small set of files without editing.
     consecutive_small_file_set_turns: usize,
+    /// Recent semantically equivalent inspections. Kept separate from the
+    /// turn ledger because native and shell reads can form a cycle inside a
+    /// sequence of otherwise differently worded turns.
+    recent_inspections: VecDeque<InspectionRecord>,
 }
 
 impl ReasoningLoopDetector {
@@ -86,6 +119,7 @@ impl ReasoningLoopDetector {
         self.consecutive_same_plan_turns = 0;
         self.consecutive_hesitation_turns = 0;
         self.consecutive_small_file_set_turns = 0;
+        self.recent_inspections.clear();
     }
 
     /// Feed a newly streamed chunk of reasoning text and check for intra-stream loops.
@@ -265,6 +299,78 @@ impl ReasoningLoopDetector {
             self.recent_turns.pop_front();
         }
 
+        ReasoningLoopStatus::Ok
+    }
+
+    /// Record a read/inspection result and detect a cross-tool cycle over an
+    /// unchanged semantic target. A single truncated read is expected and a
+    /// progressive range read is expected; intervention requires repeated
+    /// incomplete/corruption evidence and at least two inspection methods.
+    pub fn record_inspection_evidence(
+        &mut self,
+        evidence: &InspectionEvidence<'_>,
+    ) -> ReasoningLoopStatus {
+        if !evidence.unchanged || evidence.target.is_empty() {
+            self.recent_inspections.clear();
+            return ReasoningLoopStatus::Ok;
+        }
+
+        let target = evidence.target.to_lowercase();
+        if self
+            .recent_inspections
+            .back()
+            .is_some_and(|record| record.target != target)
+        {
+            // A different semantic range/file is progressive inspection. Do
+            // not let an old range make the next range look cyclic.
+            self.recent_inspections.clear();
+        }
+        self.recent_inspections.push_back(InspectionRecord {
+            tool_name: evidence.tool_name.to_lowercase(),
+            target,
+            turn_id: evidence.turn_id,
+            incomplete: evidence.incomplete,
+            corruption_claim: evidence.corruption_claim,
+        });
+        const MAX_RECENT_INSPECTIONS: usize = 8;
+        while self.recent_inspections.len() > MAX_RECENT_INSPECTIONS {
+            self.recent_inspections.pop_front();
+        }
+
+        let Some(last_target) = self.recent_inspections.back().map(|record| &record.target) else {
+            return ReasoningLoopStatus::Ok;
+        };
+        let same_target = self
+            .recent_inspections
+            .iter()
+            .rev()
+            .take_while(|record| &record.target == last_target)
+            .collect::<Vec<_>>();
+        let distinct_turns = same_target
+            .iter()
+            .map(|record| record.turn_id)
+            .collect::<HashSet<_>>();
+        if distinct_turns.len() < 3 {
+            return ReasoningLoopStatus::Ok;
+        }
+        let distinct_tools = same_target
+            .iter()
+            .map(|record| record.tool_name.as_str())
+            .collect::<HashSet<_>>();
+        let incomplete_count = same_target
+            .iter()
+            .filter(|record| record.incomplete)
+            .count();
+        let corruption_claim_count = same_target
+            .iter()
+            .filter(|record| record.corruption_claim)
+            .count();
+        let cross_tool_cycle =
+            distinct_tools.len() >= 2 && (incomplete_count >= 2 || corruption_claim_count >= 2);
+        if cross_tool_cycle {
+            self.recent_inspections.clear();
+            return ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TOOL_INSPECTION_CYCLE);
+        }
         ReasoningLoopStatus::Ok
     }
 
@@ -844,4 +950,25 @@ pub fn detect_hesitation_intent(text: &str) -> bool {
     HESITATION_PHRASES
         .iter()
         .any(|phrase| lower.contains(phrase))
+}
+
+/// Detect model claims that a stable inspection is corrupt or incomplete.
+/// These words are only used as supporting evidence alongside repeated reads;
+/// a claim by itself never triggers recovery.
+pub fn claims_corrupt_or_incomplete_inspection(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    [
+        "corrupt",
+        "corrupted",
+        "damaged",
+        "garbled",
+        "mangled",
+        "truncated",
+        "incomplete",
+        "missing content",
+        "file is broken",
+        "file appears broken",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
 }

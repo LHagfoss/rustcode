@@ -15,6 +15,24 @@ use super::{
     tool_result_precludes_preview_fallback,
 };
 
+fn subagent_model_result_content(message: &ChatMessage) -> String {
+    let content = message
+        .content
+        .split_once(": ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(&message.content);
+    if let Some(metadata) = message.tool_result.as_ref() {
+        let mut metadata = metadata.clone();
+        metadata.completeness = metadata.resolved_completeness();
+        format!(
+            "{content}\n[result_metadata: {}]",
+            serde_json::to_string(&metadata).unwrap_or_default()
+        )
+    } else {
+        content.to_string()
+    }
+}
+
 pub(crate) async fn set_subagent_status(
     state: &Arc<Mutex<AppState>>,
     agent_id: u32,
@@ -61,17 +79,16 @@ fn subagent_history_message(
         return serde_json::json!({
             "role": "tool",
             "tool_call_id": call_id,
-            "content": message
-                .content
-                .split_once(": ")
-                .map(|(_, rest)| rest)
-                .unwrap_or(&message.content),
+            "content": subagent_model_result_content(message),
         });
     }
     if message.role == "tool" {
         serde_json::json!({
             "role": "user",
-            "content": format!("<tool_result>\n{}\n</tool_result>", message.content),
+            "content": format!(
+                "<tool_result>\n{}\n</tool_result>",
+                subagent_model_result_content(message)
+            ),
         })
     } else {
         serde_json::json!({"role": message.role, "content": message.content})
@@ -827,13 +844,19 @@ pub(crate) async fn handle_agent_tool(
                 crate::app::SubAgentStatus::Running => "running",
             };
             let truncation = if completion.truncated {
-                "\n[result truncated; full output remains in the child history/artifact]"
+                "\n[tool_result_incomplete: completeness=byte_truncated; child output was bounded and must not be treated as complete.]"
             } else {
                 ""
             };
             let content = format!("subagent {id} {status}\n{}{truncation}", completion.output);
             if completion.status == crate::app::SubAgentStatus::Completed {
-                crate::tools::ToolExecutionOutput::success(content)
+                let mut output = crate::tools::ToolExecutionOutput::success(content);
+                if completion.truncated {
+                    output.truncated = true;
+                    output.completeness = rustcode_core::ToolResultCompleteness::ByteTruncated;
+                    output.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
+                }
+                output
             } else if completion.status == crate::app::SubAgentStatus::Cancelled {
                 crate::tools::ToolExecutionOutput::failure_with_kind(
                     content,
@@ -1045,8 +1068,14 @@ mod tests {
                 arguments: r#"{"pattern":"TODO"}"#.to_string(),
             },
         ]);
-        let result =
-            ChatMessage::new("tool", "view_file: content").answering(Some("call-1".to_string()));
+        let result = ChatMessage::new("tool", "view_file: content")
+            .answering(Some("call-1".to_string()))
+            .with_tool_result(crate::app::ToolResultRecord {
+                tool_name: "view_file".to_string(),
+                truncated: true,
+                completeness: rustcode_core::ToolResultCompleteness::ByteTruncated,
+                ..Default::default()
+            });
 
         let assistant_message =
             subagent_history_message(&assistant, crate::config::ToolProtocol::ApiNative);
@@ -1058,7 +1087,24 @@ mod tests {
         assert_eq!(assistant_message["tool_calls"][1]["id"], "call-2");
         assert_eq!(result_message["role"], "tool");
         assert_eq!(result_message["tool_call_id"], "call-1");
-        assert_eq!(result_message["content"], "content");
+        assert!(
+            result_message["content"]
+                .as_str()
+                .unwrap()
+                .contains("content")
+        );
+        assert!(
+            result_message["content"]
+                .as_str()
+                .unwrap()
+                .contains("result_metadata")
+        );
+        assert!(
+            result_message["content"]
+                .as_str()
+                .unwrap()
+                .contains("byte_truncated")
+        );
     }
 
     #[tokio::test]

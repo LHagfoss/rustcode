@@ -101,6 +101,41 @@ fn structured_tool_replay_keeps_metadata_out_of_ui_content_but_in_model_payload(
 }
 
 #[test]
+fn bounded_results_keep_incomplete_marker_and_completeness_through_replay() {
+    let result = finalize_tool_result(
+        ToolResult {
+            tool_name: "view_file".to_string(),
+            content: "partial source range".to_string(),
+            diff: None,
+            file_preview: None,
+            metadata: ToolResultMetadata {
+                success: true,
+                truncated: true,
+                ..Default::default()
+            },
+        },
+        None,
+    );
+    assert_eq!(
+        result.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::ByteTruncated
+    );
+    assert!(result.content.contains("tool_result_incomplete:"));
+
+    let message = tool_result_history_message(result, None);
+    let record = message.tool_result.as_ref().expect("typed metadata");
+    assert!(record.truncated);
+    assert_eq!(
+        record.resolved_completeness(),
+        rustcode_core::ToolResultCompleteness::ByteTruncated
+    );
+    let replay = history::to_messages(&[message], "system");
+    let model_content = replay[1]["content"].as_str().expect("model result");
+    assert!(model_content.contains("tool_result_incomplete:"));
+    assert!(model_content.contains("byte_truncated"));
+}
+
+#[test]
 fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields() {
     let mut state = AppState::new();
     let mut context = TurnContext::with_max_tool_rounds(7);

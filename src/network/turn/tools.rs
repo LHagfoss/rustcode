@@ -496,6 +496,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut failure_replan = None;
             let mut evidence_recovery = None;
             let mut grounded_recovery = None;
+            let mut cross_tool_inspection_cycle = None;
             let mut cross_turn_made_progress = false;
             let mut cross_turn_had_edits = false;
             let mut cross_turn_authoritative_progress = false;
@@ -650,6 +651,36 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .unwrap_or_else(|| name.clone());
                 if metadata.success
                     && let Some(call) = call
+                    && let Some(path) = loop_detect::inspection_target(&call.name, &call.arguments)
+                {
+                    let (_, category) = loop_detect::signatures(&call.name, &call.arguments);
+                    if category.starts_with("read:") {
+                        if let loop_detect::ReasoningLoopStatus::LoopDetected(reason) = ctx
+                            .recovery
+                            .reasoning_loop_detector
+                            .record_inspection_evidence(&loop_detect::InspectionEvidence {
+                                tool_name: &call.name,
+                                target: &path,
+                                turn_id: ctx.budget.tool_rounds as u64,
+                                unchanged: !is_mutating_tool(&name),
+                                incomplete: metadata.truncated
+                                    || matches!(
+                                        metadata.completeness,
+                                        rustcode_core::ToolResultCompleteness::LineTruncated
+                                            | rustcode_core::ToolResultCompleteness::ByteTruncated
+                                    ),
+                                corruption_claim:
+                                    loop_detect::claims_corrupt_or_incomplete_inspection(
+                                        &ctx.response.final_content,
+                                    ),
+                            })
+                        {
+                            cross_tool_inspection_cycle = Some((reason, path));
+                        }
+                    }
+                }
+                if metadata.success
+                    && let Some(call) = call
                     && let Some((path, start_line, end_line)) =
                         loop_detect::read_target(&call.name, &call.arguments)
                     && let Some(recovery) = ctx.progress.file_evidence.record_read_with_kind(
@@ -757,6 +788,30 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     answered_call,
                 ));
+            }
+
+            // A successful verification in the same batch is authoritative
+            // progress and invalidates any stale inspection-cycle signal.
+            if cross_turn_authoritative_progress {
+                cross_tool_inspection_cycle = None;
+            }
+            if let Some((reason, path)) = cross_tool_inspection_cycle {
+                ctx.recovery.reasoning_loops_detected += 1;
+                crate::logger::operational_event(
+                    reason,
+                    serde_json::json!({
+                        "round": ctx.budget.tool_rounds,
+                        "reason": reason,
+                        "target": path,
+                    }),
+                );
+                if evidence_recovery.is_none() {
+                    evidence_recovery = Some((
+                        loop_detect::ProgressReason::NoNewInformation,
+                        ctx.recovery.reasoning_recovery_attempts as usize + 1,
+                        format!("cross-tool inspection cycle: {reason}"),
+                    ));
+                }
             }
 
             if background_pending {
@@ -868,6 +923,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ctx.recovery.loop_recovery_attempts += 1;
                         ctx.metrics.evidence_recoveries += 1;
                         ctx.recovery.loop_detector.reset();
+                        ctx.recovery.reasoning_loop_detector.reset();
                         s.history.push(ChatMessage::new(
                             "system",
                             format!("{evidence}\n{LOOP_RECOVERY_PROMPT}"),
