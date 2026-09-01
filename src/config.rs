@@ -129,17 +129,12 @@ pub struct ContextBudget {
 
 impl ModelProfile {
     /// Return the completion cap for one request. Tool-enabled requests are
-    /// deliberately bounded for reasoning-capable models: a long speculative
-    /// chain is expensive and cannot be useful until it produces an action.
+    /// deliberately bounded for every model: a long speculative generation is
+    /// expensive and cannot be useful until it produces an action.
     /// Requests without tools retain the configured cap for normal answers.
     pub fn completion_token_limit(&self, allow_tools: bool) -> u32 {
         let configured = self.context_budget().completion_reserve;
-        let reasoning_capable = self.enable_thinking == Some(true)
-            || self.reasoning_effort.as_deref().is_some_and(|effort| {
-                !effort.eq_ignore_ascii_case("off") && !effort.eq_ignore_ascii_case("none")
-            })
-            || self.thinking_budget.is_some();
-        if allow_tools && reasoning_capable {
+        if allow_tools {
             configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
         } else {
             configured
