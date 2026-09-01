@@ -124,13 +124,7 @@ pub(crate) async fn run_subagent(
             return Err(format!("error: no subagent with id {agent_id}"));
         }
 
-        let (
-            api_base_url,
-            model_name,
-            budget_token_limit,
-            max_mutating_calls,
-            workspace_root,
-        ) = {
+        let (api_base_url, model_name, budget_token_limit, max_mutating_calls, workspace_root) = {
             let s = state.lock().await;
             let subagent = s
                 .subagents
@@ -293,7 +287,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         }
 
         let protocol = { state.lock().await.active_tool_protocol() };
-        let parsed_calls = if native_tool_calls.is_empty() {
+        let mut parsed_calls = if native_tool_calls.is_empty() {
             crate::tools::parse_tool_call(&content, protocol)
                 .map(|call| (call, None))
                 .into_iter()
@@ -1024,8 +1018,7 @@ mod tests {
             ),
         ];
 
-        let (requested, dropped, validation) =
-            prepare_subagent_tool_batch(&mut calls, 1);
+        let (requested, dropped, validation) = prepare_subagent_tool_batch(&mut calls, 1);
         assert_eq!((requested, calls.len(), dropped), (3, 2, 1));
         assert!(validation.is_ok());
 
@@ -1033,8 +1026,7 @@ mod tests {
             call("run_command", serde_json::json!({"command": "false"})),
             None,
         ));
-        let (requested, dropped, validation) =
-            prepare_subagent_tool_batch(&mut calls, 2);
+        let (requested, dropped, validation) = prepare_subagent_tool_batch(&mut calls, 2);
         assert_eq!((requested, calls.len(), dropped), (3, 3, 0));
         assert!(validation.is_ok());
     }
