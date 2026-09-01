@@ -149,7 +149,7 @@ fn context_budget_reserves_completion_thinking_tools_and_safety() {
 
 #[test]
 fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
-    let mut profile = ModelProfile {
+    let profile = ModelProfile {
         name: "local-ollama".to_string(),
         url: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
         model: "qwen2.5:32b".to_string(),
@@ -174,6 +174,49 @@ fn every_model_tool_round_cap_preserves_full_final_cap() {
 
     assert_eq!(profile.completion_token_limit(true), 8192);
     assert_eq!(profile.completion_token_limit(false), 16_000);
+}
+
+#[test]
+fn ordinary_unconfigured_output_uses_provider_default_but_tools_are_bounded() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.output_token_limit(false, false), None);
+    assert_eq!(profile.output_token_limit(true, false), Some(8192));
+    assert_eq!(profile.output_token_limit(false, true), Some(32_000));
+}
+
+#[test]
+fn output_token_field_override_and_legacy_cap_are_backward_compatible() {
+    let mut profile = ModelProfile {
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        output_token_field: Some(OutputTokenField::MaxCompletionTokens),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(
+        profile.resolved_output_token_field(),
+        OutputTokenField::MaxCompletionTokens
+    );
+    assert_eq!(
+        profile.resolved_output_token_field().wire_name(),
+        "max_completion_tokens"
+    );
+    assert_eq!(profile.output_token_limit(false, false), Some(16_000));
+
+    let encoded = serde_json::to_value(&profile).unwrap();
+    assert_eq!(encoded["max_tokens"], 16_000);
+    assert_eq!(encoded["output_token_field"], "max_completion_tokens");
+
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.max_tokens, Some(16_000));
+    assert_eq!(
+        decoded.output_token_field,
+        Some(OutputTokenField::MaxCompletionTokens)
+    );
 }
 
 #[test]
