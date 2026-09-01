@@ -7,8 +7,10 @@ mod tokens;
 #[allow(unused_imports)]
 pub use budget::{PreflightBudget, calculate_preflight_budget};
 pub(crate) use compact::SUMMARY_MARKER;
+pub(crate) use compact::valid_compaction_boundary;
 pub use compact::{
     force_compact, force_compact_with_budget, maybe_compact, maybe_compact_with_local_policy,
+    maybe_compact_with_local_policy_and_usage,
 };
 #[allow(unused_imports)]
 pub use memory::{

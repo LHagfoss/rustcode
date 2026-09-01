@@ -208,6 +208,12 @@ impl StructuredSessionMemory {
                         self.modified_files.push(f.to_string());
                     }
                 }
+            } else if let Some(files) = trimmed.strip_prefix("Inspected files: ") {
+                for f in files.split(", ") {
+                    if !f.is_empty() && !self.inspected_files.iter().any(|existing| existing == f) {
+                        self.inspected_files.push(f.to_string());
+                    }
+                }
             } else if let Some(failures) = trimmed.strip_prefix("Failures/unresolved work: ") {
                 for fail in failures.split("; ") {
                     if !self
@@ -290,6 +296,17 @@ impl StructuredSessionMemory {
                     .join(", ")
             ));
         }
+        if !self.inspected_files.is_empty() {
+            out.push_str(&format!(
+                "Inspected files: {}\n",
+                self.inspected_files
+                    .iter()
+                    .take(30)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         if !self.failures_and_errors.is_empty() {
             out.push_str("Failures/unresolved work: ");
             out.push_str(
@@ -355,7 +372,12 @@ pub fn compact_with_structured_memory(
     if history.len() <= keep_recent_count || history.len() < 4 {
         return false;
     }
-    let cutoff = history.len().saturating_sub(keep_recent_count);
+    let desired_cutoff = history.len().saturating_sub(keep_recent_count);
+    let cutoff = super::compact::bounded_recent_suffix_start(
+        history,
+        desired_cutoff,
+        (budget as f64 * 0.3) as usize,
+    );
     if cutoff == 0 {
         return false;
     }
