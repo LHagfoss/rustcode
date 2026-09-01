@@ -1561,15 +1561,11 @@ pub async fn stream_request(
     let output_token_limit = profile
         .as_ref()
         .and_then(|p| {
-            p.output_token_limit(
-                allow_tools,
-                thinking_mode == ThinkingMode::BoundedRecovery,
-            )
+            p.output_token_limit(allow_tools, thinking_mode == ThinkingMode::BoundedRecovery)
         })
         .map(|limit| clamp_request_max_tokens(limit, thinking_mode))
         .or_else(|| {
-            (allow_tools || thinking_mode == ThinkingMode::BoundedRecovery)
-                .then_some(max_tokens)
+            (allow_tools || thinking_mode == ThinkingMode::BoundedRecovery).then_some(max_tokens)
         });
     // Recovery keeps reasoning enabled but applies a small client-side bound:
     // it exists to produce the next action, not another full planning turn.
