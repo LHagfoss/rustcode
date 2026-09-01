@@ -5,7 +5,7 @@ use super::prune::{
     prune_historical_tool_outputs, prune_old_tool_outputs,
 };
 use super::tokens::estimate_message_tokens;
-use crate::app::ChatMessage;
+use crate::app::{ChatMessage, TokenUsage};
 use std::future::Future;
 use std::time::Duration;
 
@@ -40,7 +40,17 @@ pub async fn maybe_compact(
     budget: usize,
     cancel_token: &tokio_util::sync::CancellationToken,
 ) -> bool {
-    maybe_compact_with_local_policy(client, url, model, history, budget, cancel_token, false).await
+    maybe_compact_with_local_policy_and_usage(
+        client,
+        url,
+        model,
+        history,
+        budget,
+        cancel_token,
+        false,
+        None,
+    )
+    .await
 }
 
 /// Automatic compaction with an explicit local-model hint from the active
@@ -55,6 +65,34 @@ pub async fn maybe_compact_with_local_policy(
     budget: usize,
     cancel_token: &tokio_util::sync::CancellationToken,
     local_model: bool,
+) -> bool {
+    maybe_compact_with_local_policy_and_usage(
+        client,
+        url,
+        model,
+        history,
+        budget,
+        cancel_token,
+        local_model,
+        None,
+    )
+    .await
+}
+
+/// Automatic compaction using the last provider-reported prompt size when it
+/// is available. Provider usage describes the complete prompt at the previous
+/// response; only messages appended after that response are estimated locally.
+/// This avoids replacing an authoritative provider measurement with a second,
+/// divergent tokenization of the entire conversation.
+pub async fn maybe_compact_with_local_policy_and_usage(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    history: &mut Vec<ChatMessage>,
+    budget: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    local_model: bool,
+    provider_usage: Option<&TokenUsage>,
 ) -> bool {
     // 1. Local, zero-cost tool output pruning: collapse large tool outputs that
     //    have aged past the recent window, then apply the hard rolling token cap
@@ -71,7 +109,7 @@ pub async fn maybe_compact_with_local_policy(
     //    string and must be counted as such. The memo in `estimate_tokens` is
     //    what keeps the passes cheap — every message the passes leave alone is
     //    encoded once and looked up thereafter.
-    let raw_tokens: usize = history.iter().map(estimate_message_tokens).sum();
+    let raw_tokens = provider_adjusted_tokens(history, provider_usage);
     if raw_tokens < prune_floor(budget) {
         return false;
     }
@@ -85,7 +123,7 @@ pub async fn maybe_compact_with_local_policy(
     //    until compaction actually runs, so the same per-message counts serve
     //    both the budget check and the keep-suffix walk below.
     let per_message: Vec<usize> = history.iter().map(estimate_message_tokens).collect();
-    let total_tokens: usize = per_message.iter().sum();
+    let total_tokens = provider_adjusted_tokens(history, provider_usage);
     // Cancellation still permits the deterministic local pruning above, but
     // must never report a completed compaction or start a summarizer request.
     if cancel_token.is_cancelled() {
@@ -105,16 +143,15 @@ pub async fn maybe_compact_with_local_policy(
         return duplicate_reads + historical_outputs + old_outputs + pruned_reasoning > 0;
     }
 
-    // Determine how many messages to summarize.
-    // We want to keep at least the KEEP_RECENT_TURNS most recent messages
-    // verbatim, but also retain a recent suffix of up to 30% of the token
-    // budget verbatim.
+    // Determine how many messages to summarize. Keep a bounded recent suffix;
+    // preserving an unbounded number of "recent" messages defeats compaction
+    // when one tool result is very large.
     let mut accumulated_tokens = 0;
-    let keep_token_limit = (budget as f64 * 0.3) as usize; // Keep 30% of budget verbatim
+    let keep_token_limit = (budget as f64 * 0.3) as usize;
 
     let mut keep_count = 0;
     for &tokens in per_message.iter().rev() {
-        if accumulated_tokens + tokens <= keep_token_limit || keep_count < KEEP_RECENT_TURNS {
+        if keep_count == 0 || accumulated_tokens + tokens <= keep_token_limit {
             accumulated_tokens += tokens;
             keep_count += 1;
         } else {
@@ -122,7 +159,11 @@ pub async fn maybe_compact_with_local_policy(
         }
     }
 
-    let summarize_count = history.len().saturating_sub(keep_count);
+    let summarize_count = bounded_recent_suffix_start(
+        history,
+        history.len().saturating_sub(keep_count),
+        keep_token_limit,
+    );
     if summarize_count < 4 {
         emit_compaction_metrics(
             raw_tokens,
@@ -198,6 +239,38 @@ pub async fn maybe_compact_with_local_policy(
         );
         structured || (duplicate_reads + historical_outputs + old_outputs > 0)
     }
+}
+
+/// Return the best available prompt estimate. A provider usage record belongs
+/// to the most recent assistant response carrying that record. Messages after
+/// that assistant response (tool results, lifecycle notes, and the next user
+/// request) were not part of the measured prompt and are therefore estimated
+/// deterministically and added to it.
+fn provider_adjusted_tokens(history: &[ChatMessage], usage: Option<&TokenUsage>) -> usize {
+    let Some(usage) = usage else {
+        return history.iter().map(estimate_message_tokens).sum();
+    };
+
+    let measured_response = history.iter().rposition(|message| {
+        message.role == "assistant"
+            && message
+                .token_usage
+                .as_ref()
+                .is_some_and(|record| record == usage)
+    });
+    let Some(index) = measured_response else {
+        // Without a durable response marker there is no safe way to identify
+        // the unmeasured suffix. Re-estimating the complete history is the
+        // conservative fallback.
+        return history.iter().map(estimate_message_tokens).sum();
+    };
+
+    (usage.prompt_tokens as usize).saturating_add(
+        history[index.saturating_add(1)..]
+            .iter()
+            .map(estimate_message_tokens)
+            .sum::<usize>(),
+    )
 }
 
 fn emit_compaction_metrics(
@@ -290,6 +363,9 @@ async fn force_compact_internal(
     budget: Option<usize>,
     cancel_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<(), String> {
+    // A caller may have selected a message-count cut point. Normalize it to a
+    // complete turn so a result is never sent without its announcing call.
+    let summarize_count = valid_compaction_boundary(history, summarize_count);
     // Incremental compaction: if a prior summary already sits at the front of the
     // range, preserve its facts and only summarize the messages that came after.
     // Avoids re-compressing an already-compressed summary (which drifts and loses
@@ -397,6 +473,66 @@ async fn force_compact_internal(
 pub(crate) const SUMMARY_MARKER: &str = "[Session History Summary]";
 pub(super) const ORIGINAL_TASK_MARKER: &str = "[Original task — do not lose sight of this]";
 pub(super) const PRESERVED_USER_REQUEST_MARKER: &str = "[Preserved user request]";
+
+/// Find a suffix start that keeps the recent token allowance while respecting
+/// assistant tool-call/result transactions. The newest message is always
+/// retained, even when it alone exceeds the allowance; dropping it would lose
+/// the active turn entirely and is handled by deterministic output pruning.
+pub(crate) fn bounded_recent_suffix_start(
+    history: &[ChatMessage],
+    desired_start: usize,
+    token_limit: usize,
+) -> usize {
+    if history.is_empty() {
+        return 0;
+    }
+    let mut start = desired_start.min(history.len().saturating_sub(1));
+    let mut tokens = history[start..]
+        .iter()
+        .map(estimate_message_tokens)
+        .sum::<usize>();
+    while start > 0 && tokens > token_limit {
+        start += 1;
+        tokens = history[start..].iter().map(estimate_message_tokens).sum();
+    }
+    valid_compaction_boundary(history, start)
+}
+
+/// Move a cut before a complete user turn. Tool results are valid only after
+/// the assistant message that announced their call; keeping that assistant and
+/// its preceding user request avoids orphaned protocol entries on replay.
+pub(crate) fn valid_compaction_boundary(history: &[ChatMessage], boundary: usize) -> usize {
+    let mut start = boundary.min(history.len());
+    if start == history.len() || start == 0 {
+        return start;
+    }
+
+    if history[start].role == "user" && !history[start].content.starts_with("<tool_result>") {
+        return start;
+    }
+
+    if history[start].role == "tool" {
+        if let Some(call_id) = history[start].tool_call_id.as_deref()
+            && let Some(assistant) = history[..start].iter().rposition(|message| {
+                message.role == "assistant"
+                    && message.tool_calls.iter().any(|call| call.id == call_id)
+            })
+        {
+            start = assistant;
+        }
+    } else if history[start].role == "assistant" && !history[start].tool_calls.is_empty() {
+        // A structured call is part of the user turn even if no result has
+        // arrived yet.
+        start = start.saturating_sub(1);
+    }
+
+    history[..start]
+        .iter()
+        .rposition(|message| {
+            message.role == "user" && !message.content.starts_with("<tool_result>")
+        })
+        .unwrap_or(start)
+}
 
 fn collect_preserved_user_requests(
     summarized: &[ChatMessage],
@@ -699,5 +835,67 @@ mod preserved_user_request_tests {
         let preserved = collect_preserved_user_requests(&summarized, &[], None, 100);
 
         assert_eq!(preserved, vec!["keep this exact constraint".to_string()]);
+    }
+
+    #[test]
+    fn provider_usage_is_extended_only_by_messages_after_measured_response() {
+        let usage = TokenUsage {
+            prompt_tokens: 1_000,
+            completion_tokens: 20,
+            total_tokens: 1_020,
+            cached_tokens: None,
+        };
+        let mut measured = ChatMessage::new("assistant", "measured response");
+        measured.token_usage = Some(usage.clone());
+        let history = vec![
+            ChatMessage::new("user", "old prompt"),
+            measured,
+            ChatMessage::new("tool", "run_command: output"),
+            ChatMessage::new("user", "follow-up"),
+        ];
+
+        let estimate = provider_adjusted_tokens(&history, Some(&usage));
+        assert_eq!(
+            estimate,
+            1_000 + estimate_message_tokens(&history[2]) + estimate_message_tokens(&history[3])
+        );
+    }
+
+    #[test]
+    fn compaction_boundary_moves_before_tool_call_transaction() {
+        let history = vec![
+            ChatMessage::new("user", "task"),
+            ChatMessage::new("assistant", "call").with_tool_calls(vec![crate::app::ToolCallRef {
+                id: "call-1".into(),
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            }]),
+            ChatMessage::new("tool", "read_file: result").answering(Some("call-1".into())),
+            ChatMessage::new("user", "next"),
+        ];
+
+        assert_eq!(valid_compaction_boundary(&history, 2), 0);
+        assert_eq!(valid_compaction_boundary(&history, 3), 3);
+    }
+
+    #[test]
+    fn deterministic_record_carries_bounded_file_inventories() {
+        let mut read = ChatMessage::new("tool", "view_file: [File: src/lib.rs]\ncontents");
+        read.tool_call_id = Some("read-1".into());
+        let mut write = ChatMessage::new("tool", "write_to_file: wrote it");
+        write.tool_result = Some(crate::app::ToolResultRecord {
+            tool_name: "write_to_file".into(),
+            success: true,
+            changed_paths: vec!["src/lib.rs".into()],
+            ..Default::default()
+        });
+        let record = crate::network::compaction::StructuredSessionMemory::extract_from_history(&[
+            ChatMessage::new("user", "task"),
+            read,
+            write,
+        ])
+        .format_record(2_000);
+        assert!(record.contains("Modified files: src/lib.rs"));
+        assert!(record.contains("Inspected files: src/lib.rs"));
     }
 }

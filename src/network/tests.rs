@@ -604,6 +604,27 @@ fn rejected_and_interrupted_calls_still_get_results() {
 }
 
 #[test]
+fn output_limited_call_results_are_retryable_and_bounded() {
+    let refs = vec![crate::app::ToolCallRef {
+        id: "call_length".to_string(),
+        name: "write_to_file".to_string(),
+        arguments: "{}".to_string(),
+    }];
+    let answers = unanswered_call_results_with_kind(
+        &refs,
+        "provider stopped at the output limit; the call was not executed",
+        crate::tools::ToolErrorKind::OutputLimit,
+    );
+
+    assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0].tool_call_id.as_deref(), Some("call_length"));
+    assert!(answers[0].tool_result.as_ref().is_some_and(|record| {
+        record.error_kind.as_deref() == Some("OutputLimit") && record.retryable
+    }));
+    assert!(answers[0].content.len() < 200);
+}
+
+#[test]
 fn call_refs_are_empty_without_provider_ids() {
     let calls = vec![crate::tools::ToolCall {
         name: "grep".to_string(),
