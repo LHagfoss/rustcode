@@ -1,5 +1,5 @@
-use serde_json::Value;
 use rustcode_core::ToolResultCompleteness;
+use serde_json::Value;
 
 const MAX_LIST_ENTRIES: usize = 10_000;
 
@@ -90,10 +90,7 @@ mod tests {
             "path": capped_dir.path().to_string_lossy().to_string(),
         }))
         .expect("list directory");
-        assert_eq!(
-            capped.completeness,
-            ToolResultCompleteness::ByteTruncated
-        );
+        assert_eq!(capped.completeness, ToolResultCompleteness::ByteTruncated);
         assert!(capped.content.contains("more entries"));
 
         let exhaustive_dir = tempfile::tempdir().expect("tempdir");

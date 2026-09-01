@@ -395,9 +395,9 @@ fn try_ripgrep(
     if root_path.is_file() {
         Some(Ok(SearchOutput {
             content: out.trim_end().to_string(),
-            completeness: capped.then_some(ToolResultCompleteness::ByteTruncated).unwrap_or(
-                ToolResultCompleteness::Complete,
-            ),
+            completeness: capped
+                .then_some(ToolResultCompleteness::ByteTruncated)
+                .unwrap_or(ToolResultCompleteness::Complete),
         }))
     } else {
         Some(Ok(SearchOutput {
@@ -406,9 +406,9 @@ fn try_ripgrep(
                 files_hit,
                 out.trim_end()
             ),
-            completeness: capped.then_some(ToolResultCompleteness::ByteTruncated).unwrap_or(
-                ToolResultCompleteness::Complete,
-            ),
+            completeness: capped
+                .then_some(ToolResultCompleteness::ByteTruncated)
+                .unwrap_or(ToolResultCompleteness::Complete),
         }))
     }
 }
@@ -857,10 +857,7 @@ mod tests {
             "got: {res}"
         );
         assert!(res.contains("matches may be incomplete"), "got: {res}");
-        assert_eq!(
-            output.completeness,
-            ToolResultCompleteness::ByteTruncated
-        );
+        assert_eq!(output.completeness, ToolResultCompleteness::ByteTruncated);
     }
 
     #[test]
@@ -877,11 +874,9 @@ mod tests {
         assert!(res.contains("MATCH one"), "got: {res}");
         assert!(res.contains("truncated at 1 matching lines"), "got: {res}");
         assert!(!res.contains("MATCH two"), "got: {res}");
-        let capped = grep_one_file_output(&path_str, &file, &re, 1).expect("grep should succeed");
-        assert_eq!(
-            capped.completeness,
-            ToolResultCompleteness::ByteTruncated
-        );
+        let capped =
+            grep_one_file_output(&path_str, &file, &re, 1).expect("grep should succeed");
+        assert_eq!(capped.completeness, ToolResultCompleteness::ByteTruncated);
 
         // Exactly at the cap there is no truncation notice at all.
         let output = grep_one_file_output(&path_str, &file, &re, 2).expect("grep should succeed");
@@ -898,8 +893,7 @@ mod tests {
     fn glob_distinguishes_exhaustive_results_from_capped_results() {
         let dir = tempfile::tempdir().expect("tempdir");
         for index in 0..=MAX_GLOB_RESULTS {
-            std::fs::write(dir.path().join(format!("file-{index}.txt")), "content")
-                .expect("write");
+            std::fs::write(dir.path().join(format!("file-{index}.txt")), "content").expect("write");
         }
         let capped = glob_output(&serde_json::json!({
             "path": dir.path().to_string_lossy().to_string(),
@@ -914,8 +908,11 @@ mod tests {
 
         let exhaustive_dir = tempfile::tempdir().expect("tempdir");
         for index in 0..2 {
-            std::fs::write(exhaustive_dir.path().join(format!("file-{index}.txt")), "content")
-                .expect("write");
+            std::fs::write(
+                exhaustive_dir.path().join(format!("file-{index}.txt")),
+                "content",
+            )
+            .expect("write");
         }
         let exhaustive = glob_output(&serde_json::json!({
             "path": exhaustive_dir.path().to_string_lossy().to_string(),
