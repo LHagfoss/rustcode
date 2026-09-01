@@ -1064,7 +1064,10 @@ fn the_prompt_matches_what_the_executor_actually_does() {
         );
     }
     // And the stated limit on changes must be the one the executor enforces.
-    assert!(prompt.contains("at most 4 such calls"), "got: {prompt}");
+    assert!(
+        prompt.contains("at most one workspace-changing call"),
+        "got: {prompt}"
+    );
 }
 
 // Regression: the JSON "Tool Format" section used to tell the model to
@@ -1314,8 +1317,8 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
     assert_eq!(kept.len(), 10);
     assert_eq!(dropped, 0);
 
-    // Calls that can change the workspace are rationed, and the prefix
-    // before the surplus one survives in order.
+    // Only the first call that can change the workspace is kept, along with
+    // any reads that preceded it. Later calls wait for its real result.
     let over = vec![
         call("grep"),
         call("run_command"),
@@ -1327,9 +1330,9 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
     ];
     let (kept, dropped) = truncate_tool_batch(over);
     assert_eq!(kept.len(), MAX_MUTATING_CALLS_PER_RESPONSE + 1);
-    assert_eq!(dropped, 2);
+    assert_eq!(dropped, 5);
     assert_eq!(kept[0].name, "grep");
-    assert_eq!(kept[4].name, "write_to_file");
+    assert_eq!(kept[1].name, "run_command");
 
     // The absolute ceiling still applies to a runaway response.
     let runaway: Vec<ToolCall> = (0..50).map(|_| call("grep")).collect();
