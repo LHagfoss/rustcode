@@ -770,6 +770,56 @@ fn reasoning_loop_detector_catches_cross_turn_stagnant_plan() {
 }
 
 #[test]
+fn authoritative_verification_clears_stale_plan_before_final_summary() {
+    let mut detector = ReasoningLoopDetector::default();
+    let file = "src/network/turn_engine.rs";
+    let stale_plan =
+        "I will inspect src/network/turn_engine.rs and verify the turn recovery behavior.";
+
+    assert_eq!(
+        detector.record_turn_evidence(&TurnEvidence {
+            reasoning: stale_plan,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        ReasoningLoopStatus::Ok
+    );
+
+    // Verification produces authoritative evidence without changing the
+    // workspace. It must not be compared with the pre-verification plan.
+    let verification = TurnEvidence {
+        reasoning: stale_plan,
+        target_files: &[file],
+        made_progress: true,
+        had_edits: false,
+        tool_count: 1,
+        no_progress_streak: 0,
+    };
+    assert_eq!(
+        detector.record_turn_evidence_after_progress(&verification, true),
+        ReasoningLoopStatus::Ok
+    );
+
+    // A final summary that mentions the same files is now a fresh turn, not a
+    // repeated plan. Repeated verification itself remains guarded by the
+    // progress ledger's RepeatedVerification assessment.
+    assert_eq!(
+        detector.record_turn_evidence(&TurnEvidence {
+            reasoning: stale_plan,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        ReasoningLoopStatus::Ok
+    );
+}
+
+#[test]
 fn reasoning_loop_detector_catches_paraphrased_same_plan() {
     let mut detector = ReasoningLoopDetector::default();
     let turn1 = "I will modify src/network/turn_engine.rs to implement the loop recovery logic for reasoning loops.";
