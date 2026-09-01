@@ -737,6 +737,7 @@ Re-reading will not produce anything new; if an edit failed to match, expand sta
                                 command: None,
                                 exit_code: previous.exit_code,
                                 truncated: previous.truncated,
+                                completeness: previous.completeness,
                                 replayed: true,
                                 error_kind: previous.error_kind,
                                 retryable: previous.retryable,
@@ -818,6 +819,7 @@ different, read another range or make an edit first; repeating this call returns
                             success: execution.success,
                             exit_code: execution.exit_code,
                             truncated: execution.truncated,
+                            completeness: execution.completeness,
                             full_output_artifact: None,
                             error_kind: execution.error_kind,
                             retryable: execution.retryable,
@@ -906,6 +908,7 @@ different, read another range or make an edit first; repeating this call returns
                 cached.success = result.metadata.success;
                 cached.exit_code = result.metadata.exit_code;
                 cached.truncated = result.metadata.truncated;
+                cached.completeness = result.metadata.completeness;
                 cached.error_kind = result.metadata.error_kind;
                 cached.retryable = result.metadata.retryable;
                 if result.metadata.full_output_artifact.is_some() {

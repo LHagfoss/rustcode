@@ -166,6 +166,11 @@ fn command_output_to_tool_output(
         command: Some(command.to_owned()),
         exit_code: output.exit_code,
         truncated: output.stdout.is_truncated() || output.stderr.is_truncated(),
+        completeness: if output.stdout.is_truncated() || output.stderr.is_truncated() {
+            rustcode_core::ToolResultCompleteness::ByteTruncated
+        } else {
+            rustcode_core::ToolResultCompleteness::Complete
+        },
         replayed: false,
         error_kind: (!output.success).then_some(super::ToolErrorKind::CommandFailed),
         retryable: false,
@@ -409,6 +414,7 @@ fn run_command_output_inner(
             command: Some(cmd_str),
             exit_code: None,
             truncated: false,
+            completeness: rustcode_core::ToolResultCompleteness::Complete,
             replayed: false,
             error_kind: None,
             retryable: false,
@@ -454,6 +460,11 @@ fn run_command_output_inner(
         command: None,
         exit_code: Some(exit_code),
         truncated,
+        completeness: if truncated {
+            rustcode_core::ToolResultCompleteness::ByteTruncated
+        } else {
+            rustcode_core::ToolResultCompleteness::Complete
+        },
         replayed: false,
         error_kind: failed.then_some(super::ToolErrorKind::CommandFailed),
         retryable: false,
