@@ -9,6 +9,7 @@ pub(crate) struct TurnRunner {
 pub(crate) struct ResponseChunk {
     pub(crate) content: String,
     pub(crate) final_answer_boundary: super::stream::FinalAnswerBoundary,
+    pub(crate) provider_final_answer_state: super::stream::ProviderFinalAnswerState,
     pub(crate) finish_reason: Option<String>,
     pub(crate) has_native_tool_calls: bool,
     pub(crate) thought_time_ms: u64,
@@ -18,6 +19,7 @@ pub(crate) struct ResponseChunk {
 pub(crate) struct CollectedResponse {
     pub(crate) content: String,
     pub(crate) final_answer_boundary: super::stream::FinalAnswerBoundary,
+    pub(crate) provider_final_answer_state: super::stream::ProviderFinalAnswerState,
     pub(crate) finish_reason: Option<String>,
     pub(crate) thought_time_ms: u64,
     pub(crate) thought_tokens: u32,
@@ -64,6 +66,7 @@ where
         // any earlier segment. A later reasoning-only continuation must clear
         // an earlier content boundary before recovery evaluates the result.
         let final_answer_boundary = chunk.final_answer_boundary;
+        let provider_final_answer_state = chunk.provider_final_answer_state;
         has_native_tool_calls |= chunk.has_native_tool_calls;
         thought_time_ms = thought_time_ms.saturating_add(chunk.thought_time_ms);
         thought_tokens = thought_tokens.saturating_add(chunk.thought_tokens);
@@ -78,6 +81,7 @@ where
         return Ok(CollectedResponse {
             content: accumulated,
             final_answer_boundary,
+            provider_final_answer_state,
             finish_reason: chunk.finish_reason,
             thought_time_ms,
             thought_tokens,
@@ -88,7 +92,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::stream::FinalAnswerBoundary;
+    use crate::network::stream::{FinalAnswerBoundary, ProviderFinalAnswerState};
 
     #[test]
     fn continuation_policy_is_bounded_and_reusable() {
@@ -117,6 +121,7 @@ mod tests {
                 Ok(ResponseChunk {
                     content: chunk.to_string(),
                     final_answer_boundary: FinalAnswerBoundary::None,
+                    provider_final_answer_state: ProviderFinalAnswerState::None,
                     finish_reason: reason,
                     has_native_tool_calls: false,
                     thought_time_ms: 0,
@@ -145,6 +150,7 @@ mod tests {
                         "unexpected continuation".into()
                     },
                     final_answer_boundary: FinalAnswerBoundary::None,
+                    provider_final_answer_state: ProviderFinalAnswerState::None,
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: true,
                     thought_time_ms: 0,
@@ -176,6 +182,11 @@ mod tests {
                     } else {
                         FinalAnswerBoundary::ReasoningClosed
                     },
+                    provider_final_answer_state: if previous.is_empty() {
+                        ProviderFinalAnswerState::None
+                    } else {
+                        ProviderFinalAnswerState::Terminal
+                    },
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: false,
                     thought_time_ms: 0,
@@ -191,6 +202,10 @@ mod tests {
         assert_eq!(
             result.final_answer_boundary,
             FinalAnswerBoundary::ReasoningClosed
+        );
+        assert_eq!(
+            result.provider_final_answer_state,
+            ProviderFinalAnswerState::Terminal
         );
     }
 
@@ -221,6 +236,7 @@ mod tests {
                 Ok(ResponseChunk {
                     content,
                     final_answer_boundary,
+                    provider_final_answer_state: ProviderFinalAnswerState::None,
                     finish_reason,
                     has_native_tool_calls: false,
                     thought_time_ms: 0,
@@ -253,6 +269,7 @@ mod tests {
                     } else {
                         FinalAnswerBoundary::ReasoningClosed
                     },
+                    provider_final_answer_state: ProviderFinalAnswerState::None,
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: false,
                     thought_time_ms: if previous.is_empty() { 250 } else { 400 },

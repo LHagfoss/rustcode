@@ -285,6 +285,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 Ok(super::runner::ResponseChunk {
                     content: buffer.content.clone(),
                     final_answer_boundary: buffer.final_answer_boundary,
+                    provider_final_answer_state: buffer.provider_final_answer_state,
                     finish_reason,
                     has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
                     thought_time_ms: buffer.thought_time_ms,

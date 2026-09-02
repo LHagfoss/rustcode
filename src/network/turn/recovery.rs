@@ -40,9 +40,14 @@ fn completed_inspection_synthesis(
     content: &str,
     native_tool_calls_empty: bool,
     final_answer_boundary: super::super::stream::FinalAnswerBoundary,
+    provider_final_answer_state: super::super::stream::ProviderFinalAnswerState,
 ) -> Option<String> {
+    // A reasoning/content transition only identifies where answer text starts.
+    // Promotion also requires the provider's terminal state; otherwise a
+    // loop/budget stop can carry plausible-looking prose through this path.
     if !native_tool_calls_empty
         || final_answer_boundary != super::super::stream::FinalAnswerBoundary::ReasoningClosed
+        || provider_final_answer_state != super::super::stream::ProviderFinalAnswerState::Terminal
         || ctx.progress.made_edits
         || ctx.progress.failed_mutations > 0
         || ctx.progress.complete_inspection_results == 0
@@ -77,6 +82,7 @@ pub(super) async fn handle_response_recovery(
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
     final_answer_boundary: super::super::stream::FinalAnswerBoundary,
+    provider_final_answer_state: super::super::stream::ProviderFinalAnswerState,
 ) -> ResponseRecoveryOutcome {
     use super::super::lifecycle;
     use super::super::loop_detect;
@@ -128,6 +134,7 @@ pub(super) async fn handle_response_recovery(
             &ctx.response.final_content,
             native_tool_calls_empty,
             final_answer_boundary,
+            provider_final_answer_state,
         ) {
             dbg_log!(
                 "Reasoning loop followed complete read-only inspection; preserving final synthesis"
@@ -243,7 +250,7 @@ pub(super) async fn handle_response_recovery(
 mod tests {
     use super::{completed_inspection_synthesis, reasoning_loop_final_response};
     use crate::network::TurnContext;
-    use crate::network::stream::FinalAnswerBoundary;
+    use crate::network::stream::{FinalAnswerBoundary, ProviderFinalAnswerState};
 
     fn completed_inspection_context(content: &str) -> TurnContext {
         let mut ctx = TurnContext::new();
@@ -262,6 +269,7 @@ mod tests {
             &ctx.response.final_content,
             true,
             FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
         )
         .expect("complete inspection should yield a usable review");
         assert!(summary.contains("Findings:"));
@@ -280,6 +288,7 @@ mod tests {
                 &ctx.response.final_content,
                 true,
                 FinalAnswerBoundary::None,
+                ProviderFinalAnswerState::None,
             )
             .is_none()
         );
@@ -296,6 +305,7 @@ mod tests {
                 &ctx.response.final_content,
                 false,
                 FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::Terminal,
             )
             .is_none()
         );
@@ -312,6 +322,7 @@ mod tests {
                 &ctx.response.final_content,
                 true,
                 FinalAnswerBoundary::None,
+                ProviderFinalAnswerState::None,
             )
             .is_none()
         );
@@ -328,6 +339,7 @@ mod tests {
                 &ctx.response.final_content,
                 true,
                 FinalAnswerBoundary::None,
+                ProviderFinalAnswerState::None,
             )
             .is_none()
         );
@@ -344,6 +356,7 @@ mod tests {
                 &ctx.response.final_content,
                 true,
                 FinalAnswerBoundary::None,
+                ProviderFinalAnswerState::None,
             )
             .is_none()
         );
@@ -359,6 +372,7 @@ mod tests {
             &ctx.response.final_content,
             true,
             FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
         );
         assert!(summary.is_some());
     }
@@ -375,13 +389,14 @@ mod tests {
                 &ctx.response.final_content,
                 true,
                 FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::Terminal,
             )
             .is_none()
         );
     }
 
     #[test]
-    fn marker_path_and_actionable_words_without_final_boundary_do_not_finish() {
+    fn marker_path_and_actionable_words_without_terminal_provider_state_do_not_finish() {
         let ctx = completed_inspection_context(
             "Findings: src/app.ts has no issue. I got stuck in a loop and stopped.",
         );
@@ -390,7 +405,8 @@ mod tests {
                 &ctx,
                 &ctx.response.final_content,
                 true,
-                FinalAnswerBoundary::None,
+                FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::None,
             )
             .is_none()
         );
@@ -407,6 +423,7 @@ mod tests {
                 &ctx.response.final_content,
                 true,
                 FinalAnswerBoundary::ReasoningClosed,
+                ProviderFinalAnswerState::Terminal,
             )
             .is_some()
         );

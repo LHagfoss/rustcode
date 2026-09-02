@@ -2056,6 +2056,10 @@ pub async fn stream_request(
                                 stream_trace.record(line_buf.len(), &val);
                                 if let Some(choices) = val.get("choices").and_then(|c| c.as_array())
                                     && !choices.is_empty() {
+                                        let provider_stop = choices[0]
+                                            .get("finish_reason")
+                                            .and_then(|f| f.as_str())
+                                            == Some("stop");
                                         if let Some(fr) = choices[0].get("finish_reason").and_then(|f| f.as_str()) {
                                             finish_reason = Some(fr.to_string());
                                         }
@@ -2107,6 +2111,8 @@ pub async fn stream_request(
                                                     // content boundary is no longer final.
                                                     buffer.final_answer_boundary =
                                                         super::stream::FinalAnswerBoundary::None;
+                                                    buffer.provider_final_answer_state =
+                                                        super::stream::ProviderFinalAnswerState::None;
                                                     buffer.thought_started_at = Some(started);
                                                 }
                                                 if !quiet {
@@ -2191,6 +2197,15 @@ pub async fn stream_request(
                                                 chunk.push_str("\n</think>\n\n");
                                             }
                                             chunk.push_str(c_token);
+                                        }
+                                        if provider_stop && reasoning.is_none() {
+                                            let mut buffer = buffer.lock().await;
+                                            if buffer.final_answer_boundary
+                                                == super::stream::FinalAnswerBoundary::ReasoningClosed
+                                            {
+                                                buffer.provider_final_answer_state =
+                                                    super::stream::ProviderFinalAnswerState::Terminal;
+                                            }
                                         }
                                         let runaway = fences.push(&chunk) > runaway_limit
                                             || accumulators
