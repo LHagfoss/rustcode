@@ -755,6 +755,8 @@ mod tests {
             enable_thinking: Some(true),
             reasoning_effort: Some("medium".to_string()),
             thinking_budget: Some(4096),
+            supports_reasoning_effort: Some(false),
+            supports_thinking_budget: Some(false),
             ..crate::config::ModelProfile::default()
         };
         let mut payload = serde_json::json!({});
@@ -765,6 +767,21 @@ mod tests {
         assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn legacy_reasoning_profile_still_sends_existing_wire_fields() {
+        let profile = crate::config::ModelProfile {
+            reasoning_effort: Some("medium".to_string()),
+            thinking_budget: Some(4096),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(&mut payload, Some(&profile), ThinkingMode::Normal);
+
+        assert_eq!(payload["reasoning_effort"], "medium");
+        assert_eq!(payload["thinking_budget"], 4096);
     }
 
     #[test]

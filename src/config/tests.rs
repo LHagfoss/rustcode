@@ -260,11 +260,38 @@ fn provider_context_window_is_used_when_model_profile_is_unspecified() {
 }
 
 #[test]
-fn reasoning_extension_capabilities_default_to_unsupported() {
+fn omlx_context_window_requires_explicit_provider_limit() {
+    let profile = ModelProfile {
+        engine: Some("omlx".to_string()),
+        context_window: Some(128_000),
+        provider_context_window: Some(32_768),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.effective_context_window(), 32_768);
+    assert_eq!(profile.context_window_mismatch(), Some((128_000, 32_768)));
+}
+
+#[test]
+fn legacy_reasoning_fields_remain_wire_enabled_without_capability_metadata() {
     let profile = ModelProfile {
         engine: Some("omlx".to_string()),
         thinking_budget: Some(4_096),
         reasoning_effort: Some("medium".to_string()),
+        ..ModelProfile::default()
+    };
+
+    assert!(profile.supports_thinking_budget_wire());
+    assert!(profile.supports_reasoning_effort_wire());
+}
+
+#[test]
+fn explicitly_unsupported_reasoning_extensions_stay_disabled() {
+    let profile = ModelProfile {
+        thinking_budget: Some(4_096),
+        reasoning_effort: Some("medium".to_string()),
+        supports_thinking_budget: Some(false),
+        supports_reasoning_effort: Some(false),
         ..ModelProfile::default()
     };
 

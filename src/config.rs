@@ -384,11 +384,18 @@ impl ModelProfile {
     }
 
     pub fn supports_thinking_budget_wire(&self) -> bool {
-        self.supports_thinking_budget.unwrap_or(false)
+        // Profiles written before capability metadata was introduced may
+        // still contain `thinking_budget`. Preserve their established wire
+        // behavior while allowing an explicit `false` to opt out.
+        self.supports_thinking_budget
+            .unwrap_or(self.thinking_budget.is_some())
     }
 
     pub fn supports_reasoning_effort_wire(&self) -> bool {
-        self.supports_reasoning_effort.unwrap_or(false)
+        // `None` means legacy/unknown metadata, not an explicit rejection.
+        // Existing profiles with reasoning_effort must continue sending it.
+        self.supports_reasoning_effort
+            .unwrap_or(self.reasoning_effort.is_some())
     }
 }
 

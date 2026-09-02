@@ -571,8 +571,13 @@ fn context_length_from_model_info(info: &serde_json::Value) -> Option<u32> {
         .map(|n| n as u32)
 }
 
-/// Ask an ollama server for a model's context window. Returns None for
-/// non-ollama endpoints or on any error.
+/// Ask a provider's introspection endpoint for a model's context window.
+///
+/// Only explicitly supported engines are probed. In particular, oMLX and
+/// generic OpenAI-compatible endpoints do not currently expose a verified
+/// context-limit endpoint, so callers must use the profile's explicit limit
+/// instead of treating an incidental `/props` or `/api/show` response as an
+/// automatic detection.
 pub async fn fetch_context_window(
     client: &reqwest::Client,
     chat_url: &str,
@@ -581,77 +586,37 @@ pub async fn fetch_context_window(
 ) -> Option<u32> {
     let base = chat_url.strip_suffix("/v1/chat/completions")?;
 
-    if let Some(eng) = engine {
-        match eng.to_lowercase().as_str() {
-            "ollama" => {
-                let show_url = format!("{base}/api/show");
-                let resp = client
-                    .post(&show_url)
-                    .json(&serde_json::json!({"model": model}))
-                    .send()
-                    .await
-                    .ok()?;
-                if resp.status().is_success() {
-                    let body: serde_json::Value = resp.json().await.ok()?;
-                    if let Some(ctx) = context_length_from_model_info(body.get("model_info")?) {
-                        return Some(ctx);
-                    }
-                }
+    match engine.map(|value| value.to_ascii_lowercase())?.as_str() {
+        "ollama" => {
+            let show_url = format!("{base}/api/show");
+            let resp = client
+                .post(&show_url)
+                .json(&serde_json::json!({"model": model}))
+                .send()
+                .await
+                .ok()?;
+            if resp.status().is_success() {
+                let body: serde_json::Value = resp.json().await.ok()?;
+                context_length_from_model_info(body.get("model_info")?)
+            } else {
+                None
             }
-            "llamacpp" | "llama.cpp" | "llama" => {
-                let props_url = format!("{base}/props");
-                let resp = client.get(&props_url).send().await.ok()?;
-                if resp.status().is_success() {
-                    let body: serde_json::Value = resp.json().await.ok()?;
-                    if let Some(n) = body
-                        .get("default_generation_settings")
-                        .and_then(|v| v.get("n_ctx"))
-                        .and_then(|v| v.as_u64())
-                    {
-                        return Some(n as u32);
-                    }
-                    if let Some(n) = body.get("n_ctx").and_then(|v| v.as_u64()) {
-                        return Some(n as u32);
-                    }
-                }
+        }
+        "llamacpp" | "llama.cpp" | "llama" => {
+            let props_url = format!("{base}/props");
+            let resp = client.get(&props_url).send().await.ok()?;
+            if !resp.status().is_success() {
+                return None;
             }
-            _ => {}
+            let body: serde_json::Value = resp.json().await.ok()?;
+            body.get("default_generation_settings")
+                .and_then(|v| v.get("n_ctx"))
+                .and_then(|v| v.as_u64())
+                .or_else(|| body.get("n_ctx").and_then(|v| v.as_u64()))
+                .map(|n| n as u32)
         }
+        _ => None,
     }
-
-    // Fallback: try llama.cpp first, then Ollama
-    let props_url = format!("{base}/props");
-    if let Ok(resp) = client.get(&props_url).send().await
-        && resp.status().is_success()
-        && let Ok(body) = resp.json::<serde_json::Value>().await
-    {
-        if let Some(n) = body
-            .get("default_generation_settings")
-            .and_then(|v| v.get("n_ctx"))
-            .and_then(|v| v.as_u64())
-        {
-            return Some(n as u32);
-        }
-        if let Some(n) = body.get("n_ctx").and_then(|v| v.as_u64()) {
-            return Some(n as u32);
-        }
-    }
-
-    let show_url = format!("{base}/api/show");
-    let resp = client
-        .post(&show_url)
-        .json(&serde_json::json!({"model": model}))
-        .send()
-        .await
-        .ok()?;
-    if resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.ok()?;
-        if let Some(ctx) = context_length_from_model_info(body.get("model_info")?) {
-            return Some(ctx);
-        }
-    }
-
-    None
 }
 
 /// Read-only tools whose results can be safely short-circuited by the repeat guard.
