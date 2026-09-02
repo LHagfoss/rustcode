@@ -162,13 +162,32 @@ pub(crate) async fn run_agent_turn_with_context<P: policy::TurnPolicy + 'static>
     tokio::spawn(async move {
         fetch_model_quota(&client_quota, &state_quota).await;
     });
-    let notification = if matches!(stop_reason, lifecycle::StopReason::Cancelled) {
-        crate::notifications::FinishedStatus::Cancelled
-    } else {
-        crate::notifications::FinishedStatus::Success
-    };
+    let notification = finished_notification_status(&ctx, cancel_token.is_cancelled());
     let _ = crate::notifications::notify_finished(notification);
     ctx
+}
+
+fn finished_notification_status(
+    ctx: &TurnContext,
+    cancelled: bool,
+) -> crate::notifications::FinishedStatus {
+    if cancelled
+        || matches!(
+            ctx.lifecycle.stop_reason.as_ref(),
+            Some(lifecycle::StopReason::Cancelled)
+        )
+    {
+        crate::notifications::FinishedStatus::Cancelled
+    } else if ctx.lifecycle.task_completed
+        && matches!(
+            ctx.lifecycle.stop_reason.as_ref(),
+            Some(lifecycle::StopReason::Completed | lifecycle::StopReason::CompletedWithWarning(_))
+        )
+    {
+        crate::notifications::FinishedStatus::Success
+    } else {
+        crate::notifications::FinishedStatus::Incomplete
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,5 +379,43 @@ mod tests {
         let mut ctx = verified_edit_context("The work is complete.");
         ctx.recovery.force_final = true;
         assert!(!has_verified_implicit_completion(&ctx));
+    }
+
+    #[test]
+    fn loop_escalation_is_an_incomplete_notification() {
+        let mut ctx = TurnContext::new();
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::LoopEscalation);
+
+        assert_eq!(
+            finished_notification_status(&ctx, false),
+            crate::notifications::FinishedStatus::Incomplete
+        );
+    }
+
+    #[test]
+    fn only_verified_completion_is_a_success_notification() {
+        let mut ctx = TurnContext::new();
+        ctx.lifecycle.task_completed = true;
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
+
+        assert_eq!(
+            finished_notification_status(&ctx, false),
+            crate::notifications::FinishedStatus::Success
+        );
+
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::RecoveryFailed);
+        assert_eq!(
+            finished_notification_status(&ctx, false),
+            crate::notifications::FinishedStatus::Incomplete
+        );
+    }
+
+    #[test]
+    fn cancellation_remains_distinct_from_incomplete_completion() {
+        let ctx = TurnContext::new();
+        assert_eq!(
+            finished_notification_status(&ctx, true),
+            crate::notifications::FinishedStatus::Cancelled
+        );
     }
 }
