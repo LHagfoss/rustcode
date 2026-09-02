@@ -50,6 +50,25 @@ fn incomplete_tool_result(metadata: &crate::network::events::ToolResultMetadata)
         )
 }
 
+fn content_bearing_inspection_status(
+    call: Option<&crate::tools::ToolCall>,
+    metadata: &crate::network::events::ToolResultMetadata,
+    content: &str,
+) -> Option<bool> {
+    let call = call?;
+    let inspection = metadata.inspection.as_ref()?;
+    if !metadata.success
+        || content.trim().is_empty()
+        || !loop_detect::read_returns_content(&call.name, &call.arguments)
+        || inspection.fingerprint.trim().is_empty()
+        || inspection.requested_path.is_none()
+        || inspection.returned_path.is_none()
+    {
+        return None;
+    }
+    Some(inspection.complete && !incomplete_tool_result(metadata))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     client: &reqwest::Client,
@@ -530,12 +549,9 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let diff_opt = result.diff;
                 let file_preview = result.file_preview;
                 batch_incomplete |= incomplete_tool_result(&metadata);
-                if metadata.success
-                    && call.is_some_and(|call| {
-                        loop_detect::inspection_target(&call.name, &call.arguments).is_some()
-                    })
+                if let Some(complete) = content_bearing_inspection_status(call, &metadata, &content)
                 {
-                    if incomplete_tool_result(&metadata) {
+                    if !complete {
                         ctx.progress.incomplete_inspection_results =
                             ctx.progress.incomplete_inspection_results.saturating_add(1);
                     } else {
@@ -1268,9 +1284,38 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{incomplete_tool_result, should_apply_loop_recovery};
+    use super::{
+        content_bearing_inspection_status, incomplete_tool_result, should_apply_loop_recovery,
+    };
     use crate::network::events::ToolResultMetadata;
-    use rustcode_core::ToolResultCompleteness;
+    use crate::tools::ToolCall;
+    use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
+
+    fn inspection_metadata(complete: bool) -> InspectionResultMetadata {
+        InspectionResultMetadata {
+            requested_path: Some("src/app.ts".to_string()),
+            requested_range: Some(InspectionRange {
+                start: Some(1),
+                end: Some(20),
+            }),
+            returned_path: Some("src/app.ts".to_string()),
+            returned_range: Some(InspectionRange {
+                start: Some(1),
+                end: Some(20),
+            }),
+            complete,
+            fingerprint: "read:src/app.ts:1:20".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn read_call(command: &str) -> ToolCall {
+        ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": command}),
+            call_id: None,
+        }
+    }
 
     #[test]
     fn completion_request_reaches_finish_gates_before_loop_recovery() {
@@ -1302,5 +1347,58 @@ mod tests {
             completeness: ToolResultCompleteness::UserLimited,
             ..Default::default()
         }));
+    }
+
+    #[test]
+    fn content_bearing_complete_inspection_requires_typed_metadata() {
+        let call = read_call("cat src/app.ts");
+        let mut metadata = ToolResultMetadata {
+            success: true,
+            inspection: Some(inspection_metadata(true)),
+            ..Default::default()
+        };
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "1: export const app = 1;"),
+            Some(true)
+        );
+
+        metadata.inspection = None;
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "source"),
+            None
+        );
+    }
+
+    #[test]
+    fn wc_and_od_are_not_content_bearing_source_inspections() {
+        for command in ["wc -l src/app.ts", "od -An -tx1 src/app.ts"] {
+            let call = read_call(command);
+            let metadata = ToolResultMetadata {
+                success: true,
+                inspection: Some(inspection_metadata(true)),
+                ..Default::default()
+            };
+            assert_eq!(
+                content_bearing_inspection_status(Some(&call), &metadata, "20"),
+                None,
+                "{command} must not count as source content"
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_typed_content_inspection_cannot_support_completion() {
+        let call = read_call("cat src/app.ts");
+        let metadata = ToolResultMetadata {
+            success: true,
+            completeness: ToolResultCompleteness::ByteTruncated,
+            truncated: true,
+            inspection: Some(inspection_metadata(false)),
+            ..Default::default()
+        };
+        assert_eq!(
+            content_bearing_inspection_status(Some(&call), &metadata, "partial source"),
+            Some(false)
+        );
     }
 }

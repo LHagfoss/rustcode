@@ -42,6 +42,7 @@ fn completed_inspection_synthesis(
 ) -> Option<String> {
     if !native_tool_calls_empty
         || ctx.progress.made_edits
+        || ctx.progress.failed_mutations > 0
         || ctx.progress.complete_inspection_results == 0
         || ctx.progress.incomplete_inspection_results > 0
         || crate::network::text::has_intended_tool_call(content)
@@ -64,8 +65,39 @@ fn completed_inspection_synthesis(
     };
     let candidate = candidate.trim();
     let word_count = candidate.split_whitespace().count();
-    (word_count >= 20 && candidate != reasoning_loop_final_response())
-        .then(|| candidate.to_string())
+    let lower = candidate.to_ascii_lowercase();
+    let has_synthesis_marker = [
+        "findings:",
+        "key findings",
+        "issues:",
+        "summary:",
+        "recommendations:",
+        "review complete",
+        "no issues found",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker));
+    let has_evidence_reference = candidate.split_whitespace().any(|word| {
+        let word = word.trim_matches(|character: char| {
+            matches!(
+                character,
+                '`' | '*' | '(' | ')' | '[' | ']' | ',' | ';' | ':'
+            )
+        });
+        word.contains('/')
+            || [
+                ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".rb", ".swift",
+            ]
+            .iter()
+            .any(|extension| word.ends_with(extension))
+    });
+    (word_count >= 20
+        && candidate != reasoning_loop_final_response()
+        && has_synthesis_marker
+        && has_evidence_reference
+        && !lower.contains("reasoning became repetitive")
+        && !lower.contains("stopped after repeated reasoning"))
+    .then(|| candidate.to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,5 +316,30 @@ mod tests {
             "<think>Findings are ready.</think>\n```tool\n{\"name\":\"view_file\"}\n```",
         );
         assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, false).is_none());
+    }
+
+    #[test]
+    fn arbitrary_long_prose_is_not_a_final_synthesis() {
+        let ctx = completed_inspection_context(
+            "I reviewed the project carefully and considered the available evidence before deciding that more thought would be useful before presenting anything to the user.",
+        );
+        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+    }
+
+    #[test]
+    fn loop_stop_reasoning_is_not_a_final_synthesis() {
+        let ctx = completed_inspection_context(
+            "The review is complete for src/app.ts. The model stopped after repeated reasoning because the reasoning became repetitive and did not produce a trustworthy final report.",
+        );
+        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+    }
+
+    #[test]
+    fn failed_mutation_blocks_read_only_review_completion() {
+        let mut ctx = completed_inspection_context(
+            "<think>Findings: src/app.ts has an unchecked export input and the review complete evidence supports this conclusion.</think>",
+        );
+        ctx.progress.failed_mutations = 1;
+        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
     }
 }
