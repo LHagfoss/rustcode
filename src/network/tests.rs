@@ -89,6 +89,180 @@ fn model_result_contract_distinguishes_read_completeness_states() {
 }
 
 #[test]
+fn inspection_result_contract_persists_ranges_and_canonical_fingerprint() {
+    let result = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1}),
+        crate::tools::ToolExecutionOutput {
+            content: "[File: src/lib.rs, Lines 1 to 800 of 1000, Bytes offset: 0]\nsource\n[Truncated: lines 801-1000 of 1000]".to_string(),
+            truncated: true,
+            completeness: rustcode_core::ToolResultCompleteness::LineTruncated,
+            ..crate::tools::ToolExecutionOutput::success(String::new())
+        },
+        None,
+    );
+    let inspection = result
+        .metadata
+        .inspection
+        .as_ref()
+        .expect("inspection metadata");
+    assert_eq!(inspection.requested_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(
+        inspection.requested_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: None,
+        })
+    );
+    assert_eq!(inspection.returned_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(
+        inspection.returned_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(800),
+        })
+    );
+    assert!(!inspection.complete);
+    assert_eq!(
+        inspection.next_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(801),
+            end: Some(1000),
+        })
+    );
+    assert_eq!(inspection.fingerprint, "read:src/lib.rs#0");
+
+    let message = tool_result_history_message(result, None);
+    assert!(!message.content.contains("requested_path"));
+    let model = history::to_messages(&[message], "system");
+    let payload = model[1]["content"].as_str().expect("model result");
+    assert!(payload.contains("requested_path"));
+    assert!(payload.contains("next_range"));
+    assert!(payload.contains("fingerprint"));
+}
+
+#[test]
+fn final_truncation_recomputes_mid_file_inspection_ranges() {
+    let args = serde_json::json!({
+        "path": "src/large.ts",
+        "start_line": 1,
+        "end_line": 140
+    });
+    let content = format!(
+        "[File: src/large.ts, Lines 1 to 140 of 140, Bytes offset: 0]\n{}",
+        (1..=140)
+            .map(|line| format!("{line}: {}", "x".repeat(500)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let result = finalize_tool_result(
+        tool_result_from_execution(
+            "view_file",
+            &args,
+            crate::tools::ToolExecutionOutput::success(content),
+            None,
+        ),
+        None,
+    );
+    let inspection = result.metadata.inspection.expect("inspection metadata");
+
+    assert!(result.metadata.truncated);
+    assert!(!inspection.complete);
+    assert!(
+        inspection
+            .delivered_ranges
+            .iter()
+            .any(|range| range.end.unwrap() < 140),
+        "returned metadata must not claim the original range: {inspection:?}"
+    );
+    assert_ne!(
+        inspection.returned_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(140),
+        })
+    );
+    let next = inspection.next_range.expect("actionable omitted range");
+    assert!(next.start.unwrap() <= next.end.unwrap());
+    assert!(next.end.unwrap() < 140);
+}
+
+#[test]
+fn final_truncation_recomputes_mid_line_range_and_survives_replay() {
+    let args = serde_json::json!({"path": "src/long.ts", "start_line": 1});
+    let content = format!(
+        "[File: src/long.ts, Lines 1 to 1 of 1, Bytes offset: 0]\n1: {}",
+        "x".repeat(100_000)
+    );
+    let result = finalize_tool_result(
+        tool_result_from_execution(
+            "view_file",
+            &args,
+            crate::tools::ToolExecutionOutput::success(content),
+            None,
+        ),
+        None,
+    );
+    let inspection = result
+        .metadata
+        .inspection
+        .as_ref()
+        .expect("inspection metadata")
+        .clone();
+
+    assert!(result.metadata.truncated);
+    assert!(!inspection.complete);
+    assert!(
+        inspection.returned_range.is_none(),
+        "a line cut mid-content is not a complete returned range: {inspection:?}"
+    );
+    assert_eq!(
+        inspection.next_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(1),
+        })
+    );
+
+    let artifact = result.metadata.full_output_artifact.clone();
+    if let Some(path) = artifact.as_deref() {
+        assert!(
+            std::fs::metadata(path).is_ok(),
+            "artifact must be preserved"
+        );
+    }
+    let message = tool_result_history_message(result, None);
+    let record = message.tool_result.as_ref().expect("persisted metadata");
+    assert_eq!(record.inspection.as_ref(), Some(&inspection));
+    assert_eq!(record.full_output_artifact, artifact);
+    let replay = history::to_messages(&[message], "system");
+    let payload = replay[1]["content"].as_str().expect("model result");
+    assert!(payload.contains("next_range"));
+    assert!(payload.contains("\"start\":1"));
+}
+
+#[test]
+fn equivalent_inspection_tools_share_a_fingerprint() {
+    let view = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1}),
+        crate::tools::ToolExecutionOutput::success(
+            "[File: src/lib.rs, Lines 1 to 2 of 2]\ncode".into(),
+        ),
+        None,
+    );
+    let shell = tool_result_from_execution(
+        "run_command",
+        &serde_json::json!({"command": "sed -n '1,2p' src/lib.rs"}),
+        crate::tools::ToolExecutionOutput::success("code".into()),
+        None,
+    );
+    assert_eq!(
+        view.metadata.inspection.as_ref().unwrap().fingerprint,
+        shell.metadata.inspection.as_ref().unwrap().fingerprint
+    );
+}
+
 fn deterministic_compaction_persists_the_retained_suffix_anchor() {
     let mut history = vec![
         ChatMessage::new("user", "old task"),
@@ -4135,6 +4309,7 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         full_output_artifact: None,
         replayed: false,
         retryable: false,
+        inspection: None,
     });
     history.push(failed_tool);
 

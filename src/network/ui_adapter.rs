@@ -152,6 +152,7 @@ fn history_tool_result_event(
             replayed: record.replayed,
             error_kind: record.parsed_error_kind(),
             retryable: record.retryable,
+            inspection: record.inspection.clone(),
         },
     };
     Some(AgentUiEvent::ToolFinished { id, result })
