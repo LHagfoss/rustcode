@@ -1,3 +1,8 @@
+## [v0.50.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.50.0) - 2026-09-02
+
+### Fixes
+- **Completed review preservation:** Preserve completed read-only inspection work when final synthesis encounters a reasoning loop, while requiring explicit provider terminal state and content-bearing evidence before accepting completion ([#932](https://github.com/LHagfoss/rustcode/pull/932); tracked by [#931](https://github.com/LHagfoss/rustcode/issues/931)).
+
 ## [v0.40.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.9) - 2026-09-02
 
 ### Fixes
