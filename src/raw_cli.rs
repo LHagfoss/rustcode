@@ -170,6 +170,10 @@ impl crate::network::policy::TurnPolicy for HeadlessPolicy {
     fn should_verify_completion(&self) -> bool {
         true
     }
+
+    fn is_headless(&self) -> bool {
+        true
+    }
 }
 
 pub async fn run_headless_turn(
