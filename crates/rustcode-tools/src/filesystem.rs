@@ -29,7 +29,7 @@ pub fn copy_file_schema() -> Value {
 
 pub fn view_file_schema() -> Value {
     serde_json::json!({
-        "type": "object", "properties": {
+        "type": "object", "additionalProperties": false, "properties": {
             "path": { "type": "string" }, "start_line": { "type": "integer", "minimum": 1 },
             "end_line": { "type": "integer", "minimum": 1, "description": "Inclusive end line; each call is capped at 800 lines. Request targeted follow-up ranges for more content." },
             "content_offset": { "type": "integer", "minimum": 0 }

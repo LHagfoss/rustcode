@@ -893,6 +893,7 @@ mod tests {
                     replayed: false,
                     error_kind: None,
                     retryable: false,
+                    inspection: None,
                 },
             },
         });
@@ -1003,6 +1004,7 @@ mod tests {
                     replayed: false,
                     error_kind: None,
                     retryable: false,
+                    inspection: None,
                 },
             },
         });

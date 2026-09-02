@@ -119,7 +119,7 @@ pub(super) async fn collect_round(
         (
             s.api_base_url.clone(),
             s.model_name.clone(),
-            crate::tools::ToolSchemaPolicy::root(s.delegation_active),
+            crate::tools::ToolSchemaPolicy::root_for_mode(s.delegation_active, s.agent_mode),
             s.active_session_id.clone(),
         )
     };

@@ -485,6 +485,52 @@ fn request_schema_policy_isolates_subagents_from_parent_delegation() {
 }
 
 #[test]
+fn read_only_inspection_profile_is_small_and_deterministic() {
+    let policy = ToolSchemaPolicy::read_only_inspection();
+    let first = native_tools_schema_for_context(policy, &[]).0;
+    let second = native_tools_schema_for_context(policy, &[]).0;
+    assert_eq!(first, second);
+    let names = first
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            "grep",
+            "glob",
+            "list_directory",
+            "find_symbol",
+            "get_project_map",
+            "view_file"
+        ]
+    );
+}
+
+#[test]
+fn inspection_schemas_use_strict_typed_arguments() {
+    let schemas = native_tools_schema_for_context(ToolSchemaPolicy::read_only_inspection(), &[]).0;
+    for tool in schemas {
+        let parameters = &tool["function"]["parameters"];
+        assert_eq!(parameters["type"], "object");
+        assert_eq!(parameters["additionalProperties"], false, "{tool:?}");
+    }
+    let view = native_tools_schema_for_context(ToolSchemaPolicy::read_only_inspection(), &[])
+        .0
+        .into_iter()
+        .find(|tool| tool["function"]["name"] == "view_file")
+        .expect("view_file schema");
+    assert_eq!(
+        view["function"]["parameters"]["properties"]["start_line"]["type"],
+        "integer"
+    );
+    assert_eq!(
+        view["function"]["parameters"]["properties"]["end_line"]["type"],
+        "integer"
+    );
+}
+
+#[test]
 fn api_native_builtin_selection_keeps_coding_core_and_routes_specialized_tools() {
     let coding_messages = vec![serde_json::json!({
         "role": "user",

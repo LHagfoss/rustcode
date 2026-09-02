@@ -1086,7 +1086,10 @@ pub(crate) async fn prepare_turn_request(
             .to_string();
         let skill_metadata = s.prompt_cache.skill_metadata();
         let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
-            Some(crate::tools::ToolSchemaPolicy::root(delegation_active))
+            Some(crate::tools::ToolSchemaPolicy::root_for_mode(
+                delegation_active,
+                agent_mode,
+            ))
         } else {
             None
         };
