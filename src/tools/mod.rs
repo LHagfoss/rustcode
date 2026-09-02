@@ -206,48 +206,61 @@ pub const MAX_MUTATING_CALLS_PER_RESPONSE: usize =
 pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 32;
 
 /// Cut an over-eager batch down to the calls that may run this round, returning
-/// the kept prefix and how many were dropped.
+/// the kept calls and the calls that were dropped.
 ///
-/// Rejecting the whole response teaches the model nothing: with no tool output
-/// it re-plans from the same context and emits the same oversized batch again.
-/// Running the leading calls puts real results in front of it instead, which is
-/// the only thing that reliably corrects a model that has started inventing
-/// tool output. Order is preserved because later calls were written expecting
-/// the earlier ones to have run.
+/// Read-only calls are retained throughout the bounded provider batch. The
+/// mutation budget limits only non-parallel calls, so a later read is not lost
+/// merely because an earlier mutation used the budget. The absolute call
+/// ceiling still bounds every batch, and order among retained calls is kept.
 ///
-/// A control-plane call (`use_skill`) must execute alone, so it is either the
-/// entire kept batch — when it leads — or the boundary the prefix stops at.
-pub fn truncate_tool_batch(
+/// A control-plane call must execute alone, so it is either the entire kept
+/// batch — when it leads — or the boundary where the retained prefix stops.
+pub fn partition_tool_batch(
     mut calls: Vec<ToolCall>,
     max_mutating_calls: usize,
-) -> (Vec<ToolCall>, usize) {
+) -> (Vec<ToolCall>, Vec<ToolCall>) {
     let total = calls.len();
     let is_control = |call: &ToolCall| matches!(tool_safety(&call.name), ToolSafety::ControlPlane);
+    let mut keep = vec![false; total];
 
-    let keep = if calls.first().is_some_and(is_control) {
-        1
+    if calls.first().is_some_and(is_control) {
+        keep[0] = true;
     } else {
         let limit = calls.len().min(MAX_TOOL_CALLS_PER_RESPONSE);
         let mut mutating = 0;
-        let mut kept = limit;
         for (index, call) in calls[..limit].iter().enumerate() {
             if is_control(call) {
-                kept = index;
                 break;
             }
             if !supports_parallel_execution(&call.name) {
-                mutating += 1;
-                if mutating > max_mutating_calls {
-                    kept = index;
-                    break;
+                if mutating >= max_mutating_calls {
+                    continue;
                 }
+                mutating += 1;
             }
+            keep[index] = true;
         }
-        kept
-    };
+    }
 
-    calls.truncate(keep);
-    (calls, total - keep)
+    let mut dropped = Vec::new();
+    let mut kept = Vec::with_capacity(total.saturating_sub(1));
+    for (index, call) in calls.drain(..).enumerate() {
+        if keep[index] {
+            kept.push(call);
+        } else {
+            dropped.push(call);
+        }
+    }
+    (kept, dropped)
+}
+
+/// Backwards-compatible count-only view of [`partition_tool_batch`].
+pub fn truncate_tool_batch(
+    calls: Vec<ToolCall>,
+    max_mutating_calls: usize,
+) -> (Vec<ToolCall>, usize) {
+    let (kept, dropped) = partition_tool_batch(calls, max_mutating_calls);
+    (kept, dropped.len())
 }
 
 /// Validate parsed calls before they reach an executor. Text protocols are

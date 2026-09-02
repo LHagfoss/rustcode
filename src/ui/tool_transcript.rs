@@ -974,14 +974,19 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
     let mut index = 0;
     while index < entries.len() {
         let kind = entries[index].kind;
-        let group_end = if kind == ToolTranscriptKind::Command
+        // `message_indices` represents one provider batch (and may include
+        // tool-only assistant turns joined by the scrollback layer). Keep it
+        // as one visual group even when the provider mixed command, read, or
+        // edit tools. The child rows retain their kind-specific formatting.
+        let whole_batch = &entries[index..];
+        let homogeneous = whole_batch.iter().all(|entry| entry.kind == kind);
+        let group_end = if homogeneous
+            && kind == ToolTranscriptKind::Command
             && matches!(state.verbosity(), crate::app::Verbosity::Low)
         {
             index + 1
         } else {
-            (index + 1..entries.len())
-                .find(|&next| entries[next].kind != kind)
-                .unwrap_or(entries.len())
+            entries.len()
         };
         let group = &entries[index..group_end];
         let success = group.iter().all(|entry| entry.success);
@@ -989,7 +994,7 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
         if !lines.is_empty() {
             lines.push(Line::from(""));
         }
-        if kind == ToolTranscriptKind::Command {
+        if homogeneous && kind == ToolTranscriptKind::Command {
             if matches!(state.verbosity(), crate::app::Verbosity::High) {
                 lines.push(tool_group_header("Ran", success, show_picker));
                 for (child_index, entry) in group.iter().enumerate() {
@@ -1011,7 +1016,9 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
                 ));
             }
         } else {
-            let title = if kind == ToolTranscriptKind::Explored {
+            let title = if !homogeneous {
+                "Ran"
+            } else if kind == ToolTranscriptKind::Explored {
                 "Explored"
             } else if kind == ToolTranscriptKind::Edit {
                 "Edited"
@@ -1025,21 +1032,25 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
             let mut first_child = true;
             for entry in group {
                 let identity = format!("{}\0{}", entry.action, entry.target);
-                if kind != ToolTranscriptKind::Explored || seen.insert(identity) {
+                if entry.kind != ToolTranscriptKind::Explored || seen.insert(identity) {
                     let is_expanded = state.expanded_thoughts().contains(&entry.message_index);
-                    let show_hint = kind == ToolTranscriptKind::Tool
+                    let show_hint = entry.kind == ToolTranscriptKind::Tool
                         && !entry.body.is_empty()
                         && !is_expanded
                         && matches!(state.verbosity(), crate::app::Verbosity::Low);
-                    lines.extend(tool_child_line(
-                        entry,
-                        first_child,
-                        show_hint,
-                        width,
-                        show_picker,
-                    ));
+                    if entry.kind == ToolTranscriptKind::Command {
+                        lines.extend(command_child_lines(entry, first_child, width, show_picker));
+                    } else {
+                        lines.extend(tool_child_line(
+                            entry,
+                            first_child,
+                            show_hint,
+                            width,
+                            show_picker,
+                        ));
+                    }
                     first_child = false;
-                    if kind == ToolTranscriptKind::Tool
+                    if entry.kind == ToolTranscriptKind::Tool
                         && is_expanded
                         && matches!(state.verbosity(), crate::app::Verbosity::Low)
                     {
@@ -1054,7 +1065,7 @@ pub(crate) fn render_committed_tool_result_group_snapshot(
             }
         }
 
-        index = group_end;
+        index = entries.len();
     }
     lines
 }
