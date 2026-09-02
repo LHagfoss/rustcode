@@ -1,6 +1,28 @@
 use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prompt};
 use super::*;
 
+#[tokio::test]
+async fn context_detection_does_not_probe_unverified_omlx_endpoints() {
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let chat_url = format!("http://{address}/v1/chat/completions");
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        fetch_context_window(&client, &chat_url, "model", Some("omlx")).await,
+        None
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "oMLX must use an explicit profile/provider context limit"
+    );
+}
+
 #[test]
 fn model_result_contract_distinguishes_read_completeness_states() {
     let complete = tool_result_from_execution(
@@ -238,6 +260,28 @@ fn equivalent_inspection_tools_share_a_fingerprint() {
     assert_eq!(
         view.metadata.inspection.as_ref().unwrap().fingerprint,
         shell.metadata.inspection.as_ref().unwrap().fingerprint
+    );
+}
+
+fn deterministic_compaction_persists_the_retained_suffix_anchor() {
+    let mut history = vec![
+        ChatMessage::new("user", "old task"),
+        ChatMessage::new("assistant", "old progress ".repeat(300)),
+        ChatMessage::new("user", "recent task"),
+        ChatMessage::new("assistant", "recent progress"),
+    ];
+
+    assert!(compact_history_deterministically(&mut history, 100));
+    assert!(history[0].compaction_boundary.is_some());
+    let expected_anchor = history
+        .get(1)
+        .map(crate::app::CompactionEntry::from_message);
+    assert_eq!(
+        history[0]
+            .compaction_boundary
+            .as_ref()
+            .and_then(|boundary| boundary.first_retained_entry.as_ref()),
+        expected_anchor.as_ref()
     );
 }
 
@@ -2257,6 +2301,25 @@ async fn test_run_compiler_check_success() {
 }
 
 #[test]
+fn proactive_history_budget_leaves_soft_target_headroom() {
+    let profile = crate::config::ModelProfile {
+        name: "local".to_string(),
+        url: "http://example.test/v1".to_string(),
+        model: "model".to_string(),
+        context_window: Some(32_768),
+        soft_context_target: Some(24_000),
+        hard_effective_limit: Some(30_000),
+        provider_overhead_margin: Some(1_024),
+        ..Default::default()
+    };
+    let budget = profile.context_budget();
+    let proactive = super::proactive_history_budget(&budget);
+
+    assert!(proactive < budget.history_tokens);
+    assert_eq!(proactive, 24_000 - budget.tool_reserve - 1_024 - 2_048);
+}
+
+#[test]
 fn project_root_from_relative_file_is_a_real_directory() {
     let root = get_tool_project_root("delete_file", &serde_json::json!({"path": "src/temp.rs"}))
         .expect("should find project root for workspace file");
@@ -3944,6 +4007,7 @@ fn model_profile_reasoning_effort() {
         model: "Qwen3.8-27B-MTPLX-4bit".to_string(),
         reasoning_effort: Some("low".to_string()),
         thinking_budget: Some(4096),
+        supports_reasoning_effort: Some(true),
         ..ModelProfile::default()
     };
 

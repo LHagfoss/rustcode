@@ -475,7 +475,10 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
         .saturating_mul(3)
         .min(DETERMINISTIC_RECORD_MAX_CHARS as u32) as usize;
     let record = deterministic_context_record(&history[..boundary], record_limit);
-    history.splice(0..boundary, [ChatMessage::new("system", record)]);
+    let retained_tail = history[boundary..].to_vec();
+    let record_message =
+        crate::network::compaction::durable_compaction_record_message(&record, &retained_tail);
+    history.splice(0..boundary, [record_message]);
     true
 }
 
@@ -571,8 +574,13 @@ fn context_length_from_model_info(info: &serde_json::Value) -> Option<u32> {
         .map(|n| n as u32)
 }
 
-/// Ask an ollama server for a model's context window. Returns None for
-/// non-ollama endpoints or on any error.
+/// Ask a provider's introspection endpoint for a model's context window.
+///
+/// Only explicitly supported engines are probed. In particular, oMLX and
+/// generic OpenAI-compatible endpoints do not currently expose a verified
+/// context-limit endpoint, so callers must use the profile's explicit limit
+/// instead of treating an incidental `/props` or `/api/show` response as an
+/// automatic detection.
 pub async fn fetch_context_window(
     client: &reqwest::Client,
     chat_url: &str,
@@ -581,77 +589,37 @@ pub async fn fetch_context_window(
 ) -> Option<u32> {
     let base = chat_url.strip_suffix("/v1/chat/completions")?;
 
-    if let Some(eng) = engine {
-        match eng.to_lowercase().as_str() {
-            "ollama" => {
-                let show_url = format!("{base}/api/show");
-                let resp = client
-                    .post(&show_url)
-                    .json(&serde_json::json!({"model": model}))
-                    .send()
-                    .await
-                    .ok()?;
-                if resp.status().is_success() {
-                    let body: serde_json::Value = resp.json().await.ok()?;
-                    if let Some(ctx) = context_length_from_model_info(body.get("model_info")?) {
-                        return Some(ctx);
-                    }
-                }
+    match engine.map(|value| value.to_ascii_lowercase())?.as_str() {
+        "ollama" => {
+            let show_url = format!("{base}/api/show");
+            let resp = client
+                .post(&show_url)
+                .json(&serde_json::json!({"model": model}))
+                .send()
+                .await
+                .ok()?;
+            if resp.status().is_success() {
+                let body: serde_json::Value = resp.json().await.ok()?;
+                context_length_from_model_info(body.get("model_info")?)
+            } else {
+                None
             }
-            "llamacpp" | "llama.cpp" | "llama" => {
-                let props_url = format!("{base}/props");
-                let resp = client.get(&props_url).send().await.ok()?;
-                if resp.status().is_success() {
-                    let body: serde_json::Value = resp.json().await.ok()?;
-                    if let Some(n) = body
-                        .get("default_generation_settings")
-                        .and_then(|v| v.get("n_ctx"))
-                        .and_then(|v| v.as_u64())
-                    {
-                        return Some(n as u32);
-                    }
-                    if let Some(n) = body.get("n_ctx").and_then(|v| v.as_u64()) {
-                        return Some(n as u32);
-                    }
-                }
+        }
+        "llamacpp" | "llama.cpp" | "llama" => {
+            let props_url = format!("{base}/props");
+            let resp = client.get(&props_url).send().await.ok()?;
+            if !resp.status().is_success() {
+                return None;
             }
-            _ => {}
+            let body: serde_json::Value = resp.json().await.ok()?;
+            body.get("default_generation_settings")
+                .and_then(|v| v.get("n_ctx"))
+                .and_then(|v| v.as_u64())
+                .or_else(|| body.get("n_ctx").and_then(|v| v.as_u64()))
+                .map(|n| n as u32)
         }
+        _ => None,
     }
-
-    // Fallback: try llama.cpp first, then Ollama
-    let props_url = format!("{base}/props");
-    if let Ok(resp) = client.get(&props_url).send().await
-        && resp.status().is_success()
-        && let Ok(body) = resp.json::<serde_json::Value>().await
-    {
-        if let Some(n) = body
-            .get("default_generation_settings")
-            .and_then(|v| v.get("n_ctx"))
-            .and_then(|v| v.as_u64())
-        {
-            return Some(n as u32);
-        }
-        if let Some(n) = body.get("n_ctx").and_then(|v| v.as_u64()) {
-            return Some(n as u32);
-        }
-    }
-
-    let show_url = format!("{base}/api/show");
-    let resp = client
-        .post(&show_url)
-        .json(&serde_json::json!({"model": model}))
-        .send()
-        .await
-        .ok()?;
-    if resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.ok()?;
-        if let Some(ctx) = context_length_from_model_info(body.get("model_info")?) {
-            return Some(ctx);
-        }
-    }
-
-    None
 }
 
 /// Read-only tools whose results can be safely short-circuited by the repeat guard.
@@ -908,6 +876,22 @@ fn push_status_line(s: &mut AppState, text: String) {
     crate::config::save_history(&s.history);
 }
 
+/// Reserve the known non-history portions of the soft target so compaction
+/// happens before request assembly reaches the provider's target. The final
+/// preflight still accounts for the exact system prompt, schemas, and dynamic
+/// context; this is the early, history-only trigger used before those pieces
+/// are assembled.
+fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
+    const SYSTEM_PROMPT_HEADROOM: u32 = 2_048;
+    budget
+        .soft_context_target
+        .saturating_sub(budget.tool_reserve)
+        .saturating_sub(budget.provider_overhead_margin)
+        .saturating_sub(SYSTEM_PROMPT_HEADROOM)
+        .max(1)
+        .min(budget.history_tokens)
+}
+
 /// Assemble the full provider request for one agent turn.
 ///
 /// Runs AI compaction if the history is long enough, snapshots the eligible
@@ -948,10 +932,11 @@ pub(crate) async fn prepare_turn_request(
                     let lower = s.api_base_url.to_ascii_lowercase();
                     lower.contains("11434") || lower.contains("ollama")
                 };
+            let context_budget = s.active_context_budget();
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
-                s.get_history_token_budget() as usize,
+                proactive_history_budget(&context_budget) as usize,
                 local_model,
                 s.active_session_id.clone(),
                 s.history.clone(),

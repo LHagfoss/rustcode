@@ -41,6 +41,15 @@ fn should_apply_loop_recovery(
     !completion_requested && (output_abort || has_evidence_recovery)
 }
 
+fn incomplete_tool_result(metadata: &crate::network::events::ToolResultMetadata) -> bool {
+    metadata.truncated
+        || matches!(
+            metadata.completeness,
+            rustcode_core::ToolResultCompleteness::LineTruncated
+                | rustcode_core::ToolResultCompleteness::ByteTruncated
+        )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     client: &reqwest::Client,
@@ -471,6 +480,11 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             let mut s = state.lock().await;
             s.status = AppStatus::Streaming;
             let mut completed = false;
+            // Completion is valid only when every result in the same batch
+            // was actually available and complete. A later turn may recover
+            // by re-issuing a bounded read, so this is intentionally scoped
+            // to the batch that requested completion.
+            let mut batch_incomplete = dropped_calls > 0;
             let mut background_pending = false;
             let explicit_verification_user_index = s
                 .history
@@ -515,6 +529,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let content = result.content;
                 let diff_opt = result.diff;
                 let file_preview = result.file_preview;
+                batch_incomplete |= incomplete_tool_result(&metadata);
                 if metadata.pending {
                     background_pending = true;
                     s.history.push(tool_result_history_message(
@@ -552,7 +567,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     name,
                     content.len()
                 );
-                if name == "complete_task" {
+                if name == "complete_task" && metadata.success {
                     completed = true;
                 }
                 ctx.progress
@@ -869,6 +884,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 }
             }
             if executed < call_refs.len() {
+                batch_incomplete = true;
                 for message in
                     unanswered_call_results(&call_refs[executed..], "no result was produced")
                 {
@@ -958,6 +974,21 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         return ToolHandlingOutcome::Continue;
                     }
                 }
+            }
+
+            if completed && batch_incomplete {
+                dbg_log!(
+                    "Completion blocked: tool batch contained dropped, unresolved, or incomplete results"
+                );
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "[Finish blocked — this response included a dropped, unresolved, or incomplete tool result. Re-issue the affected tool call and inspect a complete result before reporting completion.]",
+                ));
+                crate::config::save_history(&s.history);
+                s.clear_current_response();
+                drop(s);
+                ctx.lifecycle.turn_machine.finish_tools_if_executing();
+                return ToolHandlingOutcome::Continue;
             }
 
             if let Some(replan) = failure_replan {
@@ -1224,7 +1255,9 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::should_apply_loop_recovery;
+    use super::{incomplete_tool_result, should_apply_loop_recovery};
+    use crate::network::events::ToolResultMetadata;
+    use rustcode_core::ToolResultCompleteness;
 
     #[test]
     fn completion_request_reaches_finish_gates_before_loop_recovery() {
@@ -1237,5 +1270,24 @@ mod tests {
         assert!(should_apply_loop_recovery(false, true, false));
         assert!(should_apply_loop_recovery(false, false, true));
         assert!(!should_apply_loop_recovery(false, false, false));
+    }
+
+    #[test]
+    fn truncated_results_block_same_batch_completion() {
+        let metadata = ToolResultMetadata {
+            completeness: ToolResultCompleteness::LineTruncated,
+            truncated: true,
+            ..Default::default()
+        };
+        assert!(incomplete_tool_result(&metadata));
+    }
+
+    #[test]
+    fn complete_and_user_limited_results_do_not_block_completion() {
+        assert!(!incomplete_tool_result(&ToolResultMetadata::default()));
+        assert!(!incomplete_tool_result(&ToolResultMetadata {
+            completeness: ToolResultCompleteness::UserLimited,
+            ..Default::default()
+        }));
     }
 }

@@ -205,6 +205,56 @@ pub struct ToolResultRecord {
     pub inspection: Option<InspectionResultMetadata>,
 }
 
+/// The stable identity of the first message retained after a compaction.
+///
+/// This is intentionally a compact identity rather than a copy of the
+/// retained message: tool results can be very large, and duplicating one in
+/// every summary would undermine compaction. The fingerprint is deterministic
+/// for the durable fields that make an entry distinct during replay.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionEntry {
+    pub role: String,
+    pub timestamp: String,
+    pub content_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl CompactionEntry {
+    pub fn from_message(message: &ChatMessage) -> Self {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        message.role.hash(&mut hasher);
+        message.content.hash(&mut hasher);
+        message.tool_call_id.hash(&mut hasher);
+        for call in &message.tool_calls {
+            call.id.hash(&mut hasher);
+            call.name.hash(&mut hasher);
+            call.arguments.hash(&mut hasher);
+        }
+        Self {
+            role: message.role.clone(),
+            timestamp: message.timestamp.clone(),
+            content_fingerprint: format!("{:016x}", hasher.finish()),
+            tool_call_id: message.tool_call_id.clone(),
+        }
+    }
+}
+
+/// Durable marker attached to a summary message.
+///
+/// The summary remains in the message content for compatibility with older
+/// readers. This typed boundary lets newer readers rebuild context from the
+/// summary and the retained suffix without guessing where the suffix begins.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionBoundary {
+    pub version: u8,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_retained_entry: Option<CompactionEntry>,
+}
+
 impl ToolResultRecord {
     /// Map records from before the completeness field was introduced to an
     /// honest state instead of treating their old `truncated` bit as complete.
@@ -250,6 +300,8 @@ pub struct ChatMessage {
     pub tool_calls: Vec<ToolCallRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_boundary: Option<CompactionBoundary>,
 }
 
 impl ChatMessage {
@@ -267,6 +319,7 @@ impl ChatMessage {
             tool_result: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
+            compaction_boundary: None,
         }
     }
 
@@ -294,6 +347,51 @@ impl ChatMessage {
         self.tool_result = Some(record);
         self
     }
+
+    pub fn with_compaction_boundary(mut self, boundary: CompactionBoundary) -> Self {
+        self.compaction_boundary = Some(boundary);
+        self
+    }
+}
+
+/// Rebuild a persisted transcript from its newest durable compaction boundary.
+///
+/// Compaction stores the summary and the identity of the first retained
+/// message. Normally the retained suffix is already adjacent to the summary,
+/// but using the anchor here makes loading resilient to stale pre-boundary
+/// entries left by an interrupted or append-only history write. If the anchor
+/// cannot be found, the original transcript is preserved rather than dropping
+/// potentially recoverable history.
+pub fn rebuild_from_compaction_boundary(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let Some((summary_index, anchor)) =
+        messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, message)| {
+                message
+                    .compaction_boundary
+                    .as_ref()
+                    .and_then(|boundary| boundary.first_retained_entry.as_ref())
+                    .map(|anchor| (index, anchor))
+            })
+    else {
+        return messages;
+    };
+
+    let Some(retained_index) = messages[summary_index.saturating_add(1)..]
+        .iter()
+        .position(|message| CompactionEntry::from_message(message) == *anchor)
+        .map(|offset| summary_index + 1 + offset)
+    else {
+        return messages;
+    };
+
+    let summary = messages[summary_index].clone();
+    let mut rebuilt = Vec::with_capacity(messages.len().saturating_sub(retained_index) + 1);
+    rebuilt.push(summary);
+    rebuilt.extend(messages.into_iter().skip(retained_index));
+    rebuilt
 }
 
 /// Durable history with a cheap mutation marker for snapshot consumers.
@@ -499,6 +597,58 @@ mod tests {
         assert!(json.contains("\"tool_result\""));
         assert!(!json.contains("\"diff\""));
         assert_eq!(serde_json::from_str::<ChatMessage>(&json).unwrap(), message);
+    }
+
+    #[test]
+    fn compaction_boundary_round_trips_with_a_retained_entry_anchor() {
+        let retained = ChatMessage::new("assistant", "recent progress");
+        let message = ChatMessage::new("system", "[Session History Summary]\nsummary")
+            .with_compaction_boundary(CompactionBoundary {
+                version: 1,
+                summary: "summary".to_string(),
+                first_retained_entry: Some(CompactionEntry::from_message(&retained)),
+            });
+
+        let json = serde_json::to_string(&message).expect("serialize compaction boundary");
+        let restored = serde_json::from_str::<ChatMessage>(&json).expect("restore boundary");
+        assert_eq!(restored, message);
+        assert_eq!(
+            restored
+                .compaction_boundary
+                .as_ref()
+                .and_then(|boundary| boundary.first_retained_entry.as_ref())
+                .map(|entry| entry.role.as_str()),
+            Some("assistant")
+        );
+    }
+
+    #[test]
+    fn compaction_boundary_rebuild_discards_stale_history_before_anchor() {
+        let retained = ChatMessage::new("assistant", "recent progress");
+        let summary = ChatMessage::new("system", "[Session History Summary]\nsummary")
+            .with_compaction_boundary(CompactionBoundary {
+                version: 1,
+                summary: "summary".to_string(),
+                first_retained_entry: Some(CompactionEntry::from_message(&retained)),
+            });
+        let rebuilt = rebuild_from_compaction_boundary(vec![
+            ChatMessage::new("user", "old summarized task"),
+            summary,
+            ChatMessage::new("assistant", "stale duplicate"),
+            retained.clone(),
+            ChatMessage::new("tool", "recent result"),
+        ]);
+
+        assert_eq!(rebuilt.len(), 3);
+        assert_eq!(rebuilt[0].content, "[Session History Summary]\nsummary");
+        assert_eq!(rebuilt[1], retained);
+        assert_eq!(rebuilt[2].content, "recent result");
+        assert!(
+            rebuilt
+                .iter()
+                .all(|message| !message.content.contains("old summarized")
+                    && !message.content.contains("stale duplicate"))
+        );
     }
 
     #[test]

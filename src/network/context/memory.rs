@@ -386,8 +386,9 @@ pub fn compact_with_structured_memory(
     let record = memory.format_record(max_chars);
 
     let tail = history[cutoff..].to_vec();
+    let summary_message = super::compact::durable_compaction_record_message(&record, &tail);
     history.clear();
-    history.push(ChatMessage::new("system", record));
+    history.push(summary_message);
     history.extend(tail);
     true
 }
