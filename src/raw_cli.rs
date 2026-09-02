@@ -422,6 +422,16 @@ mod tests {
     }
 
     #[test]
+    fn completed_read_only_review_has_a_successful_headless_terminal_status() {
+        let mut ctx = crate::network::TurnContext::default();
+        ctx.progress.complete_inspection_results = 4;
+        ctx.lifecycle.task_completed = true;
+        ctx.lifecycle.stop_reason = Some(crate::network::lifecycle::StopReason::Completed);
+
+        assert!(headless_failure(&ctx).is_none());
+    }
+
+    #[test]
     fn background_completion_is_preserved_as_typed_tool_evidence() {
         let message = background_task_history_message(
             "task-7",

@@ -41,6 +41,11 @@ pub struct RecoveryState {
 pub struct ProgressState {
     pub ledger: loop_detect::ProgressLedger,
     pub file_evidence: loop_detect::FileEvidenceLedger,
+    /// Complete read-only source results that can support a final review.
+    /// Incomplete inspection results stay separately tracked so a truncated
+    /// review can never be promoted to a successful headless completion.
+    pub complete_inspection_results: usize,
+    pub incomplete_inspection_results: usize,
     pub made_edits: bool,
     pub failed_mutations: usize,
     pub consecutive_no_progress: usize,
@@ -120,6 +125,8 @@ impl TurnContext {
             progress: ProgressState {
                 ledger: loop_detect::ProgressLedger::default(),
                 file_evidence: loop_detect::FileEvidenceLedger::default(),
+                complete_inspection_results: 0,
+                incomplete_inspection_results: 0,
                 made_edits: false,
                 failed_mutations: 0,
                 consecutive_no_progress: 0,
