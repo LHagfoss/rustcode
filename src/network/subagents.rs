@@ -284,6 +284,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 let buffer = request_buffer.lock().await;
                 Ok(super::runner::ResponseChunk {
                     content: buffer.content.clone(),
+                    final_answer_boundary: buffer.final_answer_boundary,
                     finish_reason,
                     has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
                     thought_time_ms: buffer.thought_time_ms,

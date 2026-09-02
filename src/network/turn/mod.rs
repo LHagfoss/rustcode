@@ -141,6 +141,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
     };
     let request::RoundResponse {
         content,
+        final_answer_boundary,
         finish_reason: response_finish_reason,
         response_time_ms: turn_response_time_ms,
         token_usage: turn_token_usage,
@@ -164,6 +165,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         turn_token_usage.clone(),
         thought_time_ms,
         thought_tokens,
+        final_answer_boundary,
     )
     .await
     {

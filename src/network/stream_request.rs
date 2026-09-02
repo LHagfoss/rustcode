@@ -2165,7 +2165,11 @@ pub async fn stream_request(
                                         } else if let Some(c_token) = content {
                                             if in_reasoning {
                                                 in_reasoning = false;
-                                                buffer.lock().await.finish_thought();
+                                                {
+                                                    let mut buffer = buffer.lock().await;
+                                                    buffer.final_answer_boundary = super::stream::FinalAnswerBoundary::ReasoningClosed;
+                                                    buffer.finish_thought();
+                                                }
                                                 if !quiet {
                                                     let mut s = state.lock().await;
                                                     if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {

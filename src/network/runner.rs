@@ -8,6 +8,7 @@ pub(crate) struct TurnRunner {
 
 pub(crate) struct ResponseChunk {
     pub(crate) content: String,
+    pub(crate) final_answer_boundary: super::stream::FinalAnswerBoundary,
     pub(crate) finish_reason: Option<String>,
     pub(crate) has_native_tool_calls: bool,
     pub(crate) thought_time_ms: u64,
@@ -16,6 +17,7 @@ pub(crate) struct ResponseChunk {
 
 pub(crate) struct CollectedResponse {
     pub(crate) content: String,
+    pub(crate) final_answer_boundary: super::stream::FinalAnswerBoundary,
     pub(crate) finish_reason: Option<String>,
     pub(crate) thought_time_ms: u64,
     pub(crate) thought_tokens: u32,
@@ -51,6 +53,7 @@ where
     Fut: Future<Output = Result<ResponseChunk, String>>,
 {
     let mut accumulated = String::new();
+    let mut final_answer_boundary = super::stream::FinalAnswerBoundary::None;
     let mut has_native_tool_calls = false;
     let mut thought_time_ms: u64 = 0;
     let mut thought_tokens: u32 = 0;
@@ -58,6 +61,9 @@ where
     loop {
         let chunk = request(accumulated.clone()).await?;
         accumulated.push_str(&chunk.content);
+        if chunk.final_answer_boundary == super::stream::FinalAnswerBoundary::ReasoningClosed {
+            final_answer_boundary = chunk.final_answer_boundary;
+        }
         has_native_tool_calls |= chunk.has_native_tool_calls;
         thought_time_ms = thought_time_ms.saturating_add(chunk.thought_time_ms);
         thought_tokens = thought_tokens.saturating_add(chunk.thought_tokens);
@@ -71,6 +77,7 @@ where
         }
         return Ok(CollectedResponse {
             content: accumulated,
+            final_answer_boundary,
             finish_reason: chunk.finish_reason,
             thought_time_ms,
             thought_tokens,
@@ -81,6 +88,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::stream::FinalAnswerBoundary;
 
     #[test]
     fn continuation_policy_is_bounded_and_reusable() {
@@ -108,6 +116,7 @@ mod tests {
             async move {
                 Ok(ResponseChunk {
                     content: chunk.to_string(),
+                    final_answer_boundary: FinalAnswerBoundary::None,
                     finish_reason: reason,
                     has_native_tool_calls: false,
                     thought_time_ms: 0,
@@ -135,6 +144,7 @@ mod tests {
                     } else {
                         "unexpected continuation".into()
                     },
+                    final_answer_boundary: FinalAnswerBoundary::None,
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: true,
                     thought_time_ms: 0,
@@ -161,6 +171,11 @@ mod tests {
                     } else {
                         "answer".into()
                     },
+                    final_answer_boundary: if previous.is_empty() {
+                        FinalAnswerBoundary::None
+                    } else {
+                        FinalAnswerBoundary::ReasoningClosed
+                    },
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: false,
                     thought_time_ms: 0,
@@ -186,6 +201,11 @@ mod tests {
                         "<think>first</think>".into()
                     } else {
                         "answer".into()
+                    },
+                    final_answer_boundary: if previous.is_empty() {
+                        FinalAnswerBoundary::None
+                    } else {
+                        FinalAnswerBoundary::ReasoningClosed
                     },
                     finish_reason: Some("stop".into()),
                     has_native_tool_calls: false,

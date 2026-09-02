@@ -39,8 +39,10 @@ fn completed_inspection_synthesis(
     ctx: &TurnContext,
     content: &str,
     native_tool_calls_empty: bool,
+    final_answer_boundary: super::super::stream::FinalAnswerBoundary,
 ) -> Option<String> {
     if !native_tool_calls_empty
+        || final_answer_boundary != super::super::stream::FinalAnswerBoundary::ReasoningClosed
         || ctx.progress.made_edits
         || ctx.progress.failed_mutations > 0
         || ctx.progress.complete_inspection_results == 0
@@ -50,102 +52,11 @@ fn completed_inspection_synthesis(
         return None;
     }
 
-    let promoted = crate::network::text::promote_bare_thought_markers(content);
-    let prose = crate::network::text::strip_tool_call_syntax(
-        &crate::network::text::strip_think_blocks(&promoted),
+    let candidate = crate::network::text::strip_tool_call_syntax(
+        &crate::network::text::strip_think_blocks(content),
     );
-    let candidate = if prose.trim().is_empty() {
-        // Some local providers put the final review in the reasoning channel
-        // and are cut off before emitting a separate content channel. That
-        // reasoning is usable only after complete inspection evidence exists;
-        // preserve it as the review instead of replacing it with loop prose.
-        promoted.replace("<think>", "").replace("</think>", "")
-    } else {
-        prose
-    };
     let candidate = candidate.trim();
-    has_substantive_final_synthesis(candidate).then(|| candidate.to_string())
-}
-
-/// Require a report-like result, not merely long prose that mentions a
-/// finding or review. This gate is intentionally conservative because its
-/// caller promotes a loop-cut reasoning stream to a successful answer.
-fn has_substantive_final_synthesis(candidate: &str) -> bool {
-    let word_count = candidate.split_whitespace().count();
-    let lower = candidate.to_ascii_lowercase();
-    let has_synthesis_marker = [
-        "findings:",
-        "key findings",
-        "issues:",
-        "summary:",
-        "recommendations:",
-        "review complete",
-        "no issues found",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker));
-    let has_evidence_reference = candidate.split_whitespace().any(|word| {
-        let word = word.trim_matches(|character: char| {
-            matches!(
-                character,
-                '`' | '*' | '(' | ')' | '[' | ']' | ',' | ';' | ':'
-            )
-        });
-        word.contains('/')
-            || [
-                ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".rb", ".swift",
-            ]
-            .iter()
-            .any(|extension| word.ends_with(extension))
-    });
-    let has_actionable_result = [
-        " has ",
-        " have ",
-        " lacks ",
-        " missing ",
-        " issue",
-        " bug",
-        " risk",
-        " vulnerab",
-        " recommend",
-        " should ",
-        " must ",
-        " passes ",
-        " fails ",
-        " error",
-        " concern",
-        " no issues found",
-        " no findings",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker));
-    let explicit_non_result = [
-        "stopped after repeated reasoning",
-        "reasoning became repetitive",
-        "kept reconsidering the same",
-        "reconsidering the same conclusion",
-        "halted without",
-        "stopped without",
-        "without producing",
-        "without a trustworthy report",
-        "without an actionable result",
-        "no actionable result",
-        "no trustworthy report",
-        "no result was produced",
-        "no report was produced",
-        "unable to produce",
-        "unable to provide",
-        "did not produce a trustworthy",
-        "did not produce an actionable",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker));
-    word_count >= 8
-        && candidate != reasoning_loop_final_response()
-        && has_synthesis_marker
-        && has_evidence_reference
-        && has_actionable_result
-        && !explicit_non_result
+    (!candidate.is_empty()).then(|| candidate.to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +76,7 @@ pub(super) async fn handle_response_recovery(
     turn_token_usage: Option<crate::app::TokenUsage>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
+    final_answer_boundary: super::super::stream::FinalAnswerBoundary,
 ) -> ResponseRecoveryOutcome {
     use super::super::lifecycle;
     use super::super::loop_detect;
@@ -215,6 +127,7 @@ pub(super) async fn handle_response_recovery(
             ctx,
             &ctx.response.final_content,
             native_tool_calls_empty,
+            final_answer_boundary,
         ) {
             dbg_log!(
                 "Reasoning loop followed complete read-only inspection; preserving final synthesis"
@@ -330,6 +243,7 @@ pub(super) async fn handle_response_recovery(
 mod tests {
     use super::{completed_inspection_synthesis, reasoning_loop_final_response};
     use crate::network::TurnContext;
+    use crate::network::stream::FinalAnswerBoundary;
 
     fn completed_inspection_context(content: &str) -> TurnContext {
         let mut ctx = TurnContext::new();
@@ -341,10 +255,15 @@ mod tests {
     #[test]
     fn completed_inspection_preserves_final_synthesis_after_reasoning_loop() {
         let ctx = completed_inspection_context(
-            "<think>Reviewed the complete source tree. Findings: src/app.ts has an unchecked export input and src/db.ts lacks a transaction around the write. The review is complete with no workspace changes.</think>",
+            "<think>Reviewed the complete source tree.</think>Findings: src/app.ts has an unchecked export input and src/db.ts lacks a transaction around the write.",
         );
-        let summary = completed_inspection_synthesis(&ctx, &ctx.response.final_content, true)
-            .expect("complete inspection should yield a usable review");
+        let summary = completed_inspection_synthesis(
+            &ctx,
+            &ctx.response.final_content,
+            true,
+            FinalAnswerBoundary::ReasoningClosed,
+        )
+        .expect("complete inspection should yield a usable review");
         assert!(summary.contains("Findings:"));
         assert!(!summary.contains(reasoning_loop_final_response()));
     }
@@ -355,7 +274,15 @@ mod tests {
             "<think>Reviewed the source tree. Findings: the final file is still truncated and needs another inspection before a safe review.</think>",
         );
         ctx.progress.incomplete_inspection_results = 1;
-        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::None,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -363,7 +290,15 @@ mod tests {
         let ctx = completed_inspection_context(
             "<think>Findings are ready.</think>\n```tool\n{\"name\":\"view_file\"}\n```",
         );
-        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, false).is_none());
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                false,
+                FinalAnswerBoundary::ReasoningClosed,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -371,7 +306,15 @@ mod tests {
         let ctx = completed_inspection_context(
             "I reviewed the project carefully and considered the available evidence before deciding that more thought would be useful before presenting anything to the user.",
         );
-        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::None,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -379,7 +322,15 @@ mod tests {
         let ctx = completed_inspection_context(
             "The review is complete for src/app.ts. The model stopped after repeated reasoning because the reasoning became repetitive and did not produce a trustworthy final report.",
         );
-        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::None,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -387,7 +338,15 @@ mod tests {
         let ctx = completed_inspection_context(
             "Findings: src/app.ts was inspected. Review complete. I kept reconsidering the same conclusion, then halted without producing a trustworthy report. No changes were made and no actionable result was produced.",
         );
-        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::None,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -395,15 +354,61 @@ mod tests {
         let ctx = completed_inspection_context(
             "Findings: src/app.ts has an unchecked export input; src/db.ts lacks transaction handling.",
         );
-        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_some());
+        let summary = completed_inspection_synthesis(
+            &ctx,
+            &ctx.response.final_content,
+            true,
+            FinalAnswerBoundary::ReasoningClosed,
+        );
+        assert!(summary.is_some());
     }
 
     #[test]
     fn failed_mutation_blocks_read_only_review_completion() {
         let mut ctx = completed_inspection_context(
-            "<think>Findings: src/app.ts has an unchecked export input and the review complete evidence supports this conclusion.</think>",
+            "<think>Reviewed source.</think>Findings: src/app.ts has an unchecked export input and the review supports this conclusion.",
         );
         ctx.progress.failed_mutations = 1;
-        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::ReasoningClosed,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn marker_path_and_actionable_words_without_final_boundary_do_not_finish() {
+        let ctx = completed_inspection_context(
+            "Findings: src/app.ts has no issue. I got stuck in a loop and stopped.",
+        );
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn valid_concise_review_requires_final_boundary() {
+        let ctx = completed_inspection_context(
+            "Findings: src/app.ts has no issue after checking its input validation and error handling.",
+        );
+        assert!(
+            completed_inspection_synthesis(
+                &ctx,
+                &ctx.response.final_content,
+                true,
+                FinalAnswerBoundary::ReasoningClosed,
+            )
+            .is_some()
+        );
     }
 }

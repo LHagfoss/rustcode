@@ -7,7 +7,7 @@ use crate::app::{AppState, ChatMessage, TokenUsage};
 
 use super::super::lifecycle;
 use super::super::runner;
-use super::super::stream::StreamBuffer;
+use super::super::stream::{FinalAnswerBoundary, StreamBuffer};
 use super::super::stream_request::{estimate_token_usage, stream_request};
 use super::super::{
     accumulate_tokens_used, prepare_turn_request, probe_function_calling, record_provider_error,
@@ -40,6 +40,7 @@ pub(super) fn messages_for_response_continuation<'a>(
 
 pub(super) struct RoundResponse {
     pub content: String,
+    pub final_answer_boundary: FinalAnswerBoundary,
     pub finish_reason: Option<String>,
     pub response_time_ms: u64,
     pub token_usage: Option<TokenUsage>,
@@ -189,6 +190,7 @@ pub(super) async fn collect_round(
                 let buffer = request_buffer.lock().await;
                 Ok(runner::ResponseChunk {
                     content: buffer.content.clone(),
+                    final_answer_boundary: buffer.final_answer_boundary,
                     finish_reason,
                     has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
                     thought_time_ms: buffer.thought_time_ms,
@@ -334,6 +336,7 @@ pub(super) async fn collect_round(
     };
     Ok(RoundResponse {
         content,
+        final_answer_boundary: collected.final_answer_boundary,
         finish_reason: collected.finish_reason,
         response_time_ms: turn_start_time.elapsed().as_millis() as u64,
         token_usage,
