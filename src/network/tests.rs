@@ -89,6 +89,29 @@ fn model_result_contract_distinguishes_read_completeness_states() {
 }
 
 #[test]
+fn deterministic_compaction_persists_the_retained_suffix_anchor() {
+    let mut history = vec![
+        ChatMessage::new("user", "old task"),
+        ChatMessage::new("assistant", "old progress ".repeat(300)),
+        ChatMessage::new("user", "recent task"),
+        ChatMessage::new("assistant", "recent progress"),
+    ];
+
+    assert!(compact_history_deterministically(&mut history, 100));
+    assert!(history[0].compaction_boundary.is_some());
+    let expected_anchor = history
+        .get(1)
+        .map(crate::app::CompactionEntry::from_message);
+    assert_eq!(
+        history[0]
+            .compaction_boundary
+            .as_ref()
+            .and_then(|boundary| boundary.first_retained_entry.as_ref()),
+        expected_anchor.as_ref()
+    );
+}
+
+#[test]
 fn structured_tool_replay_keeps_metadata_out_of_ui_content_but_in_model_payload() {
     let message = tool_result_history_message(
         ToolResult {
@@ -2101,6 +2124,25 @@ async fn test_run_compiler_check_success() {
     let cwd = std::env::current_dir().unwrap();
     let check = run_compiler_check(&cwd).await;
     assert!(check.is_none());
+}
+
+#[test]
+fn proactive_history_budget_leaves_soft_target_headroom() {
+    let profile = crate::config::ModelProfile {
+        name: "local".to_string(),
+        url: "http://example.test/v1".to_string(),
+        model: "model".to_string(),
+        context_window: Some(32_768),
+        soft_context_target: Some(24_000),
+        hard_effective_limit: Some(30_000),
+        provider_overhead_margin: Some(1_024),
+        ..Default::default()
+    };
+    let budget = profile.context_budget();
+    let proactive = super::proactive_history_budget(&budget);
+
+    assert!(proactive < budget.history_tokens);
+    assert_eq!(proactive, 24_000 - budget.tool_reserve - 1_024 - 2_048);
 }
 
 #[test]

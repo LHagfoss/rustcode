@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 pub use rustcode_core::{
-    ChatMessage, History, TokenUsage, ToolCallRef, ToolResultRecord, Verbosity,
+    ChatMessage, CompactionBoundary, CompactionEntry, History, TokenUsage, ToolCallRef,
+    ToolResultRecord, Verbosity,
 };
 
 #[derive(Debug, PartialEq, Clone)]

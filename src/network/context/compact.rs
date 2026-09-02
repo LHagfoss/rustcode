@@ -5,7 +5,7 @@ use super::prune::{
     prune_historical_tool_outputs, prune_old_tool_outputs,
 };
 use super::tokens::estimate_message_tokens;
-use crate::app::{ChatMessage, TokenUsage};
+use crate::app::{ChatMessage, CompactionBoundary, CompactionEntry, TokenUsage};
 use std::future::Future;
 use std::time::Duration;
 
@@ -25,6 +25,8 @@ const PRESERVED_USER_REQUEST_BUDGET_DIVISOR: usize = 5;
 /// connection, response headers, body transfer, and JSON decoding. Twenty-five
 /// seconds bounds the request while leaving ample time for valid summaries.
 pub(super) const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+
+const COMPACTION_BOUNDARY_VERSION: u8 = 1;
 
 /// Preserve the existing per-message limit while additionally enforcing the
 /// whole-input byte ceiling above.
@@ -375,10 +377,15 @@ async fn force_compact_internal(
         .take(summarize_count)
         .find(|m| m.role == "system" && m.content.starts_with(SUMMARY_MARKER))
         .map(|m| {
-            m.content
-                .trim_start_matches(SUMMARY_MARKER)
-                .trim_start_matches('\n')
-                .to_string()
+            m.compaction_boundary
+                .as_ref()
+                .map(|boundary| boundary.summary.clone())
+                .unwrap_or_else(|| {
+                    m.content
+                        .trim_start_matches(SUMMARY_MARKER)
+                        .trim_start_matches('\n')
+                        .to_string()
+                })
         });
 
     // Pin the original task (first user message, or the marker left by an
@@ -441,31 +448,69 @@ async fn force_compact_internal(
             .min(PRESERVED_USER_REQUEST_MAX_TOKENS),
     );
 
-    // Replace the summarized range with a single summary message.
+    // Replace the summarized range with a single summary message. Build the
+    // complete retained suffix first so the durable boundary points at the
+    // actual first entry the next request will replay, including pinned task
+    // and preserved-request markers.
+    let mut retained_tail = Vec::with_capacity(tail.len() + preserved_user_requests.len() + 1);
     history.clear();
-    history.push(ChatMessage::new(
-        "system",
-        format!("{SUMMARY_MARKER}\n{summary}\n[End Summary — the following messages are the most recent conversation]"),
-    ));
     // Re-inject the original task verbatim if it fell inside the summarized range.
     if let Some(task) = pinned_task
         && !task_in_tail
         && !marker_in_tail
     {
-        history.push(ChatMessage::new(
+        retained_tail.push(ChatMessage::new(
             "system",
             format!("{ORIGINAL_TASK_MARKER}\n{task}"),
         ));
     }
     for request in preserved_user_requests {
-        history.push(ChatMessage::new(
+        retained_tail.push(ChatMessage::new(
             "system",
             format!("{PRESERVED_USER_REQUEST_MARKER}\n{request}"),
         ));
     }
-    history.extend(tail);
+    retained_tail.extend(tail);
+    history.push(durable_compaction_message(&summary, &retained_tail));
+    history.extend(retained_tail);
 
     Ok(())
+}
+
+/// Build the durable summary entry used by both AI and deterministic
+/// compaction. Keeping the boundary on the summary message preserves the
+/// existing history wire format while giving newer readers a typed retained
+/// suffix anchor.
+pub(crate) fn durable_compaction_message(
+    summary: &str,
+    retained_tail: &[ChatMessage],
+) -> ChatMessage {
+    ChatMessage::new(
+        "system",
+        format!(
+            "{SUMMARY_MARKER}\n{summary}\n[End Summary — the following messages are the most recent conversation]"
+        ),
+    )
+    .with_compaction_boundary(compaction_boundary(summary, retained_tail))
+}
+
+/// Build a typed deterministic record without changing its historical
+/// non-summary presentation. Local providers intentionally skip the AI
+/// summarizer, and callers rely on this record remaining a normal system note.
+pub(crate) fn durable_compaction_record_message(
+    record: &str,
+    retained_tail: &[ChatMessage],
+) -> ChatMessage {
+    ChatMessage::new("system", record)
+        .with_compaction_boundary(compaction_boundary(record, retained_tail))
+}
+
+fn compaction_boundary(summary: &str, retained_tail: &[ChatMessage]) -> CompactionBoundary {
+    CompactionBoundary {
+        version: COMPACTION_BOUNDARY_VERSION,
+        summary: summary.to_string(),
+        first_retained_entry: retained_tail.first().map(CompactionEntry::from_message),
+    }
 }
 
 /// Prefix that marks a compaction summary message, used to detect and preserve
