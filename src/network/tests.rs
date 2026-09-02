@@ -1034,6 +1034,29 @@ fn truncated_batch_summary_keeps_shape_and_drops_prose() {
 }
 
 #[test]
+fn truncated_batch_summary_names_selectively_dropped_calls_without_arguments() {
+    let kept = vec![crate::tools::ToolCall {
+        name: "grep".to_owned(),
+        arguments: serde_json::json!({"pattern": "needle"}),
+        call_id: None,
+    }];
+    let dropped = vec![crate::tools::ToolCall {
+        name: "write_to_file".to_owned(),
+        arguments: serde_json::json!({"path": "secret.txt", "content": "secret"}),
+        call_id: None,
+    }];
+
+    let summary = super::truncated_batch_summary_with_dropped(&kept, &dropped);
+
+    assert!(
+        summary.contains("1 were dropped (write_to_file)"),
+        "got: {summary}"
+    );
+    assert!(!summary.contains("secret.txt"), "got: {summary}");
+    assert!(!summary.contains("secret"), "got: {summary}");
+}
+
+#[test]
 fn oversized_tool_result_is_bounded_once_before_history_insertion() {
     let raw = (1..=2000)
         .map(|line| format!("payload line {line}"))

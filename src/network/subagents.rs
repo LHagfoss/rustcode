@@ -105,10 +105,24 @@ fn prepare_subagent_tool_batch(
         .map(|(call, _)| call.clone())
         .collect::<Vec<_>>();
     let (kept_policy_calls, dropped_calls) =
-        crate::tools::truncate_tool_batch(policy_calls, max_mutating_calls);
-    parsed_calls.truncate(kept_policy_calls.len());
+        crate::tools::partition_tool_batch(policy_calls, max_mutating_calls);
+    let mut retained_policy_calls = kept_policy_calls.clone();
+    let retained = parsed_calls
+        .drain(..)
+        .filter(|(call, _)| {
+            retained_policy_calls
+                .iter()
+                .position(|retained| retained == call)
+                .map(|index| {
+                    retained_policy_calls.remove(index);
+                    true
+                })
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    *parsed_calls = retained;
     let validation = crate::tools::validate_tool_calls(&kept_policy_calls, max_mutating_calls);
-    (requested_calls, dropped_calls, validation)
+    (requested_calls, dropped_calls.len(), validation)
 }
 
 pub(crate) async fn run_subagent(
@@ -1053,6 +1067,42 @@ mod tests {
         ));
         let (requested, dropped, validation) = prepare_subagent_tool_batch(&mut calls, 2);
         assert_eq!((requested, calls.len(), dropped), (3, 3, 0));
+        assert!(validation.is_ok());
+    }
+
+    #[test]
+    fn subagent_batch_retains_reads_after_a_dropped_mutation() {
+        let mut calls = vec![
+            (
+                crate::tools::ToolCall {
+                    name: "run_command".to_owned(),
+                    arguments: serde_json::json!({"command": "true"}),
+                    call_id: None,
+                },
+                None,
+            ),
+            (
+                crate::tools::ToolCall {
+                    name: "write_to_file".to_owned(),
+                    arguments: serde_json::json!({"path": "x", "content": "x"}),
+                    call_id: None,
+                },
+                None,
+            ),
+            (
+                crate::tools::ToolCall {
+                    name: "grep".to_owned(),
+                    arguments: serde_json::json!({"pattern": "x"}),
+                    call_id: None,
+                },
+                None,
+            ),
+        ];
+
+        let (requested, dropped, validation) = prepare_subagent_tool_batch(&mut calls, 1);
+
+        assert_eq!((requested, calls.len(), dropped), (3, 2, 1));
+        assert_eq!(calls[1].0.name, "grep");
         assert!(validation.is_ok());
     }
 
