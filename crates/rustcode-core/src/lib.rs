@@ -79,6 +79,12 @@ pub struct InspectionResultMetadata {
     pub complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_range: Option<InspectionRange>,
+    /// Contiguous source ranges whose complete numbered lines were actually
+    /// delivered to the model. `returned_range` remains the first range for
+    /// compatibility; this preserves head/tail delivery without claiming the
+    /// omitted middle was returned.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delivered_ranges: Vec<InspectionRange>,
     /// Stable semantic identity shared by equivalent inspection tools.
     pub fingerprint: String,
 }

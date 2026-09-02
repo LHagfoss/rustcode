@@ -75,8 +75,119 @@ fn inspection_result_metadata(
         returned_range,
         complete,
         next_range,
+        delivered_ranges: Vec::new(),
         fingerprint,
     })
+}
+
+fn numbered_lines(content: &str) -> Vec<(u64, String)> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let (number, text) = line.split_once(": ")?;
+            Some((number.parse().ok()?, text.to_string()))
+        })
+        .collect()
+}
+
+fn contiguous_ranges(numbers: &[u64]) -> Vec<InspectionRange> {
+    let mut sorted = numbers.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let Some(mut start) = sorted.first().copied() else {
+        return Vec::new();
+    };
+    let mut end = start;
+    let mut ranges = Vec::new();
+    for number in sorted.into_iter().skip(1) {
+        if number == end.saturating_add(1) {
+            end = number;
+        } else {
+            ranges.push(InspectionRange {
+                start: Some(start),
+                end: Some(end),
+            });
+            start = number;
+            end = number;
+        }
+    }
+    ranges.push(InspectionRange {
+        start: Some(start),
+        end: Some(end),
+    });
+    ranges
+}
+
+/// Reconcile inspection ranges with the output that actually reached the
+/// provider. Final byte bounding can retain a head and tail, or cut through a
+/// long numbered source line, so the original view-file header is no longer a
+/// truthful returned range.
+fn reconcile_truncated_inspection(
+    inspection: &mut InspectionResultMetadata,
+    original_content: &str,
+    delivered_content: &str,
+) {
+    let original_by_number = numbered_lines(original_content)
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    let delivered_lines = numbered_lines(delivered_content);
+
+    // A numbered line is complete only when its text still exactly matches
+    // the pre-bounded output. A mismatch means byte bounding cut through that
+    // line; it must be requested again rather than advertised as returned.
+    let complete_numbers = delivered_lines
+        .iter()
+        .filter_map(|(number, text)| {
+            original_by_number
+                .get(number)
+                .filter(|original| *original == text)
+                .map(|_| *number)
+        })
+        .collect::<Vec<_>>();
+    let ranges = contiguous_ranges(&complete_numbers);
+    inspection.delivered_ranges = ranges.clone();
+    inspection.returned_range = ranges.first().cloned();
+
+    let Some((_, original_start, original_end, total)) = parse_view_header(original_content) else {
+        // Non-view inspection tools do not have line-oriented continuation
+        // metadata, but they should never retain a stale range.
+        inspection.next_range = None;
+        return;
+    };
+    let source_start = original_start;
+    let source_end = original_end.min(total);
+
+    // Find the first omitted source line without iterating across a potentially
+    // very large file. This also handles a head/tail bounded result where the
+    // middle is absent from the model-facing payload.
+    let mut cursor = source_start;
+    let mut next_start = None;
+    let mut next_end = source_end;
+    for range in &ranges {
+        let (Some(start), Some(end)) = (range.start, range.end) else {
+            continue;
+        };
+        if end < cursor || start > source_end {
+            continue;
+        }
+        if start > cursor {
+            next_start = Some(cursor);
+            next_end = start.saturating_sub(1).min(source_end);
+            break;
+        }
+        cursor = end.saturating_add(1);
+        if cursor > source_end {
+            break;
+        }
+    }
+    if next_start.is_none() && cursor <= source_end {
+        next_start = Some(cursor);
+    }
+
+    inspection.next_range = next_start.map(|start| InspectionRange {
+        start: Some(start),
+        end: Some(next_end),
+    });
 }
 
 pub(crate) fn stable_arguments_hash(arguments: &serde_json::Value) -> String {
@@ -159,17 +270,21 @@ pub(crate) fn finalize_tool_result_for_prefix(
         result.content.push_str("\n\n");
         result.content.push_str(notice);
     }
+    let original_content = result.content.clone();
     let bounded = truncate_tool_output_for_message(&result.tool_name, result.content, prefix);
     result.content = bounded.content;
     if bounded.truncated {
         result.metadata.truncated = true;
         result.metadata.completeness = ToolResultCompleteness::ByteTruncated;
-        result.metadata.full_output_artifact = bounded.full_output_artifact;
+        if result.metadata.full_output_artifact.is_none() {
+            result.metadata.full_output_artifact = bounded.full_output_artifact;
+        }
         if result.metadata.error_kind.is_none() {
             result.metadata.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
         }
         if let Some(inspection) = result.metadata.inspection.as_mut() {
             inspection.complete = false;
+            reconcile_truncated_inspection(inspection, &original_content, &result.content);
         }
     }
     normalize_incomplete_metadata(&mut result);
