@@ -475,7 +475,10 @@ fn compact_history_deterministically(history: &mut Vec<ChatMessage>, budget: u32
         .saturating_mul(3)
         .min(DETERMINISTIC_RECORD_MAX_CHARS as u32) as usize;
     let record = deterministic_context_record(&history[..boundary], record_limit);
-    history.splice(0..boundary, [ChatMessage::new("system", record)]);
+    let retained_tail = history[boundary..].to_vec();
+    let record_message =
+        crate::network::compaction::durable_compaction_record_message(&record, &retained_tail);
+    history.splice(0..boundary, [record_message]);
     true
 }
 

@@ -315,6 +315,46 @@ impl ChatMessage {
     }
 }
 
+/// Rebuild a persisted transcript from its newest durable compaction boundary.
+///
+/// Compaction stores the summary and the identity of the first retained
+/// message. Normally the retained suffix is already adjacent to the summary,
+/// but using the anchor here makes loading resilient to stale pre-boundary
+/// entries left by an interrupted or append-only history write. If the anchor
+/// cannot be found, the original transcript is preserved rather than dropping
+/// potentially recoverable history.
+pub fn rebuild_from_compaction_boundary(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let Some((summary_index, anchor)) =
+        messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, message)| {
+                message
+                    .compaction_boundary
+                    .as_ref()
+                    .and_then(|boundary| boundary.first_retained_entry.as_ref())
+                    .map(|anchor| (index, anchor))
+            })
+    else {
+        return messages;
+    };
+
+    let Some(retained_index) = messages[summary_index.saturating_add(1)..]
+        .iter()
+        .position(|message| CompactionEntry::from_message(message) == *anchor)
+        .map(|offset| summary_index + 1 + offset)
+    else {
+        return messages;
+    };
+
+    let summary = messages[summary_index].clone();
+    let mut rebuilt = Vec::with_capacity(messages.len().saturating_sub(retained_index) + 1);
+    rebuilt.push(summary);
+    rebuilt.extend(messages.into_iter().skip(retained_index));
+    rebuilt
+}
+
 /// Durable history with a cheap mutation marker for snapshot consumers.
 #[derive(Clone, Debug, Default)]
 pub struct History {
@@ -540,6 +580,35 @@ mod tests {
                 .and_then(|boundary| boundary.first_retained_entry.as_ref())
                 .map(|entry| entry.role.as_str()),
             Some("assistant")
+        );
+    }
+
+    #[test]
+    fn compaction_boundary_rebuild_discards_stale_history_before_anchor() {
+        let retained = ChatMessage::new("assistant", "recent progress");
+        let summary = ChatMessage::new("system", "[Session History Summary]\nsummary")
+            .with_compaction_boundary(CompactionBoundary {
+                version: 1,
+                summary: "summary".to_string(),
+                first_retained_entry: Some(CompactionEntry::from_message(&retained)),
+            });
+        let rebuilt = rebuild_from_compaction_boundary(vec![
+            ChatMessage::new("user", "old summarized task"),
+            summary,
+            ChatMessage::new("assistant", "stale duplicate"),
+            retained.clone(),
+            ChatMessage::new("tool", "recent result"),
+        ]);
+
+        assert_eq!(rebuilt.len(), 3);
+        assert_eq!(rebuilt[0].content, "[Session History Summary]\nsummary");
+        assert_eq!(rebuilt[1], retained);
+        assert_eq!(rebuilt[2].content, "recent result");
+        assert!(
+            rebuilt
+                .iter()
+                .all(|message| !message.content.contains("old summarized")
+                    && !message.content.contains("stale duplicate"))
         );
     }
 

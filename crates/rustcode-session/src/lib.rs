@@ -4,7 +4,7 @@
 //! the application's configuration loader. This keeps persistence reusable by
 //! future frontends while retaining the existing on-disk format and paths.
 
-use rustcode_core::{ChatMessage, History};
+use rustcode_core::{ChatMessage, History, rebuild_from_compaction_boundary};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -549,6 +549,7 @@ impl SessionStore {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|content| serde_json::from_str::<Vec<ChatMessage>>(&content).ok())
+            .map(rebuild_from_compaction_boundary)
             .unwrap_or_default()
     }
 
@@ -615,6 +616,51 @@ mod tests {
         assert_eq!(
             store.load_session_meta(&path).unwrap().title,
             "Custom title"
+        );
+    }
+
+    #[test]
+    fn resumed_history_rebuilds_from_the_persisted_compaction_anchor() {
+        use rustcode_core::{CompactionBoundary, CompactionEntry, ToolCallRef};
+
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let retained_call =
+            ChatMessage::new("assistant", "inspect recent module").with_tool_calls(vec![
+                ToolCallRef {
+                    id: "call-recent".to_string(),
+                    name: "view_file".to_string(),
+                    arguments: "{\"path\":\"src/recent.rs\"}".to_string(),
+                },
+            ]);
+        let summary = ChatMessage::new("system", "[Session History Summary]\nprior facts")
+            .with_compaction_boundary(CompactionBoundary {
+                version: 1,
+                summary: "prior facts".to_string(),
+                first_retained_entry: Some(CompactionEntry::from_message(&retained_call)),
+            });
+        let retained_result = ChatMessage::new("tool", "view_file: recent contents")
+            .answering(Some("call-recent".to_string()));
+        let history = vec![
+            message("user", "old summarized request"),
+            summary,
+            message("assistant", "stale entry from an interrupted write"),
+            retained_call.clone(),
+            retained_result.clone(),
+        ];
+
+        store.save_session_history("resume", &history);
+        flush_history();
+
+        let resumed = store.load_session_history_direct("resume");
+        assert_eq!(resumed.len(), 3);
+        assert_eq!(resumed[1], retained_call);
+        assert_eq!(resumed[2], retained_result);
+        assert!(
+            resumed
+                .iter()
+                .all(|entry| !entry.content.contains("old summarized")
+                    && !entry.content.contains("stale entry"))
         );
     }
 
