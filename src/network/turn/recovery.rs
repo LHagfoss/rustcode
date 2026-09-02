@@ -35,7 +35,7 @@ pub(super) fn reasoning_loop_final_response() -> &'static str {
     "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
 }
 
-fn completed_inspection_synthesis(
+pub(super) fn completed_inspection_synthesis(
     ctx: &TurnContext,
     content: &str,
     native_tool_calls_empty: bool,

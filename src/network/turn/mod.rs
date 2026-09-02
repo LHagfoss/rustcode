@@ -204,6 +204,8 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         turn_token_usage,
         thought_time_ms,
         thought_tokens,
+        final_answer_boundary,
+        provider_final_answer_state,
     )
     .await
     {
