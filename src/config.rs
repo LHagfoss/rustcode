@@ -66,6 +66,16 @@ pub struct ModelProfile {
     /// `reasoning_effort`, this is an explicit token limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_budget: Option<u32>,
+    /// Whether the endpoint has been verified to accept `thinking_budget`.
+    /// Unknown providers default to false so an unsupported extension is not
+    /// mistaken for an effective client-side limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_thinking_budget: Option<bool>,
+    /// Whether the endpoint has been verified to accept `reasoning_effort`.
+    /// This is separate from `enable_thinking`, which controls chat-template
+    /// thinking mode for providers such as Qwen/oMLX.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning_effort: Option<bool>,
     /// Sampling temperature sent to OpenAI-compatible endpoints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -94,6 +104,14 @@ pub struct ModelProfile {
     /// bounded client-side cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Explicit name for the total provider output ceiling. `max_tokens` is
+    /// retained as a legacy alias for existing configuration files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Minimum visible answer space to preserve when thinking and visible
+    /// output share the provider's `max_output_tokens` ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_answer_tokens: Option<u32>,
     /// Wire field used when an explicit output cap must be sent. This is an
     /// endpoint capability/dialect override, not a model-name lookup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,6 +132,12 @@ pub struct ModelProfile {
     /// Conservative safety margin for provider chat-template framing and tokenizer variations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_overhead_margin: Option<u32>,
+    /// Provider-reported or explicitly verified context limit. When both
+    /// this and `context_window` are present, the effective window is their
+    /// safe minimum. This prevents a stale model profile from advertising a
+    /// larger window than the running server accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_context_window: Option<u32>,
     /// Maximum number of workspace-changing tool calls accepted from one
     /// response. Omitted profiles retain the safe one-call default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,8 +172,12 @@ impl std::fmt::Display for OutputTokenField {
     }
 }
 
-/// Fallback `max_tokens` used when a `ModelProfile` doesn't set its own.
+/// Fallback output ceiling used when a `ModelProfile` doesn't set its own.
 pub const DEFAULT_REQUEST_MAX_TOKENS: u32 = 32768;
+/// Preserve visible answer/tool-call room when thinking shares the provider's
+/// total output ceiling. This is a reservation, not an increase to the
+/// provider request limit.
+pub const DEFAULT_MINIMUM_ANSWER_TOKENS: u32 = 1024;
 
 /// The portion of a model context that is intentionally unavailable to the
 /// conversation history. Tool schemas, completion/tool-call output, and (when
@@ -161,7 +189,10 @@ pub struct ContextBudget {
     pub soft_context_target: u32,
     pub hard_effective_limit: u32,
     pub completion_reserve: u32,
+    pub max_output_tokens: u32,
     pub thinking_reserve: u32,
+    pub thinking_budget: u32,
+    pub minimum_answer_tokens: u32,
     pub tool_reserve: u32,
     pub safety_reserve: u32,
     pub provider_overhead_margin: u32,
@@ -184,7 +215,7 @@ impl ModelProfile {
     /// expensive and cannot be useful until it produces an action.
     /// Requests without tools retain the configured cap for normal answers.
     pub fn completion_token_limit(&self, allow_tools: bool) -> u32 {
-        let configured = self.context_budget().completion_reserve;
+        let configured = self.context_budget().max_output_tokens;
         if allow_tools {
             configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
         } else {
@@ -218,7 +249,11 @@ impl ModelProfile {
     /// independent: an unset ordinary response uses the provider default,
     /// while tool and recovery rounds retain a hard client-side ceiling.
     pub fn output_token_limit(&self, allow_tools: bool, bounded_recovery: bool) -> Option<u32> {
-        if self.max_tokens.is_some() || allow_tools || bounded_recovery {
+        if self.max_output_tokens.is_some()
+            || self.max_tokens.is_some()
+            || allow_tools
+            || bounded_recovery
+        {
             Some(self.completion_token_limit(allow_tools))
         } else {
             None
@@ -229,27 +264,54 @@ impl ModelProfile {
         // Keep the effective value bounded and honest. In particular, do not
         // inflate a deliberately small profile and then send a request that
         // cannot fit the provider's configured window.
-        let context_window = self.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW).max(1);
+        let configured_context_window = self
+            .context_window
+            .or(self.provider_context_window)
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW)
+            .max(1);
+        let context_window = self
+            .provider_context_window
+            .map(|provider| configured_context_window.min(provider.max(1)))
+            .unwrap_or(configured_context_window);
         let default_completion = if self.is_local() {
             (context_window / 8).clamp(1024, 4096)
         } else {
             DEFAULT_REQUEST_MAX_TOKENS.min((context_window / 4).max(1))
         };
-        let configured_completion = self.max_tokens.unwrap_or(default_completion);
+        let configured_completion = self
+            .max_output_tokens
+            .or(self.max_tokens)
+            .unwrap_or(default_completion);
         let requested_completion = configured_completion
             .min((context_window / 4).max(1))
             .max(1);
-        let requested_thinking = if self.enable_thinking == Some(true)
+        let thinking_enabled = self.enable_thinking == Some(true)
             || self
                 .reasoning_effort
                 .as_deref()
+                .filter(|_| self.supports_reasoning_effort_wire())
                 .map(|e| e != "off" && e != "none")
-                .unwrap_or(false)
-        {
-            (context_window / 8).clamp(1, 2048)
+                .unwrap_or(false);
+        let requested_thinking = if thinking_enabled {
+            self.thinking_budget
+                .unwrap_or_else(|| (context_window / 8).clamp(1, 2048))
         } else {
             0
         };
+        let minimum_answer_tokens = self
+            .minimum_answer_tokens
+            .unwrap_or_else(|| {
+                if thinking_enabled {
+                    // Scale the default for small output ceilings so a local
+                    // model still gets both a thinking slice and answer space.
+                    DEFAULT_MINIMUM_ANSWER_TOKENS
+                        .min((requested_completion / 4).max(1))
+                        .min(requested_completion.saturating_sub(1))
+                } else {
+                    0
+                }
+            })
+            .min(requested_completion);
         let requested_tool = (context_window / 16).clamp(1, 4096);
         let requested_safety = (context_window / 32).clamp(1, 1024);
 
@@ -279,13 +341,16 @@ impl ModelProfile {
         // context window, and history always retains a small inspectable tail.
         let mut reserve_capacity = context_window.saturating_sub(requested_completion);
         let completion_reserve = requested_completion;
-        let thinking_reserve = requested_thinking.min(reserve_capacity);
-        reserve_capacity = reserve_capacity.saturating_sub(thinking_reserve);
+        // Thinking and visible answer tokens share max_output_tokens; they
+        // must not be double-counted against the prompt context. The fields
+        // below describe the split within that output reservation.
+        let thinking_reserve =
+            requested_thinking.min(requested_completion.saturating_sub(minimum_answer_tokens));
+        let thinking_budget = thinking_reserve;
         let tool_reserve = requested_tool.min(reserve_capacity);
         reserve_capacity = reserve_capacity.saturating_sub(tool_reserve);
         let safety_reserve = requested_safety.min(reserve_capacity);
         let reserved = completion_reserve
-            .saturating_add(thinking_reserve)
             .saturating_add(tool_reserve)
             .saturating_add(safety_reserve);
         let history_tokens = context_window.saturating_sub(reserved);
@@ -294,12 +359,36 @@ impl ModelProfile {
             soft_context_target,
             hard_effective_limit,
             completion_reserve,
+            max_output_tokens: completion_reserve,
             thinking_reserve,
+            thinking_budget,
+            minimum_answer_tokens,
             tool_reserve,
             safety_reserve,
             provider_overhead_margin,
             history_tokens,
         }
+    }
+
+    /// The context window RustCode may safely use for this profile.
+    pub fn effective_context_window(&self) -> u32 {
+        self.context_budget().context_window
+    }
+
+    /// Returns the configured and provider-reported windows when the profile
+    /// is wider than the provider. This is useful for a concise diagnostic.
+    pub fn context_window_mismatch(&self) -> Option<(u32, u32)> {
+        let configured = self.context_window?;
+        let provider = self.provider_context_window?;
+        (provider < configured).then_some((configured, provider))
+    }
+
+    pub fn supports_thinking_budget_wire(&self) -> bool {
+        self.supports_thinking_budget.unwrap_or(false)
+    }
+
+    pub fn supports_reasoning_effort_wire(&self) -> bool {
+        self.supports_reasoning_effort.unwrap_or(false)
     }
 }
 

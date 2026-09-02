@@ -3769,6 +3769,7 @@ fn model_profile_reasoning_effort() {
         model: "Qwen3.8-27B-MTPLX-4bit".to_string(),
         reasoning_effort: Some("low".to_string()),
         thinking_budget: Some(4096),
+        supports_reasoning_effort: Some(true),
         ..ModelProfile::default()
     };
 

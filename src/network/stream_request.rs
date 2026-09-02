@@ -69,18 +69,28 @@ fn apply_profile_generation_options(
     if thinking_mode == ThinkingMode::BoundedRecovery {
         payload["enable_thinking"] = serde_json::json!(true);
         payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(true);
-        payload["reasoning_effort"] = serde_json::json!("low");
-        payload["thinking_budget"] = serde_json::json!(RECOVERY_THINKING_BUDGET);
+        if profile.is_some_and(|p| p.supports_reasoning_effort_wire()) {
+            payload["reasoning_effort"] = serde_json::json!("low");
+        }
+        if profile.is_some_and(|p| p.supports_thinking_budget_wire()) {
+            payload["thinking_budget"] = serde_json::json!(RECOVERY_THINKING_BUDGET);
+        }
         return;
     }
     if let Some(enable_thinking) = profile.and_then(|p| p.enable_thinking) {
         payload["enable_thinking"] = serde_json::json!(enable_thinking);
         payload["chat_template_kwargs"]["enable_thinking"] = serde_json::json!(enable_thinking);
     }
-    if let Some(effort) = profile.and_then(|p| p.reasoning_effort.as_ref()) {
+    if let Some(effort) = profile
+        .filter(|p| p.supports_reasoning_effort_wire())
+        .and_then(|p| p.reasoning_effort.as_ref())
+    {
         payload["reasoning_effort"] = serde_json::json!(effort);
     }
-    if let Some(thinking_budget) = profile.and_then(|p| p.thinking_budget) {
+    if let Some(thinking_budget) = profile
+        .filter(|p| p.supports_thinking_budget_wire())
+        .and_then(|p| p.thinking_budget)
+    {
         payload["thinking_budget"] = serde_json::json!(thinking_budget);
     }
 }
@@ -709,6 +719,8 @@ mod tests {
             enable_thinking: Some(true),
             reasoning_effort: Some("low".to_string()),
             thinking_budget: Some(4096),
+            supports_reasoning_effort: Some(true),
+            supports_thinking_budget: Some(true),
             ..crate::config::ModelProfile::default()
         };
         let mut payload = serde_json::json!({});
@@ -732,6 +744,25 @@ mod tests {
         );
 
         assert!(payload.get("enable_thinking").is_none());
+        assert!(payload.get("reasoning_effort").is_none());
+        assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[test]
+    fn qwen_omlx_does_not_send_unverified_reasoning_extensions() {
+        let profile = crate::config::ModelProfile {
+            engine: Some("omlx".to_string()),
+            enable_thinking: Some(true),
+            reasoning_effort: Some("medium".to_string()),
+            thinking_budget: Some(4096),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+
+        apply_profile_generation_options(&mut payload, Some(&profile), ThinkingMode::Normal);
+
+        assert_eq!(payload["enable_thinking"], true);
+        assert_eq!(payload["chat_template_kwargs"]["enable_thinking"], true);
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
     }
@@ -976,6 +1007,8 @@ mod tests {
             enable_thinking: Some(true),
             reasoning_effort: Some("medium".to_string()),
             thinking_budget: Some(4096),
+            supports_reasoning_effort: Some(true),
+            supports_thinking_budget: Some(true),
             ..crate::config::ModelProfile::default()
         };
         let mut payload = serde_json::json!({});
@@ -1583,7 +1616,7 @@ pub async fn stream_request(
     } else if thinking_mode == ThinkingMode::Disabled {
         None
     } else {
-        profile.as_ref().and_then(|p| p.thinking_budget)
+        profile.as_ref().map(|p| p.context_budget().thinking_budget)
     };
 
     let (tool_protocol, native_tool_schemas, mcp_selection) = {
@@ -1694,6 +1727,22 @@ pub async fn stream_request(
     let tool_schema_tokens =
         crate::network::compaction::estimate_tool_schema_tokens(&native_tool_schemas);
 
+    if let Some((configured, provider)) = profile
+        .as_ref()
+        .and_then(crate::config::ModelProfile::context_window_mismatch)
+    {
+        crate::logger::operational_event(
+            "context.window_mismatch",
+            serde_json::json!({
+                "model": model,
+                "configured_context_window": configured,
+                "provider_context_window": provider,
+                "effective_context_window": provider,
+                "action": "clamped_to_provider",
+            }),
+        );
+    }
+
     crate::logger::operational_event(
         "context.request_composition",
         serde_json::json!({
@@ -1707,7 +1756,9 @@ pub async fn stream_request(
             "output_token_field": output_token_limit.map(|_| output_token_field),
             "output_token_limit": output_token_limit,
             "output_token_limit_source":
-                if profile.as_ref().is_some_and(|p| p.max_tokens.is_some()) {
+                if profile.as_ref().is_some_and(|p| {
+                    p.max_output_tokens.is_some() || p.max_tokens.is_some()
+                }) {
                     "profile"
                 } else if output_token_limit.is_some() {
                     "client_safety"
@@ -1717,6 +1768,16 @@ pub async fn stream_request(
             "soft_context_target": profile.as_ref().map(|p| p.context_budget().soft_context_target),
             "hard_effective_limit": profile.as_ref().map(|p| p.context_budget().hard_effective_limit),
             "context_window": profile.as_ref().map(|p| p.context_budget().context_window),
+            "configured_context_window": profile.as_ref().and_then(|p| p.context_window),
+            "provider_context_window": profile.as_ref().and_then(|p| p.provider_context_window),
+            "context_window_mismatch": profile.as_ref().and_then(|p| p.context_window_mismatch()).map(|(configured, provider)| serde_json::json!({
+                "configured": configured,
+                "provider": provider,
+                "action": "clamped_to_provider"
+            })),
+            "thinking_budget": thinking_budget,
+            "thinking_budget_wire_supported": profile.as_ref().map(|p| p.supports_thinking_budget_wire()),
+            "minimum_answer_tokens": profile.as_ref().map(|p| p.context_budget().minimum_answer_tokens),
         }),
     );
 
@@ -2175,6 +2236,17 @@ pub async fn stream_request(
                                             .and_then(|v| v.as_u64())
                                             .or_else(|| usage.get("cached_tokens").and_then(|v| v.as_u64()))
                                             .map(|n| n as u32);
+                                        let observed_reasoning_tokens = usage
+                                            .get("completion_tokens_details")
+                                            .and_then(|details| details.get("reasoning_tokens"))
+                                            .and_then(|v| v.as_u64())
+                                            .or_else(|| {
+                                                usage
+                                                    .get("reasoning_tokens")
+                                                    .and_then(|v| v.as_u64())
+                                            });
+                                        let observed_answer_tokens = observed_reasoning_tokens
+                                            .map(|reasoning| c.saturating_sub(reasoning));
 
                                         let mut s = state.lock().await;
                                         if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {
@@ -2201,8 +2273,15 @@ pub async fn stream_request(
                                                 "completion_tokens": c,
                                                 "total_tokens": t,
                                                 "cached_tokens": cached,
+                                                "requested_max_output_tokens": output_token_limit,
                                                 "requested_max_tokens": output_token_limit,
+                                                "requested_thinking_budget": thinking_budget,
                                                 "thinking_budget": thinking_budget,
+                                                "requested_minimum_answer_tokens": profile
+                                                    .as_ref()
+                                                    .map(|p| p.context_budget().minimum_answer_tokens),
+                                                "observed_reasoning_tokens": observed_reasoning_tokens,
+                                                "observed_answer_tokens": observed_answer_tokens,
                                                 "completion_limit_reached": output_token_limit
                                                     .is_some_and(|limit| c >= u64::from(limit)),
                                                 "estimated_prompt_tokens": estimated_prompt_tokens,
