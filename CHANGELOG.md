@@ -1,3 +1,11 @@
+## [v0.40.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.9) - 2026-09-02
+
+### Fixes
+- **Incomplete recovery status:** Keep bounded recovery, unrecoverable tool calls, and detected corruption loops explicitly incomplete instead of reporting false success ([#926](https://github.com/LHagfoss/rustcode/pull/926); tracked by [#921](https://github.com/LHagfoss/rustcode/issues/921)).
+- **Provider budgets:** Separate reasoning, output, and effective context budgets, preserving legacy reasoning settings while honoring explicit provider context limits ([#928](https://github.com/LHagfoss/rustcode/pull/928); tracked by [#922](https://github.com/LHagfoss/rustcode/issues/922)).
+- **Durable compaction:** Persist compaction boundaries and retained-history anchors across requests and session reloads for reliable long-context operation ([#927](https://github.com/LHagfoss/rustcode/pull/927); tracked by [#923](https://github.com/LHagfoss/rustcode/issues/923)).
+- **Inspection results:** Unify inspection result metadata, preserve actionable omitted ranges, and narrow inspection tool exposure across equivalent tools ([#929](https://github.com/LHagfoss/rustcode/pull/929); tracked by [#924](https://github.com/LHagfoss/rustcode/issues/924)).
+
 ## [v0.40.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.40.8) - 2026-09-01
 
 ### Fixes
