@@ -222,9 +222,10 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.request_clear_screen();
 }
 
-/// Fill in the active profile's context window from the provider when the
-/// config doesn't have one (currently: ollama's /api/show). Silent no-op on
-/// non-ollama endpoints, errors, or profiles that already have a window set.
+/// Fill in the active profile's provider context window when the provider can
+/// report one (currently: Ollama's /api/show and llama.cpp's /props). The
+/// configured model window remains intact so a mismatch can be diagnosed, but
+/// all request budgeting uses the safe effective minimum.
 pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwest::Client) {
     tokio::spawn(async move {
         let (name, url, model, engine) = {
@@ -233,7 +234,7 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
             let Some(profile) = s.config.models.iter().find(|m| m.name == name) else {
                 return;
             };
-            if profile.context_window.is_some() {
+            if profile.provider_context_window.is_some() {
                 return;
             }
             (
@@ -250,13 +251,23 @@ pub fn spawn_context_window_detection(state: Arc<Mutex<AppState>>, client: reqwe
         };
         let mut s = state.lock().await;
         if let Some(profile) = s.config.models.iter_mut().find(|m| m.name == name)
-            && profile.context_window.is_none()
+            && profile.provider_context_window.is_none()
         {
-            profile.context_window = Some(ctx);
+            let mismatch = profile
+                .context_window
+                .is_some_and(|configured| ctx < configured);
+            profile.provider_context_window = Some(ctx);
             crate::config::save_entire_config(&s.config);
             s.history.push(ChatMessage::new(
                 "system",
-                format!("Detected context window for '{}': {} tokens", name, ctx),
+                if mismatch {
+                    format!(
+                        "Detected provider context window for '{}': {} tokens (clamped below the configured model window)",
+                        name, ctx
+                    )
+                } else {
+                    format!("Detected provider context window for '{}': {} tokens", name, ctx)
+                },
             ));
             s.request_redraw();
         }
