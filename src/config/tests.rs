@@ -159,12 +159,13 @@ fn context_budget_reserves_completion_thinking_tools_and_safety() {
     assert_eq!(budget.context_window, 4096);
     assert!(budget.completion_reserve > 0);
     assert!(budget.thinking_reserve > 0);
+    assert_eq!(budget.max_output_tokens, budget.completion_reserve);
+    assert_eq!(budget.thinking_budget, budget.thinking_reserve);
     assert!(budget.tool_reserve > 0);
     assert!(budget.history_tokens < budget.context_window);
     assert_eq!(
         budget.history_tokens
             + budget.completion_reserve
-            + budget.thinking_reserve
             + budget.tool_reserve
             + budget.safety_reserve,
         budget.context_window
@@ -173,11 +174,7 @@ fn context_budget_reserves_completion_thinking_tools_and_safety() {
     profile.context_window = Some(512);
     let tiny = profile.context_budget();
     assert_eq!(
-        tiny.history_tokens
-            + tiny.completion_reserve
-            + tiny.thinking_reserve
-            + tiny.tool_reserve
-            + tiny.safety_reserve,
+        tiny.history_tokens + tiny.completion_reserve + tiny.tool_reserve + tiny.safety_reserve,
         tiny.context_window
     );
 }
@@ -197,6 +194,109 @@ fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
 
     profile.max_tokens = Some(8192);
     assert_eq!(profile.context_budget().completion_reserve, 8192);
+}
+
+#[test]
+fn explicit_output_and_answer_budgets_are_independent() {
+    let profile = ModelProfile {
+        context_window: Some(32_768),
+        max_output_tokens: Some(8_192),
+        thinking_budget: Some(6_000),
+        minimum_answer_tokens: Some(1_024),
+        enable_thinking: Some(true),
+        ..ModelProfile::default()
+    };
+    let budget = profile.context_budget();
+
+    assert_eq!(budget.max_output_tokens, 8_192);
+    assert_eq!(budget.completion_reserve, 8_192);
+    assert_eq!(budget.thinking_budget, 6_000);
+    assert_eq!(budget.minimum_answer_tokens, 1_024);
+    assert_eq!(profile.completion_token_limit(false), 8_192);
+}
+
+#[test]
+fn new_budget_fields_round_trip_without_rewriting_legacy_fields() {
+    let profile = ModelProfile {
+        max_output_tokens: Some(8_192),
+        minimum_answer_tokens: Some(1_024),
+        supports_thinking_budget: Some(false),
+        supports_reasoning_effort: Some(true),
+        provider_context_window: Some(32_768),
+        ..ModelProfile::default()
+    };
+
+    let encoded = serde_json::to_value(&profile).unwrap();
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.max_output_tokens, Some(8_192));
+    assert_eq!(decoded.minimum_answer_tokens, Some(1_024));
+    assert_eq!(decoded.supports_thinking_budget, Some(false));
+    assert_eq!(decoded.supports_reasoning_effort, Some(true));
+    assert_eq!(decoded.provider_context_window, Some(32_768));
+    assert_eq!(decoded.max_tokens, None);
+}
+
+#[test]
+fn effective_context_window_clamps_stale_model_profile() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        provider_context_window: Some(32_768),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.effective_context_window(), 32_768);
+    assert_eq!(profile.context_window_mismatch(), Some((128_000, 32_768)));
+}
+
+#[test]
+fn provider_context_window_is_used_when_model_profile_is_unspecified() {
+    let profile = ModelProfile {
+        provider_context_window: Some(65_536),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.effective_context_window(), 65_536);
+    assert_eq!(profile.context_window_mismatch(), None);
+}
+
+#[test]
+fn omlx_context_window_requires_explicit_provider_limit() {
+    let profile = ModelProfile {
+        engine: Some("omlx".to_string()),
+        context_window: Some(128_000),
+        provider_context_window: Some(32_768),
+        ..ModelProfile::default()
+    };
+
+    assert_eq!(profile.effective_context_window(), 32_768);
+    assert_eq!(profile.context_window_mismatch(), Some((128_000, 32_768)));
+}
+
+#[test]
+fn legacy_reasoning_fields_remain_wire_enabled_without_capability_metadata() {
+    let profile = ModelProfile {
+        engine: Some("omlx".to_string()),
+        thinking_budget: Some(4_096),
+        reasoning_effort: Some("medium".to_string()),
+        ..ModelProfile::default()
+    };
+
+    assert!(profile.supports_thinking_budget_wire());
+    assert!(profile.supports_reasoning_effort_wire());
+}
+
+#[test]
+fn explicitly_unsupported_reasoning_extensions_stay_disabled() {
+    let profile = ModelProfile {
+        thinking_budget: Some(4_096),
+        reasoning_effort: Some("medium".to_string()),
+        supports_thinking_budget: Some(false),
+        supports_reasoning_effort: Some(false),
+        ..ModelProfile::default()
+    };
+
+    assert!(!profile.supports_thinking_budget_wire());
+    assert!(!profile.supports_reasoning_effort_wire());
 }
 
 #[test]
@@ -244,10 +344,12 @@ fn output_token_field_override_and_legacy_cap_are_backward_compatible() {
 
     let encoded = serde_json::to_value(&profile).unwrap();
     assert_eq!(encoded["max_tokens"], 16_000);
+    assert!(encoded.get("max_output_tokens").is_none());
     assert_eq!(encoded["output_token_field"], "max_completion_tokens");
 
     let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
     assert_eq!(decoded.max_tokens, Some(16_000));
+    assert_eq!(decoded.max_output_tokens, None);
     assert_eq!(
         decoded.output_token_field,
         Some(OutputTokenField::MaxCompletionTokens)
@@ -306,7 +408,6 @@ fn context_budget_scales_without_double_reserving_large_or_small_windows() {
         assert_eq!(
             budget.history_tokens
                 + budget.completion_reserve
-                + budget.thinking_reserve
                 + budget.tool_reserve
                 + budget.safety_reserve,
             budget.context_window
@@ -322,7 +423,7 @@ fn context_budget_scales_without_double_reserving_large_or_small_windows() {
         let thinking = profile.context_budget();
         if window >= 64 {
             assert!(thinking.thinking_reserve > 0);
-            assert!(thinking.history_tokens < budget.history_tokens);
+            assert_eq!(thinking.history_tokens, budget.history_tokens);
         }
     }
 }

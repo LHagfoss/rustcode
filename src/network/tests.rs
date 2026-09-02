@@ -1,6 +1,28 @@
 use super::turn_engine::{save_turn_context_after_run, take_turn_context_for_prompt};
 use super::*;
 
+#[tokio::test]
+async fn context_detection_does_not_probe_unverified_omlx_endpoints() {
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let chat_url = format!("http://{address}/v1/chat/completions");
+    let client = reqwest::Client::new();
+
+    assert_eq!(
+        fetch_context_window(&client, &chat_url, "model", Some("omlx")).await,
+        None
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "oMLX must use an explicit profile/provider context limit"
+    );
+}
+
 #[test]
 fn model_result_contract_distinguishes_read_completeness_states() {
     let complete = tool_result_from_execution(
@@ -3769,6 +3791,7 @@ fn model_profile_reasoning_effort() {
         model: "Qwen3.8-27B-MTPLX-4bit".to_string(),
         reasoning_effort: Some("low".to_string()),
         thinking_budget: Some(4096),
+        supports_reasoning_effort: Some(true),
         ..ModelProfile::default()
     };
 
