@@ -18,8 +18,8 @@ use super::super::{
     cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
     completion_block_message, completion_claims_unapplied_work, failure_replan_message,
     is_mutating_tool, loop_recovery_action, mutation_made_progress, push_or_replace_loop_warning,
-    truncated_batch_summary, unanswered_call_results, unanswered_call_results_with_kind,
-    update_compiler_diagnostic_streak,
+    truncated_batch_summary_with_dropped, unanswered_call_results,
+    unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
 };
 use super::recovery::record_malformed_call;
 use super::{
@@ -48,6 +48,52 @@ fn incomplete_tool_result(metadata: &crate::network::events::ToolResultMetadata)
             rustcode_core::ToolResultCompleteness::LineTruncated
                 | rustcode_core::ToolResultCompleteness::ByteTruncated
         )
+}
+
+fn benign_shell_wrapper_failure(
+    call: Option<&crate::tools::ToolCall>,
+    metadata: &crate::network::events::ToolResultMetadata,
+    content: &str,
+) -> bool {
+    let Some(call) = call else {
+        return false;
+    };
+    if call.name != "run_command"
+        || metadata.success
+        || content.to_ascii_lowercase().contains("error")
+    {
+        return false;
+    }
+    let Some(command) = call
+        .arguments
+        .get("command")
+        .and_then(|value| value.as_str())
+    else {
+        return false;
+    };
+    let command = command.trim();
+    let stages = command.split('|').map(str::trim).collect::<Vec<_>>();
+    let has_search_stage = stages.iter().any(|stage| {
+        let executable = stage.split_whitespace().next().unwrap_or_default();
+        matches!(executable, "grep" | "rg")
+            || (executable == "git" && stage.split_whitespace().nth(1) == Some("grep"))
+    });
+    match metadata.exit_code {
+        // grep/rg use 1 for a understood no-match result. Restrict this to a
+        // simple pipeline so a later command failure is never hidden.
+        Some(1) => has_search_stage && !command.contains("&&") && !command.contains(';'),
+        // `head` commonly closes a pipe after it has enough data, leaving the
+        // upstream producer with SIGPIPE. This remains a failed command in
+        // the transcript; it is only excluded from loop-recovery evidence.
+        Some(141) => {
+            stages.len() > 1
+                && stages.iter().any(|stage| {
+                    let executable = stage.split_whitespace().next().unwrap_or_default();
+                    executable == "head"
+                })
+        }
+        _ => false,
+    }
 }
 
 fn content_bearing_inspection_status(
@@ -189,8 +235,9 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 
     let requested_calls = parsed_tool_calls.len();
     let (parsed_tool_calls, dropped_calls) =
-        crate::tools::truncate_tool_batch(parsed_tool_calls, max_mutating_calls);
-    if dropped_calls > 0 {
+        crate::tools::partition_tool_batch(parsed_tool_calls, max_mutating_calls);
+    let dropped_count = dropped_calls.len();
+    if dropped_count > 0 {
         dbg_log!(
             "Oversized batch: running {} of {} requested tool calls",
             parsed_tool_calls.len(),
@@ -201,14 +248,15 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             serde_json::json!({
                 "requested": requested_calls,
                 "kept": parsed_tool_calls.len(),
-                "dropped": dropped_calls,
+                "dropped": dropped_count,
                 "max_mutating_calls": max_mutating_calls,
                 "max_mutating_calls_source": mutation_limit_source,
             }),
         );
-        ctx.response.final_content = truncated_batch_summary(&parsed_tool_calls, dropped_calls);
+        ctx.response.final_content =
+            truncated_batch_summary_with_dropped(&parsed_tool_calls, &dropped_calls);
     }
-    let oversized_batch = dropped_calls > 0;
+    let oversized_batch = dropped_count > 0;
     if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls, max_mutating_calls) {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
@@ -240,8 +288,14 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 ctx.recovery.force_final = true;
             }
             format!(
-                " This response contained {requested_calls} separate tool calls; the leading {} were kept and the rest dropped, then the remainder failed validation, so nothing ran and nothing it claimed about their results happened. Start again from the last real tool result. Reads may be issued together; keep calls that change the workspace to at most {} per response so each one is grounded in the previous result.",
+                " This response contained {requested_calls} separate tool calls; {} were kept and {} were dropped, then the kept calls failed validation, so nothing ran and nothing it claimed about their results happened. Dropped calls: {}. Start again from the last real tool result. Reads may be issued together; keep calls that change the workspace to at most {} per response so each one is grounded in the previous result.",
                 parsed_tool_calls.len(),
+                dropped_count,
+                dropped_calls
+                    .iter()
+                    .map(|call| call.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 max_mutating_calls
             )
         } else {
@@ -404,12 +458,16 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 ctx.response.final_content_persisted = true;
-                if dropped_calls > 0 {
+                if dropped_count > 0 {
                     s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
-                                    "[{dropped_calls} of the {requested_calls} tool calls in that response were dropped; only the first {} ran. Their results follow — plan the next step from those, not from what the response predicted. Reads may be issued together; keep calls that change the workspace to at most {} per response.]",
-                                    tool_calls.len(),
+                                    "[{dropped_count} of the {requested_calls} tool calls in that response were dropped: {}. The kept calls ran; their results follow — plan the next step from those, not from what the response predicted. Reads may be issued together; keep calls that change the workspace to at most {} per response.]",
+                                    dropped_calls
+                                        .iter()
+                                        .map(|call| call.name.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
                                     max_mutating_calls
                                 ),
                             ));
@@ -473,7 +531,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     "count": results.len(),
                     "requested": requested_calls,
                     "executed": results.len(),
-                    "dropped": dropped_calls,
+                    "dropped": dropped_count,
                     "max_mutating_calls": max_mutating_calls,
                     "max_mutating_calls_source": mutation_limit_source,
                     "successes": results.iter().filter(|result| result.metadata.success).count(),
@@ -503,7 +561,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             // was actually available and complete. A later turn may recover
             // by re-issuing a bounded read, so this is intentionally scoped
             // to the batch that requested completion.
-            let mut batch_incomplete = dropped_calls > 0;
+            let mut batch_incomplete = dropped_count > 0;
             let mut background_pending = false;
             let explicit_verification_user_index = s
                 .history
@@ -742,7 +800,8 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         format!("read:{}#{}", path, start_line / 200),
                     ));
                 }
-                let failure_fingerprint = (!metadata.success).then(|| {
+                let benign_shell_failure = benign_shell_wrapper_failure(call, &metadata, &content);
+                let failure_fingerprint = (!metadata.success && !benign_shell_failure).then(|| {
                     loop_detect::stable_hash(&format!(
                         "{name}:{}:{}",
                         metadata.exit_code.unwrap_or_default(),
@@ -806,7 +865,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 {
                     evidence_recovery = Some((assessment.reason, assessment.streak, name.clone()));
                 }
-                if !assessment.suppress_stagnation {
+                if !assessment.suppress_stagnation && !benign_shell_failure {
                     match ctx
                         .recovery
                         .loop_detector
@@ -1285,7 +1344,8 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_bearing_inspection_status, incomplete_tool_result, should_apply_loop_recovery,
+        benign_shell_wrapper_failure, content_bearing_inspection_status, incomplete_tool_result,
+        should_apply_loop_recovery,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -1328,6 +1388,40 @@ mod tests {
         assert!(should_apply_loop_recovery(false, true, false));
         assert!(should_apply_loop_recovery(false, false, true));
         assert!(!should_apply_loop_recovery(false, false, false));
+    }
+
+    #[test]
+    fn expected_shell_wrapper_statuses_do_not_become_recovery_failures() {
+        let no_match = read_call("rg missing_symbol src | head -20");
+        let no_match_metadata = ToolResultMetadata {
+            success: false,
+            exit_code: Some(1),
+            ..Default::default()
+        };
+        assert!(benign_shell_wrapper_failure(
+            Some(&no_match),
+            &no_match_metadata,
+            "exit code: 1\n(no output)"
+        ));
+
+        let sigpipe = read_call("rg symbol src | head -20");
+        let sigpipe_metadata = ToolResultMetadata {
+            success: false,
+            exit_code: Some(141),
+            ..Default::default()
+        };
+        assert!(benign_shell_wrapper_failure(
+            Some(&sigpipe),
+            &sigpipe_metadata,
+            "exit code: 141\n(no output)"
+        ));
+
+        let real_failure = read_call("rg symbol src && cargo test");
+        assert!(!benign_shell_wrapper_failure(
+            Some(&real_failure),
+            &no_match_metadata,
+            "exit code: 1\nerror: cargo test failed"
+        ));
     }
 
     #[test]

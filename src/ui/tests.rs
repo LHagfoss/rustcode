@@ -969,6 +969,57 @@ fn high_verbosity_batches_consecutive_commands_under_one_heading() {
 }
 
 #[test]
+fn high_verbosity_keeps_mixed_provider_batch_under_one_ran_heading() {
+    use crate::app::{ChatMessage, ToolCallRef, ToolResultRecord, Verbosity};
+
+    let mut state = AppState::new();
+    state.verbosity = Verbosity::High;
+    state
+        .history
+        .push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+            ToolCallRef {
+                id: "call-1".to_owned(),
+                name: "get_time".to_owned(),
+                arguments: "{}".to_owned(),
+            },
+            ToolCallRef {
+                id: "call-2".to_owned(),
+                name: "run_command".to_owned(),
+                arguments: r#"{"command":"git status --short"}"#.to_owned(),
+            },
+        ]));
+    state.history.push(
+        ChatMessage::new("tool", "get_time: Thursday, 08:30")
+            .answering(Some("call-1".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "get_time".to_owned(),
+                success: true,
+                ..Default::default()
+            }),
+    );
+    state.history.push(
+        ChatMessage::new("tool", "run_command: exit code: 0")
+            .answering(Some("call-2".to_owned()))
+            .with_tool_result(ToolResultRecord {
+                tool_name: "run_command".to_owned(),
+                success: true,
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+    );
+
+    let rendered = super::render_committed_tool_result_group(&state, &[1, 2], 80, false)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rendered,
+        ["• Ran", "  └ GetTime", "    Bash git status --short"]
+    );
+}
+
+#[test]
 fn worked_separator_only_labels_concrete_work_over_one_minute() {
     use crate::app::{ChatMessage, ToolResultRecord};
 

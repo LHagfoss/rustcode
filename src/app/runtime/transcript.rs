@@ -24,6 +24,58 @@ pub(super) fn render_finalized_assistant_scrollback(
     }
 }
 
+fn is_tool_only_assistant(
+    snapshot: &crate::ui::render_snapshot::RenderSnapshot,
+    message_index: usize,
+    width: u16,
+) -> bool {
+    let Some(message) = snapshot.active_history().get(message_index) else {
+        return false;
+    };
+    if message.role != "assistant" {
+        return false;
+    }
+    let has_tool_calls = !message.tool_calls.is_empty()
+        || !crate::tools::resolve_tool_calls(message, snapshot.active_tool_protocol()).is_empty();
+    has_tool_calls
+        && crate::ui::render_committed_history_block_snapshot(snapshot, message_index, width)
+            .is_empty()
+}
+
+/// Collect tool results from one provider batch and adjacent empty tool-only
+/// turns. A visible assistant message, system notice, or user message remains
+/// a hard transcript boundary even when its content is not part of the tool
+/// result group.
+pub(super) fn tool_result_group(
+    snapshot: &crate::ui::render_snapshot::RenderSnapshot,
+    start: usize,
+    end: usize,
+    width: u16,
+) -> (Vec<usize>, usize) {
+    let history = snapshot.active_history();
+    let mut indices = Vec::new();
+    let mut index = start;
+    while index < end
+        && history
+            .get(index)
+            .is_some_and(|message| message.role == "tool")
+    {
+        indices.push(index);
+        index += 1;
+
+        if index < end
+            && is_tool_only_assistant(snapshot, index, width)
+            && index + 1 < end
+            && history
+                .get(index + 1)
+                .is_some_and(|message| message.role == "tool")
+        {
+            index += 1;
+        }
+    }
+    (indices, index)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn commit_transcript(
     terminal_runtime: &mut crate::ui::TerminalRuntime,
@@ -80,10 +132,8 @@ pub(super) fn commit_transcript(
     while index < history_range.end {
         let message = &snapshot.history()[index];
         if message.role == "tool" {
-            let group_end = (index + 1..history_range.end)
-                .find(|&next| snapshot.history()[next].role != "tool")
-                .unwrap_or(history_range.end);
-            let indices = (index..group_end).collect::<Vec<_>>();
+            let (indices, group_end) =
+                tool_result_group(snapshot, index, history_range.end, terminal_width);
             let mut block = crate::ui::render_committed_tool_result_group_snapshot(
                 snapshot,
                 &indices,
@@ -152,4 +202,90 @@ pub(super) fn commit_transcript(
         *replaying_transcript = false;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_result_group;
+    use crate::app::{AppState, ChatMessage, ToolCallRef};
+
+    fn tool_turn(id: &str) -> ChatMessage {
+        ChatMessage::new("assistant", "").with_tool_calls(vec![ToolCallRef {
+            id: id.to_owned(),
+            name: "get_time".to_owned(),
+            arguments: "{}".to_owned(),
+        }])
+    }
+
+    fn result(id: &str) -> ChatMessage {
+        ChatMessage::new("tool", "get_time: result").answering(Some(id.to_owned()))
+    }
+
+    #[test]
+    fn adjacent_empty_tool_turns_share_one_group() {
+        let mut state = AppState::new();
+        state.history.extend([
+            tool_turn("call-1"),
+            result("call-1"),
+            tool_turn("call-2"),
+            result("call-2"),
+        ]);
+        let snapshot = state.render_snapshot();
+
+        assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1, 3], 4));
+    }
+
+    #[test]
+    fn visible_assistant_prose_keeps_tool_groups_separate() {
+        let mut state = AppState::new();
+        state.history.extend([
+            tool_turn("call-1"),
+            result("call-1"),
+            ChatMessage::new("assistant", "I need to inspect one more thing.").with_tool_calls(
+                vec![ToolCallRef {
+                    id: "call-2".to_owned(),
+                    name: "get_time".to_owned(),
+                    arguments: "{}".to_owned(),
+                }],
+            ),
+            result("call-2"),
+        ]);
+        let snapshot = state.render_snapshot();
+
+        assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
+    }
+
+    #[test]
+    fn visible_assistant_thought_keeps_tool_groups_separate() {
+        let mut state = AppState::new();
+        state.history.extend([
+            tool_turn("call-1"),
+            result("call-1"),
+            ChatMessage::new("assistant", "<think>Planning the next read.</think>")
+                .with_tool_calls(vec![ToolCallRef {
+                    id: "call-2".to_owned(),
+                    name: "get_time".to_owned(),
+                    arguments: "{}".to_owned(),
+                }]),
+            result("call-2"),
+        ]);
+        let snapshot = state.render_snapshot();
+
+        assert_eq!(tool_result_group(&snapshot, 1, 4, 80), (vec![1], 2));
+    }
+
+    #[test]
+    fn system_boundaries_are_not_crossed_by_tool_grouping() {
+        let mut state = AppState::new();
+        state.history.extend([
+            tool_turn("call-1"),
+            result("call-1"),
+            tool_turn("call-2"),
+            ChatMessage::new("system", "a recovery boundary"),
+            result("call-2"),
+        ]);
+        let snapshot = state.render_snapshot();
+
+        assert_eq!(tool_result_group(&snapshot, 1, 5, 80), (vec![1], 2));
+    }
 }

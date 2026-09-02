@@ -1408,8 +1408,8 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
     assert_eq!(kept.len(), 10);
     assert_eq!(dropped, 0);
 
-    // Only the first call that can change the workspace is kept, along with
-    // any reads that preceded it. Later calls wait for its real result.
+    // Only the first call that can change the workspace is kept, while reads
+    // before and after it remain available in this provider batch.
     let over = vec![
         call("grep"),
         call("run_command"),
@@ -1420,12 +1420,12 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
         call("grep"),
     ];
     let (kept, dropped) = truncate_tool_batch(over, MAX_MUTATING_CALLS_PER_RESPONSE);
-    assert_eq!(kept.len(), MAX_MUTATING_CALLS_PER_RESPONSE + 1);
-    assert_eq!(dropped, 5);
+    assert_eq!(kept.len(), MAX_MUTATING_CALLS_PER_RESPONSE + 2);
+    assert_eq!(dropped, 4);
     assert_eq!(kept[0].name, "grep");
     assert_eq!(kept[1].name, "run_command");
 
-    // A profile override permits a bounded larger prefix while retaining
+    // A profile override permits a bounded larger set while retaining
     // response order and the same read behavior.
     let over = vec![
         call("grep"),
@@ -1467,6 +1467,40 @@ fn truncate_allows_multiple_skills_and_parallel_reads() {
     );
     assert_eq!(kept.len(), 4);
     assert_eq!(dropped, 0);
+}
+
+#[test]
+fn partition_preserves_reads_after_the_mutation_limit() {
+    let call = |name: &str| ToolCall {
+        name: name.to_owned(),
+        arguments: serde_json::json!({}),
+        call_id: None,
+    };
+    let (kept, dropped) = partition_tool_batch(
+        vec![
+            call("grep"),
+            call("run_command"),
+            call("write_to_file"),
+            call("view_file"),
+            call("run_command"),
+            call("get_time"),
+        ],
+        1,
+    );
+
+    assert_eq!(
+        kept.iter()
+            .map(|call| call.name.as_str())
+            .collect::<Vec<_>>(),
+        ["grep", "run_command", "view_file", "get_time"]
+    );
+    assert_eq!(
+        dropped
+            .iter()
+            .map(|call| call.name.as_str())
+            .collect::<Vec<_>>(),
+        ["write_to_file", "run_command"]
+    );
 }
 
 #[test]
