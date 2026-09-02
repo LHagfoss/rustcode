@@ -1478,6 +1478,30 @@ pub(crate) fn truncated_batch_summary(kept: &[crate::tools::ToolCall], dropped: 
     )
 }
 
+/// Replacement transcript text for a response whose batch was selectively
+/// truncated. Unlike the legacy count-only form, this preserves the names of
+/// the calls that did not run without replaying their arguments or prose.
+pub(crate) fn truncated_batch_summary_with_dropped(
+    kept: &[crate::tools::ToolCall],
+    dropped: &[crate::tools::ToolCall],
+) -> String {
+    let names = kept
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let dropped_names = dropped
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "[Oversized response: {} tool calls were kept ({names}); {} were dropped ({dropped_names}). Anything the response claimed about dropped results was imagined — continue from the real results below.]",
+        kept.len(),
+        dropped.len(),
+    )
+}
+
 #[cfg(test)]
 #[path = "network/tests.rs"]
 mod tests;
