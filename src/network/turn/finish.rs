@@ -7,7 +7,8 @@ use crate::app::{AppState, AppStatus, ChatMessage, StreamTracker};
 use super::super::fetch_model_quota;
 use super::super::lifecycle;
 use super::super::policy;
-use super::super::stream::StreamBuffer;
+use super::super::stream::{FinalAnswerBoundary, ProviderFinalAnswerState, StreamBuffer};
+use super::recovery::completed_inspection_synthesis;
 use super::{TurnContext, run_single_turn};
 
 pub async fn run_agent_turn<P: policy::TurnPolicy + 'static>(
@@ -221,6 +222,8 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
     turn_token_usage: Option<crate::app::TokenUsage>,
     thought_time_ms: Option<u64>,
     thought_tokens: Option<u32>,
+    final_answer_boundary: FinalAnswerBoundary,
+    provider_final_answer_state: ProviderFinalAnswerState,
 ) -> FinishGateOutcome {
     const MAX_FINISH_GATE_RETRIES: u32 = 2;
     use super::super::cached_compiler_check;
@@ -313,7 +316,33 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
         }
     }
 
-    if finish_gate_passed && has_verified_implicit_completion(ctx) {
+    if finish_gate_passed
+        && policy.is_headless()
+        && ctx.lifecycle.stop_reason.is_none()
+        && let Some(summary) = completed_inspection_synthesis(
+            ctx,
+            &ctx.response.final_content,
+            true,
+            final_answer_boundary,
+            provider_final_answer_state,
+        )
+    {
+        dbg_log!("Complete read-only inspection accepted as headless completion");
+        let mut s = state.lock().await;
+        if !ctx.response.final_content_persisted {
+            let mut msg = ChatMessage::new("assistant", summary.clone());
+            msg.response_time_ms = Some(turn_response_time_ms);
+            msg.token_usage = turn_token_usage;
+            msg.thought_time_ms = thought_time_ms;
+            msg.thought_tokens = thought_tokens;
+            s.history.push(msg);
+            crate::config::save_history(&s.history);
+            ctx.response.final_content_persisted = true;
+        }
+        ctx.response.final_content = summary;
+        ctx.lifecycle.task_completed = true;
+        ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
+    } else if finish_gate_passed && has_verified_implicit_completion(ctx) {
         dbg_log!("Verified final prose accepted as implicit completion");
         let mut s = state.lock().await;
         let mut msg = ChatMessage::new("assistant", ctx.response.final_content.clone());
@@ -334,6 +363,7 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn verified_edit_context(content: &str) -> TurnContext {
         let mut ctx = TurnContext::new();
@@ -416,6 +446,64 @@ mod tests {
         assert_eq!(
             finished_notification_status(&ctx, true),
             crate::notifications::FinishedStatus::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_complete_inspection_report_is_completed_and_persisted_once() {
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let policy = Arc::new(crate::raw_cli::HeadlessPolicy { quiet: true });
+        let mut ctx = TurnContext::new();
+        ctx.progress.complete_inspection_results = 1;
+        ctx.response.final_content =
+            "<think>Reviewed the source.</think>Findings: src/app.ts validates its export input."
+                .to_string();
+
+        let outcome = handle_plain_response_finish(
+            &state,
+            &policy,
+            &mut ctx,
+            0,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+        )
+        .await;
+
+        assert_eq!(outcome, FinishGateOutcome::Stop);
+        assert!(ctx.lifecycle.task_completed);
+        assert_eq!(
+            ctx.lifecycle.stop_reason,
+            Some(lifecycle::StopReason::Completed)
+        );
+        assert!(ctx.response.final_content_persisted);
+
+        // A repeated finish callback must not duplicate the durable report.
+        let _ = handle_plain_response_finish(
+            &state,
+            &policy,
+            &mut ctx,
+            0,
+            None,
+            None,
+            None,
+            FinalAnswerBoundary::ReasoningClosed,
+            ProviderFinalAnswerState::Terminal,
+        )
+        .await;
+
+        let state = state.lock().await;
+        let reports = state
+            .history
+            .iter()
+            .filter(|message| message.role == "assistant")
+            .collect::<Vec<_>>();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            reports[0].content,
+            "Findings: src/app.ts validates its export input."
         );
     }
 }
