@@ -2101,7 +2101,14 @@ pub async fn stream_request(
                                             if !in_reasoning {
                                                 in_reasoning = true;
                                                 let started = std::time::Instant::now();
-                                                buffer.lock().await.thought_started_at = Some(started);
+                                                {
+                                                    let mut buffer = buffer.lock().await;
+                                                    // A later reasoning segment means the prior
+                                                    // content boundary is no longer final.
+                                                    buffer.final_answer_boundary =
+                                                        super::stream::FinalAnswerBoundary::None;
+                                                    buffer.thought_started_at = Some(started);
+                                                }
                                                 if !quiet {
                                                     let mut s = state.lock().await;
                                                     if expected_session_id.is_some_and(|expected| s.active_session_id != expected) {

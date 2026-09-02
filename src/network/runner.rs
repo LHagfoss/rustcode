@@ -53,7 +53,6 @@ where
     Fut: Future<Output = Result<ResponseChunk, String>>,
 {
     let mut accumulated = String::new();
-    let mut final_answer_boundary = super::stream::FinalAnswerBoundary::None;
     let mut has_native_tool_calls = false;
     let mut thought_time_ms: u64 = 0;
     let mut thought_tokens: u32 = 0;
@@ -61,9 +60,10 @@ where
     loop {
         let chunk = request(accumulated.clone()).await?;
         accumulated.push_str(&chunk.content);
-        if chunk.final_answer_boundary == super::stream::FinalAnswerBoundary::ReasoningClosed {
-            final_answer_boundary = chunk.final_answer_boundary;
-        }
+        // This describes the segment that ended the collected response, not
+        // any earlier segment. A later reasoning-only continuation must clear
+        // an earlier content boundary before recovery evaluates the result.
+        let final_answer_boundary = chunk.final_answer_boundary;
         has_native_tool_calls |= chunk.has_native_tool_calls;
         thought_time_ms = thought_time_ms.saturating_add(chunk.thought_time_ms);
         thought_tokens = thought_tokens.saturating_add(chunk.thought_tokens);
@@ -188,6 +188,52 @@ mod tests {
 
         assert_eq!(calls, 2);
         assert_eq!(result.content, "<think>plan</think>answer");
+        assert_eq!(
+            result.final_answer_boundary,
+            FinalAnswerBoundary::ReasoningClosed
+        );
+    }
+
+    #[tokio::test]
+    async fn later_reasoning_only_continuation_invalidates_earlier_content_boundary() {
+        let mut calls = 0;
+        let result = collect_response(|_| {
+            calls += 1;
+            let (content, final_answer_boundary, finish_reason) = match calls {
+                1 => (
+                    "<think>completed inspection</think>".to_string(),
+                    FinalAnswerBoundary::None,
+                    Some("length".to_string()),
+                ),
+                2 => (
+                    "Findings: src/app.ts has a validated export boundary.".to_string(),
+                    FinalAnswerBoundary::ReasoningClosed,
+                    Some("length".to_string()),
+                ),
+                3 => (
+                    "<think>I got stuck reconsidering the same review.</think>".to_string(),
+                    FinalAnswerBoundary::None,
+                    Some("reasoning_loop".to_string()),
+                ),
+                _ => panic!("unexpected continuation"),
+            };
+            async move {
+                Ok(ResponseChunk {
+                    content,
+                    final_answer_boundary,
+                    finish_reason,
+                    has_native_tool_calls: false,
+                    thought_time_ms: 0,
+                    thought_tokens: 0,
+                })
+            }
+        })
+        .await
+        .expect("reasoning loop response should collect");
+
+        assert_eq!(calls, 3);
+        assert_eq!(result.final_answer_boundary, FinalAnswerBoundary::None);
+        assert_eq!(result.finish_reason.as_deref(), Some("reasoning_loop"));
     }
 
     #[tokio::test]
