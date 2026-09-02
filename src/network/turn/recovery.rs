@@ -64,6 +64,13 @@ fn completed_inspection_synthesis(
         prose
     };
     let candidate = candidate.trim();
+    has_substantive_final_synthesis(candidate).then(|| candidate.to_string())
+}
+
+/// Require a report-like result, not merely long prose that mentions a
+/// finding or review. This gate is intentionally conservative because its
+/// caller promotes a loop-cut reasoning stream to a successful answer.
+fn has_substantive_final_synthesis(candidate: &str) -> bool {
     let word_count = candidate.split_whitespace().count();
     let lower = candidate.to_ascii_lowercase();
     let has_synthesis_marker = [
@@ -91,13 +98,54 @@ fn completed_inspection_synthesis(
             .iter()
             .any(|extension| word.ends_with(extension))
     });
-    (word_count >= 20
+    let has_actionable_result = [
+        " has ",
+        " have ",
+        " lacks ",
+        " missing ",
+        " issue",
+        " bug",
+        " risk",
+        " vulnerab",
+        " recommend",
+        " should ",
+        " must ",
+        " passes ",
+        " fails ",
+        " error",
+        " concern",
+        " no issues found",
+        " no findings",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker));
+    let explicit_non_result = [
+        "stopped after repeated reasoning",
+        "reasoning became repetitive",
+        "kept reconsidering the same",
+        "reconsidering the same conclusion",
+        "halted without",
+        "stopped without",
+        "without producing",
+        "without a trustworthy report",
+        "without an actionable result",
+        "no actionable result",
+        "no trustworthy report",
+        "no result was produced",
+        "no report was produced",
+        "unable to produce",
+        "unable to provide",
+        "did not produce a trustworthy",
+        "did not produce an actionable",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker));
+    word_count >= 8
         && candidate != reasoning_loop_final_response()
         && has_synthesis_marker
         && has_evidence_reference
-        && !lower.contains("reasoning became repetitive")
-        && !lower.contains("stopped after repeated reasoning"))
-    .then(|| candidate.to_string())
+        && has_actionable_result
+        && !explicit_non_result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,6 +380,22 @@ mod tests {
             "The review is complete for src/app.ts. The model stopped after repeated reasoning because the reasoning became repetitive and did not produce a trustworthy final report.",
         );
         assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+    }
+
+    #[test]
+    fn marker_and_path_do_not_rescue_explicit_non_result_prose() {
+        let ctx = completed_inspection_context(
+            "Findings: src/app.ts was inspected. Review complete. I kept reconsidering the same conclusion, then halted without producing a trustworthy report. No changes were made and no actionable result was produced.",
+        );
+        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+    }
+
+    #[test]
+    fn concise_actionable_findings_still_pass() {
+        let ctx = completed_inspection_context(
+            "Findings: src/app.ts has an unchecked export input; src/db.ts lacks transaction handling.",
+        );
+        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_some());
     }
 
     #[test]
