@@ -166,6 +166,56 @@ pub struct ToolResultRecord {
     pub replayed: bool,
 }
 
+/// The stable identity of the first message retained after a compaction.
+///
+/// This is intentionally a compact identity rather than a copy of the
+/// retained message: tool results can be very large, and duplicating one in
+/// every summary would undermine compaction. The fingerprint is deterministic
+/// for the durable fields that make an entry distinct during replay.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionEntry {
+    pub role: String,
+    pub timestamp: String,
+    pub content_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl CompactionEntry {
+    pub fn from_message(message: &ChatMessage) -> Self {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        message.role.hash(&mut hasher);
+        message.content.hash(&mut hasher);
+        message.tool_call_id.hash(&mut hasher);
+        for call in &message.tool_calls {
+            call.id.hash(&mut hasher);
+            call.name.hash(&mut hasher);
+            call.arguments.hash(&mut hasher);
+        }
+        Self {
+            role: message.role.clone(),
+            timestamp: message.timestamp.clone(),
+            content_fingerprint: format!("{:016x}", hasher.finish()),
+            tool_call_id: message.tool_call_id.clone(),
+        }
+    }
+}
+
+/// Durable marker attached to a summary message.
+///
+/// The summary remains in the message content for compatibility with older
+/// readers. This typed boundary lets newer readers rebuild context from the
+/// summary and the retained suffix without guessing where the suffix begins.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionBoundary {
+    pub version: u8,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_retained_entry: Option<CompactionEntry>,
+}
+
 impl ToolResultRecord {
     /// Map records from before the completeness field was introduced to an
     /// honest state instead of treating their old `truncated` bit as complete.
@@ -211,6 +261,8 @@ pub struct ChatMessage {
     pub tool_calls: Vec<ToolCallRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_boundary: Option<CompactionBoundary>,
 }
 
 impl ChatMessage {
@@ -228,6 +280,7 @@ impl ChatMessage {
             tool_result: None,
             tool_calls: Vec::new(),
             tool_call_id: None,
+            compaction_boundary: None,
         }
     }
 
@@ -253,6 +306,11 @@ impl ChatMessage {
 
     pub fn with_tool_result(mut self, record: ToolResultRecord) -> Self {
         self.tool_result = Some(record);
+        self
+    }
+
+    pub fn with_compaction_boundary(mut self, boundary: CompactionBoundary) -> Self {
+        self.compaction_boundary = Some(boundary);
         self
     }
 }
@@ -460,6 +518,29 @@ mod tests {
         assert!(json.contains("\"tool_result\""));
         assert!(!json.contains("\"diff\""));
         assert_eq!(serde_json::from_str::<ChatMessage>(&json).unwrap(), message);
+    }
+
+    #[test]
+    fn compaction_boundary_round_trips_with_a_retained_entry_anchor() {
+        let retained = ChatMessage::new("assistant", "recent progress");
+        let message = ChatMessage::new("system", "[Session History Summary]\nsummary")
+            .with_compaction_boundary(CompactionBoundary {
+                version: 1,
+                summary: "summary".to_string(),
+                first_retained_entry: Some(CompactionEntry::from_message(&retained)),
+            });
+
+        let json = serde_json::to_string(&message).expect("serialize compaction boundary");
+        let restored = serde_json::from_str::<ChatMessage>(&json).expect("restore boundary");
+        assert_eq!(restored, message);
+        assert_eq!(
+            restored
+                .compaction_boundary
+                .as_ref()
+                .and_then(|boundary| boundary.first_retained_entry.as_ref())
+                .map(|entry| entry.role.as_str()),
+            Some("assistant")
+        );
     }
 
     #[test]

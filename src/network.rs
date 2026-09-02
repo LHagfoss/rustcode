@@ -873,6 +873,22 @@ fn push_status_line(s: &mut AppState, text: String) {
     crate::config::save_history(&s.history);
 }
 
+/// Reserve the known non-history portions of the soft target so compaction
+/// happens before request assembly reaches the provider's target. The final
+/// preflight still accounts for the exact system prompt, schemas, and dynamic
+/// context; this is the early, history-only trigger used before those pieces
+/// are assembled.
+fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
+    const SYSTEM_PROMPT_HEADROOM: u32 = 2_048;
+    budget
+        .soft_context_target
+        .saturating_sub(budget.tool_reserve)
+        .saturating_sub(budget.provider_overhead_margin)
+        .saturating_sub(SYSTEM_PROMPT_HEADROOM)
+        .max(1)
+        .min(budget.history_tokens)
+}
+
 /// Assemble the full provider request for one agent turn.
 ///
 /// Runs AI compaction if the history is long enough, snapshots the eligible
@@ -913,10 +929,11 @@ pub(crate) async fn prepare_turn_request(
                     let lower = s.api_base_url.to_ascii_lowercase();
                     lower.contains("11434") || lower.contains("ollama")
                 };
+            let context_budget = s.active_context_budget();
             (
                 s.api_base_url.clone(),
                 s.model_name.clone(),
-                s.get_history_token_budget() as usize,
+                proactive_history_budget(&context_budget) as usize,
                 local_model,
                 s.active_session_id.clone(),
                 s.history.clone(),

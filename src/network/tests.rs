@@ -2104,6 +2104,25 @@ async fn test_run_compiler_check_success() {
 }
 
 #[test]
+fn proactive_history_budget_leaves_soft_target_headroom() {
+    let profile = crate::config::ModelProfile {
+        name: "local".to_string(),
+        url: "http://example.test/v1".to_string(),
+        model: "model".to_string(),
+        context_window: Some(32_768),
+        soft_context_target: Some(24_000),
+        hard_effective_limit: Some(30_000),
+        provider_overhead_margin: Some(1_024),
+        ..Default::default()
+    };
+    let budget = profile.context_budget();
+    let proactive = super::proactive_history_budget(&budget);
+
+    assert!(proactive < budget.history_tokens);
+    assert_eq!(proactive, 24_000 - budget.tool_reserve - 1_024 - 2_048);
+}
+
+#[test]
 fn project_root_from_relative_file_is_a_real_directory() {
     let root = get_tool_project_root("delete_file", &serde_json::json!({"path": "src/temp.rs"}))
         .expect("should find project root for workspace file");
