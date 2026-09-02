@@ -530,6 +530,19 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 let diff_opt = result.diff;
                 let file_preview = result.file_preview;
                 batch_incomplete |= incomplete_tool_result(&metadata);
+                if metadata.success
+                    && call.is_some_and(|call| {
+                        loop_detect::inspection_target(&call.name, &call.arguments).is_some()
+                    })
+                {
+                    if incomplete_tool_result(&metadata) {
+                        ctx.progress.incomplete_inspection_results =
+                            ctx.progress.incomplete_inspection_results.saturating_add(1);
+                    } else {
+                        ctx.progress.complete_inspection_results =
+                            ctx.progress.complete_inspection_results.saturating_add(1);
+                    }
+                }
                 if metadata.pending {
                     background_pending = true;
                     s.history.push(tool_result_history_message(

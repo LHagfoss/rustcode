@@ -35,6 +35,39 @@ pub(super) fn reasoning_loop_final_response() -> &'static str {
     "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
 }
 
+fn completed_inspection_synthesis(
+    ctx: &TurnContext,
+    content: &str,
+    native_tool_calls_empty: bool,
+) -> Option<String> {
+    if !native_tool_calls_empty
+        || ctx.progress.made_edits
+        || ctx.progress.complete_inspection_results == 0
+        || ctx.progress.incomplete_inspection_results > 0
+        || crate::network::text::has_intended_tool_call(content)
+    {
+        return None;
+    }
+
+    let promoted = crate::network::text::promote_bare_thought_markers(content);
+    let prose = crate::network::text::strip_tool_call_syntax(
+        &crate::network::text::strip_think_blocks(&promoted),
+    );
+    let candidate = if prose.trim().is_empty() {
+        // Some local providers put the final review in the reasoning channel
+        // and are cut off before emitting a separate content channel. That
+        // reasoning is usable only after complete inspection evidence exists;
+        // preserve it as the review instead of replacing it with loop prose.
+        promoted.replace("<think>", "").replace("</think>", "")
+    } else {
+        prose
+    };
+    let candidate = candidate.trim();
+    let word_count = candidate.split_whitespace().count();
+    (word_count >= 20 && candidate != reasoning_loop_final_response())
+        .then(|| candidate.to_string())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResponseRecoveryOutcome {
     Continue,
@@ -98,6 +131,31 @@ pub(super) async fn handle_response_recovery(
         Some("reasoning_loop" | "reasoning_budget")
     );
     if is_reasoning_loop && !ctx.recovery.force_final {
+        if let Some(summary) = completed_inspection_synthesis(
+            ctx,
+            &ctx.response.final_content,
+            native_tool_calls_empty,
+        ) {
+            dbg_log!(
+                "Reasoning loop followed complete read-only inspection; preserving final synthesis"
+            );
+            let mut s = state.lock().await;
+            let mut message = ChatMessage::new("assistant", &summary);
+            message.response_time_ms = Some(turn_response_time_ms);
+            message.token_usage = turn_token_usage;
+            message.thought_time_ms = thought_time_ms;
+            message.thought_tokens = thought_tokens;
+            s.history.push(message);
+            ctx.response.final_content = summary;
+            ctx.response.final_content_persisted = true;
+            ctx.lifecycle.task_completed = true;
+            ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::Completed);
+            crate::config::save_history(&s.history);
+            s.clear_current_response();
+            drop(s);
+            ctx.lifecycle.turn_machine.abandon_tool_phase();
+            return ResponseRecoveryOutcome::Stop;
+        }
         ctx.recovery.reasoning_loops_detected += 1;
         dbg_log!(
             "Reasoning loop detected during stream (attempt {}/{})",
@@ -186,4 +244,45 @@ pub(super) async fn handle_response_recovery(
         return ResponseRecoveryOutcome::Stop;
     }
     ResponseRecoveryOutcome::Proceed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{completed_inspection_synthesis, reasoning_loop_final_response};
+    use crate::network::TurnContext;
+
+    fn completed_inspection_context(content: &str) -> TurnContext {
+        let mut ctx = TurnContext::new();
+        ctx.progress.complete_inspection_results = 4;
+        ctx.response.final_content = content.to_string();
+        ctx
+    }
+
+    #[test]
+    fn completed_inspection_preserves_final_synthesis_after_reasoning_loop() {
+        let ctx = completed_inspection_context(
+            "<think>Reviewed the complete source tree. Findings: src/app.ts has an unchecked export input and src/db.ts lacks a transaction around the write. The review is complete with no workspace changes.</think>",
+        );
+        let summary = completed_inspection_synthesis(&ctx, &ctx.response.final_content, true)
+            .expect("complete inspection should yield a usable review");
+        assert!(summary.contains("Findings:"));
+        assert!(!summary.contains(reasoning_loop_final_response()));
+    }
+
+    #[test]
+    fn incomplete_inspection_never_promotes_loop_synthesis() {
+        let mut ctx = completed_inspection_context(
+            "<think>Reviewed the source tree. Findings: the final file is still truncated and needs another inspection before a safe review.</think>",
+        );
+        ctx.progress.incomplete_inspection_results = 1;
+        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, true).is_none());
+    }
+
+    #[test]
+    fn synthesis_with_tool_calls_never_finishes_the_turn() {
+        let ctx = completed_inspection_context(
+            "<think>Findings are ready.</think>\n```tool\n{\"name\":\"view_file\"}\n```",
+        );
+        assert!(completed_inspection_synthesis(&ctx, &ctx.response.final_content, false).is_none());
+    }
 }
