@@ -1,7 +1,23 @@
 /// Accumulates text emitted by a provider stream while the network layer
 /// processes the stream events.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FinalAnswerBoundary {
+    #[default]
+    None,
+    ReasoningClosed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ProviderFinalAnswerState {
+    #[default]
+    None,
+    Terminal,
+}
+
 pub(crate) struct StreamBuffer {
     pub content: String,
+    pub final_answer_boundary: FinalAnswerBoundary,
+    pub provider_final_answer_state: ProviderFinalAnswerState,
     pub thought_time_ms: u64,
     pub thought_tokens: u32,
     pub thought_started_at: Option<std::time::Instant>,
@@ -22,6 +38,8 @@ impl StreamBuffer {
     pub fn new() -> Self {
         Self {
             content: String::new(),
+            final_answer_boundary: FinalAnswerBoundary::None,
+            provider_final_answer_state: ProviderFinalAnswerState::None,
             thought_time_ms: 0,
             thought_tokens: 0,
             thought_started_at: None,
@@ -33,6 +51,8 @@ impl StreamBuffer {
     /// Drops everything carried over from a previous request.
     pub fn reset(&mut self) {
         self.content.clear();
+        self.final_answer_boundary = FinalAnswerBoundary::None;
+        self.provider_final_answer_state = ProviderFinalAnswerState::None;
         self.thought_time_ms = 0;
         self.thought_tokens = 0;
         self.thought_started_at = None;
@@ -59,6 +79,8 @@ mod tests {
         buffer.thought_time_ms = 12;
         buffer.thought_tokens = 4;
         buffer.thought_started_at = Some(std::time::Instant::now());
+        buffer.final_answer_boundary = FinalAnswerBoundary::ReasoningClosed;
+        buffer.provider_final_answer_state = ProviderFinalAnswerState::Terminal;
         buffer.tool_call_ids.push("call-1".to_string());
         buffer
             .native_tool_calls
@@ -75,5 +97,10 @@ mod tests {
         assert_eq!(buffer.thought_time_ms, 0);
         assert_eq!(buffer.thought_tokens, 0);
         assert!(buffer.thought_started_at.is_none());
+        assert_eq!(buffer.final_answer_boundary, FinalAnswerBoundary::None);
+        assert_eq!(
+            buffer.provider_final_answer_state,
+            ProviderFinalAnswerState::None
+        );
     }
 }
