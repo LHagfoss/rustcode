@@ -1136,3 +1136,7 @@
 
 ## [v0.1.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.1.12) - 2026-07-16
 - Initial release
+## [v0.50.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.50.1) - 2026-09-02
+
+### Fixes
+- **Headless read-only completion:** Mark complete inspection reports as successful in headless mode, preserving genuine incomplete and recovery failures ([#934](https://github.com/LHagfoss/rustcode/issues/934); [#935](https://github.com/LHagfoss/rustcode/pull/935)).
