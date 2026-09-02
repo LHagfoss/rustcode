@@ -6,8 +6,8 @@ mod tokens;
 
 #[allow(unused_imports)]
 pub use budget::{PreflightBudget, calculate_preflight_budget};
-pub(crate) use compact::SUMMARY_MARKER;
 pub(crate) use compact::valid_compaction_boundary;
+pub(crate) use compact::{SUMMARY_MARKER, durable_compaction_record_message};
 pub use compact::{
     force_compact, force_compact_with_budget, maybe_compact, maybe_compact_with_local_policy,
     maybe_compact_with_local_policy_and_usage,
@@ -561,11 +561,12 @@ mod tests {
         .await;
 
         assert!(compacted);
-        assert!(
-            !history
-                .iter()
-                .any(|message| message.content.starts_with(SUMMARY_MARKER))
-        );
+        let boundary = history
+            .iter()
+            .find_map(|message| message.compaction_boundary.as_ref())
+            .expect("local compaction must persist a typed boundary");
+        assert_eq!(boundary.version, 1);
+        assert!(boundary.summary.contains(STRUCTURED_MEMORY_MARKER));
     }
 
     #[tokio::test]
@@ -622,6 +623,25 @@ mod tests {
             .await
             .expect("incremental compaction should succeed");
 
+        let boundary = history[0]
+            .compaction_boundary
+            .as_ref()
+            .expect("AI summaries must persist a typed boundary");
+        assert_eq!(boundary.version, 1);
+        assert_eq!(boundary.summary, "Goal: retain the original objective");
+        assert_eq!(
+            boundary
+                .first_retained_entry
+                .as_ref()
+                .map(|entry| entry.role.as_str()),
+            Some("system")
+        );
+        assert_eq!(
+            boundary.first_retained_entry,
+            history
+                .get(1)
+                .map(crate::app::CompactionEntry::from_message)
+        );
         assert!(history.iter().any(|message| {
             message.content == format!("{ORIGINAL_TASK_MARKER}\noriginal objective")
         }));
