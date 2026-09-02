@@ -1,3 +1,8 @@
+## [v0.50.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.50.2) - 2026-09-02
+
+### Fixes
+- **Read-only tool batching:** Preserve read-only calls when mutation limits apply, group mixed tool batches and adjacent tool-only turns coherently, and avoid unnecessary recovery from expected shell wrapper statuses ([#938](https://github.com/LHagfoss/rustcode/issues/938); [#939](https://github.com/LHagfoss/rustcode/pull/939)).
+
 ## [v0.50.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.50.0) - 2026-09-02
 
 ### Fixes
