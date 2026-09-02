@@ -10,6 +10,10 @@ pub(crate) trait TurnPolicy: Send + Sync {
         tool_calls: &[ToolCall],
     ) -> impl std::future::Future<Output = bool> + Send;
     fn should_verify_completion(&self) -> bool;
+
+    fn is_headless(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) struct InteractivePolicy;
