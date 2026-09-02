@@ -39,6 +39,15 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
 pub(crate) struct ToolSchemaPolicy {
     pub(crate) include_agent_tools: bool,
     pub(crate) include_mcp_tools: bool,
+    pub(crate) profile: ToolSchemaProfile,
+}
+
+/// Deterministic provider-facing tool menu for the read-only inspection mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ToolSchemaProfile {
+    #[default]
+    Coding,
+    ReadOnlyInspection,
 }
 
 /// Request phase used to keep the initial tool menu small for new projects.
@@ -56,6 +65,23 @@ impl ToolSchemaPolicy {
         Self {
             include_agent_tools,
             include_mcp_tools: true,
+            profile: ToolSchemaProfile::Coding,
+        }
+    }
+
+    pub(crate) fn root_for_mode(include_agent_tools: bool, mode: crate::config::AgentMode) -> Self {
+        if mode == crate::config::AgentMode::Plan {
+            Self::read_only_inspection()
+        } else {
+            Self::root(include_agent_tools)
+        }
+    }
+
+    pub(crate) const fn read_only_inspection() -> Self {
+        Self {
+            include_agent_tools: false,
+            include_mcp_tools: false,
+            profile: ToolSchemaProfile::ReadOnlyInspection,
         }
     }
 
@@ -63,6 +89,7 @@ impl ToolSchemaPolicy {
         Self {
             include_agent_tools: false,
             include_mcp_tools: false,
+            profile: ToolSchemaProfile::ReadOnlyInspection,
         }
     }
 }
@@ -306,6 +333,15 @@ const BOOTSTRAP_CODING_TOOLS: &[&str] = &[
     "use_skill",
 ];
 
+const READ_ONLY_INSPECTION_TOOLS: &[&str] = &[
+    "grep",
+    "glob",
+    "list_directory",
+    "find_symbol",
+    "get_project_map",
+    "view_file",
+];
+
 const BOOTSTRAP_SOURCE_FILE_LIMIT: usize = 3;
 
 fn source_file_count(root: &Path) -> usize {
@@ -461,16 +497,23 @@ fn builtin_tool_is_relevant(
 }
 
 fn build_builtin_native_tools_schema(
-    include_agent_tools: bool,
+    policy: ToolSchemaPolicy,
     terms: Option<&std::collections::HashSet<String>>,
     phase: ToolSchemaPhase,
 ) -> Vec<Value> {
     let mut tools = Vec::new();
     for t in TOOLS {
-        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !include_agent_tools {
+        if policy.profile == ToolSchemaProfile::ReadOnlyInspection
+            && !READ_ONLY_INSPECTION_TOOLS.contains(&t.name)
+        {
             continue;
         }
-        if !(include_agent_tools && t.capabilities.contains(&ToolCapability::AgentDelegation))
+        if t.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools
+        {
+            continue;
+        }
+        if !(policy.include_agent_tools
+            && t.capabilities.contains(&ToolCapability::AgentDelegation))
             && terms.is_some_and(|terms| !builtin_tool_is_relevant(t.name, terms, phase))
         {
             continue;
@@ -489,10 +532,18 @@ fn build_builtin_native_tools_schema(
 
 fn builtin_native_tools_schema(include_agent_tools: bool) -> Vec<Value> {
     static WITHOUT_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
-        build_builtin_native_tools_schema(false, None, ToolSchemaPhase::Established)
+        build_builtin_native_tools_schema(
+            ToolSchemaPolicy::root(false),
+            None,
+            ToolSchemaPhase::Established,
+        )
     });
     static WITH_AGENT_TOOLS: LazyLock<Vec<Value>> = LazyLock::new(|| {
-        build_builtin_native_tools_schema(true, None, ToolSchemaPhase::Established)
+        build_builtin_native_tools_schema(
+            ToolSchemaPolicy::root(true),
+            None,
+            ToolSchemaPhase::Established,
+        )
     });
 
     if include_agent_tools {
@@ -826,13 +877,14 @@ pub(crate) fn native_tools_schema_for_context_with_sticky_at(
 ) -> (Vec<Value>, McpSchemaSelectionStats) {
     let phase = tool_schema_phase(messages, workspace_root);
     let terms = context_terms(messages);
-    let mut tools =
-        build_builtin_native_tools_schema(policy.include_agent_tools, Some(&terms), phase);
+    let mut tools = build_builtin_native_tools_schema(policy, Some(&terms), phase);
     let builtin_available = TOOLS
         .iter()
         .filter(|tool| {
-            !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
-                && !policy.include_agent_tools)
+            !(policy.profile == ToolSchemaProfile::ReadOnlyInspection
+                && !READ_ONLY_INSPECTION_TOOLS.contains(&tool.name))
+                && !(tool.capabilities.contains(&ToolCapability::AgentDelegation)
+                    && !policy.include_agent_tools)
         })
         .count();
     let builtin_selected = tools.len();
@@ -999,6 +1051,11 @@ If the request context names a skill, load it first. For a likely specialized wo
 
     p.push_str("Available tools:\n");
     for t in TOOLS {
+        if policy.profile == ToolSchemaProfile::ReadOnlyInspection
+            && !READ_ONLY_INSPECTION_TOOLS.contains(&t.name)
+        {
+            continue;
+        }
         if t.capabilities.contains(&ToolCapability::AgentDelegation) && !policy.include_agent_tools
         {
             continue;
@@ -1072,7 +1129,7 @@ pub fn tool_system_prompt(
     agent_mode: crate::config::AgentMode,
 ) -> String {
     tool_system_prompt_for_policy(
-        ToolSchemaPolicy::root(include_agent_tools),
+        ToolSchemaPolicy::root_for_mode(include_agent_tools, agent_mode),
         protocol,
         agent_mode,
     )

@@ -52,6 +52,37 @@ impl ToolResultCompleteness {
     }
 }
 
+/// A line-oriented range carried by a model-facing inspection result.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InspectionRange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<u64>,
+}
+
+/// Canonical, bounded facts about a read-only inspection. The terminal/UI
+/// presentation remains the separate `ChatMessage::content` field.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InspectionResultMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_range: Option<InspectionRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned_range: Option<InspectionRange>,
+    /// True when the requested inspection was fully delivered. A
+    /// `user_limited` read is complete for its explicitly requested range.
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_range: Option<InspectionRange>,
+    /// Stable semantic identity shared by equivalent inspection tools.
+    pub fingerprint: String,
+}
+
 /// Identity of one structured tool call, retained for transcript replay.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallRef {
@@ -164,6 +195,8 @@ pub struct ToolResultRecord {
     pub retryable: bool,
     #[serde(default)]
     pub replayed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection: Option<InspectionResultMetadata>,
 }
 
 impl ToolResultRecord {

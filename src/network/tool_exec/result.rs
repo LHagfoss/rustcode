@@ -4,7 +4,80 @@ use super::super::events::{ToolResult, ToolResultMetadata};
 use super::super::is_mutating_tool;
 use super::super::output::{INCOMPLETE_TOOL_RESULT_MARKER, truncate_tool_output_for_message};
 use super::preview::get_file_preview;
-use rustcode_core::ToolResultCompleteness;
+use rustcode_core::{InspectionRange, InspectionResultMetadata, ToolResultCompleteness};
+
+fn parse_view_header(content: &str) -> Option<(String, u64, u64, u64)> {
+    let rest = content.strip_prefix("[File: ")?;
+    let (path, rest) = rest.split_once(", Lines ")?;
+    let (range, rest) = rest.split_once(" of ")?;
+    let (start, end) = range.split_once(" to ")?;
+    let total = rest.split_once(',')?.0;
+    Some((
+        path.to_string(),
+        start.parse().ok()?,
+        end.parse().ok()?,
+        total.parse().ok()?,
+    ))
+}
+
+fn inspection_result_metadata(
+    tool_name: &str,
+    args: &serde_json::Value,
+    content: &str,
+    completeness: ToolResultCompleteness,
+) -> Option<InspectionResultMetadata> {
+    let fingerprint = if crate::network::loop_detect::inspection_target(tool_name, args).is_some()
+        || crate::network::loop_detect::is_read_only(tool_name)
+    {
+        // Use the detector's category rather than the exact range identity so
+        // native reads and equivalent shell reads share one stable fingerprint.
+        crate::network::loop_detect::signatures(tool_name, args).1
+    } else {
+        return None;
+    };
+    let read_target = crate::network::loop_detect::read_target(tool_name, args);
+    let requested_path = args
+        .get("path")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .or_else(|| read_target.as_ref().map(|(path, _, _)| path.clone()));
+    let requested_range = read_target.map(|(_, start, end)| InspectionRange {
+        start: Some(start as u64),
+        end: end.map(|value| value as u64),
+    });
+    let parsed = parse_view_header(content);
+    let returned_path = parsed
+        .as_ref()
+        .map(|(path, _, _, _)| path.clone())
+        .or_else(|| requested_path.clone());
+    let returned_range = parsed.as_ref().map(|(_, start, end, _)| InspectionRange {
+        start: Some(*start),
+        end: Some(*end),
+    });
+    let complete = matches!(
+        completeness,
+        ToolResultCompleteness::Complete | ToolResultCompleteness::UserLimited
+    );
+    let next_range = (!complete)
+        .then(|| {
+            parsed.as_ref().and_then(|(_, _, end, total)| {
+                (*end < *total).then_some(InspectionRange {
+                    start: Some(end + 1),
+                    end: Some(*total),
+                })
+            })
+        })
+        .flatten();
+    Some(InspectionResultMetadata {
+        requested_path,
+        requested_range,
+        returned_path,
+        returned_range,
+        complete,
+        next_range,
+        fingerprint,
+    })
+}
 
 pub(crate) fn stable_arguments_hash(arguments: &serde_json::Value) -> String {
     use std::hash::{Hash, Hasher};
@@ -41,6 +114,7 @@ pub(crate) fn tool_result_from_execution(
     } else {
         Vec::new()
     };
+    let inspection = inspection_result_metadata(tool_name, args, &execution.content, completeness);
     ToolResult {
         tool_name: tool_name.to_string(),
         content: execution.content,
@@ -70,6 +144,7 @@ pub(crate) fn tool_result_from_execution(
                 })
             },
             retryable: execution.retryable,
+            inspection,
         },
     }
 }
@@ -92,6 +167,9 @@ pub(crate) fn finalize_tool_result_for_prefix(
         result.metadata.full_output_artifact = bounded.full_output_artifact;
         if result.metadata.error_kind.is_none() {
             result.metadata.error_kind = Some(crate::tools::ToolErrorKind::OutputLimit);
+        }
+        if let Some(inspection) = result.metadata.inspection.as_mut() {
+            inspection.complete = false;
         }
     }
     normalize_incomplete_metadata(&mut result);
@@ -173,6 +251,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
             error_kind: envelope.error_kind.map(|kind| kind.as_str().to_string()),
             retryable: envelope.retryable,
             replayed: envelope.replayed,
+            inspection: envelope.inspection,
         })
 }
 

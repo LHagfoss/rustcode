@@ -67,6 +67,81 @@ fn model_result_contract_distinguishes_read_completeness_states() {
 }
 
 #[test]
+fn inspection_result_contract_persists_ranges_and_canonical_fingerprint() {
+    let result = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1}),
+        crate::tools::ToolExecutionOutput {
+            content: "[File: src/lib.rs, Lines 1 to 800 of 1000, Bytes offset: 0]\nsource\n[Truncated: lines 801-1000 of 1000]".to_string(),
+            truncated: true,
+            completeness: rustcode_core::ToolResultCompleteness::LineTruncated,
+            ..crate::tools::ToolExecutionOutput::success(String::new())
+        },
+        None,
+    );
+    let inspection = result
+        .metadata
+        .inspection
+        .as_ref()
+        .expect("inspection metadata");
+    assert_eq!(inspection.requested_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(
+        inspection.requested_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: None,
+        })
+    );
+    assert_eq!(inspection.returned_path.as_deref(), Some("src/lib.rs"));
+    assert_eq!(
+        inspection.returned_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(1),
+            end: Some(800),
+        })
+    );
+    assert!(!inspection.complete);
+    assert_eq!(
+        inspection.next_range,
+        Some(rustcode_core::InspectionRange {
+            start: Some(801),
+            end: Some(1000),
+        })
+    );
+    assert_eq!(inspection.fingerprint, "read:src/lib.rs#0");
+
+    let message = tool_result_history_message(result, None);
+    assert!(!message.content.contains("requested_path"));
+    let model = history::to_messages(&[message], "system");
+    let payload = model[1]["content"].as_str().expect("model result");
+    assert!(payload.contains("requested_path"));
+    assert!(payload.contains("next_range"));
+    assert!(payload.contains("fingerprint"));
+}
+
+#[test]
+fn equivalent_inspection_tools_share_a_fingerprint() {
+    let view = tool_result_from_execution(
+        "view_file",
+        &serde_json::json!({"path": "src/lib.rs", "start_line": 1}),
+        crate::tools::ToolExecutionOutput::success(
+            "[File: src/lib.rs, Lines 1 to 2 of 2]\ncode".into(),
+        ),
+        None,
+    );
+    let shell = tool_result_from_execution(
+        "run_command",
+        &serde_json::json!({"command": "sed -n '1,2p' src/lib.rs"}),
+        crate::tools::ToolExecutionOutput::success("code".into()),
+        None,
+    );
+    assert_eq!(
+        view.metadata.inspection.as_ref().unwrap().fingerprint,
+        shell.metadata.inspection.as_ref().unwrap().fingerprint
+    );
+}
+
+#[test]
 fn structured_tool_replay_keeps_metadata_out_of_ui_content_but_in_model_payload() {
     let message = tool_result_history_message(
         ToolResult {
@@ -4070,6 +4145,7 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         full_output_artifact: None,
         replayed: false,
         retryable: false,
+        inspection: None,
     });
     history.push(failed_tool);
 

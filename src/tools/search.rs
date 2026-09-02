@@ -16,7 +16,7 @@ use super::{Tool, ToolCapability, ToolExecutionOutput, ToolSafety};
 
 fn grep_schema() -> Value {
     serde_json::json!({
-        "type": "object",
+        "type": "object", "additionalProperties": false,
         "properties": {
             "pattern": { "type": "string" }, "path": { "type": "string" },
             "include": { "type": "string" }, "ignore_case": { "type": "boolean", "default": false }
@@ -37,7 +37,7 @@ pub const GREP: Tool = Tool {
 
 fn glob_schema() -> Value {
     serde_json::json!({
-        "type": "object", "properties": {
+        "type": "object", "additionalProperties": false, "properties": {
             "pattern": { "type": "string" }, "path": { "type": "string" }
         }, "required": ["pattern"]
     })
@@ -56,7 +56,7 @@ pub const GLOB: Tool = Tool {
 
 fn list_directory_schema() -> Value {
     serde_json::json!({
-        "type": "object", "properties": { "path": { "type": "string" } }
+        "type": "object", "additionalProperties": false, "properties": { "path": { "type": "string" } }
     })
 }
 
@@ -73,7 +73,7 @@ pub const LIST_DIRECTORY: Tool = Tool {
 
 fn find_symbol_schema() -> Value {
     serde_json::json!({
-        "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"]
+        "type": "object", "additionalProperties": false, "properties": { "query": { "type": "string" } }, "required": ["query"]
     })
 }
 
