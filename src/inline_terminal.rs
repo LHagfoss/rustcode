@@ -396,6 +396,39 @@ mod tests {
     }
 
     #[test]
+    fn clear_removes_mutable_viewport_but_preserves_transcript_rows() {
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = InlineTerminal::new(backend).unwrap();
+        terminal
+            .insert_before(2, |buffer| {
+                buffer.set_string(0, 0, "transcript", ratatui::style::Style::default());
+            })
+            .unwrap();
+        terminal
+            .draw_height(4, |frame| {
+                frame.render_widget(ratatui::widgets::Paragraph::new("stale TUI"), frame.area());
+            })
+            .unwrap();
+
+        terminal.clear().unwrap();
+
+        assert_eq!(terminal.area(), Rect::new(0, 2, 40, 4));
+        assert_eq!(
+            terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+            "t"
+        );
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .skip(2 * 40)
+                .all(|cell| cell.symbol().trim().is_empty())
+        );
+    }
+
+    #[test]
     fn resize_replay_clears_old_width_rows_and_resets_viewport() {
         let backend = TestBackend::new(40, 12);
         let mut terminal = InlineTerminal::new(backend).unwrap();

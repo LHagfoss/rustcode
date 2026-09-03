@@ -23,5 +23,9 @@ pub(super) async fn run_update_command(
     terminal_runtime
         .restore()
         .map_err(|error| format!("failed to restore the terminal before updating: {error}"))?;
+    terminal_runtime
+        .terminal()
+        .clear()
+        .map_err(|error| format!("failed to clear the TUI before updating: {error}"))?;
     crate::update::run_update(client, expected_version).await
 }
