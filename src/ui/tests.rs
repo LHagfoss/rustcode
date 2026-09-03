@@ -3802,5 +3802,10 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .iter()
         .position(|line| line.chars().take(60).collect::<String>().contains("● "))
         .expect("context grid should be rendered");
-    assert_eq!(first_grid_row, summary_row + 1);
+    let category_header_row = lines
+        .iter()
+        .position(|line| line.contains("Token usage by category"))
+        .expect("category header should be rendered");
+    assert_eq!(first_grid_row, summary_row);
+    assert_eq!(category_header_row, summary_row + 2);
 }
