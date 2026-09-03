@@ -1851,3 +1851,17 @@ fn list_directory_uses_active_workspace_root_instead_of_process_cwd() {
     set_active_workspace_root(None);
     assert_eq!(result.expect("workspace listing"), "workspace-only.txt");
 }
+
+#[test]
+fn run_command_uses_active_workspace_root_when_cwd_is_omitted() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    std::fs::write(workspace.path().join("workspace-only.txt"), "content")
+        .expect("workspace marker");
+    set_active_workspace_root(Some(workspace.path().to_path_buf()));
+
+    let result = super::exec::run_command(&serde_json::json!({
+        "command": "test -f workspace-only.txt"
+    }));
+    set_active_workspace_root(None);
+    assert!(result.expect("workspace command").contains("exit code: 0"));
+}

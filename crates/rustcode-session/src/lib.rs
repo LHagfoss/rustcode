@@ -17,6 +17,9 @@ pub const IMAGE_CACHE_FILE: &str = "image_cache.json";
 const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
 const MAX_SESSIONS: usize = 30;
 
+mod workspace;
+pub use workspace::*;
+
 /// A history input that exposes immutable messages and, when available, a
 /// mutation revision for queued-write deduplication.
 pub trait HistorySnapshot {
@@ -392,6 +395,10 @@ impl SessionStore {
 
     pub fn get_active_session_artifacts_dir(&self, session_id: &str) -> PathBuf {
         self.session_dir(session_id).join("artifacts")
+    }
+
+    pub fn workspace_manager(&self) -> WorkspaceManager {
+        WorkspaceManager::new(&self.root)
     }
 
     pub fn create_subagent_workspace(

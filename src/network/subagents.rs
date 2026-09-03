@@ -222,7 +222,10 @@ pub(crate) async fn run_subagent(
                 model_name,
                 budget,
                 max_mutating_calls,
-                s.workspace_root.clone(),
+                subagent
+                    .workspace_root
+                    .clone()
+                    .or_else(|| s.workspace_root.clone()),
             )
         };
         compact_history_to_budget(&mut history_snapshot, budget_token_limit).await;
@@ -616,6 +619,26 @@ async fn project_subagent_completion(
                 crate::config::write_subagent_review_manifest(workspace, completion.id.raw())
             })
     };
+    let workspace_lifecycle = match completion.status {
+        crate::app::SubAgentStatus::Completed => rustcode_session::WorkspaceLifecycle::Completed,
+        crate::app::SubAgentStatus::Failed => rustcode_session::WorkspaceLifecycle::Failed,
+        crate::app::SubAgentStatus::Cancelled => rustcode_session::WorkspaceLifecycle::Cancelled,
+        crate::app::SubAgentStatus::Running => rustcode_session::WorkspaceLifecycle::Running,
+    };
+    let workspace_path = {
+        let state = state.lock().await;
+        state
+            .subagents
+            .iter()
+            .find(|agent| agent.id == completion.id.raw())
+            .and_then(|agent| agent.workspace_root.clone())
+    };
+    if let Some(path) = workspace_path
+        && let Some(manager) = crate::config::workspace_manager()
+        && let Ok(Some(descriptor)) = manager.find_by_workspace_path(&path)
+    {
+        let _ = manager.set_lifecycle(&descriptor.id, workspace_lifecycle);
+    }
 
     let mut state = state.lock().await;
     if let Some(agent) = state
@@ -654,6 +677,22 @@ fn launch_subagent_turn(
     supervisor: &crate::app::SubagentSupervisor,
     agent_id: u32,
 ) -> Result<(), crate::app::SubagentError> {
+    let workspace_path = state.try_lock().ok().and_then(|state| {
+        state
+            .subagents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .and_then(|agent| agent.workspace_root.clone())
+    });
+    if let Some(path) = workspace_path
+        && let Some(manager) = crate::config::workspace_manager()
+        && let Ok(Some(descriptor)) = manager.find_by_workspace_path(&path)
+    {
+        let _ = manager.set_lifecycle(
+            &descriptor.id,
+            rustcode_session::WorkspaceLifecycle::Running,
+        );
+    }
     let client = client.clone();
     let child_state = Arc::clone(state);
     let completion_state = Arc::downgrade(state);
@@ -732,6 +771,21 @@ pub(crate) async fn handle_agent_tool(
                 .get("verification_command")
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
+            let workspace_mode = args
+                .get("workspace_mode")
+                .and_then(|value| value.as_str())
+                .unwrap_or("shared");
+            if !matches!(workspace_mode, "shared" | "isolated") {
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: workspace_mode must be `shared` or `isolated`".to_string(),
+                );
+            }
+            if workspace_mode == "isolated" && !write_access {
+                return crate::tools::ToolExecutionOutput::failure(
+                    "error: isolated workspaces require write_access=true and allowed_paths"
+                        .to_string(),
+                );
+            }
             let verification_label = verification_command
                 .as_deref()
                 .unwrap_or("none")
@@ -739,7 +793,63 @@ pub(crate) async fn handle_agent_tool(
             let (agent_id, supervisor) = {
                 let mut s = state.lock().await;
                 let id = s.next_subagent_id;
-                let workspace_root = if write_access {
+                let workspace_root = if workspace_mode == "isolated" {
+                    let Some(base_sha) = args
+                        .get("base_sha")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.trim().is_empty())
+                    else {
+                        return crate::tools::ToolExecutionOutput::failure(
+                            "error: isolated workspaces require an explicit base_sha".to_string(),
+                        );
+                    };
+                    let source_cwd = s
+                        .workspace_root
+                        .clone()
+                        .or_else(|| std::env::current_dir().ok())
+                        .ok_or_else(|| "cannot determine source workspace".to_string());
+                    let Ok(source_cwd) = source_cwd else {
+                        return crate::tools::ToolExecutionOutput::failure(
+                            "error: cannot determine source workspace".to_string(),
+                        );
+                    };
+                    let name = args
+                        .get("workspace_name")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or(&format!("agent-{id}"))
+                        .to_string();
+                    let task_id = args
+                        .get("task_id")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or(&id.to_string())
+                        .to_string();
+                    let mut request = crate::config::WorkspaceRequest::for_task(
+                        source_cwd,
+                        name,
+                        base_sha,
+                        format!("session:{}", s.active_session_id),
+                        s.active_session_id.clone(),
+                        task_id,
+                    );
+                    request.branch = args
+                        .get("branch")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    match crate::config::workspace_manager()
+                        .ok_or_else(|| "workspace persistence unavailable".to_string())
+                        .and_then(|manager| {
+                            manager.create(&request).map_err(|error| error.to_string())
+                        }) {
+                        Ok(descriptor) => Some(descriptor.workspace_path),
+                        Err(error) => {
+                            return crate::tools::ToolExecutionOutput::failure(format!(
+                                "error: unable to create named isolated workspace: {error}"
+                            ));
+                        }
+                    }
+                } else if write_access {
                     match crate::config::create_subagent_workspace(&s.active_session_id, id) {
                         Ok(path) => Some(path),
                         Err(error) => {
@@ -767,7 +877,7 @@ pub(crate) async fn handle_agent_tool(
                 push_status_line(
                     &mut s,
                     format!(
-                        "agent-{id} spawned: {brief} (write_access={write_access}, verify={})",
+                        "agent-{id} spawned: {brief} (write_access={write_access}, workspace_mode={workspace_mode}, verify={})",
                         verification_label
                     ),
                 );
@@ -872,7 +982,27 @@ pub(crate) async fn handle_agent_tool(
             } else {
                 ""
             };
-            let content = format!("subagent {id} {status}\n{}{truncation}", completion.output);
+            let handoff = {
+                let workspace = state
+                    .lock()
+                    .await
+                    .subagents
+                    .iter()
+                    .find(|agent| agent.id == id)
+                    .and_then(|agent| agent.workspace_root.clone());
+                workspace.and_then(|path| {
+                    crate::config::workspace_manager().and_then(|manager| {
+                        manager.handoff_for_workspace_path(&path).ok().flatten()
+                    })
+                })
+            };
+            let handoff = handoff
+                .map(|value| format!("\n\n{value}"))
+                .unwrap_or_default();
+            let content = format!(
+                "subagent {id} {status}\n{}{truncation}{handoff}",
+                completion.output
+            );
             if completion.status == crate::app::SubAgentStatus::Completed {
                 let mut output = crate::tools::ToolExecutionOutput::success(content);
                 if completion.truncated {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::ChatMessage;
 use rustcode_session::SessionStore;
-pub use rustcode_session::{HistorySnapshot, SessionMeta};
+pub use rustcode_session::{HistorySnapshot, SessionMeta, WorkspaceManager, WorkspaceRequest};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -150,6 +150,10 @@ pub fn get_active_session_sandbox_dir(session_id: &str) -> Option<PathBuf> {
 
 pub fn get_active_session_artifacts_dir(session_id: &str) -> Option<PathBuf> {
     store().map(|session_store| session_store.get_active_session_artifacts_dir(session_id))
+}
+
+pub fn workspace_manager() -> Option<WorkspaceManager> {
+    store().map(|session_store| session_store.workspace_manager())
 }
 
 pub fn create_subagent_workspace(session_id: &str, agent_id: u32) -> Result<PathBuf, String> {

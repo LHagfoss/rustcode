@@ -258,6 +258,7 @@ pub fn build_help_text() -> String {
                 ("/new", "Start a new conversation"),
                 ("/fork", "Fork the current conversation into a new session"),
                 ("/archive", "Persist the current session"),
+                ("/workspace", "Manage an isolated task workspace"),
                 ("/agents", "Browse subagent conversation contexts"),
                 ("/delete_chat", "Delete current session and start fresh"),
                 ("/history", "Pick a previous session to resume"),
