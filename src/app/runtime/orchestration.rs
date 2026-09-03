@@ -2,6 +2,8 @@ use super::*;
 use rustcode_tasks::TaskEvent;
 use std::sync::mpsc::TryRecvError;
 
+const IDLE_SUMMARY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 fn record_active_background_task(
     state: &mut crate::app::AppState,
     task_id: &str,
@@ -132,6 +134,26 @@ impl AppRuntime {
                 apply_background_task_event(&app_state, event).await;
                 needs_redraw = true;
             }
+
+            let idle_summary_due = {
+                let mut state = app_state.lock().await;
+                let background_tasks_active =
+                    crate::tools::has_background_tasks(&state.active_session_id);
+                let due = state.should_start_idle_summary(
+                    std::time::Instant::now(),
+                    background_tasks_active,
+                    IDLE_SUMMARY_AFTER,
+                );
+                if due { state.claim_summary() } else { false }
+            };
+            if idle_summary_due {
+                let state_clone = std::sync::Arc::clone(&app_state);
+                let client_clone = client.clone();
+                tokio::spawn(async move {
+                    crate::app::summarize_session_after_idle(&state_clone, &client_clone).await;
+                });
+            }
+
             task_subscriptions.retain(|session_id, _| {
                 session_id == &active_session_id || manager.has_running(session_id)
             });
@@ -239,7 +261,7 @@ impl AppRuntime {
 
             {
                 let mut s = app_state.lock().await;
-                if !s.orchestrator_running && !s.pending_queue.is_empty() {
+                if !s.summary_in_flight && !s.orchestrator_running && !s.pending_queue.is_empty() {
                     s.orchestrator_running = true;
                     s.status = AppStatus::Queued;
                     let client_clone = client.clone();

@@ -60,9 +60,27 @@ const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 16_000;
 const MAX_SUMMARY_TOOL_CHARS: usize = 300;
 
 pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
+    summarize_session_inner(state_arc, client, false).await;
+}
+
+pub(crate) async fn summarize_session_after_idle(
+    state_arc: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+) {
+    summarize_session_inner(state_arc, client, true).await;
+}
+
+async fn summarize_session_inner(
+    state_arc: &Arc<Mutex<AppState>>,
+    client: &reqwest::Client,
+    already_claimed: bool,
+) {
     let started = std::time::Instant::now();
-    let (api_base_url, model_name, transcript) = {
+    let (api_base_url, model_name, transcript, captured_session_id, captured_history_len) = {
         let mut s = state_arc.lock().await;
+        if !already_claimed && !s.claim_summary() {
+            return;
+        }
 
         // Flatten the chat into a single plain transcript. Sending the raw
         // history (system/assistant/tool roles) through the request builder's
@@ -110,7 +128,13 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
         s.generation_start_time = Some(started);
         s.clear_current_response();
 
-        (s.api_base_url.clone(), s.model_name.clone(), transcript)
+        (
+            s.api_base_url.clone(),
+            s.model_name.clone(),
+            transcript,
+            s.active_session_id.clone(),
+            s.history.len(),
+        )
     };
 
     dbg_log!(
@@ -126,6 +150,7 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
         s.generation_start_time = None;
         s.history
             .push(ChatMessage::new("system", "Nothing to summarize yet."));
+        s.finish_summary();
         s.request_redraw();
         return;
     }
@@ -161,6 +186,12 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
     let elapsed = started.elapsed().as_secs_f32();
 
     let mut s = state_arc.lock().await;
+    if s.active_session_id != captured_session_id || s.history.len() != captured_history_len {
+        s.summary_in_flight = false;
+        s.clear_current_response();
+        s.request_redraw();
+        return;
+    }
     s.status = AppStatus::Idle;
     s.generation_start_time = None;
     s.clear_current_response();
@@ -194,6 +225,8 @@ pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwes
             ));
         }
     }
+    s.finish_summary();
+    crate::config::save_session_history(&captured_session_id, &s.history);
     s.request_redraw();
 }
 
