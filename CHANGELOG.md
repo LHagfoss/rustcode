@@ -1,3 +1,8 @@
+## [v0.51.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.1) - 2026-09-03
+
+### Fixes
+- **Idle conversation recaps:** Give automatically generated idle summaries a deterministic `Conversation recap` heading without changing manual summaries ([#947](https://github.com/LHagfoss/rustcode/pull/947)).
+
 ## [v0.51.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.0) - 2026-09-03
 
 ### Features
