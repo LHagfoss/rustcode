@@ -1,3 +1,8 @@
+## [v0.51.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.3) - 2026-09-03
+
+### Fixes
+- **Idle recap cleanup:** Remove leaked model reasoning, bound automatic recaps by words without visible ellipsis truncation, suppress empty reasoning-only recaps, and match the `Worked for` separator layout ([#952](https://github.com/LHagfoss/rustcode/pull/952)).
+
 ## [v0.51.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.2) - 2026-09-03
 
 ### Fixes
