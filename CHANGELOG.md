@@ -1,3 +1,8 @@
+## [v0.51.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.2) - 2026-09-03
+
+### Fixes
+- **Codex-style idle conversation recaps:** Show automatic summaries as compact one- or two-sentence `Conversation recap` blocks, keep them out of model context, and preserve detailed manual `/summarize` output ([#950](https://github.com/LHagfoss/rustcode/pull/950)).
+
 ## [v0.51.1](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.1) - 2026-09-03
 
 ### Fixes
