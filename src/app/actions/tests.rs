@@ -1,4 +1,18 @@
-use super::{handle_ctrl_c, parse_token_count};
+use super::{handle_ctrl_c, label_idle_summary, parse_token_count};
+
+#[test]
+fn idle_summary_has_a_deterministic_recap_heading() {
+    assert_eq!(
+        label_idle_summary("# Summary\n\nThe session is complete."),
+        "## Conversation recap\n\n# Summary\n\nThe session is complete."
+    );
+}
+
+#[test]
+fn idle_summary_does_not_duplicate_an_existing_recap_heading() {
+    let summary = "## Conversation recap\n\nThe session is complete.";
+    assert_eq!(label_idle_summary(summary), summary);
+}
 
 async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
