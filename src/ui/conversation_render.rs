@@ -331,15 +331,14 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
     }
-    let label = "Conversation recap";
+    let label = "─ Conversation recap ─";
     let line_style = get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false);
     let label_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
     let label_width = label.width();
     let mut lines = vec![Line::from(vec![
         Span::styled(label, label_style),
-        Span::styled(" ", line_style),
         Span::styled(
-            "─".repeat((width as usize).saturating_sub(label_width + 1)),
+            "─".repeat((width as usize).saturating_sub(label_width)),
             line_style,
         ),
     ])];

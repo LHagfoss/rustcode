@@ -9,10 +9,28 @@ fn idle_summary_removes_headings_and_bullets() {
 }
 
 #[test]
-fn idle_summary_is_bounded_to_a_single_compact_block() {
+fn idle_summary_strips_reasoning_before_compacting() {
+    assert_eq!(
+        compact_idle_summary(
+            "<think>Planning the recap and listing every detail.</think>\n\nThe task is complete and tests pass."
+        ),
+        "The task is complete and tests pass."
+    );
+}
+
+#[test]
+fn idle_summary_drops_reasoning_only_responses() {
+    assert_eq!(
+        compact_idle_summary("<think>Still planning the recap.</think>"),
+        ""
+    );
+}
+
+#[test]
+fn idle_summary_is_bounded_by_words_without_an_ellipsis() {
     let summary = compact_idle_summary(&"important status ".repeat(100));
-    assert!(summary.chars().count() <= 280);
-    assert!(summary.ends_with('…'));
+    assert!(summary.split_whitespace().count() <= 32);
+    assert!(!summary.ends_with('…'));
 }
 
 async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {
