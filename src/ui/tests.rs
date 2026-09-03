@@ -2963,6 +2963,34 @@ fn committed_assistant_message_has_one_trailing_separator() {
 }
 
 #[test]
+fn conversation_recap_renders_as_compact_labeled_block() {
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new(
+            "assistant",
+            "The implementation is complete; cargo test passes and the next step is review.",
+        )
+        .as_conversation_recap(),
+    );
+
+    let rendered = super::render_committed_history_block(&state, 0, 80);
+    let text = rendered
+        .iter()
+        .map(ratatui::text::Line::to_string)
+        .collect::<Vec<_>>();
+
+    assert!(text[0].starts_with("Conversation recap"));
+    assert_eq!(text[0].chars().count(), 80);
+    assert_eq!(text[1], "");
+    assert_eq!(
+        text[2],
+        "The implementation is complete; cargo test passes and the next step is review."
+    );
+    assert_eq!(text[3], "");
+    assert!(!text.iter().any(|line| line.contains("• ")));
+}
+
+#[test]
 fn committed_assistant_message_uses_saved_thought_metrics() {
     let mut state = AppState::new();
     let mut message = ChatMessage::new("assistant", "<think>Planning.</think>Finished.");
