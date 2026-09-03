@@ -2979,7 +2979,7 @@ fn conversation_recap_renders_as_compact_labeled_block() {
         .map(ratatui::text::Line::to_string)
         .collect::<Vec<_>>();
 
-    assert!(text[0].starts_with("Conversation recap"));
+    assert!(text[0].starts_with("─ Conversation recap ─"));
     assert_eq!(text[0].chars().count(), 80);
     assert_eq!(text[1], "");
     assert_eq!(
