@@ -145,6 +145,9 @@ pub(crate) fn to_messages(
         .collect();
 
     for message in history {
+        if message.conversation_recap {
+            continue;
+        }
         let orphan_result = message
             .tool_call_id
             .as_deref()
@@ -474,6 +477,19 @@ mod tests {
         let messages = to_messages(&history, "system");
         assert_eq!(messages[3]["role"], "user");
         assert!(messages[3]["content"].as_str().unwrap().contains("grep:"));
+    }
+
+    #[test]
+    fn does_not_replay_ui_conversation_recaps_to_the_model() {
+        let history = vec![
+            ChatMessage::new("user", "inspect this"),
+            ChatMessage::new("assistant", "short recap").as_conversation_recap(),
+            ChatMessage::new("assistant", "I inspected it."),
+        ];
+
+        let messages = to_messages(&history, "system");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2]["content"], "I inspected it.");
     }
 
     #[test]
