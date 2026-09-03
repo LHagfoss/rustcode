@@ -113,6 +113,7 @@ pub(super) async fn handle_app_event(
         AppEvent::Tui(ev) => match ev {
             TuiEvent::Key(key) => {
                 *needs_redraw = true;
+                app_state.lock().await.mark_user_activity();
                 let is_ctrl = key.modifiers.contains(event::KeyModifiers::CONTROL);
                 let is_cmd = key.modifiers.contains(event::KeyModifiers::SUPER);
 
@@ -1593,6 +1594,7 @@ pub(super) async fn handle_app_event(
                 *needs_redraw = true;
             }
             TuiEvent::Paste(text) => {
+                app_state.lock().await.mark_user_activity();
                 // Terminals with bracketed paste enabled deliver Cmd+V through
                 // this event instead of the Char('v') key handler. When the
                 // clipboard holds an image (e.g. a screenshot), the pasted text

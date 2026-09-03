@@ -160,6 +160,8 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.pending_queue.clear();
     s.background_wakeup_ids.clear();
     s.background_turn_context = None;
+    s.last_user_activity_at = std::time::Instant::now();
+    s.last_summary_history_len = None;
     s.image_analysis_cache.clear();
     s.clear_current_response();
     s.current_thought_time_ms = 0;
