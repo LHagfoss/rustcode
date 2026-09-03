@@ -58,10 +58,13 @@ const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 16_000;
 /// Tool outputs are the bulk of a session's bytes but low signal for a summary;
 /// keep only a head of each so the transcript stays small and fast.
 const MAX_SUMMARY_TOOL_CHARS: usize = 300;
-const MAX_IDLE_SUMMARY_CHARS: usize = 280;
+const MAX_IDLE_SUMMARY_WORDS: usize = 32;
 
 pub(crate) fn compact_idle_summary(content: &str) -> String {
-    let text = content
+    // Some models put their recap inside their reasoning stream. Remove that
+    // before applying the compacting rules so the UI never exposes scratchpad
+    // text or truncates the actual answer after a long `<think>` block.
+    let text = crate::network::text::strip_think_blocks(content)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -69,20 +72,10 @@ pub(crate) fn compact_idle_summary(content: &str) -> String {
         .filter(|line| !line.eq_ignore_ascii_case("conversation recap"))
         .collect::<Vec<_>>()
         .join(" ");
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() <= MAX_IDLE_SUMMARY_CHARS {
-        return text;
-    }
-
-    let mut compact = text
-        .chars()
-        .take(MAX_IDLE_SUMMARY_CHARS.saturating_sub(1))
-        .collect::<String>();
-    if let Some(index) = compact.rfind(char::is_whitespace) {
-        compact.truncate(index);
-    }
-    compact.push('…');
-    compact
+    text.split_whitespace()
+        .take(MAX_IDLE_SUMMARY_WORDS)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
@@ -183,7 +176,7 @@ async fn summarize_session_inner(
     }
 
     let instruction = if compact {
-        "You are writing a conversation recap for a coding assistant UI. Return only one or two concise sentences (maximum 280 characters) describing the current task state, the most important work or validation, any blocker, and the next step. Start directly with the status. Use plain text only: no title, headings, bullets, labels, Markdown, preamble, or transcript."
+        "You are writing a conversation recap for a coding assistant UI. Return only one or two concise sentences (maximum 32 words) describing the current task state, the most important work or validation, any blocker, and the next step. Finish the sentences within the limit. Start directly with the status. Use plain text only: no title, headings, bullets, labels, Markdown, preamble, reasoning, or transcript."
     } else {
         "You are summarizing a coding assistant session. Produce a concise, structured summary with these sections: Problem, What was done, Current state, Open problems, Next steps. Omit a section if it has nothing. Be specific about files and decisions."
     };
@@ -240,12 +233,16 @@ async fn summarize_session_inner(
             } else {
                 summary_content
             };
-            let mut msg = ChatMessage::new("assistant", summary_content);
-            if compact {
-                msg = msg.as_conversation_recap();
+            if compact && summary_content.is_empty() {
+                dbg_log!("[SUMMARIZE] compact response contained no visible answer");
+            } else {
+                let mut msg = ChatMessage::new("assistant", summary_content);
+                if compact {
+                    msg = msg.as_conversation_recap();
+                }
+                msg.response_time_ms = Some((elapsed * 1000.0) as u64);
+                s.history.push(msg);
             }
-            msg.response_time_ms = Some((elapsed * 1000.0) as u64);
-            s.history.push(msg);
         }
         Ok(_) => {
             dbg_log!("[SUMMARIZE] empty response after {:.1}s", elapsed);
