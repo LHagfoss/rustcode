@@ -236,6 +236,8 @@ pub async fn handle_enter(
                 }
             }
 
+            "/workspace" => handle_workspace_command(&mut s, &tokens),
+
             "/cancel" => {
                 cancel_token.cancel();
                 *cancel_token = tokio_util::sync::CancellationToken::new();
@@ -1054,4 +1056,166 @@ pub async fn handle_enter(
         });
     }
     false
+}
+
+fn handle_workspace_command(s: &mut AppState, tokens: &[&str]) {
+    let Some(action) = tokens.get(1).copied() else {
+        s.history.push(ChatMessage::new(
+            "system",
+            "Usage: /workspace create <base_sha> [branch] [name] | status | archive | cleanup confirm [delete-branch]",
+        ));
+        return;
+    };
+    let Some(manager) = crate::config::workspace_manager() else {
+        s.history.push(ChatMessage::new(
+            "system",
+            "Workspace persistence is unavailable.",
+        ));
+        return;
+    };
+    match action {
+        "create" => {
+            let Some(base_sha) = tokens.get(2).copied().filter(|value| !value.is_empty()) else {
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "Usage: /workspace create <base_sha> [branch] [name]",
+                ));
+                return;
+            };
+            let source = s
+                .workspace_root
+                .clone()
+                .or_else(|| std::env::current_dir().ok());
+            let Some(source) = source else {
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "Cannot determine the source workspace.",
+                ));
+                return;
+            };
+            let name = tokens.get(4).copied().unwrap_or("main-task");
+            let mut request = crate::config::WorkspaceRequest::for_task(
+                source,
+                name,
+                base_sha,
+                format!("session:{}", s.active_session_id),
+                s.active_session_id.clone(),
+                "main",
+            );
+            request.branch = tokens.get(3).map(|value| (*value).to_string());
+            match manager.create(&request) {
+                Ok(descriptor) => {
+                    s.workspace_root = Some(descriptor.workspace_path.clone());
+                    s.history.push(ChatMessage::new(
+                        "system",
+                        format!(
+                            "Isolated workspace active at {} on branch {} from base {}.",
+                            descriptor.workspace_path.display(),
+                            descriptor.branch,
+                            descriptor.base_sha
+                        ),
+                    ));
+                }
+                Err(error) => s.history.push(ChatMessage::new(
+                    "system",
+                    format!("Unable to create isolated workspace: {error}"),
+                )),
+            }
+        }
+        "status" => {
+            let Some(path) = s.workspace_root.as_deref() else {
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "No isolated workspace is active.",
+                ));
+                return;
+            };
+            match manager.handoff_for_workspace_path(path) {
+                Ok(Some(handoff)) => s.history.push(ChatMessage::new("system", handoff)),
+                Ok(None) => s.history.push(ChatMessage::new(
+                    "system",
+                    format!("No RustCode workspace descriptor owns {}.", path.display()),
+                )),
+                Err(error) => s.history.push(ChatMessage::new(
+                    "system",
+                    format!("Unable to inspect workspace: {error}"),
+                )),
+            }
+        }
+        "archive" => {
+            let Some(path) = s.workspace_root.as_deref() else {
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "No isolated workspace is active.",
+                ));
+                return;
+            };
+            match manager.find_by_workspace_path(path) {
+                Ok(Some(descriptor)) => match manager.cleanup(
+                    &descriptor.id,
+                    rustcode_session::CleanupAction::Archive,
+                    false,
+                ) {
+                    Ok(_) => s.history.push(ChatMessage::new(
+                        "system",
+                        "Workspace archived and retained for review.",
+                    )),
+                    Err(error) => s.history.push(ChatMessage::new(
+                        "system",
+                        format!("Unable to archive workspace: {error}"),
+                    )),
+                },
+                Ok(None) => s.history.push(ChatMessage::new(
+                    "system",
+                    "No RustCode workspace descriptor owns the active path.",
+                )),
+                Err(error) => s.history.push(ChatMessage::new(
+                    "system",
+                    format!("Unable to find workspace: {error}"),
+                )),
+            }
+        }
+        "cleanup" => {
+            let Some(path) = s.workspace_root.as_deref() else {
+                s.history.push(ChatMessage::new(
+                    "system",
+                    "No isolated workspace is active.",
+                ));
+                return;
+            };
+            let confirmed = tokens.get(2) == Some(&"confirm");
+            let delete_branch = tokens.get(3) == Some(&"delete-branch");
+            match manager.find_by_workspace_path(path) {
+                Ok(Some(descriptor)) => match manager.cleanup(
+                    &descriptor.id,
+                    rustcode_session::CleanupAction::Remove { delete_branch },
+                    confirmed,
+                ) {
+                    Ok(_) => {
+                        s.workspace_root = None;
+                        s.history.push(ChatMessage::new(
+                            "system",
+                            "Isolated workspace removed. Source checkout was not changed.",
+                        ));
+                    }
+                    Err(error) => s.history.push(ChatMessage::new(
+                        "system",
+                        format!("Workspace cleanup was not performed: {error}"),
+                    )),
+                },
+                Ok(None) => s.history.push(ChatMessage::new(
+                    "system",
+                    "No RustCode workspace descriptor owns the active path.",
+                )),
+                Err(error) => s.history.push(ChatMessage::new(
+                    "system",
+                    format!("Unable to find workspace: {error}"),
+                )),
+            }
+        }
+        _ => s.history.push(ChatMessage::new(
+            "system",
+            "Unknown workspace action. Use create, status, archive, or cleanup.",
+        )),
+    }
 }

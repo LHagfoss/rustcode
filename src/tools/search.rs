@@ -739,8 +739,10 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
         .and_then(|q| q.as_str())
         .ok_or("missing 'query' argument")?;
 
-    let cwd =
-        std::env::current_dir().map_err(|e| format!("cannot determine current directory: {e}"))?;
+    let cwd = super::current_tool_context()
+        .workspace_root
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("cannot determine current directory")?;
 
     let _ = crate::symbols::update_index(&cwd);
 
@@ -769,8 +771,10 @@ pub fn find_symbol_tool(args: &Value) -> Result<String, String> {
 }
 
 pub fn get_project_map_tool(_args: &Value) -> Result<String, String> {
-    let cwd =
-        std::env::current_dir().map_err(|e| format!("cannot determine current directory: {e}"))?;
+    let cwd = super::current_tool_context()
+        .workspace_root
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("cannot determine current directory")?;
 
     let _ = crate::symbols::update_index(&cwd);
 
