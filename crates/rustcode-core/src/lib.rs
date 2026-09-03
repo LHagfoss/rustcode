@@ -302,6 +302,11 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_boundary: Option<CompactionBoundary>,
+    /// A UI-only recap inserted after an idle period. It is persisted for
+    /// transcript continuity but must not be replayed to the model as an
+    /// assistant turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conversation_recap: bool,
 }
 
 impl ChatMessage {
@@ -320,6 +325,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             tool_call_id: None,
             compaction_boundary: None,
+            conversation_recap: false,
         }
     }
 
@@ -350,6 +356,11 @@ impl ChatMessage {
 
     pub fn with_compaction_boundary(mut self, boundary: CompactionBoundary) -> Self {
         self.compaction_boundary = Some(boundary);
+        self
+    }
+
+    pub fn as_conversation_recap(mut self) -> Self {
+        self.conversation_recap = true;
         self
     }
 }

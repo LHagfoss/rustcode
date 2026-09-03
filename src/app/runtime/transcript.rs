@@ -146,7 +146,7 @@ pub(super) fn commit_transcript(
             }
             index = group_end;
             continue;
-        } else if message.role == "assistant" {
+        } else if message.role == "assistant" && !message.conversation_recap {
             let separator = crate::ui::render_work_separator_before_assistant_snapshot(
                 snapshot,
                 index,
