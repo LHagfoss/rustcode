@@ -146,7 +146,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "/summarize",
-        desc: "Summarize the current chat session",
+        desc: "Summarize the current chat session now (also runs after inactivity)",
     },
     CommandInfo {
         name: "/sync",

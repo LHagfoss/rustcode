@@ -39,6 +39,14 @@ pub struct AppState {
     /// concurrent orchestrator — two turns streaming the same history produced
     /// duplicate assistant messages. Spawns gate on this instead.
     pub orchestrator_running: bool,
+    /// Time of the most recent keyboard or paste activity. This only controls
+    /// the interactive idle-summary timer and is not persisted.
+    pub(crate) last_user_activity_at: std::time::Instant,
+    /// Prevents manual and automatic summaries from running concurrently.
+    pub(crate) summary_in_flight: bool,
+    /// History length at which the last summary completed. A changed history
+    /// is required before the idle timer can summarize again.
+    pub(crate) last_summary_history_len: Option<usize>,
     pub cursor_position: usize,
 
     pub suggestion_cycle: crate::app::suggestion::SuggestionCycle,
@@ -319,6 +327,42 @@ impl AppState {
     pub fn request_redraw(&mut self) {
         self.redraw_requested = true;
         self.render_revision = self.render_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn mark_user_activity(&mut self) {
+        self.last_user_activity_at = std::time::Instant::now();
+    }
+
+    pub(crate) fn should_start_idle_summary(
+        &self,
+        now: std::time::Instant,
+        background_tasks_active: bool,
+        idle_after: std::time::Duration,
+    ) -> bool {
+        self.status == AppStatus::Idle
+            && !self.orchestrator_running
+            && self.pending_queue.is_empty()
+            && !self.summary_in_flight
+            && !background_tasks_active
+            && !self.modal_open()
+            && self.input_buffer.trim().is_empty()
+            && self.history.len() >= 2
+            && self.last_summary_history_len != Some(self.history.len())
+            && now.duration_since(self.last_user_activity_at) >= idle_after
+    }
+
+    pub(crate) fn claim_summary(&mut self) -> bool {
+        if self.summary_in_flight {
+            return false;
+        }
+        self.summary_in_flight = true;
+        true
+    }
+
+    pub(crate) fn finish_summary(&mut self) {
+        self.summary_in_flight = false;
+        self.last_summary_history_len = Some(self.history.len());
+        self.last_user_activity_at = std::time::Instant::now();
     }
 
     /// Clear the pending Ctrl+C exit confirmation, invalidating the footer
@@ -620,6 +664,9 @@ impl AppState {
             background_turn_context: None,
             status: AppStatus::Idle,
             orchestrator_running: false,
+            last_user_activity_at: std::time::Instant::now(),
+            summary_in_flight: false,
+            last_summary_history_len: None,
             cursor_position: 0,
             suggestion_cycle: crate::app::suggestion::SuggestionCycle::new(),
             response_time: None,
@@ -1266,6 +1313,9 @@ mod history_tests;
 #[cfg(test)]
 #[path = "state/hover_tests.rs"]
 mod hover_tests;
+#[cfg(test)]
+#[path = "state/idle_summary_tests.rs"]
+mod idle_summary_tests;
 #[cfg(test)]
 #[path = "state/input_history_tests.rs"]
 mod input_history_tests;
