@@ -1,17 +1,18 @@
-use super::{handle_ctrl_c, label_idle_summary, parse_token_count};
+use super::{compact_idle_summary, handle_ctrl_c, parse_token_count};
 
 #[test]
-fn idle_summary_has_a_deterministic_recap_heading() {
+fn idle_summary_removes_headings_and_bullets() {
     assert_eq!(
-        label_idle_summary("# Summary\n\nThe session is complete."),
-        "## Conversation recap\n\n# Summary\n\nThe session is complete."
+        compact_idle_summary("## Conversation recap\n\n- The session is complete."),
+        "The session is complete."
     );
 }
 
 #[test]
-fn idle_summary_does_not_duplicate_an_existing_recap_heading() {
-    let summary = "## Conversation recap\n\nThe session is complete.";
-    assert_eq!(label_idle_summary(summary), summary);
+fn idle_summary_is_bounded_to_a_single_compact_block() {
+    let summary = compact_idle_summary(&"important status ".repeat(100));
+    assert!(summary.chars().count() <= 280);
+    assert!(summary.ends_with('…'));
 }
 
 async fn pending_response_server() -> (String, tokio::sync::oneshot::Receiver<()>) {

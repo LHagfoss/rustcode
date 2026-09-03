@@ -58,33 +58,49 @@ const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 16_000;
 /// Tool outputs are the bulk of a session's bytes but low signal for a summary;
 /// keep only a head of each so the transcript stays small and fast.
 const MAX_SUMMARY_TOOL_CHARS: usize = 300;
-const IDLE_SUMMARY_TITLE: &str = "Conversation recap";
+const MAX_IDLE_SUMMARY_CHARS: usize = 280;
 
-pub(crate) fn label_idle_summary(content: &str) -> String {
-    let first_line = content.lines().next().unwrap_or_default().trim();
-    let first_line_title = first_line.trim_start_matches('#').trim();
-    if first_line_title.eq_ignore_ascii_case(IDLE_SUMMARY_TITLE) {
-        content.to_owned()
-    } else {
-        format!("## {IDLE_SUMMARY_TITLE}\n\n{content}")
+pub(crate) fn compact_idle_summary(content: &str) -> String {
+    let text = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim_start_matches(['#', '-', '*', '•']).trim())
+        .filter(|line| !line.eq_ignore_ascii_case("conversation recap"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= MAX_IDLE_SUMMARY_CHARS {
+        return text;
     }
+
+    let mut compact = text
+        .chars()
+        .take(MAX_IDLE_SUMMARY_CHARS.saturating_sub(1))
+        .collect::<String>();
+    if let Some(index) = compact.rfind(char::is_whitespace) {
+        compact.truncate(index);
+    }
+    compact.push('…');
+    compact
 }
 
 pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
-    summarize_session_inner(state_arc, client, false).await;
+    summarize_session_inner(state_arc, client, false, false).await;
 }
 
 pub(crate) async fn summarize_session_after_idle(
     state_arc: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
 ) {
-    summarize_session_inner(state_arc, client, true).await;
+    summarize_session_inner(state_arc, client, true, true).await;
 }
 
 async fn summarize_session_inner(
     state_arc: &Arc<Mutex<AppState>>,
     client: &reqwest::Client,
     already_claimed: bool,
+    compact: bool,
 ) {
     let started = std::time::Instant::now();
     let (api_base_url, model_name, transcript, captured_session_id, captured_history_len) = {
@@ -166,10 +182,15 @@ async fn summarize_session_inner(
         return;
     }
 
+    let instruction = if compact {
+        "You are writing a conversation recap for a coding assistant UI. Return only one or two concise sentences (maximum 280 characters) describing the current task state, the most important work or validation, any blocker, and the next step. Start directly with the status. Use plain text only: no title, headings, bullets, labels, Markdown, preamble, or transcript."
+    } else {
+        "You are summarizing a coding assistant session. Produce a concise, structured summary with these sections: Problem, What was done, Current state, Open problems, Next steps. Omit a section if it has nothing. Be specific about files and decisions."
+    };
     let messages = vec![
         serde_json::json!({
             "role": "system",
-            "content": "You are summarizing a coding assistant session. Produce a concise, structured summary with these sections: Problem, What was done, Current state, Open problems, Next steps. Omit a section if it has nothing. Be specific about files and decisions."
+            "content": instruction
         }),
         serde_json::json!({ "role": "user", "content": format!("Summarize this session transcript:\n\n{transcript}") }),
     ];
@@ -214,15 +235,15 @@ async fn summarize_session_inner(
                 elapsed,
                 summary_content.len()
             );
-            // Post as an assistant message so it renders as a normal model reply
-            // (chat bubble), not a system Notice/Warning — the summary text often
-            // contains words like "error"/"loop" that would trip the warning style.
-            let summary_content = if already_claimed {
-                label_idle_summary(&summary_content)
+            let summary_content = if compact {
+                compact_idle_summary(&summary_content)
             } else {
                 summary_content
             };
             let mut msg = ChatMessage::new("assistant", summary_content);
+            if compact {
+                msg = msg.as_conversation_recap();
+            }
             msg.response_time_ms = Some((elapsed * 1000.0) as u64);
             s.history.push(msg);
         }

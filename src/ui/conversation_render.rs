@@ -205,6 +205,10 @@ pub(crate) fn render_committed_history_block_snapshot(
     let mut lines = Vec::new();
     let show_picker = false;
 
+    if message.conversation_recap {
+        return render_conversation_recap(&message.content, width);
+    }
+
     match message.role.as_str() {
         "user" => {
             let prefix_style =
@@ -320,6 +324,28 @@ pub(crate) fn render_committed_history_block_snapshot(
         _ => {}
     }
 
+    lines.into_iter().map(|line| own_line(&line)).collect()
+}
+
+fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let label = "Conversation recap";
+    let line_style = get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false);
+    let label_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
+    let label_width = label.width();
+    let mut lines = vec![Line::from(vec![
+        Span::styled(label, label_style),
+        Span::styled(" ", line_style),
+        Span::styled(
+            "─".repeat((width as usize).saturating_sub(label_width + 1)),
+            line_style,
+        ),
+    ])];
+    lines.push(Line::from(""));
+    lines.extend(render_markdown(content, width as usize, false, true));
+    lines.push(Line::from(""));
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
 
