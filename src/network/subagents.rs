@@ -125,6 +125,34 @@ fn prepare_subagent_tool_batch(
     (requested_calls, dropped_calls.len(), validation)
 }
 
+fn parse_subagent_tool_calls(
+    content: &str,
+    protocol: crate::config::ToolProtocol,
+    native_tool_calls: Vec<crate::tools::ToolCallEnvelope>,
+) -> Vec<(crate::tools::ToolCall, Option<String>)> {
+    if protocol == crate::config::ToolProtocol::ApiNative {
+        return native_tool_calls
+            .into_iter()
+            .map(|call| {
+                let call_id = call.call_id;
+                (
+                    crate::tools::ToolCall {
+                        name: call.tool_name,
+                        arguments: call.arguments,
+                        call_id: Some(call_id.clone()),
+                    },
+                    Some(call_id),
+                )
+            })
+            .collect();
+    }
+
+    crate::tools::parse_tool_call(content, protocol)
+        .map(|call| (call, None))
+        .into_iter()
+        .collect()
+}
+
 pub(crate) async fn run_subagent(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
@@ -320,27 +348,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         }
 
         let protocol = { state.lock().await.active_tool_protocol() };
-        let mut parsed_calls = if native_tool_calls.is_empty() {
-            crate::tools::parse_tool_call(&content, protocol)
-                .map(|call| (call, None))
-                .into_iter()
-                .collect::<Vec<_>>()
-        } else {
-            native_tool_calls
-                .into_iter()
-                .map(|call| {
-                    let call_id = call.call_id;
-                    (
-                        crate::tools::ToolCall {
-                            name: call.tool_name,
-                            arguments: call.arguments,
-                            call_id: Some(call_id.clone()),
-                        },
-                        Some(call_id),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
+        let mut parsed_calls = parse_subagent_tool_calls(&content, protocol, native_tool_calls);
 
         if !parsed_calls.is_empty() {
             let (requested_calls, dropped_calls, validation) =
@@ -1157,6 +1165,31 @@ mod tests {
                 .unwrap()
                 .contains("byte_truncated")
         );
+    }
+
+    #[test]
+    fn api_native_subagent_ignores_text_tool_syntax_without_native_calls() {
+        let calls = parse_subagent_tool_calls(
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"decoy\"}}\n```",
+            crate::config::ToolProtocol::ApiNative,
+            Vec::new(),
+        );
+
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn text_protocol_subagent_still_parses_tool_syntax() {
+        let calls = parse_subagent_tool_calls(
+            "```tool\n{\"name\":\"grep\",\"arguments\":{\"pattern\":\"needle\"}}\n```",
+            crate::config::ToolProtocol::Json,
+            Vec::new(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0.name, "grep");
+        assert_eq!(calls[0].0.arguments["pattern"], "needle");
+        assert!(calls[0].1.is_none());
     }
 
     #[tokio::test]
