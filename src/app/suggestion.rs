@@ -89,6 +89,10 @@ pub const COMMANDS: &[CommandInfo] = &[
         desc: "Allow subagents for the next task only",
     },
     CommandInfo {
+        name: "/workspace",
+        desc: "Manage an isolated task workspace",
+    },
+    CommandInfo {
         name: "/ollama",
         desc: "Configure or list Ollama models",
     },

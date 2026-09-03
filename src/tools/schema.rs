@@ -12,7 +12,7 @@ pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     (
         "spawn_agent",
         "Start an asynchronous read-only subagent and return its id. Use wait_agent for completion. Write access, allowed paths, and verification must be explicit.",
-        r#"{"task": "task description", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test"}"#,
+        r#"{"task": "task description", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test", "workspace_mode": "shared", "base_sha": "origin/main"}"#,
     ),
     (
         "send_agent",
@@ -941,7 +941,7 @@ pub(super) fn schema_for_tool(name: &str) -> Value {
 pub(super) fn schema_for_agent_tool(name: &str) -> Value {
     match name {
         "spawn_agent" => {
-            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"}},"required":["task"]})
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"}},"required":["task"]})
         }
         "send_agent" => {
             serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"}},"required":["id","message"]})
@@ -1083,7 +1083,7 @@ If the request context names a skill, load it first. For a likely specialized wo
     }
     if policy.include_agent_tools && agent_mode != crate::config::AgentMode::Plan {
         p.push_str(
-            "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent.\n\
+            "- spawn_agent | Args: {\"task\": \"task description\"} | Delegate task to a fresh subagent. Set workspace_mode=isolated with an explicit base_sha for a named branch/worktree.\n\
             - send_agent | Args: {\"id\": subagent_id, \"message\": \"message\"} | Start a follow-up for a completed subagent; running subagents reject it.\n\
             - set_goal | Args: {\"goal\": \"goal description\"} | Set a new long-running task and switch the agent to continuous autoloop mode.\n\
             - todo_write | Args: {\"todos\": [{\"content\": \"step\", \"status\": \"pending|in_progress|completed\", \"priority\": \"high|medium|low\"}]} | Replace the persistent task plan. Use this at the start of multi-step work and update it as steps finish.\n",
