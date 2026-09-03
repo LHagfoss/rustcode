@@ -242,7 +242,7 @@ pub(in crate::ui) fn render_context_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 18);
+    let modal_area = input_anchor_rect(f, input_area, 20);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),
@@ -258,7 +258,6 @@ pub(in crate::ui) fn render_context_modal(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Header
-            Constraint::Length(1), // Spacer
             Constraint::Min(6),    // Content
         ])
         .split(inner_area);
@@ -291,7 +290,7 @@ pub(in crate::ui) fn render_context_modal(
             Constraint::Length(2),      // Spacer
             Constraint::Percentage(42), // Stats breakdown
         ])
-        .split(modal_chunks[2]);
+        .split(modal_chunks[1]);
 
     let mut grid_area = cols[0];
     grid_area.y = grid_area.y.saturating_add(1);
@@ -396,6 +395,7 @@ pub(in crate::ui) fn render_context_modal(
     let mut stats_lines: Vec<Line<'static>> = Vec::new();
 
     // Model and overall usage header
+    stats_lines.push(Line::default());
     stats_lines.push(Line::from(vec![
         Span::styled(
             format!("{} · ", breakdown.model_name),
@@ -416,6 +416,7 @@ pub(in crate::ui) fn render_context_modal(
         ),
     ]));
 
+    stats_lines.push(Line::default());
     stats_lines.push(Line::from(vec![Span::styled(
         "Token usage by category",
         Style::default().fg(COLOR_MUTED()),
