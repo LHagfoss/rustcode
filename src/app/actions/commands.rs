@@ -58,6 +58,17 @@ const MAX_SUMMARY_TRANSCRIPT_CHARS: usize = 16_000;
 /// Tool outputs are the bulk of a session's bytes but low signal for a summary;
 /// keep only a head of each so the transcript stays small and fast.
 const MAX_SUMMARY_TOOL_CHARS: usize = 300;
+const IDLE_SUMMARY_TITLE: &str = "Conversation recap";
+
+pub(crate) fn label_idle_summary(content: &str) -> String {
+    let first_line = content.lines().next().unwrap_or_default().trim();
+    let first_line_title = first_line.trim_start_matches('#').trim();
+    if first_line_title.eq_ignore_ascii_case(IDLE_SUMMARY_TITLE) {
+        content.to_owned()
+    } else {
+        format!("## {IDLE_SUMMARY_TITLE}\n\n{content}")
+    }
+}
 
 pub async fn summarize_session(state_arc: &Arc<Mutex<AppState>>, client: &reqwest::Client) {
     summarize_session_inner(state_arc, client, false).await;
@@ -206,6 +217,11 @@ async fn summarize_session_inner(
             // Post as an assistant message so it renders as a normal model reply
             // (chat bubble), not a system Notice/Warning — the summary text often
             // contains words like "error"/"loop" that would trip the warning style.
+            let summary_content = if already_claimed {
+                label_idle_summary(&summary_content)
+            } else {
+                summary_content
+            };
             let mut msg = ChatMessage::new("assistant", summary_content);
             msg.response_time_ms = Some((elapsed * 1000.0) as u64);
             s.history.push(msg);
