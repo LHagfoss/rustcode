@@ -1,3 +1,9 @@
+## [v0.51.0](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.0) - 2026-09-03
+
+### Features
+- **Isolated task workspaces:** Add opt-in named Git worktrees with durable descriptors, resume/status/handoff flows, scoped execution context, and guarded cleanup for tasks and delegated agents ([#943](https://github.com/LHagfoss/rustcode/issues/943); [#944](https://github.com/LHagfoss/rustcode/pull/944)).
+- **Idle session summaries:** Automatically summarize unchanged chats after user inactivity and persist the result as a normal assistant message ([#945](https://github.com/LHagfoss/rustcode/pull/945)).
+
 ## [v0.50.2](https://github.com/LHagfoss/rustcode/releases/tag/v0.50.2) - 2026-09-02
 
 ### Fixes
