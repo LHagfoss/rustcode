@@ -187,9 +187,11 @@ validate() {
     main_upstream="$(git -C "$REPO_ROOT" rev-parse --verify origin/main 2>/dev/null || true)"
     main_local="$(git -C "$REPO_ROOT" rev-parse --verify main 2>/dev/null || true)"
     if [[ -n "$main_upstream" ]]; then
-        # Check if local main is behind origin/main (needs pull).
-        local behind_count
-        behind_count="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null | awk '{print $1}')"
+        # rev-list --left-right --count outputs "ahead behind".
+        # We only care about being behind (origin/main has commits we don't).
+        local counts behind_count
+        counts="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null)"
+        behind_count="$(echo "$counts" | awk '{print $2}')"
         if [[ "$behind_count" -gt 0 ]]; then
             die "main is behind origin/main by $behind_count commit(s). Run 'git pull' and retry."
         fi
