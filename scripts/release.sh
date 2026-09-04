@@ -546,7 +546,7 @@ phase_wait_and_merge() {
         die "Could not find PR for branch $RELEASE_BRANCH."
     fi
 
-    info "Waiting for required checks on PR #$pr_number…"
+    info "Waiting for required checks on PR #${pr_number}…"
     if ! gh pr checks "$RELEASE_BRANCH" --watch --fail-fast; then
         local pr_url
         pr_url="$(gh pr view "$RELEASE_BRANCH" --json url --jq '.url')"
