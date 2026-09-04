@@ -21,6 +21,10 @@ pub(super) fn render_status_panel<'a>(
         push_centered_separator(lines, "✕ Turn cancelled", width, show_picker);
         return;
     }
+    if let Some(label) = yolo_mode_notice_label(content) {
+        push_centered_separator(lines, label, width, show_picker);
+        return;
+    }
 
     // Convert verbose internal agent-steering prompts into concise, human-friendly status lines in the UI.
     let human_summary = if content.contains("stuck in a loop")
@@ -250,6 +254,14 @@ pub(super) fn render_status_panel<'a>(
 
 pub(super) fn is_turn_cancelled_notice(content: &str) -> bool {
     content.trim() == "[harness: turn stopped — cancelled]"
+}
+
+pub(super) fn yolo_mode_notice_label(content: &str) -> Option<&'static str> {
+    match content.trim() {
+        "YOLO mode enabled" => Some("⚡ YOLO mode enabled"),
+        "YOLO mode disabled" => Some("✕ YOLO mode disabled"),
+        _ => None,
+    }
 }
 
 pub(crate) fn build_claude_startup_banner_snapshot(

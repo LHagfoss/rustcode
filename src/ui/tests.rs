@@ -1968,6 +1968,22 @@ fn status_panels_render_minimal_inline() {
         "Repetitive tool loop detected — stopping tools and requesting final response"
     );
 
+    let mut yolo_enabled_lines = Vec::new();
+    render_status_panel("YOLO mode enabled", 80, false, &mut yolo_enabled_lines);
+    assert_eq!(yolo_enabled_lines.len(), 2);
+    assert_eq!(
+        yolo_enabled_lines[1].spans[1].content,
+        " ⚡ YOLO mode enabled "
+    );
+
+    let mut yolo_disabled_lines = Vec::new();
+    render_status_panel("YOLO mode disabled", 80, false, &mut yolo_disabled_lines);
+    assert_eq!(yolo_disabled_lines.len(), 2);
+    assert_eq!(
+        yolo_disabled_lines[1].spans[1].content,
+        " ✕ YOLO mode disabled "
+    );
+
     let mut cancelled_lines = Vec::new();
     render_status_panel(
         "[harness: turn stopped — cancelled]",
@@ -2116,6 +2132,26 @@ fn cancelled_turn_renders_as_a_human_status_separator() {
             .any(|line| line.contains("✕ Turn cancelled"))
     );
     assert!(!rendered.iter().any(|line| line.contains("[harness:")));
+}
+
+#[test]
+fn yolo_toggle_renders_as_a_human_status_separator() {
+    let mut state = crate::app::AppState::new();
+    state
+        .history
+        .push(crate::app::ChatMessage::new("system", "YOLO mode enabled"));
+
+    let rendered = super::render_committed_history_block(&state, 0, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("⚡ YOLO mode enabled"))
+    );
+    assert!(!rendered.iter().any(|line| line == "  YOLO mode enabled"));
 }
 
 #[test]
