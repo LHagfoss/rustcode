@@ -3005,15 +3005,42 @@ fn conversation_recap_renders_as_compact_labeled_block() {
         .map(ratatui::text::Line::to_string)
         .collect::<Vec<_>>();
 
-    assert!(text[0].starts_with("─ Conversation recap ─"));
+    assert!(text[0].starts_with("  ─ Conversation recap ─"));
     assert_eq!(text[0].chars().count(), 80);
     assert_eq!(text[1], "");
     assert_eq!(
         text[2],
-        "The implementation is complete; cargo test passes and the next step is review."
+        "  The implementation is complete; cargo test passes and the next step is review."
     );
     assert_eq!(text[3], "");
     assert!(!text.iter().any(|line| line.contains("• ")));
+}
+
+#[test]
+fn conversation_recap_wraps_inside_its_message_gutter() {
+    let mut state = AppState::new();
+    state.history.push(
+        ChatMessage::new(
+            "assistant",
+            "The recap remains aligned while its long message wraps across multiple lines.",
+        )
+        .as_conversation_recap(),
+    );
+
+    let rendered = super::render_committed_history_block(&state, 0, 32);
+    let text = rendered
+        .iter()
+        .map(ratatui::text::Line::to_string)
+        .collect::<Vec<_>>();
+
+    assert!(text.len() > 5, "recap fixture must wrap: {text:?}");
+    assert!(text[0].starts_with("  ─ Conversation recap ─"));
+    assert!(
+        text[2..]
+            .iter()
+            .filter(|line| !line.is_empty())
+            .all(|line| line.starts_with("  ") && line.chars().count() <= 32)
+    );
 }
 
 #[test]
