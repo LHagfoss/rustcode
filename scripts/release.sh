@@ -6,9 +6,8 @@
 #   scripts/release.sh --help
 #
 # This script is intentionally conservative: it never pushes, tags, or merges
-# unless explicitly confirmed.  --dry-run prints every command that would run.
-# --yes skips interactive prompts but still requires the pre-release diff
-# confirmation.
+# unless explicitly confirmed. --dry-run prints every command that would run;
+# --yes accepts every confirmation for explicitly authorized automation.
 
 set -euo pipefail
 
@@ -26,6 +25,7 @@ RELEASE_BRANCH=""
 ORIGINAL_BRANCH=""
 CURRENT_VERSION=""
 RELEASE_TAG_COMMIT=""
+MERGED_COMMIT=""
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
@@ -567,7 +567,13 @@ To resolve manually:
   3. Merge manually, then re-run this script from the tag phase"
     fi
 
-    info "PR merged successfully."
+    MERGED_COMMIT="$(gh pr view "$pr_number" --json state,mergeCommit --jq \
+        'select(.state == "MERGED") | .mergeCommit.oid')"
+    if [[ -z "$MERGED_COMMIT" ]]; then
+        die "PR #$pr_number merged, but its merge commit could not be resolved. Tagging aborted."
+    fi
+
+    info "PR merged successfully at $MERGED_COMMIT."
 }
 
 # ── Phase: Tag & publish ─────────────────────────────────────────────────────
@@ -578,21 +584,21 @@ phase_tag_and_publish() {
     run git -C "$REPO_ROOT" checkout main
     run git -C "$REPO_ROOT" pull --ff-only origin main
 
-    # Verify the release commit is on main.
-    local release_commit
-    release_commit="$(git -C "$REPO_ROOT" log --oneline -1 origin/main 2>/dev/null || \
-                      git -C "$REPO_ROOT" log --oneline -1 main 2>/dev/null || true)"
-    if [[ -z "$release_commit" ]]; then
-        die "Could not find the release commit on main."
+    # Tag only the commit produced by the release PR. This prevents an
+    # unrelated commit that lands immediately afterward from being released.
+    if ! $DRY_RUN; then
+        if [[ -z "$MERGED_COMMIT" ]] || ! git -C "$REPO_ROOT" merge-base --is-ancestor "$MERGED_COMMIT" origin/main; then
+            die "Release merge commit ${MERGED_COMMIT:-unknown} is not on origin/main. Tagging aborted."
+        fi
     fi
-    info "Release commit on main: $release_commit"
+    info "Release commit on main: ${MERGED_COMMIT:-dry-run}"
 
     # Verify main contains the release version before tagging.
     if $DRY_RUN; then
         info "[dry-run] Would verify main contains version $VERSION"
     else
         local main_version
-        main_version="$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | sed 's/^version = "\(.*\)"/\1/')"
+        main_version="$(git -C "$REPO_ROOT" show "$MERGED_COMMIT:Cargo.toml" | grep -m1 '^version = ' | sed 's/^version = "\(.*\)"/\1/')"
         if [[ "$main_version" != "$VERSION" ]]; then
             die "main does not contain version $VERSION (found $main_version). Tagging aborted."
         fi
@@ -600,7 +606,11 @@ phase_tag_and_publish() {
     fi
 
     # Create annotated tag.
-    run git -C "$REPO_ROOT" tag -a "v$VERSION" -m "Release v$VERSION"
+    if $DRY_RUN; then
+        info "[dry-run] git -C $REPO_ROOT tag -a v$VERSION -m Release v$VERSION <release-merge-commit>"
+    else
+        run git -C "$REPO_ROOT" tag -a "v$VERSION" "$MERGED_COMMIT" -m "Release v$VERSION"
+    fi
 
     # Capture the tag commit SHA before pushing.
     if $DRY_RUN; then
@@ -733,6 +743,40 @@ phase_verify_release() {
         die "Missing expected assets: ${missing_assets[*]}"
     fi
 
+}
+
+phase_verify_distribution() {
+    info "Phase 14: Verifying Homebrew metadata and local updater"
+
+    if $DRY_RUN; then
+        info "[dry-run] Would verify the Homebrew formula, run rustcode --update, and check rustcode --version."
+        return
+    fi
+
+    local formula encoded formula_version
+    encoded="$(gh api repos/LHagfoss/homebrew-tap/contents/Formula/rustcode.rb --jq '.content')" || \
+        die "Could not read the published Homebrew formula."
+    if ! formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 --decode 2>/dev/null)"; then
+        formula="$(printf '%s' "$encoded" | tr -d '\n' | base64 -D)" || \
+            die "Could not decode the published Homebrew formula."
+    fi
+    formula_version="$(printf '%s\n' "$formula" | sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' | head -n1)"
+    if [[ "$formula_version" != "$VERSION" ]]; then
+        die "Homebrew formula version mismatch: expected $VERSION, found ${formula_version:-none}."
+    fi
+    info "  ✓ Homebrew formula: $formula_version"
+
+    local rustcode_bin installed_version
+    rustcode_bin="$(command -v rustcode || true)"
+    if [[ -z "$rustcode_bin" ]]; then
+        die "rustcode is not installed locally; cannot verify the supported updater."
+    fi
+    "$rustcode_bin" --update
+    installed_version="$("$rustcode_bin" --version | awk '{print $2}')"
+    if [[ "$installed_version" != "$VERSION" ]]; then
+        die "Installed rustcode version mismatch after update: expected $VERSION, found ${installed_version:-none}."
+    fi
+    info "  ✓ Installed rustcode: $installed_version"
     info "Release v$VERSION complete."
 }
 
@@ -742,14 +786,17 @@ run_tests() {
 
     local failed=0
 
-    # Test 1: Workspace parser returns all 8 crates.
+    # Test 1: Workspace parser returns every non-root metadata package.
     info "Test 1: Workspace member discovery"
     local crate_count
     crate_count="$(get_workspace_crate_paths | wc -l | tr -d ' ')"
-    if [[ "$crate_count" -eq 8 ]]; then
+    local expected_crate_count
+    expected_crate_count="$(cargo metadata --manifest-path "$REPO_ROOT/Cargo.toml" --no-deps --format-version 1 |
+        jq '[.packages[] | select(.manifest_path != $root)] | length' --arg root "$REPO_ROOT/Cargo.toml")"
+    if [[ "$crate_count" -eq "$expected_crate_count" && "$crate_count" -gt 0 ]]; then
         info "  ✓ Found $crate_count workspace crates"
     else
-        error "  ✗ Expected 8 crates, found $crate_count"
+        error "  ✗ Expected $expected_crate_count crates, found $crate_count"
         failed=$((failed + 1))
     fi
 
@@ -856,6 +903,7 @@ main() {
     phase_tag_and_publish
     phase_wait_for_build
     phase_verify_release
+    phase_verify_distribution
 
     info "═══════════════════════════════════════════════════════"
     info "  Release v$VERSION completed successfully!"
