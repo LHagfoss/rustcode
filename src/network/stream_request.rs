@@ -1103,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_profile_tool_output_limit_can_be_raised_to_16k() {
+    fn verified_profile_tool_output_starts_at_safe_cap() {
         let profile = crate::config::ModelProfile {
             context_window: Some(128_000),
             max_tokens: Some(16_000),
@@ -1116,7 +1116,7 @@ mod tests {
             profile.resolved_output_token_field(),
             profile.output_token_limit(true, false),
         );
-        assert_eq!(payload["max_tokens"], 16_000);
+        assert_eq!(payload["max_tokens"], 8_192);
     }
 
     #[test]
@@ -1584,6 +1584,7 @@ pub async fn stream_request(
     thinking_mode: ThinkingMode,
     schema_policy: crate::tools::ToolSchemaPolicy,
     expected_session_id: Option<&str>,
+    tool_output_limit_override: Option<u32>,
 ) -> Result<Option<String>, StreamFailure> {
     let aligned_messages = align_alternating_messages(messages);
     let message_count = aligned_messages.len();
@@ -1635,7 +1636,7 @@ pub async fn stream_request(
         .as_ref()
         .map(crate::config::ModelProfile::resolved_output_token_field)
         .unwrap_or(crate::config::OutputTokenField::MaxTokens);
-    let output_token_limit = profile
+    let mut output_token_limit = profile
         .as_ref()
         .and_then(|p| {
             p.output_token_limit(allow_tools, thinking_mode == ThinkingMode::BoundedRecovery)
@@ -1644,6 +1645,15 @@ pub async fn stream_request(
         .or_else(|| {
             (allow_tools || thinking_mode == ThinkingMode::BoundedRecovery).then_some(max_tokens)
         });
+    if allow_tools && thinking_mode == ThinkingMode::Normal {
+        if let Some(override_limit) = tool_output_limit_override {
+            let verified_ceiling = profile
+                .as_ref()
+                .map(|p| p.tool_output_ceiling())
+                .unwrap_or(crate::config::DEFAULT_TOOL_ROUND_MAX_TOKENS);
+            output_token_limit = Some(override_limit.min(verified_ceiling).max(1));
+        }
+    }
     // Recovery keeps reasoning enabled but applies a small client-side bound:
     // it exists to produce the next action, not another full planning turn.
     let thinking_budget = if thinking_mode == ThinkingMode::BoundedRecovery {
@@ -1678,6 +1688,27 @@ pub async fn stream_request(
             )
         }
     };
+
+    // Estimate the actual continuation prompt before serializing the payload
+    // so an adaptive ceiling cannot ask the provider for output that cannot
+    // fit inside the profile's effective context window.
+    let estimated_prompt_tokens =
+        estimate_token_usage_with_tool_schemas(&aligned_messages, "", &native_tool_schemas)
+            .await
+            .map(|u| u.prompt_tokens)
+            .unwrap_or(0);
+    let context_output_capacity = profile.as_ref().map(|p| {
+        p.context_budget()
+            .hard_effective_limit
+            .saturating_sub(estimated_prompt_tokens)
+    });
+    if let Some(capacity) = context_output_capacity {
+        output_token_limit = output_token_limit.map(|limit| limit.min(capacity.max(1)));
+    }
+    {
+        let mut buffer = buffer.lock().await;
+        buffer.output_token_limit = output_token_limit;
+    }
     let mut payload = serde_json::json!({
         "model": model,
         "stream": true,
@@ -1750,14 +1781,6 @@ pub async fn stream_request(
     );
 
     let request_start_time = std::time::Instant::now();
-    let provider_messages = payload["messages"]
-        .as_array()
-        .expect("request messages were constructed as an array");
-    let estimated_prompt_tokens =
-        estimate_token_usage_with_tool_schemas(provider_messages, "", &native_tool_schemas)
-            .await
-            .map(|u| u.prompt_tokens)
-            .unwrap_or(0);
     drop(payload);
     let tool_schema_tokens =
         crate::network::compaction::estimate_tool_schema_tokens(&native_tool_schemas);
@@ -1790,8 +1813,12 @@ pub async fn stream_request(
             "total_estimated_prompt_tokens": estimated_prompt_tokens,
             "output_token_field": output_token_limit.map(|_| output_token_field),
             "output_token_limit": output_token_limit,
+            "tool_output_limit_override": tool_output_limit_override,
+            "context_output_capacity": context_output_capacity,
             "output_token_limit_source":
-                if allow_tools && profile.as_ref().is_some_and(|p| p.tool_max_tokens.is_some()) {
+                if tool_output_limit_override.is_some() {
+                    "adaptive_profile_tool"
+                } else if allow_tools && profile.as_ref().is_some_and(|p| p.tool_max_tokens.is_some()) {
                     "profile_tool"
                 } else if profile.as_ref().is_some_and(|p| {
                     p.max_output_tokens.is_some() || p.max_tokens.is_some()

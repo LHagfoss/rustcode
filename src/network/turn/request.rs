@@ -150,6 +150,41 @@ pub(super) async fn collect_round(
     // retry policy cannot safely replay it. Retry once from the last coherent
     // history checkpoint, after clearing speculative UI output. No tool has
     // executed yet at this point, so this cannot duplicate a mutation.
+    let (adaptive_tool_output_limit, hard_context_limit) = {
+        let s = request_state.lock().await;
+        let profile = s.config.models.iter().find(|profile| {
+            (profile.model == model_name || profile.name == model_name)
+                && (profile.url == api_base_url || profile.endpoint_url() == api_base_url)
+        });
+        (
+            profile
+                .filter(|profile| {
+                    request_allow_tools
+                        && request_thinking_mode
+                            == super::super::stream_request::ThinkingMode::Normal
+                        && profile.tool_max_tokens.is_some()
+                })
+                .map(|profile| profile.tool_output_ceiling()),
+            profile.map(|profile| profile.context_budget().hard_effective_limit),
+        )
+    };
+    let base_prompt_tokens = estimate_token_usage(&request_msgs, "")
+        .await
+        .map(|usage| usage.prompt_tokens)
+        .unwrap_or(0);
+    // Native schemas and continuation framing are selected inside
+    // stream_request. Reserve a conservative allowance so adaptive output is
+    // disabled rather than risking context overflow.
+    let context_output_limit = hard_context_limit.map(|limit| {
+        limit
+            .saturating_sub(base_prompt_tokens)
+            .saturating_sub(8_192)
+    });
+    let continuation_policy = runner::ContinuationPolicy {
+        adaptive_tool_output_limit,
+        context_output_limit,
+        max_total_output_tokens: 32_768,
+    };
     let mut transport_retry_attempts = 0usize;
     let collected = loop {
         let attempt_client = request_client.clone();
@@ -160,7 +195,7 @@ pub(super) async fn collect_round(
         let attempt_model = model_name.clone();
         let attempt_msgs = Arc::clone(&request_msgs);
         let attempt_session_id = request_session_id.clone();
-        let attempt = runner::collect_response(move |previous| {
+        let attempt = runner::collect_response(continuation_policy.clone(), move |request| {
             let request_client = attempt_client.clone();
             let request_state = Arc::clone(&attempt_state);
             let request_cancel = attempt_cancel.clone();
@@ -171,7 +206,8 @@ pub(super) async fn collect_round(
             let request_session_id = attempt_session_id.clone();
             async move {
                 request_buffer.lock().await.reset();
-                let current_msgs = messages_for_response_continuation(&request_msgs, &previous);
+                let current_msgs =
+                    messages_for_response_continuation(&request_msgs, &request.previous);
                 let finish_reason = stream_request(
                     &request_client,
                     request_state,
@@ -185,6 +221,7 @@ pub(super) async fn collect_round(
                     request_thinking_mode,
                     request_schema_policy,
                     Some(request_session_id.as_str()),
+                    request.output_token_limit,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -195,6 +232,7 @@ pub(super) async fn collect_round(
                     provider_final_answer_state: buffer.provider_final_answer_state,
                     finish_reason,
                     has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
+                    output_token_limit: buffer.output_token_limit,
                     thought_time_ms: buffer.thought_time_ms,
                     thought_tokens: buffer.thought_tokens,
                 })

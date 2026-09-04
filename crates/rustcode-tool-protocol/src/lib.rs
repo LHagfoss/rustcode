@@ -432,6 +432,64 @@ pub fn is_tool_call_start(text: &str) -> bool {
                 || trimmed.contains("\"function\"")))
 }
 
+/// Returns true only when the response contains an actionable tool envelope
+/// whose closing syntax is missing. A complete-but-invalid call is left to
+/// malformed-call recovery; it is not evidence that more output can repair it.
+pub fn has_incomplete_actionable_tool_call(text: &str) -> bool {
+    let actionable = |body: &str| {
+        let lower = body.to_ascii_lowercase();
+        lower.contains("<function")
+            || lower.contains("\"name\"")
+            || lower.contains("\"arguments\"")
+            || lower.contains("\"path\"")
+            || lower.contains("\"command\"")
+    };
+
+    let lower_text = text.to_ascii_lowercase();
+    if let Some(start) = lower_text.rfind("<tool_call") {
+        let after = &text[start..];
+        if !after.to_ascii_lowercase().contains("</tool_call>") {
+            let body = after
+                .split_once('>')
+                .map(|(_, body)| body)
+                .unwrap_or_default();
+            if actionable(body) {
+                return true;
+            }
+        }
+    }
+
+    if let Some(start) = lower_text.rfind("<function_call") {
+        let after = &text[start..];
+        if !after.to_ascii_lowercase().contains("</function_call>") {
+            let body = after
+                .split_once('>')
+                .map(|(_, body)| body)
+                .unwrap_or_default();
+            if actionable(body) {
+                return true;
+            }
+        }
+    }
+
+    if let Some(start) = text.rfind("```tool") {
+        let after = &text[start + "```tool".len()..];
+        let (block_end, _) = find_closing_tool_fence(after);
+        if block_end == after.len() && actionable(after) {
+            return true;
+        }
+    }
+
+    if let Some(start) = text.find("[TOOL_CALLS]") {
+        let after = &text[start + "[TOOL_CALLS]".len()..];
+        if after.contains('{') && !after.trim_end().ends_with('}') && actionable(after) {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn parse_tool_call(text: &str, protocol: ToolProtocol) -> Option<ToolCall> {
     parse_tool_calls(text, protocol).into_iter().next()
 }
@@ -439,8 +497,8 @@ pub fn parse_tool_call(text: &str, protocol: ToolProtocol) -> Option<ToolCall> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolCall, ToolProtocol, find_closing_tool_fence, is_code_editing_tool, is_tool_call_start,
-        parse_tool_calls, repair_json,
+        ToolCall, ToolProtocol, find_closing_tool_fence, has_incomplete_actionable_tool_call,
+        is_code_editing_tool, is_tool_call_start, parse_tool_calls, repair_json,
     };
 
     #[test]
@@ -452,6 +510,22 @@ mod tests {
             ),
             "{\"name\": \"replace_file_content\", \"arguments\": {\"path\": \"src/x.rs\", \"edits\": [{\"old_string\": \"a\", \"new_string\": \"a\\nb\"}]}}"
         );
+    }
+
+    #[test]
+    fn incomplete_actionable_tool_envelopes_are_detected() {
+        assert!(has_incomplete_actionable_tool_call(
+            "<tool_call><function=write_to_file>{\"path\":\"src/lib.rs\",\"content\":\"partial"
+        ));
+        assert!(has_incomplete_actionable_tool_call(
+            "```tool\n{\"name\":\"write_to_file\",\"arguments\": {\"path\":\"x\"}\n"
+        ));
+        assert!(!has_incomplete_actionable_tool_call(
+            "<tool_call><function=write_to_file>{\"path\":\"x\"}</tool_call>"
+        ));
+        assert!(!has_incomplete_actionable_tool_call(
+            "The answer is ordinary prose about a tool call."
+        ));
     }
 
     #[test]

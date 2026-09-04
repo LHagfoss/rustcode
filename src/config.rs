@@ -107,9 +107,10 @@ pub struct ModelProfile {
     /// bounded client-side cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
-    /// Optional tool-round completion cap for a verified provider/model
-    /// combination. Unknown profiles retain the safe 8K default. Recovery
-    /// requests intentionally ignore this override and remain small.
+    /// Optional maximum tool-round completion ceiling for a verified
+    /// provider/model combination. Tool requests begin at the safe 8K cap and
+    /// may use this ceiling only after an actionable textual call is proven to
+    /// have been truncated. Recovery requests intentionally ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_max_tokens: Option<u32>,
     /// Explicit name for the total provider output ceiling. `max_tokens` is
@@ -225,15 +226,16 @@ impl ModelProfile {
     pub fn completion_token_limit(&self, allow_tools: bool) -> u32 {
         let configured = self.context_budget().max_output_tokens;
         if allow_tools {
-            self.tool_completion_token_limit(configured)
+            configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
         } else {
             configured
         }
     }
 
-    /// Resolve an explicitly opted-in tool limit without allowing a profile
+    /// Resolve an explicitly opted-in tool ceiling without allowing a profile
     /// typo to bypass the context-derived normal completion ceiling.
-    fn tool_completion_token_limit(&self, configured: u32) -> u32 {
+    pub fn tool_output_ceiling(&self) -> u32 {
+        let configured = self.context_budget().max_output_tokens;
         self.tool_max_tokens
             .unwrap_or(DEFAULT_TOOL_ROUND_MAX_TOKENS)
             .clamp(1, MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS)
