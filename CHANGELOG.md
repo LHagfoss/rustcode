@@ -1,3 +1,8 @@
+## [v0.51.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.5) - 2026-09-04
+
+### Fixes
+- **Cancellation display:** Render cancelled turns as a clear, centered status separator instead of exposing the internal bracketed harness marker ([#959](https://github.com/LHagfoss/rustcode/pull/959)).
+
 ## [v0.51.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.4) - 2026-09-04
 
 ### Fixes
