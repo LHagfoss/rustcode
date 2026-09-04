@@ -24,12 +24,14 @@ DRY_RUN=false
 YES=false
 RELEASE_BRANCH=""
 ORIGINAL_BRANCH=""
+CURRENT_VERSION=""
+RELEASE_TAG_COMMIT=""
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
 error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; }
-die()   { error "$*"; cleanup_and_exit 1; }
+die()   { error "$*"; exit 1; }
 
 # Print a command before executing it (or the equivalent in dry-run).
 run() {
@@ -68,6 +70,7 @@ get_editor() {
 # Uses EXIT trap for reliable cleanup on any exit (normal or error).
 cleanup_and_exit() {
     local code="$1"
+    trap - EXIT INT TERM
     if [[ -n "${RELEASE_BRANCH:-}" ]] && [[ -n "${ORIGINAL_BRANCH:-}" ]]; then
         local current_branch
         current_branch="$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)"
@@ -84,27 +87,27 @@ cleanup_and_exit() {
                 warn "Release branch $RELEASE_BRANCH has uncommitted changes."
                 warn "Preserving release branch for manual recovery."
             fi
-            info "Recovery: To resume the release, run:"
-            info "  scripts/release.sh --version $VERSION ${DRY_RUN:+--dry-run}"
+            if [[ "$code" -ne 0 ]]; then
+                info "Recovery: fix the reported issue, then resume from $RELEASE_BRANCH or clean up manually."
+            fi
         fi
     fi
     exit "$code"
 }
-trap 'cleanup_and_exit 1' EXIT INT TERM
+trap 'cleanup_and_exit $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ── Dependency checks ────────────────────────────────────────────────────────
 check_deps() {
     local missing=()
-    for cmd in git cargo gh python3 jq; do
+    for cmd in git cargo gh jq; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             missing+=("$cmd")
         fi
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
         die "Missing required commands: ${missing[*]}. Install them and retry."
-    fi
-    if [[ -z "${EDITOR:-}" ]] && [[ -z "${VISUAL:-}" ]]; then
-        die "No EDITOR or VISUAL set. Set one (e.g. export EDITOR=vim) and retry."
     fi
 }
 
@@ -136,10 +139,18 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --version)    VERSION="$2"; shift 2 ;;
-            --date)       DATE="$2"; shift 2 ;;
-            --category)   CATEGORY="$2"; shift 2 ;;
-            --notes-file) NOTES_FILE="$2"; shift 2 ;;
+            --version|--date|--category|--notes-file)
+                if [[ $# -lt 2 ]]; then
+                    die "Option $1 requires a value."
+                fi
+                case "$1" in
+                    --version) VERSION="$2" ;;
+                    --date) DATE="$2" ;;
+                    --category) CATEGORY="$2" ;;
+                    --notes-file) NOTES_FILE="$2" ;;
+                esac
+                shift 2
+                ;;
             --dry-run)    DRY_RUN=true; shift ;;
             --yes)        YES=true; shift ;;
             --help)       usage; exit 0 ;;
@@ -190,17 +201,16 @@ validate() {
     # 1. Version is greater than current.
     local current
     current="$(get_current_version)"
+    CURRENT_VERSION="$current"
     info "Current version: $current  →  Target: $VERSION"
     if ! semver_gt "$VERSION" "$current"; then
         die "Version $VERSION is not greater than current version $current."
     fi
 
     # 2. Tag does not already exist (local and remote).
-    if git -C "$REPO_ROOT" tag --list "v$VERSION" | grep -q "^v$VERSION$"; then
-        die "Tag v$VERSION already exists (local). Delete it or choose a different version."
-    fi
-    if git -C "$REPO_ROOT" ls-remote --tags origin "v$VERSION" | grep -q "v$VERSION"; then
-        die "Tag v$VERSION already exists (remote). Delete it or choose a different version."
+    if git -C "$REPO_ROOT" tag --list "v$VERSION" | grep -q "^v$VERSION$" || \
+       git -C "$REPO_ROOT" ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+        die "Tag v$VERSION already exists. Delete it or choose a different version."
     fi
 
     # 3. Worktree is clean.
@@ -246,18 +256,16 @@ validate() {
 
 # ── Workspace discovery ──────────────────────────────────────────────────────
 get_workspace_crate_paths() {
-    # Use python3 for robust TOML parsing of multi-line members array.
-    python3 -c "
-import re, sys
-with open('$REPO_ROOT/Cargo.toml') as f:
-    content = f.read()
-match = re.search(r'members\s*=\s*\[(.*?)\]', content, re.DOTALL)
-if match:
-    members_str = match.group(1)
-    members = re.findall(r'\"([^\"]+)\"', members_str)
-    for m in members:
-        print(m)
-"
+    cargo metadata --manifest-path "$REPO_ROOT/Cargo.toml" --no-deps --format-version 1 |
+        jq -r '.packages[].manifest_path' |
+        while IFS= read -r manifest_path; do
+            case "$manifest_path" in
+                "$REPO_ROOT/Cargo.toml") ;;
+                "$REPO_ROOT"/*/Cargo.toml)
+                    printf '%s\n' "${manifest_path#"$REPO_ROOT"/}" | sed 's#/Cargo.toml$##'
+                    ;;
+            esac
+        done
 }
 
 # ── Phase 1: Branch & version bump ───────────────────────────────────────────
@@ -265,6 +273,9 @@ phase_branch() {
     RELEASE_BRANCH="chore/release-v$VERSION"
     ORIGINAL_BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
     info "Phase 1: Creating release branch $RELEASE_BRANCH"
+    if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$RELEASE_BRANCH"; then
+        die "Release branch $RELEASE_BRANCH already exists. Resume or remove it manually."
+    fi
     if $DRY_RUN; then
         info "[dry-run] git checkout -b $RELEASE_BRANCH"
     else
@@ -280,53 +291,90 @@ phase_update_versions() {
     local tmp
     tmp="$(mktemp)"
     sed 's/^version = ".*"/version = "'"$VERSION"'"/' "$root_toml" > "$tmp"
-    run mv -- "$tmp" "$root_toml"
+    if $DRY_RUN; then
+        info "[dry-run] mv $tmp $root_toml"
+        rm -f -- "$tmp"
+    else
+        mv -- "$tmp" "$root_toml"
+    fi
 
     # Update each workspace crate's Cargo.toml.
-    local crate_path
-    for crate_path in $(get_workspace_crate_paths); do
+    local crate_path crate_count=0
+    while IFS= read -r crate_path; do
+        [[ -z "$crate_path" ]] && continue
+        crate_count=$((crate_count + 1))
         local crate_toml="$REPO_ROOT/$crate_path/Cargo.toml"
-        if [[ -f "$crate_toml" ]]; then
-            tmp="$(mktemp)"
-            sed 's/^version = ".*"/version = "'"$VERSION"'"/' "$crate_toml" > "$tmp"
-            run mv -- "$tmp" "$crate_toml"
+        if [[ ! -f "$crate_toml" ]]; then
+            die "Workspace member manifest not found: $crate_toml"
         fi
-    done
+        tmp="$(mktemp)"
+        sed 's/^version = ".*"/version = "'"$VERSION"'"/' "$crate_toml" > "$tmp"
+        if $DRY_RUN; then
+            info "[dry-run] mv $tmp $crate_toml"
+            rm -f -- "$tmp"
+        else
+            mv -- "$tmp" "$crate_toml"
+        fi
+    done < <(get_workspace_crate_paths)
+    if [[ "$crate_count" -eq 0 ]]; then
+        die "Could not discover any workspace crate manifests."
+    fi
+}
+
+verify_workspace_versions() {
+    local mismatches
+    mismatches="$(cargo metadata --manifest-path "$REPO_ROOT/Cargo.toml" --no-deps --format-version 1 |
+        jq -r --arg version "$VERSION" '.packages[] | select(.version != $version) | "\(.name)=\(.version)"')"
+    if [[ -n "$mismatches" ]]; then
+        die "Workspace packages with unexpected versions:\n$mismatches"
+    fi
 }
 
 phase_update_lockfile() {
     info "Phase 3: Updating Cargo.lock"
     if $DRY_RUN; then
-        info "[dry-run] cargo update --locked"
+        info "[dry-run] (cd $REPO_ROOT && cargo check --manifest-path $REPO_ROOT/Cargo.toml)"
     else
-        # Capture the lockfile state before any changes.
-        local lockfile_before
-        lockfile_before="$(mktemp)"
-        cp "$REPO_ROOT/Cargo.lock" "$lockfile_before"
+        local lockfile="$REPO_ROOT/Cargo.lock"
+        local backup
+        backup="$(mktemp)"
+        cp "$lockfile" "$backup"
 
-        # Try cargo update --locked first; this only updates version entries,
-        # not dependency resolutions.
-        if ! cargo update --locked 2>/dev/null; then
-            # If --locked fails, we need to regenerate but verify changes are minimal.
-            info "Lockfile needs updating for version change, regenerating…"
-            cargo generate-lockfile
-
-            # Verify only version entries changed, not dependency resolutions.
-            local lockfile_after
-            lockfile_after="$(mktemp)"
-            cp "$REPO_ROOT/Cargo.lock" "$lockfile_after"
-
-            # Check if any non-version lines changed.
-            if ! diff -q "$lockfile_before" "$lockfile_after" >/dev/null 2>&1; then
-                # Show what changed.
-                info "Lockfile changes:"
-                diff "$lockfile_before" "$lockfile_after" | head -50
-            fi
-            rm -f -- "$lockfile_before" "$lockfile_after"
-        else
-            rm -f -- "$lockfile_before"
+        # An unlocked check updates the local workspace package entries while
+        # preserving the existing dependency resolution where possible.
+        if ! (cd "$REPO_ROOT" && cargo check --manifest-path "$REPO_ROOT/Cargo.toml"); then
+            cp "$backup" "$lockfile"
+            rm -f -- "$backup"
+            die "Cargo could not update Cargo.lock for the new workspace version."
         fi
+
+        local diff_output unexpected
+        diff_output="$(git -C "$REPO_ROOT" diff --unified=0 -- Cargo.lock || true)"
+        unexpected="$(printf '%s\n' "$diff_output" |
+            grep -E '^[+-]' |
+            grep -vE '^(---|\+\+\+)' |
+            grep -vFx -- "-version = \"$CURRENT_VERSION\"" |
+            grep -vFx -- "+version = \"$VERSION\"" || true)"
+        if [[ -n "$unexpected" ]]; then
+            cp "$backup" "$lockfile"
+            rm -f -- "$backup"
+            die "Cargo.lock changed outside the intended workspace version entries:\n$unexpected"
+        fi
+        rm -f -- "$backup"
     fi
+}
+
+format_changelog_notes() {
+    local notes="$1"
+    local category="$2"
+    local heading="### $category"
+
+    case "$notes" in
+        "$heading") notes="" ;;
+        "$heading"$'\n'*) notes="${notes#"$heading"}"; notes="${notes#$'\n'}" ;;
+    esac
+
+    printf '### %s\n%s' "$category" "$notes"
 }
 
 phase_update_changelog() {
@@ -344,34 +392,24 @@ phase_update_changelog() {
         local tmpfile editor
         tmpfile="$(mktemp /tmp/rustcode-changelog-XXXXXX.md)"
         editor="$(get_editor)"
-        # Write the category heading as a template.
-        cat > "$tmpfile" <<EOF
-### $CATEGORY
--
-EOF
+        # The script adds the category heading after editing.
+        printf '%s\n' '-' > "$tmpfile"
         if $DRY_RUN; then
             info "[dry-run] Would open editor for changelog notes: $tmpfile"
             notes="$(cat "$tmpfile")"
         else
-            "$editor" "$tmpfile"
+            local -a editor_command
+            read -r -a editor_command <<< "$editor"
+            "${editor_command[@]}" "$tmpfile"
             notes="$(cat "$tmpfile")"
         fi
         rm -f -- "$tmpfile"
     fi
 
-    # Build the new changelog entry.
-    # Only prepend category heading if notes don't already start with one.
-    # Recognize: ### CATEGORY, ## CATEGORY, # CATEGORY (with optional whitespace).
-    local category_heading=""
-    if ! echo "$notes" | head -1 | grep -qE "^#[[:space:]]*#?[[:space:]]*$CATEGORY"; then
-        category_heading="### $CATEGORY
-"
-    fi
-
     local new_entry
     new_entry="## [v$VERSION](https://github.com/LHagfoss/rustcode/releases/tag/v$VERSION) - $DATE
 
-${category_heading}${notes}
+$(format_changelog_notes "$notes" "$CATEGORY")
 "
 
     # Prepend to CHANGELOG.md.
@@ -380,7 +418,12 @@ ${category_heading}${notes}
     tmp="$(mktemp)"
     printf '%s' "$new_entry" > "$tmp"
     cat "$changelog" >> "$tmp"
-    run mv -- "$tmp" "$changelog"
+    if $DRY_RUN; then
+        info "[dry-run] mv $tmp $changelog"
+        rm -f -- "$tmp"
+    else
+        mv -- "$tmp" "$changelog"
+    fi
 }
 
 # ── Phase: Show diff & confirm ───────────────────────────────────────────────
@@ -398,6 +441,12 @@ phase_show_diff() {
 # ── Phase: Verification ──────────────────────────────────────────────────────
 phase_verify() {
     info "Phase 6: Running verification checks"
+
+    if $DRY_RUN; then
+        info "[dry-run] Would verify every workspace package is version $VERSION"
+    else
+        verify_workspace_versions
+    fi
 
     local checks=(
         "cargo fmt --check"
@@ -505,9 +554,9 @@ phase_wait_and_merge() {
     fi
 
     info "All checks passed. Merging PR #$pr_number…"
-    if ! gh pr merge "$RELEASE_BRANCH" --squash --delete-branch; then
-        local merge_err pr_url
-        merge_err="$(gh pr merge "$RELEASE_BRANCH" --squash --delete-branch 2>&1 || true)"
+    local merge_err=""
+    if ! merge_err="$(gh pr merge "$RELEASE_BRANCH" --squash --delete-branch 2>&1)"; then
+        local pr_url
         pr_url="$(gh pr view "$RELEASE_BRANCH" --json url --jq '.url')"
         die "Merge blocked. Reason:
 $merge_err
@@ -539,20 +588,27 @@ phase_tag_and_publish() {
     info "Release commit on main: $release_commit"
 
     # Verify main contains the release version before tagging.
-    local main_version
-    main_version="$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | sed 's/^version = "\(.*\)"/\1/')"
-    if [[ "$main_version" != "$VERSION" ]]; then
-        die "main does not contain version $VERSION (found $main_version). Tagging aborted."
+    if $DRY_RUN; then
+        info "[dry-run] Would verify main contains version $VERSION"
+    else
+        local main_version
+        main_version="$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | sed 's/^version = "\(.*\)"/\1/')"
+        if [[ "$main_version" != "$VERSION" ]]; then
+            die "main does not contain version $VERSION (found $main_version). Tagging aborted."
+        fi
+        info "Verified main contains version $VERSION"
     fi
-    info "Verified main contains version $VERSION"
 
     # Create annotated tag.
     run git -C "$REPO_ROOT" tag -a "v$VERSION" -m "Release v$VERSION"
 
     # Capture the tag commit SHA before pushing.
-    local tag_sha
-    tag_sha="$(git -C "$REPO_ROOT" rev-parse "v$VERSION")"
-    info "Tag v$VERSION points to commit: $tag_sha"
+    if $DRY_RUN; then
+        RELEASE_TAG_COMMIT="$(git -C "$REPO_ROOT" rev-parse main)"
+    else
+        RELEASE_TAG_COMMIT="$(git -C "$REPO_ROOT" rev-parse "v$VERSION^{commit}")"
+    fi
+    info "Tag v$VERSION points to commit: $RELEASE_TAG_COMMIT"
 
     # Push the tag.
     run git -C "$REPO_ROOT" push origin "v$VERSION"
@@ -577,11 +633,12 @@ phase_wait_for_build() {
     local max_attempts=30
     local attempt=0
     while [[ $attempt -lt $max_attempts ]]; do
-        # List runs for the Build workflow, filter by the tag SHA.
+        # List runs for the Build workflow, filtering by the exact tag SHA.
         run_id="$(gh run list \
             --workflow="$workflow_name" \
-            --json id,status,conclusion,headSha \
-            --jq ".[] | select(.headSha == \"$tag_sha\") | .id" \
+            --commit "$RELEASE_TAG_COMMIT" \
+            --json databaseId,status,conclusion \
+            --jq '.[0].databaseId' \
             2>/dev/null | head -n1 || true)"
 
         if [[ -n "$run_id" ]]; then
@@ -595,12 +652,12 @@ phase_wait_for_build() {
     done
 
     if [[ -z "$run_id" ]]; then
-        die "Could not find the Build workflow for tag v$VERSION (SHA: $tag_sha).
-Check manually: gh run list --workflow='$workflow_name' --sha=$tag_sha"
+        die "Could not find the Build workflow for tag v$VERSION (SHA: $RELEASE_TAG_COMMIT).
+Check manually: gh run list --workflow='$workflow_name' --commit=$RELEASE_TAG_COMMIT"
     fi
 
     info "Waiting for workflow run $run_id to complete…"
-    if ! gh run watch "$run_id" --fail-fast; then
+    if ! gh run watch "$run_id" --exit-status; then
         die "Workflow run $run_id failed. Inspect with: gh run view $run_id --log-failed"
     fi
 
@@ -697,21 +754,12 @@ run_tests() {
     fi
 
     # Test 2: Changelog generation with actual ### Features input.
-    info "Test 2: Changelog category deduplication (with ### Features input)"
+    info "Test 2: Changelog category deduplication (with heading)"
     local test_notes="### Features
 - Added new feature"
-    local test_category="Features"
-    local category_heading=""
-    if ! echo "$test_notes" | head -1 | grep -qE "^#[[:space:]]*#?[[:space:]]*$test_category"; then
-        category_heading="### $test_category
-"
-    fi
-    local test_entry="## [v0.52.0] - 2026-09-04
-
-${category_heading}${test_notes}
-"
+    local test_entry="$(format_changelog_notes "$test_notes" "Features")"
     local dup_count
-    dup_count="$(echo "$test_entry" | grep -c "### Features" || true)"
+    dup_count="$(printf '%s\n' "$test_entry" | grep -c '^### Features$' || true)"
     if [[ "$dup_count" -eq 1 ]]; then
         info "  ✓ Category appears exactly once"
     else
@@ -722,18 +770,9 @@ ${category_heading}${test_notes}
     # Test 3: Changelog generation without existing category heading.
     info "Test 3: Changelog category deduplication (without heading)"
     local test_notes2="Some changelog notes"
-    local test_category2="Features"
-    local category_heading2=""
-    if ! echo "$test_notes2" | head -1 | grep -qE "^#[[:space:]]*#?[[:space:]]*$test_category2"; then
-        category_heading2="### $test_category2
-"
-    fi
-    local test_entry2="## [v0.52.0] - 2026-09-04
-
-${category_heading2}${test_notes2}
-"
+    local test_entry2="$(format_changelog_notes "$test_notes2" "Features")"
     local dup_count2
-    dup_count2="$(echo "$test_entry2" | grep -c "### Features" || true)"
+    dup_count2="$(printf '%s\n' "$test_entry2" | grep -c '^### Features$' || true)"
     if [[ "$dup_count2" -eq 1 ]]; then
         info "  ✓ Category appears exactly once"
     else
