@@ -1,3 +1,9 @@
+## [v0.51.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.5) - 2026-09-04
+
+### Fixes
+- Recover truncated tool-call continuations by escalating the output budget from 8K to 16K when the response is incomplete.
+- Bound profile-specific tool output limits and malformed tool-call history.
+- Improve cancelled-turn display and harden release automation verification.
 ## [v0.51.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.4) - 2026-09-04
 
 ### Fixes
