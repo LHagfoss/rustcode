@@ -53,6 +53,7 @@ ask() {
 }
 
 # Get the editor to use, falling back from EDITOR to VISUAL.
+# Handles commands with arguments (e.g. "code --wait").
 get_editor() {
     if [[ -n "${EDITOR:-}" ]]; then
         echo "$EDITOR"
@@ -64,22 +65,37 @@ get_editor() {
 }
 
 # Cleanup: restore branch if we switched, print recovery instructions.
+# Uses EXIT trap for reliable cleanup on any exit (normal or error).
 cleanup_and_exit() {
     local code="$1"
-    if [[ -n "${RELEASE_BRANCH:-}" ]] && [[ "$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)" == "$RELEASE_BRANCH" ]]; then
-        info "Returning to original branch: $ORIGINAL_BRANCH"
-        run git -C "$REPO_ROOT" checkout "$ORIGINAL_BRANCH" 2>/dev/null || true
-        info "Recovery: To resume the release, run:"
-        info "  scripts/release.sh --version $VERSION ${DRY_RUN:+--dry-run}"
+    if [[ -n "${RELEASE_BRANCH:-}" ]] && [[ -n "${ORIGINAL_BRANCH:-}" ]]; then
+        local current_branch
+        current_branch="$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)"
+        if [[ "$current_branch" == "$RELEASE_BRANCH" ]]; then
+            # Check if there are uncommitted changes on the release branch.
+            local dirty
+            dirty="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)"
+            if [[ -z "$dirty" ]]; then
+                # Safe to return to original branch.
+                info "Returning to original branch: $ORIGINAL_BRANCH"
+                run git -C "$REPO_ROOT" checkout "$ORIGINAL_BRANCH" 2>/dev/null || true
+            else
+                # Dirty state — preserve release branch.
+                warn "Release branch $RELEASE_BRANCH has uncommitted changes."
+                warn "Preserving release branch for manual recovery."
+            fi
+            info "Recovery: To resume the release, run:"
+            info "  scripts/release.sh --version $VERSION ${DRY_RUN:+--dry-run}"
+        fi
     fi
     exit "$code"
 }
-trap 'cleanup_and_exit 1' INT TERM
+trap 'cleanup_and_exit 1' EXIT INT TERM
 
 # ── Dependency checks ────────────────────────────────────────────────────────
 check_deps() {
     local missing=()
-    for cmd in git cargo gh; do
+    for cmd in git cargo gh python3 jq; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             missing+=("$cmd")
         fi
@@ -179,9 +195,12 @@ validate() {
         die "Version $VERSION is not greater than current version $current."
     fi
 
-    # 2. Tag does not already exist.
+    # 2. Tag does not already exist (local and remote).
     if git -C "$REPO_ROOT" tag --list "v$VERSION" | grep -q "^v$VERSION$"; then
-        die "Tag v$VERSION already exists. Delete it or choose a different version."
+        die "Tag v$VERSION already exists (local). Delete it or choose a different version."
+    fi
+    if git -C "$REPO_ROOT" ls-remote --tags origin "v$VERSION" | grep -q "v$VERSION"; then
+        die "Tag v$VERSION already exists (remote). Delete it or choose a different version."
     fi
 
     # 3. Worktree is clean.
@@ -280,12 +299,32 @@ phase_update_lockfile() {
     if $DRY_RUN; then
         info "[dry-run] cargo update --locked"
     else
-        # --locked ensures we don't upgrade unrelated dependencies.
-        # If the lockfile needs updating for version changes, this will fail
-        # and we fall back to generate-lockfile.
+        # Capture the lockfile state before any changes.
+        local lockfile_before
+        lockfile_before="$(mktemp)"
+        cp "$REPO_ROOT/Cargo.lock" "$lockfile_before"
+
+        # Try cargo update --locked first; this only updates version entries,
+        # not dependency resolutions.
         if ! cargo update --locked 2>/dev/null; then
+            # If --locked fails, we need to regenerate but verify changes are minimal.
             info "Lockfile needs updating for version change, regenerating…"
             cargo generate-lockfile
+
+            # Verify only version entries changed, not dependency resolutions.
+            local lockfile_after
+            lockfile_after="$(mktemp)"
+            cp "$REPO_ROOT/Cargo.lock" "$lockfile_after"
+
+            # Check if any non-version lines changed.
+            if ! diff -q "$lockfile_before" "$lockfile_after" >/dev/null 2>&1; then
+                # Show what changed.
+                info "Lockfile changes:"
+                diff "$lockfile_before" "$lockfile_after" | head -50
+            fi
+            rm -f -- "$lockfile_before" "$lockfile_after"
+        else
+            rm -f -- "$lockfile_before"
         fi
     fi
 }
@@ -305,7 +344,7 @@ phase_update_changelog() {
         local tmpfile editor
         tmpfile="$(mktemp /tmp/rustcode-changelog-XXXXXX.md)"
         editor="$(get_editor)"
-        # Only write the category heading if notes file not provided.
+        # Write the category heading as a template.
         cat > "$tmpfile" <<EOF
 ### $CATEGORY
 -
@@ -322,8 +361,9 @@ EOF
 
     # Build the new changelog entry.
     # Only prepend category heading if notes don't already start with one.
+    # Recognize: ### CATEGORY, ## CATEGORY, # CATEGORY (with optional whitespace).
     local category_heading=""
-    if [[ ! "$notes" =~ ^#[[:space:]]*#?[[:space:]]*$CATEGORY ]]; then
+    if ! echo "$notes" | head -1 | grep -qE "^#[[:space:]]*#?[[:space:]]*$CATEGORY"; then
         category_heading="### $CATEGORY
 "
     fi
@@ -509,6 +549,11 @@ phase_tag_and_publish() {
     # Create annotated tag.
     run git -C "$REPO_ROOT" tag -a "v$VERSION" -m "Release v$VERSION"
 
+    # Capture the tag commit SHA before pushing.
+    local tag_sha
+    tag_sha="$(git -C "$REPO_ROOT" rev-parse "v$VERSION")"
+    info "Tag v$VERSION points to commit: $tag_sha"
+
     # Push the tag.
     run git -C "$REPO_ROOT" push origin "v$VERSION"
 
@@ -527,26 +572,39 @@ phase_wait_for_build() {
 
     info "Monitoring workflow: $workflow_name (triggered by tag v$VERSION)"
 
-    # Use gh run list with --workflow and filter by branch/tag.
-    # The --ref flag is not supported; instead we filter by conclusion/status.
-    local run_id
-    run_id="$(gh run list \
-        --workflow="$workflow_name" \
-        --json id,status,conclusion,headBranch,headSha \
-        --jq ".[] | select(.headBranch == \"main\" and (.status == \"completed\" or .status == \"in_progress\" or .status == \"queued\")) | select(.conclusion == null or .conclusion == \"success\" or .conclusion == \"failure\") | .id" \
-        2>/dev/null | head -n1 || true)"
+    # Poll for the workflow run associated with the tag SHA.
+    local run_id=""
+    local max_attempts=30
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        # List runs for the Build workflow, filter by the tag SHA.
+        run_id="$(gh run list \
+            --workflow="$workflow_name" \
+            --json id,status,conclusion,headSha \
+            --jq ".[] | select(.headSha == \"$tag_sha\") | .id" \
+            2>/dev/null | head -n1 || true)"
+
+        if [[ -n "$run_id" ]]; then
+            info "Found workflow run ID: $run_id"
+            break
+        fi
+
+        attempt=$((attempt + 1))
+        info "Waiting for workflow to start… (attempt $attempt/$max_attempts)"
+        sleep 10
+    done
 
     if [[ -z "$run_id" ]]; then
-        warn "Could not find a running or completed workflow for v$VERSION."
-        info "Check manually: gh run list --workflow='$workflow_name' --branch=main"
-        return
+        die "Could not find the Build workflow for tag v$VERSION (SHA: $tag_sha).
+Check manually: gh run list --workflow='$workflow_name' --sha=$tag_sha"
     fi
 
-    info "Workflow run ID: $run_id — waiting for completion…"
+    info "Waiting for workflow run $run_id to complete…"
     if ! gh run watch "$run_id" --fail-fast; then
-        warn "Workflow run $run_id failed. Inspect with: gh run view $run_id --log-failed"
-        warn "You may need to investigate and re-run the workflow manually."
+        die "Workflow run $run_id failed. Inspect with: gh run view $run_id --log-failed"
     fi
+
+    info "Build workflow completed successfully."
 }
 
 phase_verify_release() {
@@ -557,18 +615,34 @@ phase_verify_release() {
         return
     fi
 
-    # Use supported fields: tagName, name, url, assets.
-    local release_info
-    release_info="$(gh release view "v$VERSION" --json tagName,name,url,assets 2>/dev/null || true)"
+    # Poll until the GitHub release exists.
+    local release_info=""
+    local max_attempts=30
+    local attempt=0
+    while [[ $attempt -lt $max_attempts ]]; do
+        # Use supported fields: tagName, name, url, assets.
+        release_info="$(gh release view "v$VERSION" --json tagName,name,url,assets 2>/dev/null || true)"
+        if [[ -n "$release_info" ]]; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        info "Waiting for GitHub release to appear… (attempt $attempt/$max_attempts)"
+        sleep 10
+    done
 
     if [[ -z "$release_info" ]]; then
-        die "GitHub release v$VERSION not found. It may still be processing."
+        die "GitHub release v$VERSION not found after polling. It may still be processing."
     fi
 
     local tag_name release_name asset_count
     tag_name="$(echo "$release_info" | jq -r '.tagName')"
     release_name="$(echo "$release_info" | jq -r '.name')"
     asset_count="$(echo "$release_info" | jq -r '.assets | length')"
+
+    # Verify the tag is exactly v$VERSION.
+    if [[ "$tag_name" != "v$VERSION" ]]; then
+        die "Release tag mismatch: expected v$VERSION, got $tag_name"
+    fi
 
     info "Release verified:"
     info "  Tag:      $tag_name"
@@ -586,14 +660,21 @@ phase_verify_release() {
     local asset_names
     asset_names="$(echo "$release_info" | jq -r '.assets[].name')"
 
+    local missing_assets=()
     local expected
     for expected in "${expected_assets[@]}"; do
         if echo "$asset_names" | grep -qF "$expected"; then
             info "  ✓ Found: $expected"
         else
             warn "  ✗ Missing: $expected"
+            missing_assets+=("$expected")
         fi
     done
+
+    # Fail if any expected asset is missing.
+    if [[ ${#missing_assets[@]} -gt 0 ]]; then
+        die "Missing expected assets: ${missing_assets[*]}"
+    fi
 
     info "Release v$VERSION complete."
 }
@@ -615,12 +696,13 @@ run_tests() {
         failed=$((failed + 1))
     fi
 
-    # Test 2: Changelog generation doesn't duplicate category.
-    info "Test 2: Changelog category deduplication"
-    local test_notes="Some changelog notes"
+    # Test 2: Changelog generation with actual ### Features input.
+    info "Test 2: Changelog category deduplication (with ### Features input)"
+    local test_notes="### Features
+- Added new feature"
     local test_category="Features"
     local category_heading=""
-    if [[ ! "$test_notes" =~ ^#[[:space:]]*#?[[:space:]]*$test_category ]]; then
+    if ! echo "$test_notes" | head -1 | grep -qE "^#[[:space:]]*#?[[:space:]]*$test_category"; then
         category_heading="### $test_category
 "
     fi
@@ -637,22 +719,51 @@ ${category_heading}${test_notes}
         failed=$((failed + 1))
     fi
 
-    # Test 3: Branch validation logic.
-    info "Test 3: Branch validation logic"
-    # Simulate: local == origin (should pass)
-    local ahead=0 behind=0
-    if [[ "$ahead" -gt 0 && "$behind" -eq 0 ]]; then
-        error "  ✗ Should not detect divergence when equal"
-        failed=$((failed + 1))
-    elif [[ "$behind" -gt 0 && "$ahead" -eq 0 ]]; then
-        error "  ✗ Should not detect divergence when equal"
-        failed=$((failed + 1))
+    # Test 3: Changelog generation without existing category heading.
+    info "Test 3: Changelog category deduplication (without heading)"
+    local test_notes2="Some changelog notes"
+    local test_category2="Features"
+    local category_heading2=""
+    if ! echo "$test_notes2" | head -1 | grep -qE "^#[[:space:]]*#?[[:space:]]*$test_category2"; then
+        category_heading2="### $test_category2
+"
+    fi
+    local test_entry2="## [v0.52.0] - 2026-09-04
+
+${category_heading2}${test_notes2}
+"
+    local dup_count2
+    dup_count2="$(echo "$test_entry2" | grep -c "### Features" || true)"
+    if [[ "$dup_count2" -eq 1 ]]; then
+        info "  ✓ Category appears exactly once"
     else
-        info "  ✓ Equal branches pass validation"
+        error "  ✗ Category appears $dup_count2 times (expected 1)"
+        failed=$((failed + 1))
     fi
 
-    # Test 4: gh release view JSON fields.
-    info "Test 4: GitHub CLI JSON field validation"
+    # Test 4: Branch validation logic — ahead state.
+    info "Test 4: Branch validation logic (ahead rejection)"
+    local ahead=2 behind=0
+    if [[ "$ahead" -gt 0 && "$behind" -eq 0 ]]; then
+        info "  ✓ Ahead state correctly detected"
+    else
+        error "  ✗ Should detect ahead state"
+        failed=$((failed + 1))
+    fi
+
+    # Test 5: Branch validation logic — behind state.
+    info "Test 5: Branch validation logic (behind rejection)"
+    ahead=0
+    behind=3
+    if [[ "$behind" -gt 0 && "$ahead" -eq 0 ]]; then
+        info "  ✓ Behind state correctly detected"
+    else
+        error "  ✗ Should detect behind state"
+        failed=$((failed + 1))
+    fi
+
+    # Test 6: gh release view JSON fields.
+    info "Test 6: GitHub CLI JSON field validation"
     local test_json='{"tagName":"v0.52.0","name":"Release v0.52.0","url":"https://github.com/test/test/releases/tag/v0.52.0","assets":[{"name":"test.tar.gz"}]}'
     local test_tag test_name
     test_tag="$(echo "$test_json" | jq -r '.tagName')"
@@ -666,8 +777,10 @@ ${category_heading}${test_notes}
 
     if [[ "$failed" -eq 0 ]]; then
         info "All tests passed."
+        return 0
     else
-        warn "$failed test(s) failed."
+        error "$failed test(s) failed."
+        return 1
     fi
 }
 
@@ -691,6 +804,12 @@ main() {
     phase_update_changelog
     phase_show_diff
     phase_verify
+
+    # Run tests before any push/tag/release action.
+    if ! run_tests; then
+        die "Tests failed. Fix the issues and retry."
+    fi
+
     phase_commit
     phase_push
     phase_create_pr
@@ -698,9 +817,6 @@ main() {
     phase_tag_and_publish
     phase_wait_for_build
     phase_verify_release
-
-    # Run lightweight tests after successful release.
-    run_tests
 
     info "═══════════════════════════════════════════════════════"
     info "  Release v$VERSION completed successfully!"
