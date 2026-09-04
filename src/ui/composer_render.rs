@@ -261,6 +261,9 @@ pub(super) fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 }
 
 fn decode_speed_label(state: &RenderSnapshot) -> Option<String> {
+    if *state.status() != AppStatus::Streaming {
+        return None;
+    }
     let (tokens_per_second, _) = state.stream_tracker()?.snapshot();
     (tokens_per_second >= 0.05).then(|| format!("Tokens/s: {tokens_per_second:.1}"))
 }
@@ -375,15 +378,6 @@ pub(super) fn activity_status_line(state: &RenderSnapshot, show_picker: bool) ->
     {
         spans.push(Span::styled(
             format!(" ({})", fmt_elapsed_compact(started.elapsed().as_secs())),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
-        ));
-    }
-
-    if *state.status() == AppStatus::Streaming
-        && let Some(speed) = decode_speed_label(state)
-    {
-        spans.push(Span::styled(
-            format!(" · {speed}"),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), show_picker),
         ));
     }
@@ -634,14 +628,18 @@ pub(super) fn render_composer_footer(
             "  ⚠ Press Ctrl+C again to exit".to_owned(),
             get_themed_style(Color::Yellow, COLOR_BG(), Modifier::BOLD, false),
         )
-    } else if let Some(agent) = state.selected_subagent() {
-        (
-            format!("  {} · {} · {}", agent.name(), state.model_name(), location),
-            get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
-        )
     } else {
+        let mut metadata = Vec::new();
+        if let Some(agent) = state.selected_subagent() {
+            metadata.push(agent.name().to_string());
+        }
+        metadata.push(state.model_name().to_string());
+        if let Some(speed) = decode_speed_label(state) {
+            metadata.push(speed);
+        }
+        metadata.push(location);
         (
-            format!("  {} · {}", state.model_name(), location),
+            format!("  {}", metadata.join(" · ")),
             get_themed_style(COLOR_MUTED(), COLOR_BG(), Modifier::empty(), false),
         )
     };
