@@ -258,6 +258,7 @@ pub(in crate::ui) fn render_context_modal(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Header
+            Constraint::Length(1), // Spacer
             Constraint::Min(6),    // Content
         ])
         .split(inner_area);
@@ -290,7 +291,7 @@ pub(in crate::ui) fn render_context_modal(
             Constraint::Length(2),      // Spacer
             Constraint::Percentage(42), // Stats breakdown
         ])
-        .split(modal_chunks[1]);
+        .split(modal_chunks[2]);
 
     let mut grid_area = cols[0];
     grid_area.y = grid_area.y.saturating_add(1);
