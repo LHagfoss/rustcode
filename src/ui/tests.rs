@@ -2232,7 +2232,7 @@ fn activity_status_labels_idle_and_working_states() {
 }
 
 #[test]
-fn streaming_activity_displays_decode_speed() {
+fn streaming_decode_speed_is_displayed_in_composer_footer_not_activity() {
     let mut state = AppState::new();
     state.status = AppStatus::Streaming;
     state.generation_start_time = Some(std::time::Instant::now());
@@ -2242,8 +2242,14 @@ fn streaming_activity_displays_decode_speed() {
     state.stream_tracker = Some(tracker);
 
     let status = activity_status_line(&state.render_snapshot(), false).to_string();
+    let rendered = render_state_to_text(&mut state, 100, 12);
+    let footer = rendered
+        .lines()
+        .find(|line| line.contains("context left"))
+        .expect("composer footer should be rendered");
 
-    assert!(status.contains("Tokens/s: 80.0"), "{status}");
+    assert!(!status.contains("Tokens/s"), "{status}");
+    assert!(footer.contains("Tokens/s: 80.0"), "{footer}");
 }
 
 #[test]
