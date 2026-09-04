@@ -331,19 +331,32 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
     }
+    let message_padding = 2;
+    let content_width = (width as usize).saturating_sub(message_padding).max(10);
     let label = "─ Conversation recap ─";
     let line_style = get_themed_style(COLOR_TURN_SEPARATOR(), COLOR_BG(), Modifier::empty(), false);
     let label_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
     let label_width = label.width();
     let mut lines = vec![Line::from(vec![
+        Span::styled("  ", line_style),
         Span::styled(label, label_style),
         Span::styled(
-            "─".repeat((width as usize).saturating_sub(label_width)),
+            "─".repeat((width as usize).saturating_sub(message_padding + label_width)),
             line_style,
         ),
     ])];
     lines.push(Line::from(""));
-    lines.extend(render_markdown(content, width as usize, false, true));
+    let message_padding = Span::styled("  ", line_style);
+    lines.extend(
+        render_markdown(content, content_width, false, true)
+            .into_iter()
+            .map(|mut line| {
+                if !line.spans.is_empty() {
+                    line.spans.insert(0, message_padding.clone());
+                }
+                line
+            }),
+    );
     lines.push(Line::from(""));
     lines.into_iter().map(|line| own_line(&line)).collect()
 }
