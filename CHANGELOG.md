@@ -1,3 +1,9 @@
+## [v0.51.4](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.4) - 2026-09-04
+
+### Fixes
+- **Context modal spacing:** Restore top padding for the left token grid while retaining model summary spacing ([#937](https://github.com/LHagfoss/rustcode/issues/937); [#957](https://github.com/LHagfoss/rustcode/pull/957)).
+- **Conversation recap alignment:** Add standard left message padding to recap dividers and content while preserving narrow-terminal wrapping ([#954](https://github.com/LHagfoss/rustcode/issues/954); [#956](https://github.com/LHagfoss/rustcode/pull/956)).
+
 ## [v0.51.3](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.3) - 2026-09-03
 
 ### Fixes
