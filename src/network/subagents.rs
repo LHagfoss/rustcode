@@ -286,63 +286,68 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
         let request_api_url = api_base_url.clone();
         let request_model = model_name.clone();
         let request_msgs: Arc<[serde_json::Value]> = msgs.into();
-        let collected = match runner::collect_response(move |previous| {
-            let mut current_msgs =
-                Vec::with_capacity(request_msgs.len() + if previous.is_empty() { 0 } else { 2 });
-            current_msgs.extend(request_msgs.iter().cloned());
-            if !previous.is_empty() {
-                let continuation_assistant = format_continuation_assistant_message(&previous);
-                let nudge = continuation_nudge_for_category(&previous, None);
-                current_msgs.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": continuation_assistant
-                }));
-                current_msgs.push(serde_json::json!({
-                    "role": "user",
-                    "content": nudge
-                }));
-            }
-            let request_client = request_client.clone();
-            let request_state = Arc::clone(&request_state);
-            let request_cancel = request_cancel.clone();
-            let request_buffer = Arc::clone(&request_buffer);
-            let request_api_url = request_api_url.clone();
-            let request_model = request_model.clone();
-            async move {
-                request_buffer.lock().await.reset();
-                let finish_reason = stream_request(
-                    &request_client,
-                    request_state,
-                    request_cancel,
-                    &request_api_url,
-                    &request_model,
-                    current_msgs,
-                    Arc::clone(&request_buffer),
-                    true,
-                    true,
-                    super::stream_request::ThinkingMode::Normal,
-                    crate::tools::ToolSchemaPolicy::subagent(),
-                    None,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                let buffer = request_buffer.lock().await;
-                Ok(super::runner::ResponseChunk {
-                    content: buffer.content.clone(),
-                    final_answer_boundary: buffer.final_answer_boundary,
-                    provider_final_answer_state: buffer.provider_final_answer_state,
-                    finish_reason,
-                    has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
-                    thought_time_ms: buffer.thought_time_ms,
-                    thought_tokens: buffer.thought_tokens,
-                })
-            }
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(e) => return Err(format!("error: subagent request failed: {e}")),
-        };
+        let collected =
+            match runner::collect_response(runner::ContinuationPolicy::default(), move |request| {
+                let mut current_msgs = Vec::with_capacity(
+                    request_msgs.len() + if request.previous.is_empty() { 0 } else { 2 },
+                );
+                current_msgs.extend(request_msgs.iter().cloned());
+                if !request.previous.is_empty() {
+                    let continuation_assistant =
+                        format_continuation_assistant_message(&request.previous);
+                    let nudge = continuation_nudge_for_category(&request.previous, None);
+                    current_msgs.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": continuation_assistant
+                    }));
+                    current_msgs.push(serde_json::json!({
+                        "role": "user",
+                        "content": nudge
+                    }));
+                }
+                let request_client = request_client.clone();
+                let request_state = Arc::clone(&request_state);
+                let request_cancel = request_cancel.clone();
+                let request_buffer = Arc::clone(&request_buffer);
+                let request_api_url = request_api_url.clone();
+                let request_model = request_model.clone();
+                async move {
+                    request_buffer.lock().await.reset();
+                    let finish_reason = stream_request(
+                        &request_client,
+                        request_state,
+                        request_cancel,
+                        &request_api_url,
+                        &request_model,
+                        current_msgs,
+                        Arc::clone(&request_buffer),
+                        true,
+                        true,
+                        super::stream_request::ThinkingMode::Normal,
+                        crate::tools::ToolSchemaPolicy::subagent(),
+                        None,
+                        request.output_token_limit,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    let buffer = request_buffer.lock().await;
+                    Ok(super::runner::ResponseChunk {
+                        content: buffer.content.clone(),
+                        final_answer_boundary: buffer.final_answer_boundary,
+                        provider_final_answer_state: buffer.provider_final_answer_state,
+                        finish_reason,
+                        has_native_tool_calls: !buffer.native_tool_calls.is_empty(),
+                        output_token_limit: buffer.output_token_limit,
+                        thought_time_ms: buffer.thought_time_ms,
+                        thought_tokens: buffer.thought_tokens,
+                    })
+                }
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(e) => return Err(format!("error: subagent request failed: {e}")),
+            };
         let content = collected.content;
         let native_tool_calls = stream_buffer.lock().await.native_tool_calls.clone();
 

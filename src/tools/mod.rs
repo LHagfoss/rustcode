@@ -17,8 +17,8 @@ mod video;
 #[allow(unused_imports)]
 pub use dispatch::{execute, needs_confirmation};
 pub use parser::{
-    diagnose_failed_tool_call, is_code_editing_tool, is_tool_call_start, parse_tool_call,
-    parse_tool_calls,
+    diagnose_failed_tool_call, has_incomplete_actionable_tool_call, is_code_editing_tool,
+    is_tool_call_start, parse_tool_call, parse_tool_calls,
 };
 pub use schema::{native_tools_schema, tool_system_prompt};
 
