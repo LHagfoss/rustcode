@@ -19,6 +19,32 @@ fn render_state_to_text(state: &mut AppState, width: u16, height: u16) -> String
         .join("\n")
 }
 
+fn render_context_modal_to_text(state: &AppState, width: u16, height: u16) -> String {
+    use crate::inline_terminal::InlineTerminal as Terminal;
+    use ratatui::{backend::TestBackend, layout::Rect};
+
+    let snapshot = state.render_snapshot();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            super::modals::render_context_modal(
+                frame,
+                &snapshot,
+                Rect::new(0, height.saturating_sub(3), width, 3),
+            );
+        })
+        .unwrap();
+
+    (0..height)
+        .map(|row| {
+            (0..width)
+                .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn render_snapshot_to_text(state: &AppState, width: u16, height: u16) -> String {
     use crate::inline_terminal::InlineTerminal as Terminal;
     use ratatui::backend::TestBackend;
@@ -3808,7 +3834,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert!(breakdown.assistant_tokens > 0);
     assert!(breakdown.total_used > 0);
 
-    let rendered = render_state_to_text(&mut state, 120, 24);
+    let rendered = render_context_modal_to_text(&state, 120, 24);
     assert!(rendered.contains("context usage"), "rendered: {rendered:?}");
     assert!(
         rendered.contains("Token usage by category"),
@@ -3822,6 +3848,10 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
     assert!(rendered.contains("Free space"), "rendered: {rendered:?}");
 
     let lines = rendered.lines().collect::<Vec<_>>();
+    let header_row = lines
+        .iter()
+        .position(|line| line.contains("context usage"))
+        .expect("context header should be rendered");
     let summary_row = lines
         .iter()
         .position(|line| line.contains(" tokens (") && line.contains(" · "))
@@ -3834,6 +3864,7 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .iter()
         .position(|line| line.contains("Token usage by category"))
         .expect("category header should be rendered");
+    assert_eq!(summary_row, header_row + 3);
     assert_eq!(first_grid_row, summary_row);
     assert_eq!(category_header_row, summary_row + 2);
 }
