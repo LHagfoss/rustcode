@@ -41,6 +41,28 @@ fn should_apply_loop_recovery(
     !completion_requested && (output_abort || has_evidence_recovery)
 }
 
+const MAX_MALFORMED_TOOL_HISTORY_BYTES: usize = 4096;
+
+/// Keep malformed provider output useful for diagnostics without replaying a
+/// potentially megabyte-sized partial tool argument into every retry.
+fn bounded_malformed_tool_history(content: &str) -> String {
+    if content.len() <= MAX_MALFORMED_TOOL_HISTORY_BYTES {
+        return content.to_owned();
+    }
+
+    // Leave ample room for the marker, including the decimal byte count.
+    let preview_limit = MAX_MALFORMED_TOOL_HISTORY_BYTES.saturating_sub(128);
+    let mut preview_end = preview_limit.min(content.len());
+    while preview_end > 0 && !content.is_char_boundary(preview_end) {
+        preview_end -= 1;
+    }
+    let marker = format!(
+        "\n[malformed tool response truncated by harness; {} bytes omitted]",
+        content.len().saturating_sub(preview_end)
+    );
+    format!("{}{}", &content[..preview_end], marker)
+}
+
 fn incomplete_tool_result(metadata: &crate::network::events::ToolResultMetadata) -> bool {
     metadata.truncated
         || matches!(
@@ -1294,7 +1316,8 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         let raw_content = ctx.response.final_content.clone();
         let repeated_malformed = record_malformed_call(ctx, &raw_content, &[]);
         let mut s = state.lock().await;
-        let mut msg = ChatMessage::new("assistant", &ctx.response.final_content);
+        let bounded_history_content = bounded_malformed_tool_history(&ctx.response.final_content);
+        let mut msg = ChatMessage::new("assistant", bounded_history_content);
         msg.response_time_ms = Some(turn_response_time_ms);
         msg.token_usage = turn_token_usage.clone();
         msg.thought_time_ms = thought_time_ms;
@@ -1344,8 +1367,8 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 #[cfg(test)]
 mod tests {
     use super::{
-        benign_shell_wrapper_failure, content_bearing_inspection_status, incomplete_tool_result,
-        should_apply_loop_recovery,
+        benign_shell_wrapper_failure, bounded_malformed_tool_history,
+        content_bearing_inspection_status, incomplete_tool_result, should_apply_loop_recovery,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -1441,6 +1464,26 @@ mod tests {
             completeness: ToolResultCompleteness::UserLimited,
             ..Default::default()
         }));
+    }
+
+    #[test]
+    fn malformed_tool_history_is_bounded_and_keeps_a_diagnostic_marker() {
+        let content = format!("<tool_call>\n{}", "x".repeat(20_000));
+        let bounded = bounded_malformed_tool_history(&content);
+
+        assert!(bounded.len() <= super::MAX_MALFORMED_TOOL_HISTORY_BYTES);
+        assert!(bounded.starts_with("<tool_call>"));
+        assert!(bounded.contains("malformed tool response truncated by harness"));
+        assert!(bounded.contains("bytes omitted"));
+    }
+
+    #[test]
+    fn malformed_tool_history_does_not_split_utf8() {
+        let content = format!("<tool_call>{}", "🙂".repeat(4_000));
+        let bounded = bounded_malformed_tool_history(&content);
+
+        assert!(bounded.len() <= super::MAX_MALFORMED_TOOL_HISTORY_BYTES);
+        assert!(std::str::from_utf8(bounded.as_bytes()).is_ok());
     }
 
     #[test]

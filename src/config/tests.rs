@@ -312,6 +312,51 @@ fn every_model_tool_round_cap_preserves_full_final_cap() {
 }
 
 #[test]
+fn verified_profile_can_raise_tool_round_cap_without_changing_default() {
+    let default_profile = ModelProfile {
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(default_profile.completion_token_limit(true), 8_192);
+
+    let kat_omlx_profile = ModelProfile {
+        name: "kat-coder".to_string(),
+        url: "https://tokmax.paral.no/v1/chat/completions".to_string(),
+        model: "KAT-Coder-V2.5-Dev-OptiQ-4bit".to_string(),
+        engine: Some("omlx".to_string()),
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        tool_max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(kat_omlx_profile.completion_token_limit(true), 16_000);
+    assert_eq!(kat_omlx_profile.completion_token_limit(false), 16_000);
+}
+
+#[test]
+fn tool_round_override_is_bounded_by_profile_and_hard_safety_limits() {
+    let profile = ModelProfile {
+        context_window: Some(128_000),
+        max_tokens: Some(16_000),
+        tool_max_tokens: Some(64_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(profile.completion_token_limit(true), 16_000);
+
+    let larger_profile = ModelProfile {
+        context_window: Some(262_144),
+        max_tokens: Some(65_536),
+        tool_max_tokens: Some(64_000),
+        ..ModelProfile::default()
+    };
+    assert_eq!(
+        larger_profile.completion_token_limit(true),
+        MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS
+    );
+}
+
+#[test]
 fn ordinary_unconfigured_output_uses_provider_default_but_tools_are_bounded() {
     let profile = ModelProfile {
         context_window: Some(128_000),
@@ -321,6 +366,18 @@ fn ordinary_unconfigured_output_uses_provider_default_but_tools_are_bounded() {
     assert_eq!(profile.output_token_limit(false, false), None);
     assert_eq!(profile.output_token_limit(true, false), Some(8192));
     assert_eq!(profile.output_token_limit(false, true), Some(32_000));
+}
+
+#[test]
+fn tool_round_override_round_trips_through_json() {
+    let profile = ModelProfile {
+        tool_max_tokens: Some(16_000),
+        ..ModelProfile::default()
+    };
+    let encoded = serde_json::to_value(&profile).unwrap();
+    assert_eq!(encoded["tool_max_tokens"], 16_000);
+    let decoded: ModelProfile = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded.tool_max_tokens, Some(16_000));
 }
 
 #[test]
