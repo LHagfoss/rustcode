@@ -21,6 +21,9 @@ pub(crate) struct StreamBuffer {
     pub thought_time_ms: u64,
     pub thought_tokens: u32,
     pub thought_started_at: Option<std::time::Instant>,
+    /// Effective output ceiling used for this request, recorded so the turn
+    /// runner can make an evidence-based continuation decision.
+    pub output_token_limit: Option<u32>,
     /// Provider-assigned ids for the structured tool calls in this response, in
     /// the order the calls appear. Empty for the text protocols, where a call is
     /// prose the model wrote and has no identity of its own.
@@ -43,6 +46,7 @@ impl StreamBuffer {
             thought_time_ms: 0,
             thought_tokens: 0,
             thought_started_at: None,
+            output_token_limit: None,
             tool_call_ids: Vec::new(),
             native_tool_calls: Vec::new(),
         }
@@ -56,6 +60,7 @@ impl StreamBuffer {
         self.thought_time_ms = 0;
         self.thought_tokens = 0;
         self.thought_started_at = None;
+        self.output_token_limit = None;
         self.tool_call_ids.clear();
         self.native_tool_calls.clear();
     }

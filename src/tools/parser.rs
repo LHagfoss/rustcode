@@ -5,7 +5,8 @@
 //! registry when producing schema-aware diagnostics.
 
 pub use rustcode_tool_protocol::{
-    is_code_editing_tool, is_tool_call_start, parse_tool_call, parse_tool_calls,
+    has_incomplete_actionable_tool_call, is_code_editing_tool, is_tool_call_start, parse_tool_call,
+    parse_tool_calls,
 };
 
 pub(crate) use rustcode_tool_protocol::{find_closing_tool_fence, repair_json};

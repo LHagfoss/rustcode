@@ -312,7 +312,7 @@ fn every_model_tool_round_cap_preserves_full_final_cap() {
 }
 
 #[test]
-fn verified_profile_can_raise_tool_round_cap_without_changing_default() {
+fn verified_profile_can_raise_tool_ceiling_without_changing_initial_default() {
     let default_profile = ModelProfile {
         context_window: Some(128_000),
         max_tokens: Some(16_000),
@@ -330,7 +330,8 @@ fn verified_profile_can_raise_tool_round_cap_without_changing_default() {
         tool_max_tokens: Some(16_000),
         ..ModelProfile::default()
     };
-    assert_eq!(kat_omlx_profile.completion_token_limit(true), 16_000);
+    assert_eq!(kat_omlx_profile.completion_token_limit(true), 8_192);
+    assert_eq!(kat_omlx_profile.tool_output_ceiling(), 16_000);
     assert_eq!(kat_omlx_profile.completion_token_limit(false), 16_000);
 }
 
@@ -342,7 +343,8 @@ fn tool_round_override_is_bounded_by_profile_and_hard_safety_limits() {
         tool_max_tokens: Some(64_000),
         ..ModelProfile::default()
     };
-    assert_eq!(profile.completion_token_limit(true), 16_000);
+    assert_eq!(profile.completion_token_limit(true), 8_192);
+    assert_eq!(profile.tool_output_ceiling(), 16_000);
 
     let larger_profile = ModelProfile {
         context_window: Some(262_144),
@@ -350,8 +352,9 @@ fn tool_round_override_is_bounded_by_profile_and_hard_safety_limits() {
         tool_max_tokens: Some(64_000),
         ..ModelProfile::default()
     };
+    assert_eq!(larger_profile.completion_token_limit(true), 8_192);
     assert_eq!(
-        larger_profile.completion_token_limit(true),
+        larger_profile.tool_output_ceiling(),
         MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS
     );
 }

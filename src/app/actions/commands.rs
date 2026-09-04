@@ -204,6 +204,7 @@ async fn summarize_session_inner(
         crate::network::stream_request::ThinkingMode::Normal,
         crate::tools::ToolSchemaPolicy::root(false),
         None,
+        None,
     )
     .await;
 

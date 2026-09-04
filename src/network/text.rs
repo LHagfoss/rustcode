@@ -18,6 +18,13 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
         return false;
     }
 
+    // Keep an incomplete textual envelope incomplete even if the tolerant
+    // parser can repair its JSON. Executing repaired output after a length
+    // stop would risk silently applying a truncated mutation.
+    if crate::tools::has_incomplete_actionable_tool_call(content) {
+        return true;
+    }
+
     // If the model already produced a valid tool call, we don't need to continue text generation.
     // We should execute the tool and get its output first.
     if !crate::tools::parse_tool_calls(content, crate::config::ToolProtocol::Native).is_empty() {
@@ -66,6 +73,18 @@ pub(crate) fn is_cut_off(content: &str, finish_reason: Option<&str>) -> bool {
     }
 
     false
+}
+
+/// Evidence used by adaptive continuation. This is deliberately narrower than
+/// `is_cut_off`: ordinary prose and reasoning-only responses may continue for
+/// the existing reasons, but they must never receive a larger output ceiling.
+pub(crate) fn is_adaptive_tool_continuation_candidate(
+    content: &str,
+    finish_reason: Option<&str>,
+) -> bool {
+    matches!(finish_reason, Some("length" | "tool_arguments_limit"))
+        && !is_reasoning_only(content)
+        && crate::tools::has_incomplete_actionable_tool_call(content)
 }
 
 /// True when the prose (outside `<think>` blocks) ends on language that
@@ -485,6 +504,26 @@ mod tests {
     fn test_is_cut_off_reasoning_only() {
         assert!(is_cut_off("<think>thinking</think>", None));
         assert!(!is_cut_off("<think>thinking</think>\n\nthe answer", None));
+    }
+
+    #[test]
+    fn adaptive_continuation_requires_truncated_actionable_tool_output() {
+        assert!(is_adaptive_tool_continuation_candidate(
+            "<tool_call><function=write_to_file>{\"path\":\"x\",\"content\":\"partial",
+            Some("length")
+        ));
+        assert!(!is_adaptive_tool_continuation_candidate(
+            "<think>still planning</think>",
+            Some("length")
+        ));
+        assert!(!is_adaptive_tool_continuation_candidate(
+            "<tool_call><function=write_to_file>{\"path\":\"x\"}</tool_call>",
+            Some("length")
+        ));
+        assert!(!is_adaptive_tool_continuation_candidate(
+            "<tool_call><function=write_to_file>{\"path\":\"x\",\"content\":\"partial",
+            Some("context_length_exceeded")
+        ));
     }
 
     #[test]
