@@ -186,8 +186,13 @@ validate() {
     local main_upstream main_local
     main_upstream="$(git -C "$REPO_ROOT" rev-parse --verify origin/main 2>/dev/null || true)"
     main_local="$(git -C "$REPO_ROOT" rev-parse --verify main 2>/dev/null || true)"
-    if [[ -n "$main_upstream" && "$main_local" != "$main_upstream" ]]; then
-        die "main is not up to date with origin/main. Run 'git pull' and retry."
+    if [[ -n "$main_upstream" ]]; then
+        # Check if local main is behind origin/main (needs pull).
+        local behind_count
+        behind_count="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null | awk '{print $1}')"
+        if [[ "$behind_count" -gt 0 ]]; then
+            die "main is behind origin/main by $behind_count commit(s). Run 'git pull' and retry."
+        fi
     fi
 
     info "All validations passed."
