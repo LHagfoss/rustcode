@@ -1103,6 +1103,23 @@ mod tests {
     }
 
     #[test]
+    fn verified_profile_tool_output_limit_can_be_raised_to_16k() {
+        let profile = crate::config::ModelProfile {
+            context_window: Some(128_000),
+            max_tokens: Some(16_000),
+            tool_max_tokens: Some(16_000),
+            ..crate::config::ModelProfile::default()
+        };
+        let mut payload = serde_json::json!({});
+        apply_output_token_limit(
+            &mut payload,
+            profile.resolved_output_token_field(),
+            profile.output_token_limit(true, false),
+        );
+        assert_eq!(payload["max_tokens"], 16_000);
+    }
+
+    #[test]
     fn native_google_payload_uses_max_output_tokens_capability_field() {
         let profile = crate::config::ModelProfile {
             url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3:generateContent"
@@ -1126,6 +1143,7 @@ mod tests {
         let profile = crate::config::ModelProfile {
             context_window: Some(128_000),
             max_tokens: Some(16_000),
+            tool_max_tokens: Some(16_000),
             ..crate::config::ModelProfile::default()
         };
         let limit = profile
@@ -1773,7 +1791,9 @@ pub async fn stream_request(
             "output_token_field": output_token_limit.map(|_| output_token_field),
             "output_token_limit": output_token_limit,
             "output_token_limit_source":
-                if profile.as_ref().is_some_and(|p| {
+                if allow_tools && profile.as_ref().is_some_and(|p| p.tool_max_tokens.is_some()) {
+                    "profile_tool"
+                } else if profile.as_ref().is_some_and(|p| {
                     p.max_output_tokens.is_some() || p.max_tokens.is_some()
                 }) {
                     "profile"
