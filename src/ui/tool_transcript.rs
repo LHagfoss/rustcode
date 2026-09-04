@@ -1180,6 +1180,7 @@ pub(super) fn is_hidden_system_notice(content: &str) -> bool {
         || content.contains("Oversized response:")
         || content.starts_with(crate::network::compaction::SUMMARY_MARKER)
         || content.starts_with("[harness: stopped after ")
+        || (content.starts_with("[harness: turn stopped — ") && !is_turn_cancelled_notice(content))
         || content.contains("Your reasoning became repetitive")
         || content.contains("reasoning loop")
 }

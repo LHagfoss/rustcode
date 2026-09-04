@@ -17,6 +17,10 @@ pub(super) fn render_status_panel<'a>(
         push_centered_separator(lines, "New Chat Started", width, show_picker);
         return;
     }
+    if is_turn_cancelled_notice(content) {
+        push_centered_separator(lines, "✕ Turn cancelled", width, show_picker);
+        return;
+    }
 
     // Convert verbose internal agent-steering prompts into concise, human-friendly status lines in the UI.
     let human_summary = if content.contains("stuck in a loop")
@@ -242,6 +246,10 @@ pub(super) fn render_status_panel<'a>(
         bot_border,
         Style::default().fg(border_c).bg(reset_bg),
     )]));
+}
+
+pub(super) fn is_turn_cancelled_notice(content: &str) -> bool {
+    content.trim() == "[harness: turn stopped — cancelled]"
 }
 
 pub(crate) fn build_claude_startup_banner_snapshot(
