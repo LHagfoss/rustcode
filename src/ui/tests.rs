@@ -1967,6 +1967,16 @@ fn status_panels_render_minimal_inline() {
         loop_abort_lines[0].spans[1].content,
         "Repetitive tool loop detected — stopping tools and requesting final response"
     );
+
+    let mut cancelled_lines = Vec::new();
+    render_status_panel(
+        "[harness: turn stopped — cancelled]",
+        80,
+        false,
+        &mut cancelled_lines,
+    );
+    assert_eq!(cancelled_lines.len(), 2);
+    assert_eq!(cancelled_lines[1].spans[1].content, " ✕ Turn cancelled ");
 }
 
 #[test]
@@ -2082,6 +2092,30 @@ fn harness_recovery_notices_are_hidden_from_transcript() {
     assert!(!super::is_hidden_system_notice(
         "Notice: background task finished"
     ));
+    assert!(!super::is_hidden_system_notice(
+        "[harness: turn stopped — cancelled]"
+    ));
+}
+
+#[test]
+fn cancelled_turn_renders_as_a_human_status_separator() {
+    let mut state = crate::app::AppState::new();
+    state.history.push(crate::app::ChatMessage::new(
+        "system",
+        "[harness: turn stopped — cancelled]",
+    ));
+
+    let rendered = super::render_committed_history_block(&state, 0, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("✕ Turn cancelled"))
+    );
+    assert!(!rendered.iter().any(|line| line.contains("[harness:")));
 }
 
 #[test]
