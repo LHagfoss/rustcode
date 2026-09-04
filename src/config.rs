@@ -15,6 +15,9 @@ pub const DEFAULT_SUBAGENT_CONCURRENCY_LIMIT: usize = 4;
 /// call; a smaller cap keeps local agent turns responsive while final prose
 /// still uses the profile's full completion budget.
 pub const DEFAULT_TOOL_ROUND_MAX_TOKENS: u32 = 8192;
+/// Upper bound for an explicitly verified profile tool-round override. This
+/// remains below the normal context-budget ceiling for a 128k context model.
+pub const MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS: u32 = 32768;
 /// Safe default for workspace-changing calls emitted in one model response.
 pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 1;
 /// Keep profile overrides bounded even when a config typo requests an
@@ -104,6 +107,11 @@ pub struct ModelProfile {
     /// bounded client-side cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Optional tool-round completion cap for a verified provider/model
+    /// combination. Unknown profiles retain the safe 8K default. Recovery
+    /// requests intentionally ignore this override and remain small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_max_tokens: Option<u32>,
     /// Explicit name for the total provider output ceiling. `max_tokens` is
     /// retained as a legacy alias for existing configuration files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -217,10 +225,19 @@ impl ModelProfile {
     pub fn completion_token_limit(&self, allow_tools: bool) -> u32 {
         let configured = self.context_budget().max_output_tokens;
         if allow_tools {
-            configured.min(DEFAULT_TOOL_ROUND_MAX_TOKENS)
+            self.tool_completion_token_limit(configured)
         } else {
             configured
         }
+    }
+
+    /// Resolve an explicitly opted-in tool limit without allowing a profile
+    /// typo to bypass the context-derived normal completion ceiling.
+    fn tool_completion_token_limit(&self, configured: u32) -> u32 {
+        self.tool_max_tokens
+            .unwrap_or(DEFAULT_TOOL_ROUND_MAX_TOKENS)
+            .clamp(1, MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS)
+            .min(configured)
     }
 
     /// Resolve the endpoint's output-limit field. Explicit profile metadata
