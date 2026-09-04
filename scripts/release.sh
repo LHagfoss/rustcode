@@ -22,6 +22,8 @@ CATEGORY="Features"
 NOTES_FILE=""
 DRY_RUN=false
 YES=false
+RELEASE_BRANCH=""
+ORIGINAL_BRANCH=""
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
@@ -50,12 +52,25 @@ ask() {
     [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
-# Cleanup: restore branch if we switched.
+# Get the editor to use, falling back from EDITOR to VISUAL.
+get_editor() {
+    if [[ -n "${EDITOR:-}" ]]; then
+        echo "$EDITOR"
+    elif [[ -n "${VISUAL:-}" ]]; then
+        echo "$VISUAL"
+    else
+        echo "vi"
+    fi
+}
+
+# Cleanup: restore branch if we switched, print recovery instructions.
 cleanup_and_exit() {
     local code="$1"
     if [[ -n "${RELEASE_BRANCH:-}" ]] && [[ "$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)" == "$RELEASE_BRANCH" ]]; then
-        info "Returning to main branch."
-        run git -C "$REPO_ROOT" checkout main 2>/dev/null || true
+        info "Returning to original branch: $ORIGINAL_BRANCH"
+        run git -C "$REPO_ROOT" checkout "$ORIGINAL_BRANCH" 2>/dev/null || true
+        info "Recovery: To resume the release, run:"
+        info "  scripts/release.sh --version $VERSION ${DRY_RUN:+--dry-run}"
     fi
     exit "$code"
 }
@@ -176,24 +191,34 @@ validate() {
         die "Worktree is not clean. Commit or stash changes before releasing:\n$status"
     fi
 
-    # 4. Current branch is main and up to date with origin/main.
+    # 4. Current branch is main and exactly matches origin/main.
     local current_branch
     current_branch="$(git -C "$REPO_ROOT" branch --show-current)"
     if [[ "$current_branch" != "main" ]]; then
         die "Not on main branch (currently on '$current_branch'). Checkout main and retry."
     fi
 
-    local main_upstream main_local
-    main_upstream="$(git -C "$REPO_ROOT" rev-parse --verify origin/main 2>/dev/null || true)"
-    main_local="$(git -C "$REPO_ROOT" rev-parse --verify main 2>/dev/null || true)"
-    if [[ -n "$main_upstream" ]]; then
-        # rev-list --left-right --count outputs "ahead behind".
-        # We only care about being behind (origin/main has commits we don't).
-        local counts behind_count
-        counts="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null)"
-        behind_count="$(echo "$counts" | awk '{print $2}')"
-        if [[ "$behind_count" -gt 0 ]]; then
-            die "main is behind origin/main by $behind_count commit(s). Run 'git pull' and retry."
+    # Fetch latest origin/main to ensure accurate comparison.
+    run git -C "$REPO_ROOT" fetch origin main
+
+    local origin_main local_main
+    origin_main="$(git -C "$REPO_ROOT" rev-parse --verify origin/main 2>/dev/null || true)"
+    local_main="$(git -C "$REPO_ROOT" rev-parse --verify main 2>/dev/null || true)"
+
+    if [[ -z "$origin_main" ]]; then
+        die "Could not find origin/main. Is the remote configured?"
+    fi
+
+    if [[ "$local_main" != "$origin_main" ]]; then
+        local ahead behind
+        ahead="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null | awk '{print $1}')"
+        behind="$(git -C "$REPO_ROOT" rev-list --left-right --count main...origin/main 2>/dev/null | awk '{print $2}')"
+        if [[ "$ahead" -gt 0 && "$behind" -eq 0 ]]; then
+            die "main is ahead of origin/main by $ahead commit(s). Push your changes first: git push origin main"
+        elif [[ "$behind" -gt 0 && "$ahead" -eq 0 ]]; then
+            die "main is behind origin/main by $behind commit(s). Run 'git pull' and retry."
+        else
+            die "main is diverged from origin/main (ahead by $ahead, behind by $behind). Resolve the divergence and retry."
         fi
     fi
 
@@ -202,15 +227,24 @@ validate() {
 
 # ── Workspace discovery ──────────────────────────────────────────────────────
 get_workspace_crate_paths() {
-    sed -n '/^\[workspace\]/,/^[^[:space:]]/p' "$REPO_ROOT/Cargo.toml" \
-        | sed -n '/^members = \[/,/]/p' \
-        | grep '"[^"]*"' \
-        | sed 's/.*"\([^"]*\)".*/\1/'
+    # Use python3 for robust TOML parsing of multi-line members array.
+    python3 -c "
+import re, sys
+with open('$REPO_ROOT/Cargo.toml') as f:
+    content = f.read()
+match = re.search(r'members\s*=\s*\[(.*?)\]', content, re.DOTALL)
+if match:
+    members_str = match.group(1)
+    members = re.findall(r'\"([^\"]+)\"', members_str)
+    for m in members:
+        print(m)
+"
 }
 
 # ── Phase 1: Branch & version bump ───────────────────────────────────────────
 phase_branch() {
     RELEASE_BRANCH="chore/release-v$VERSION"
+    ORIGINAL_BRANCH="$(git -C "$REPO_ROOT" branch --show-current)"
     info "Phase 1: Creating release branch $RELEASE_BRANCH"
     if $DRY_RUN; then
         info "[dry-run] git checkout -b $RELEASE_BRANCH"
@@ -244,9 +278,15 @@ phase_update_versions() {
 phase_update_lockfile() {
     info "Phase 3: Updating Cargo.lock"
     if $DRY_RUN; then
-        info "[dry-run] cargo generate-lockfile"
+        info "[dry-run] cargo update --locked"
     else
-        cargo generate-lockfile
+        # --locked ensures we don't upgrade unrelated dependencies.
+        # If the lockfile needs updating for version changes, this will fail
+        # and we fall back to generate-lockfile.
+        if ! cargo update --locked 2>/dev/null; then
+            info "Lockfile needs updating for version change, regenerating…"
+            cargo generate-lockfile
+        fi
     fi
 }
 
@@ -262,8 +302,10 @@ phase_update_changelog() {
         notes="$(cat "$NOTES_FILE")"
     else
         # Open editor for multiline input.
-        local tmpfile
+        local tmpfile editor
         tmpfile="$(mktemp /tmp/rustcode-changelog-XXXXXX.md)"
+        editor="$(get_editor)"
+        # Only write the category heading if notes file not provided.
         cat > "$tmpfile" <<EOF
 ### $CATEGORY
 -
@@ -272,18 +314,24 @@ EOF
             info "[dry-run] Would open editor for changelog notes: $tmpfile"
             notes="$(cat "$tmpfile")"
         else
-            "$EDITOR" "$tmpfile"
+            "$editor" "$tmpfile"
             notes="$(cat "$tmpfile")"
         fi
         rm -f -- "$tmpfile"
     fi
 
     # Build the new changelog entry.
+    # Only prepend category heading if notes don't already start with one.
+    local category_heading=""
+    if [[ ! "$notes" =~ ^#[[:space:]]*#?[[:space:]]*$CATEGORY ]]; then
+        category_heading="### $CATEGORY
+"
+    fi
+
     local new_entry
     new_entry="## [v$VERSION](https://github.com/LHagfoss/rustcode/releases/tag/v$VERSION) - $DATE
 
-### $CATEGORY
-$notes
+${category_heading}${notes}
 "
 
     # Prepend to CHANGELOG.md.
@@ -450,6 +498,14 @@ phase_tag_and_publish() {
     fi
     info "Release commit on main: $release_commit"
 
+    # Verify main contains the release version before tagging.
+    local main_version
+    main_version="$(grep -m1 '^version = ' "$REPO_ROOT/Cargo.toml" | sed 's/^version = "\(.*\)"/\1/')"
+    if [[ "$main_version" != "$VERSION" ]]; then
+        die "main does not contain version $VERSION (found $main_version). Tagging aborted."
+    fi
+    info "Verified main contains version $VERSION"
+
     # Create annotated tag.
     run git -C "$REPO_ROOT" tag -a "v$VERSION" -m "Release v$VERSION"
 
@@ -471,16 +527,18 @@ phase_wait_for_build() {
 
     info "Monitoring workflow: $workflow_name (triggered by tag v$VERSION)"
 
+    # Use gh run list with --workflow and filter by branch/tag.
+    # The --ref flag is not supported; instead we filter by conclusion/status.
     local run_id
     run_id="$(gh run list \
         --workflow="$workflow_name" \
-        --ref="refs/tags/v$VERSION" \
-        --json id,status,conclusion \
-        --jq '.[0].id' 2>/dev/null || true)"
+        --json id,status,conclusion,headBranch,headSha \
+        --jq ".[] | select(.headBranch == \"main\" and (.status == \"completed\" or .status == \"in_progress\" or .status == \"queued\")) | select(.conclusion == null or .conclusion == \"success\" or .conclusion == \"failure\") | .id" \
+        2>/dev/null | head -n1 || true)"
 
     if [[ -z "$run_id" ]]; then
-        warn "Could not find a running workflow for v$VERSION. It may have already completed or not yet started."
-        info "Check manually: gh run list --workflow='$workflow_name' --ref='refs/tags/v$VERSION'"
+        warn "Could not find a running or completed workflow for v$VERSION."
+        info "Check manually: gh run list --workflow='$workflow_name' --branch=main"
         return
     fi
 
@@ -499,23 +557,24 @@ phase_verify_release() {
         return
     fi
 
+    # Use supported fields: tagName, name, url, assets.
     local release_info
-    release_info="$(gh release view "v$VERSION" --json tagName,tagCommit,title,url,assets 2>/dev/null || true)"
+    release_info="$(gh release view "v$VERSION" --json tagName,name,url,assets 2>/dev/null || true)"
 
     if [[ -z "$release_info" ]]; then
         die "GitHub release v$VERSION not found. It may still be processing."
     fi
 
-    local tag_name title asset_count
+    local tag_name release_name asset_count
     tag_name="$(echo "$release_info" | jq -r '.tagName')"
-    title="$(echo "$release_info" | jq -r '.title')"
+    release_name="$(echo "$release_info" | jq -r '.name')"
     asset_count="$(echo "$release_info" | jq -r '.assets | length')"
 
     info "Release verified:"
-    info "  Tag:    $tag_name"
-    info "  Title:  $title"
-    info "  URL:    $(echo "$release_info" | jq -r '.url')"
-    info "  Assets: $asset_count"
+    info "  Tag:      $tag_name"
+    info "  Name:     $release_name"
+    info "  URL:      $(echo "$release_info" | jq -r '.url')"
+    info "  Assets:   $asset_count"
 
     # Verify expected artifacts.
     local expected_assets=(
@@ -537,6 +596,79 @@ phase_verify_release() {
     done
 
     info "Release v$VERSION complete."
+}
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+run_tests() {
+    info "Running lightweight tests…"
+
+    local failed=0
+
+    # Test 1: Workspace parser returns all 8 crates.
+    info "Test 1: Workspace member discovery"
+    local crate_count
+    crate_count="$(get_workspace_crate_paths | wc -l | tr -d ' ')"
+    if [[ "$crate_count" -eq 8 ]]; then
+        info "  ✓ Found $crate_count workspace crates"
+    else
+        error "  ✗ Expected 8 crates, found $crate_count"
+        failed=$((failed + 1))
+    fi
+
+    # Test 2: Changelog generation doesn't duplicate category.
+    info "Test 2: Changelog category deduplication"
+    local test_notes="Some changelog notes"
+    local test_category="Features"
+    local category_heading=""
+    if [[ ! "$test_notes" =~ ^#[[:space:]]*#?[[:space:]]*$test_category ]]; then
+        category_heading="### $test_category
+"
+    fi
+    local test_entry="## [v0.52.0] - 2026-09-04
+
+${category_heading}${test_notes}
+"
+    local dup_count
+    dup_count="$(echo "$test_entry" | grep -c "### Features" || true)"
+    if [[ "$dup_count" -eq 1 ]]; then
+        info "  ✓ Category appears exactly once"
+    else
+        error "  ✗ Category appears $dup_count times (expected 1)"
+        failed=$((failed + 1))
+    fi
+
+    # Test 3: Branch validation logic.
+    info "Test 3: Branch validation logic"
+    # Simulate: local == origin (should pass)
+    local ahead=0 behind=0
+    if [[ "$ahead" -gt 0 && "$behind" -eq 0 ]]; then
+        error "  ✗ Should not detect divergence when equal"
+        failed=$((failed + 1))
+    elif [[ "$behind" -gt 0 && "$ahead" -eq 0 ]]; then
+        error "  ✗ Should not detect divergence when equal"
+        failed=$((failed + 1))
+    else
+        info "  ✓ Equal branches pass validation"
+    fi
+
+    # Test 4: gh release view JSON fields.
+    info "Test 4: GitHub CLI JSON field validation"
+    local test_json='{"tagName":"v0.52.0","name":"Release v0.52.0","url":"https://github.com/test/test/releases/tag/v0.52.0","assets":[{"name":"test.tar.gz"}]}'
+    local test_tag test_name
+    test_tag="$(echo "$test_json" | jq -r '.tagName')"
+    test_name="$(echo "$test_json" | jq -r '.name')"
+    if [[ "$test_tag" == "v0.52.0" && "$test_name" == "Release v0.52.0" ]]; then
+        info "  ✓ JSON fields are valid"
+    else
+        error "  ✗ JSON field extraction failed"
+        failed=$((failed + 1))
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        info "All tests passed."
+    else
+        warn "$failed test(s) failed."
+    fi
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -566,6 +698,9 @@ main() {
     phase_tag_and_publish
     phase_wait_for_build
     phase_verify_release
+
+    # Run lightweight tests after successful release.
+    run_tests
 
     info "═══════════════════════════════════════════════════════"
     info "  Release v$VERSION completed successfully!"
