@@ -1,3 +1,8 @@
+## [v0.51.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.6) - 2026-09-05
+
+### Fixes
+- Moved the live tokens-per-second metric from the activity line into the composer footer.
+- Rendered YOLO mode toggles as clear, centered in-chat status separators.
 ## [v0.51.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.5) - 2026-09-04
 
 ### Fixes
