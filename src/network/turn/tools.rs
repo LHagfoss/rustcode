@@ -27,7 +27,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ToolHandlingOutcome {
+pub(crate) enum ToolHandlingOutcome {
     Continue,
     Stop,
     NotHandled,
@@ -153,7 +153,7 @@ fn content_bearing_inspection_status(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
+pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
@@ -300,8 +300,8 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         .zip(&validation_errors)
         .filter_map(|(call, error)| error.is_none().then(|| call.clone()))
         .collect::<Vec<_>>();
-    if let Err(reason) =
-        crate::tools::validate_tool_calls(&executable_tool_calls, max_mutating_calls)
+    if let Err(reason) = crate::tools::validate_control_plane_batch(&parsed_tool_calls)
+        .and_then(|_| crate::tools::validate_tool_calls(&executable_tool_calls, max_mutating_calls))
     {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);

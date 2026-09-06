@@ -3,7 +3,7 @@ mod finish;
 mod queue;
 mod recovery;
 mod request;
-mod tools;
+pub(crate) mod tools;
 
 pub use context::TurnContext;
 pub use finish::run_agent_turn;

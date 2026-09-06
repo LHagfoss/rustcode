@@ -981,31 +981,67 @@ fn output_limited_call_results_are_retryable_and_bounded() {
     assert!(answers[0].content.len() < 200);
 }
 
-#[test]
-fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
-    let calls = [
-        crate::tools::ToolCall {
-            name: "grep".to_string(),
-            arguments: serde_json::json!({}),
-            call_id: Some("call_invalid".to_string()),
-        },
-        crate::tools::ToolCall {
-            name: "grep".to_string(),
-            arguments: serde_json::json!({"pattern": "TODO"}),
-            call_id: Some("call_valid".to_string()),
-        },
-    ];
+#[tokio::test]
+async fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
 
-    let errors = crate::tools::validation_errors_by_call(&calls);
+    super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        vec![
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_invalid".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_valid".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "TODO"}),
+            },
+        ],
+    )
+    .await;
 
-    assert_eq!(calls[0].call_id.as_deref(), Some("call_invalid"));
-    assert!(
-        errors[0]
-            .as_deref()
-            .is_some_and(|error| error.contains("invalid arguments for 'grep'"))
+    let history = state.lock().await;
+    let tool_results = history
+        .history
+        .iter()
+        .filter(|message| message.role == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(tool_results.len(), 2);
+    assert_eq!(
+        tool_results[0].tool_call_id.as_deref(),
+        Some("call_invalid")
     );
-    assert_eq!(calls[1].call_id.as_deref(), Some("call_valid"));
-    assert!(errors[1].is_none(), "valid call inherited: {:?}", errors[1]);
+    assert!(
+        tool_results[0]
+            .content
+            .contains("invalid arguments for 'grep'")
+    );
+    assert_eq!(tool_results[1].tool_call_id.as_deref(), Some("call_valid"));
+    assert!(
+        !tool_results[1]
+            .content
+            .contains("invalid arguments for 'grep'")
+    );
 }
 
 #[test]

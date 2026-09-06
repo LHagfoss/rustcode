@@ -276,16 +276,7 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
         ));
     }
     let mut seen = std::collections::HashSet::new();
-    let has_control_plane = calls
-        .iter()
-        .any(|call| matches!(tool_safety(&call.name), ToolSafety::ControlPlane));
-
-    if has_control_plane && calls.len() > 1 {
-        return Err(
-            "control-plane calls such as use_skill must be emitted alone; retry the deferred action in the next turn"
-                .to_string(),
-        );
-    }
+    validate_control_plane_batch(calls)?;
 
     for call in calls {
         let fingerprint = format!("{}:{}", call.name, call.arguments);
@@ -304,6 +295,23 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
         return Err(format!(
             "too many workspace-changing tool calls in one response ({mutating}; maximum is {max_mutating_calls}); emit the next action after receiving the previous result"
         ));
+    }
+
+    Ok(())
+}
+
+/// Control-plane calls must remain batch-wide barriers even when a sibling
+/// call has an independent schema-validation failure.
+pub(crate) fn validate_control_plane_batch(calls: &[ToolCall]) -> Result<(), String> {
+    let has_control_plane = calls
+        .iter()
+        .any(|call| matches!(tool_safety(&call.name), ToolSafety::ControlPlane));
+
+    if has_control_plane && calls.len() > 1 {
+        return Err(
+            "control-plane calls such as use_skill must be emitted alone; retry the deferred action in the next turn"
+                .to_string(),
+        );
     }
 
     Ok(())
