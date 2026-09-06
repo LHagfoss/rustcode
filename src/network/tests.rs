@@ -2323,7 +2323,7 @@ fn cancellation_persists_completed_results_and_typed_missing_results() {
 #[tokio::test]
 async fn test_run_compiler_check_success() {
     let cwd = std::env::current_dir().unwrap();
-    let check = run_compiler_check(&cwd).await;
+    let check = run_compiler_check(&cwd, &tokio_util::sync::CancellationToken::new()).await;
     assert!(check.is_none());
 }
 

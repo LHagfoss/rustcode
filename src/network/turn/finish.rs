@@ -216,6 +216,7 @@ fn has_verified_implicit_completion(ctx: &TurnContext) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static>(
     state: &Arc<Mutex<AppState>>,
+    cancel_token: &tokio_util::sync::CancellationToken,
     policy: &Arc<P>,
     ctx: &mut TurnContext,
     turn_response_time_ms: u64,
@@ -261,8 +262,13 @@ pub(super) async fn handle_plain_response_finish<P: policy::TurnPolicy + 'static
             let mut s = state.lock().await;
             s.status = AppStatus::Streaming;
         }
-        if let Some(errors) =
-            cached_compiler_check(&root, &mut ctx.compiler.dirty, &mut ctx.compiler.cache).await
+        if let Some(errors) = cached_compiler_check(
+            &root,
+            &mut ctx.compiler.dirty,
+            &mut ctx.compiler.cache,
+            cancel_token,
+        )
+        .await
         {
             if errors.starts_with("__BUILD_UNVERIFIED__") {
                 dbg_log!("Finish gate: build unverified — {errors}");
@@ -461,6 +467,7 @@ mod tests {
 
         let outcome = handle_plain_response_finish(
             &state,
+            &tokio_util::sync::CancellationToken::new(),
             &policy,
             &mut ctx,
             0,
@@ -483,6 +490,7 @@ mod tests {
         // A repeated finish callback must not duplicate the durable report.
         let _ = handle_plain_response_finish(
             &state,
+            &tokio_util::sync::CancellationToken::new(),
             &policy,
             &mut ctx,
             0,

@@ -41,6 +41,21 @@ fn should_apply_loop_recovery(
     !completion_requested && (output_abort || has_evidence_recovery)
 }
 
+fn batch_invalidates_read_recovery(
+    made_progress: bool,
+    recovery: Option<&(loop_detect::ProgressReason, usize, String)>,
+) -> bool {
+    made_progress
+        && recovery
+            .is_some_and(|(reason, _, _)| *reason == loop_detect::ProgressReason::NoNewInformation)
+}
+
+fn mutation_batch_guidance(limit: usize) -> String {
+    format!(
+        "Keep mutation-budget calls to at most {limit} per response. Every run_command, including read-only shell commands, counts toward this limit, as do workspace-editing tools. For parallel read-only inspection, use grep, glob, or view_file instead."
+    )
+}
+
 const MAX_MALFORMED_TOOL_HISTORY_BYTES: usize = 4096;
 
 /// Keep malformed provider output useful for diagnostics without replaying a
@@ -310,7 +325,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 ctx.recovery.force_final = true;
             }
             format!(
-                " This response contained {requested_calls} separate tool calls; {} were kept and {} were dropped, then the kept calls failed validation, so nothing ran and nothing it claimed about their results happened. Dropped calls: {}. Start again from the last real tool result. Reads may be issued together; keep calls that change the workspace to at most {} per response so each one is grounded in the previous result.",
+                " This response contained {requested_calls} separate tool calls; {} were kept and {} were dropped, then the kept calls failed validation, so nothing ran and nothing it claimed about their results happened. Dropped calls: {}. Start again from the last real tool result. {}",
                 parsed_tool_calls.len(),
                 dropped_count,
                 dropped_calls
@@ -318,7 +333,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     .map(|call| call.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", "),
-                max_mutating_calls
+                mutation_batch_guidance(max_mutating_calls)
             )
         } else {
             ctx.recovery.oversized_batch_rejections = 0;
@@ -484,13 +499,13 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     s.history.push(ChatMessage::new(
                                 "system",
                                 format!(
-                                    "[{dropped_count} of the {requested_calls} tool calls in that response were dropped: {}. The kept calls ran; their results follow — plan the next step from those, not from what the response predicted. Reads may be issued together; keep calls that change the workspace to at most {} per response.]",
+                                    "[{dropped_count} of the {requested_calls} tool calls in that response were dropped: {}. The kept calls ran; their results follow — plan the next step from those, not from what the response predicted. {}]",
                                     dropped_calls
                                         .iter()
                                         .map(|call| call.name.as_str())
                                         .collect::<Vec<_>>()
                                         .join(", "),
-                                    max_mutating_calls
+                                    mutation_batch_guidance(max_mutating_calls)
                                 ),
                             ));
                 }
@@ -915,6 +930,17 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 ));
             }
 
+            // Per-result no-information signals are provisional: a mixed
+            // batch can repeat an old read and also discover new evidence.
+            // Decide after the whole batch, independently of result order.
+            // Keep failure/churn signals and the separate cross-turn guard;
+            // fresh reads must not license an endless inspect/same-plan loop.
+            if batch_invalidates_read_recovery(cross_turn_made_progress, evidence_recovery.as_ref())
+            {
+                evidence_recovery = None;
+                grounded_recovery = None;
+            }
+
             // A successful verification in the same batch is authoritative
             // progress and invalidates any stale inspection-cycle signal.
             if cross_turn_authoritative_progress {
@@ -1226,6 +1252,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         &root,
                         &mut ctx.compiler.dirty,
                         &mut ctx.compiler.cache,
+                        cancel_token,
                     )
                     .await;
                     s = state.lock().await;
@@ -1367,8 +1394,9 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
 #[cfg(test)]
 mod tests {
     use super::{
-        benign_shell_wrapper_failure, bounded_malformed_tool_history,
-        content_bearing_inspection_status, incomplete_tool_result, should_apply_loop_recovery,
+        batch_invalidates_read_recovery, benign_shell_wrapper_failure,
+        bounded_malformed_tool_history, content_bearing_inspection_status, incomplete_tool_result,
+        mutation_batch_guidance, should_apply_loop_recovery,
     };
     use crate::network::events::ToolResultMetadata;
     use crate::tools::ToolCall;
@@ -1411,6 +1439,101 @@ mod tests {
         assert!(should_apply_loop_recovery(false, true, false));
         assert!(should_apply_loop_recovery(false, false, true));
         assert!(!should_apply_loop_recovery(false, false, false));
+    }
+
+    #[test]
+    fn dropped_call_guidance_includes_read_only_shell_commands_in_actual_limit() {
+        for limit in [1, 3] {
+            let guidance = mutation_batch_guidance(limit);
+            assert!(guidance.contains(&format!("at most {limit} per response")));
+            assert!(guidance.contains("Every run_command, including read-only shell commands"));
+            assert!(guidance.contains("grep, glob, or view_file"));
+        }
+    }
+
+    fn read_observation(action: &str) -> super::loop_detect::ProgressObservation {
+        super::loop_detect::ProgressObservation {
+            action: action.to_owned(),
+            output_fingerprint: super::loop_detect::stable_hash(action),
+            state_fingerprint: None,
+            failure_fingerprint: None,
+            changed_workspace: false,
+            fresh_read: true,
+            search_result: false,
+            no_result: false,
+            verification: false,
+            read_only: true,
+            replayed: false,
+            success: true,
+        }
+    }
+
+    #[test]
+    fn fresh_evidence_invalidates_repeated_read_recovery_in_either_batch_order() {
+        use super::loop_detect::{ProgressLedger, ProgressReason};
+
+        let old = read_observation("read:macros.rs:1:80");
+        let fresh = read_observation("read:service.rs:1:100");
+        for batch in [[&old, &old, &old, &fresh], [&fresh, &old, &old, &old]] {
+            let mut ledger = ProgressLedger::default();
+            ledger.observe(&old);
+            let mut made_progress = false;
+            let mut recovery = None;
+            for observation in batch {
+                let assessment = ledger.observe(observation);
+                made_progress |= assessment.meaningful;
+                if assessment.streak >= ProgressLedger::RECOVERY_STREAK {
+                    recovery = Some((
+                        assessment.reason,
+                        assessment.streak,
+                        observation.action.clone(),
+                    ));
+                }
+            }
+            assert_eq!(
+                recovery.as_ref().unwrap().0,
+                ProgressReason::NoNewInformation
+            );
+            assert!(batch_invalidates_read_recovery(
+                made_progress,
+                recovery.as_ref()
+            ));
+        }
+    }
+
+    #[test]
+    fn all_repeated_reads_still_request_recovery() {
+        use super::loop_detect::ProgressLedger;
+
+        let old = read_observation("read:macros.rs:1:80");
+        let mut ledger = ProgressLedger::default();
+        ledger.observe(&old);
+        let mut made_progress = false;
+        let mut recovery = None;
+        for _ in 0..ProgressLedger::RECOVERY_STREAK {
+            let assessment = ledger.observe(&old);
+            made_progress |= assessment.meaningful;
+            recovery = Some((assessment.reason, assessment.streak, old.action.clone()));
+        }
+        assert!(!batch_invalidates_read_recovery(
+            made_progress,
+            recovery.as_ref()
+        ));
+        assert!(should_apply_loop_recovery(false, false, recovery.is_some()));
+    }
+
+    #[test]
+    fn fresh_reads_do_not_clear_failure_or_churn_recovery() {
+        use super::loop_detect::ProgressReason;
+
+        for reason in [
+            ProgressReason::RepeatedFailure,
+            ProgressReason::Churn,
+            ProgressReason::RepeatedVerification,
+        ] {
+            let recovery = (reason, 3, "run_command".to_owned());
+            assert!(!batch_invalidates_read_recovery(true, Some(&recovery)));
+        }
     }
 
     #[test]

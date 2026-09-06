@@ -13,19 +13,15 @@ pub static LAST_COMPACTION_RECLAIMED: std::sync::atomic::AtomicUsize =
 /// structured compaction, everything before this suffix is folded into a summary.
 pub const KEEP_RECENT_TURNS: usize = 12;
 
-/// Hard byte ceiling for the complete user prompt sent to the summarizer.
-/// 64 KiB is deliberately conservative: it leaves ample room for the pinned
-/// task, a prior summary, and several recent messages without allowing history
-/// length to grow the request without bound.
+/// Minimum output size worth replacing with a recoverable excerpt.
 const PRUNE_TOKEN_THRESHOLD: usize = 1000;
 
 /// Message-count-based pruning of historical tool outputs.
 ///
 /// Keeps the most recent `keep_recent_count` messages fully intact for accuracy.
 /// For older messages, any tool result larger than [`PRUNE_TOKEN_THRESHOLD`] is
-/// replaced with a one-line summary that preserves the `tool_name:` prefix — so
-/// the tool call / result pairing and schema validity stay intact — along with
-/// the original token count and, when detectable, the command's exit status.
+/// replaced with bounded evidence and an artifact reference, preserving the
+/// `tool_name:` prefix, execution status, and truthful completeness metadata.
 pub fn prune_historical_tool_outputs(
     history: &mut [ChatMessage],
     keep_recent_count: usize,
@@ -50,17 +46,87 @@ pub fn prune_historical_tool_outputs(
         if tokens <= PRUNE_TOKEN_THRESHOLD {
             continue;
         }
-        // Preserve the "tool_name: " prefix so the call/result pairing survives.
-        let prefix = match m.content.find(": ") {
-            Some(pos) => m.content[..pos + 2].to_string(),
-            None => String::new(),
-        };
-        let status = detect_exit_status(&m.content);
-        m.content =
-            format!("{prefix}[Tool Output Truncated: {tokens} tokens reduced to summary.{status}]");
-        pruned += 1;
+        pruned += usize::from(compact_tool_evidence(m, tokens));
     }
     pruned
+}
+
+/// Preserve a recoverable snapshot before replacing evidence. If storage is
+/// unavailable, retaining the original result is safer than an unrecoverable
+/// placeholder. Execution success is independent of transcript completeness.
+fn compact_tool_evidence(message: &mut ChatMessage, tokens: usize) -> bool {
+    compact_tool_evidence_with_save(
+        message,
+        tokens,
+        crate::network::output::save_full_tool_output,
+    )
+}
+
+fn compact_tool_evidence_with_save(
+    message: &mut ChatMessage,
+    tokens: usize,
+    save: impl FnOnce(&str, &str) -> Option<String>,
+) -> bool {
+    if is_stubbed_tool_output(&message.content) || message.content.len() <= 2048 {
+        return false;
+    }
+    let (name, body) = message
+        .content
+        .split_once(": ")
+        .unwrap_or(("tool", &message.content));
+    let artifact = message
+        .tool_result
+        .as_ref()
+        .and_then(|record| record.full_output_artifact.clone())
+        .or_else(|| save(name, body));
+    let Some(artifact) = artifact else {
+        return false;
+    };
+    let status = detect_exit_status(body);
+    // Keep the header, bounded diagnostic lines, and tail. A single enormous
+    // line must not defeat this bound (nor split a UTF-8 character).
+    let head: String = body.chars().take(512).collect();
+    let diagnostics = body
+        .lines()
+        .filter(|line| has_failure_or_diagnostic(line) || line.contains("diagnostic:"))
+        .take(4)
+        .map(|line| line.chars().take(256).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail: String = body
+        .chars()
+        .rev()
+        .take(256)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let content = format!(
+        "{name}: [Tool Output Truncated: {tokens} tokens reduced to summary.{status}]\n\
+         Retained excerpt (including failure/diagnostic evidence when present):\n{head}\n\
+         ...\n{diagnostics}\n...\n{tail}\n\
+         Full output saved to: {artifact}\n\
+         Use grep or view_file with line offsets to recover the omitted evidence.\n\
+         [tool_result_incomplete: completeness=byte_truncated; historical output is partial.]"
+    );
+    // The rolling cap may encounter tiny messages. Never grow those while
+    // claiming reclamation.
+    if content.len() >= message.content.len() {
+        return false;
+    }
+    if let Some(record) = message.tool_result.as_mut() {
+        record.truncated = true;
+        record.completeness = rustcode_core::ToolResultCompleteness::ByteTruncated;
+        record.full_output_artifact = Some(artifact);
+        if let Some(inspection) = record.inspection.as_mut() {
+            inspection.complete = false;
+            inspection.returned_range = None;
+            inspection.delivered_ranges.clear();
+            inspection.next_range = inspection.requested_range.clone();
+        }
+    }
+    message.content = content;
+    true
 }
 
 /// Best-effort extraction of a command exit code from raw tool output, so the
@@ -95,28 +161,7 @@ pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> 
             // NOTE: still a fixed cap; if you run a small-context model as the
             // main model, lower this to fit its window.
             if total_tool_tokens > threshold {
-                let valuable = has_failure_or_diagnostic(&m.content);
-                if let Some(pos) = m.content.find(": ") {
-                    let tool_name = &m.content[..pos];
-                    m.content = if valuable {
-                        format!(
-                            "{}: [Old tool result retained as compact failure/diagnostic evidence; output cleared to save context]",
-                            tool_name
-                        )
-                    } else {
-                        format!(
-                            "{}: [Old tool result content cleared to save context]",
-                            tool_name
-                        )
-                    };
-                } else {
-                    m.content = if valuable {
-                        "[Old tool result retained as compact failure/diagnostic evidence; output cleared to save context]".to_string()
-                    } else {
-                        "[Old tool result content cleared to save context]".to_string()
-                    };
-                }
-                pruned += 1;
+                pruned += usize::from(compact_tool_evidence(m, tokens));
             }
         }
     }
@@ -227,9 +272,104 @@ pub fn prune_duplicate_tool_results(
 ///
 /// Below this the window has room to spare, and keeping what the model actually
 /// read is worth more than the tokens reclaimed.
-const PRUNE_PRESSURE_RATIO: f64 = 0.5;
+const PRUNE_PRESSURE_RATIO: f64 = 0.8;
 
 /// Token count at which pruning starts for a given budget.
 pub(super) fn prune_floor(budget: usize) -> usize {
     (budget as f64 * PRUNE_PRESSURE_RATIO) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{ToolCallRef, ToolResultRecord};
+    use rustcode_core::{InspectionResultMetadata, ToolResultCompleteness};
+
+    fn evidence() -> ChatMessage {
+        ChatMessage::new(
+            "tool",
+            format!(
+                "run_command: diagnostic: symbol_not_found\n{}",
+                "x ".repeat(3000)
+            ),
+        )
+        .with_tool_result(ToolResultRecord {
+            tool_name: "run_command".into(),
+            success: true,
+            exit_code: Some(0),
+            inspection: Some(InspectionResultMetadata {
+                complete: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn pruned_evidence_is_recoverable_and_truthful_in_persisted_native_and_text_history() {
+        let mut result = evidence();
+        let original = result.content.split_once(": ").unwrap().1.to_string();
+        assert!(compact_tool_evidence(&mut result, 3000));
+        assert!(result.content.contains("diagnostic: symbol_not_found"));
+        let metadata = result.tool_result.as_ref().unwrap();
+        assert!(metadata.success);
+        assert_eq!(metadata.exit_code, Some(0));
+        assert!(metadata.truncated);
+        assert_eq!(metadata.completeness, ToolResultCompleteness::ByteTruncated);
+        assert!(!metadata.inspection.as_ref().unwrap().complete);
+        let path = metadata.full_output_artifact.clone().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        let persisted = serde_json::to_string(&result).unwrap();
+        let restored: ChatMessage = serde_json::from_str(&persisted).unwrap();
+        for native in [false, true] {
+            let mut result = restored.clone();
+            let mut history = Vec::new();
+            if native {
+                history.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
+                    ToolCallRef {
+                        id: "call-1".into(),
+                        name: "run_command".into(),
+                        arguments: "{}".into(),
+                    },
+                ]));
+                result.tool_call_id = Some("call-1".into());
+            }
+            history.push(result);
+            let messages = crate::network::history::to_messages(&history, "system");
+            let content = messages.last().unwrap()["content"].as_str().unwrap();
+            assert!(content.contains("\"completeness\":\"byte_truncated\""));
+            assert!(content.contains("\"success\":true"));
+            assert!(content.contains(&path));
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_artifact_write_keeps_original_evidence_and_metadata() {
+        let mut result = evidence();
+        let before = serde_json::to_string(&result).unwrap();
+        assert!(!compact_tool_evidence_with_save(
+            &mut result,
+            3000,
+            |_, _| None
+        ));
+        assert_eq!(serde_json::to_string(&result).unwrap(), before);
+    }
+
+    #[test]
+    fn existing_original_artifact_survives_historical_pruning() {
+        let mut result = evidence();
+        result.tool_result.as_mut().unwrap().full_output_artifact =
+            Some("/original/full-output.txt".into());
+        assert!(compact_tool_evidence_with_save(
+            &mut result,
+            3000,
+            |_, _| panic!("must retain original artifact")
+        ));
+        assert!(result.content.contains("/original/full-output.txt"));
+        assert!(
+            !compact_tool_evidence(&mut result, 3000),
+            "an excerpt should not be expanded by repeated pruning"
+        );
+    }
 }

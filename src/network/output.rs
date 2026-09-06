@@ -101,7 +101,7 @@ pub(crate) fn truncate_tool_output_for_message(
     }
 }
 
-fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
+pub(crate) fn save_full_tool_output(name: &str, content: &str) -> Option<String> {
     let dir = crate::config::get_config_dir()?.join("tool_output");
     let _ = std::fs::create_dir_all(&dir);
     let ts = std::time::SystemTime::now()

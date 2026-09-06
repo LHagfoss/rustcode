@@ -211,8 +211,8 @@ mod tests {
 
     #[test]
     fn prune_floor_scales_with_the_budget() {
-        assert_eq!(prune_floor(100_000), 50_000);
-        assert_eq!(prune_floor(8_000), 4_000);
+        assert_eq!(prune_floor(100_000), 80_000);
+        assert_eq!(prune_floor(8_000), 6_400);
     }
 
     #[test]

@@ -79,7 +79,7 @@ impl ContextFragment {
     fn render(&self) -> String {
         let mut content = self.content.clone();
         if content.len() > MAX_CONTEXT_FRAGMENT_CHARS {
-            content.truncate(MAX_CONTEXT_FRAGMENT_CHARS);
+            content.truncate(content.floor_char_boundary(MAX_CONTEXT_FRAGMENT_CHARS));
             content.push_str("\n[context fragment truncated]");
         }
         content
@@ -98,7 +98,7 @@ pub(crate) fn render_context_fragments(fragments: &[ContextFragment]) -> String 
         }
         rendered.push_str(&content);
         if rendered.len() >= MAX_CONTEXT_TAIL_CHARS {
-            rendered.truncate(MAX_CONTEXT_TAIL_CHARS);
+            rendered.truncate(rendered.floor_char_boundary(MAX_CONTEXT_TAIL_CHARS));
             rendered.push_str("\n[context tail truncated]");
             break;
         }
@@ -498,6 +498,41 @@ mod tests {
         let rendered = render_context_fragments(&[fragment]);
         assert!(rendered.len() <= MAX_CONTEXT_FRAGMENT_CHARS + 32);
         assert!(rendered.contains("context fragment truncated"));
+    }
+
+    #[test]
+    fn context_fragment_truncation_preserves_utf8_boundaries() {
+        for character in ["é", "界", "🦀"] {
+            for split in 1..character.len() {
+                let prefix = "x".repeat(MAX_CONTEXT_FRAGMENT_CHARS - split);
+                let fragment = ContextFragment::new("unicode", prefix.clone() + character);
+                assert_eq!(fragment.render(), prefix + "\n[context fragment truncated]");
+            }
+        }
+    }
+
+    #[test]
+    fn context_tail_truncation_preserves_utf8_boundaries() {
+        for character in ["é", "界", "🦀"] {
+            for split in 1..character.len() {
+                let fragments = [
+                    ContextFragment::new("first", "a".repeat(MAX_CONTEXT_FRAGMENT_CHARS)),
+                    ContextFragment::new("second", "b".repeat(MAX_CONTEXT_FRAGMENT_CHARS)),
+                    ContextFragment::new(
+                        "third",
+                        "c".repeat(MAX_CONTEXT_FRAGMENT_CHARS - 4 - split) + character,
+                    ),
+                ];
+                let rendered = render_context_fragments(&fragments);
+                let suffix = "\n[context tail truncated]";
+                assert!(rendered.ends_with(suffix));
+                assert_eq!(
+                    rendered.len(),
+                    MAX_CONTEXT_TAIL_CHARS - split + suffix.len()
+                );
+                assert!(rendered.trim_end_matches(suffix).ends_with('c'));
+            }
+        }
     }
 
     #[test]

@@ -116,6 +116,7 @@ pub async fn maybe_compact_with_local_policy_and_usage(
         return false;
     }
 
+    let local_before: usize = history.iter().map(estimate_message_tokens).sum();
     let duplicate_reads = prune_duplicate_tool_results(history, KEEP_RECENT_TURNS);
     let historical_outputs = prune_historical_tool_outputs(history, KEEP_RECENT_TURNS);
     let pruned_reasoning = prune_historical_reasoning(history, KEEP_RECENT_TURNS);
@@ -125,7 +126,11 @@ pub async fn maybe_compact_with_local_policy_and_usage(
     //    until compaction actually runs, so the same per-message counts serve
     //    both the budget check and the keep-suffix walk below.
     let per_message: Vec<usize> = history.iter().map(estimate_message_tokens).collect();
-    let total_tokens = provider_adjusted_tokens(history, provider_usage);
+    // The previous provider measurement cannot see edits to its measured
+    // prefix. Apply the local before/after delta instead of reusing that stale
+    // measurement unchanged, which hid reclamation and triggered needless
+    // summarization even after pruning restored ample headroom.
+    let total_tokens = adjusted_after_pruning(raw_tokens, local_before, per_message.iter().sum());
     // Cancellation still permits the deterministic local pruning above, but
     // must never report a completed compaction or start a summarizer request.
     if cancel_token.is_cancelled() {
@@ -241,6 +246,16 @@ pub async fn maybe_compact_with_local_policy_and_usage(
         );
         structured || (duplicate_reads + historical_outputs + old_outputs > 0)
     }
+}
+
+fn adjusted_after_pruning(
+    measured_before: usize,
+    local_before: usize,
+    local_after: usize,
+) -> usize {
+    measured_before
+        .saturating_sub(local_before.saturating_sub(local_after))
+        .saturating_add(local_after.saturating_sub(local_before))
 }
 
 /// Return the best available prompt estimate. A provider usage record belongs
@@ -906,6 +921,84 @@ mod preserved_user_request_tests {
             estimate,
             1_000 + estimate_message_tokens(&history[2]) + estimate_message_tokens(&history[3])
         );
+    }
+
+    #[test]
+    fn provider_measurement_tracks_locally_reclaimed_prefix_tokens() {
+        assert_eq!(adjusted_after_pruning(90_000, 60_000, 40_000), 70_000);
+        assert_eq!(adjusted_after_pruning(90_000, 60_000, 60_000), 90_000);
+        assert_eq!(adjusted_after_pruning(90_000, 60_000, 60_100), 90_100);
+    }
+
+    #[tokio::test]
+    async fn benchmark_half_full_provider_window_keeps_dependency_evidence() {
+        let mut history = vec![ChatMessage::new(
+            "tool",
+            format!("view_file: {}", "dependency source\n".repeat(3000)),
+        )];
+        for _ in 0..13 {
+            history.push(ChatMessage::new("assistant", "inspect"));
+        }
+        let usage = TokenUsage {
+            prompt_tokens: 57_734,
+            completion_tokens: 100,
+            total_tokens: 57_834,
+            cached_tokens: None,
+        };
+        history.last_mut().unwrap().token_usage = Some(usage.clone());
+        let before = serde_json::to_string(&history).unwrap();
+        assert!(
+            !maybe_compact_with_local_policy_and_usage(
+                &reqwest::Client::new(),
+                "http://unused",
+                "local",
+                &mut history,
+                106_880,
+                &tokio_util::sync::CancellationToken::new(),
+                true,
+                Some(&usage),
+            )
+            .await
+        );
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn pruning_measured_prefix_restores_headroom_without_summary_request() {
+        let mut history = vec![ChatMessage::new(
+            "tool",
+            format!("view_file: {}", "dependency source\n".repeat(3000)),
+        )];
+        for _ in 0..13 {
+            history.push(ChatMessage::new("assistant", "inspect"));
+        }
+        let usage = TokenUsage {
+            prompt_tokens: 21_000,
+            completion_tokens: 100,
+            total_tokens: 21_100,
+            cached_tokens: None,
+        };
+        history.last_mut().unwrap().token_usage = Some(usage.clone());
+        let original_len = history.len();
+        assert!(
+            maybe_compact_with_local_policy_and_usage(
+                &reqwest::Client::new(),
+                "http://unused",
+                "local",
+                &mut history,
+                20_000,
+                &tokio_util::sync::CancellationToken::new(),
+                false,
+                Some(&usage),
+            )
+            .await
+        );
+        assert_eq!(
+            history.len(),
+            original_len,
+            "local reclamation must avoid unnecessary structured compaction"
+        );
+        assert!(history[0].content.contains("Full output saved to:"));
     }
 
     #[test]

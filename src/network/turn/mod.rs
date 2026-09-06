@@ -233,6 +233,7 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
 
     match finish::handle_plain_response_finish(
         state,
+        cancel_token,
         policy,
         ctx,
         turn_response_time_ms,

@@ -532,6 +532,41 @@ EOF
 }
 
 # ── Phase: Wait for checks & merge ───────────────────────────────────────────
+# A freshly pushed PR may not have registered checks yet. Poll the CI workflow
+# for its exact head, rather than treating "no checks" as failure (or success).
+# The same deadline covers registration and completion; failed runs never pass.
+wait_for_pr_ci() {
+    local head_sha="$1"
+    local max_attempts="${2:-120}" interval="${3:-10}"
+    local attempt=0 run="" run_id="" status="" conclusion=""
+    while [[ "$attempt" -lt "$max_attempts" ]]; do
+        if ! run="$(gh run list --workflow ci.yml --event pull_request \
+            --commit "$head_sha" --limit 1 --json databaseId,status,conclusion \
+            --jq '.[0] // empty')"; then
+            error "Could not query CI for PR head $head_sha."
+            return 1
+        fi
+        if [[ -n "$run" ]]; then
+            run_id="$(printf '%s' "$run" | jq -r '.databaseId')"
+            status="$(printf '%s' "$run" | jq -r '.status')"
+            conclusion="$(printf '%s' "$run" | jq -r '.conclusion')"
+            if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                    info "CI run $run_id passed for PR head $head_sha."
+                    return 0
+                fi
+                error "CI run $run_id concluded $conclusion. Inspect: gh run view $run_id --log-failed"
+                return 1
+            fi
+        fi
+        attempt=$((attempt + 1))
+        info "Waiting for CI on $head_sha ($attempt/$max_attempts; ${status:-not registered})…"
+        if [[ "$attempt" -lt "$max_attempts" ]]; then sleep "$interval"; fi
+    done
+    error "Timed out waiting for CI on PR head $head_sha."
+    return 1
+}
+
 phase_wait_and_merge() {
     info "Phase 10: Waiting for PR checks and merging"
 
@@ -546,6 +581,12 @@ phase_wait_and_merge() {
         die "Could not find PR for branch $RELEASE_BRANCH."
     fi
 
+    local pr_head
+    pr_head="$(gh pr view "$RELEASE_BRANCH" --json headRefOid --jq '.headRefOid')"
+    if [[ -z "$pr_head" ]] || ! wait_for_pr_ci "$pr_head"; then
+        die "Release CI did not pass for PR #${pr_number}; merge aborted."
+    fi
+
     info "Waiting for required checks on PR #${pr_number}…"
     if ! gh pr checks "$RELEASE_BRANCH" --watch --fail-fast; then
         local pr_url
@@ -555,7 +596,7 @@ phase_wait_and_merge() {
 
     info "All checks passed. Merging PR #${pr_number}…"
     local merge_err=""
-    if ! merge_err="$(gh pr merge "$RELEASE_BRANCH" --squash --delete-branch 2>&1)"; then
+    if ! merge_err="$(gh pr merge "$RELEASE_BRANCH" --squash --delete-branch --match-head-commit "$pr_head" 2>&1)"; then
         local pr_url
         pr_url="$(gh pr view "$RELEASE_BRANCH" --json url --jq '.url')"
         die "Merge blocked. Reason:
@@ -858,6 +899,42 @@ run_tests() {
         info "  ✓ JSON fields are valid"
     else
         error "  ✗ JSON field extraction failed"
+        failed=$((failed + 1))
+    fi
+
+    # Test 7: No real GitHub calls: exercise delayed registration, completion,
+    # failed checks, API errors, and the deadline against an exact head SHA.
+    info "Test 7: Exact-head CI registration and completion gate"
+    if (
+        mock_tick=0 mock_mode=delayed
+        sleep() { mock_tick=$((mock_tick + 1)); }
+        gh() {
+            [[ "$*" == *"--workflow ci.yml --event pull_request --commit tested-head"* ]] || return 1
+            case "$mock_mode" in
+                delayed)
+                    case "$mock_tick" in
+                        0) return 0 ;;
+                        1) printf '%s' '{"databaseId":42,"status":"in_progress","conclusion":""}' ;;
+                        *) printf '%s' '{"databaseId":42,"status":"completed","conclusion":"success"}' ;;
+                    esac ;;
+                failed) printf '%s' '{"databaseId":42,"status":"completed","conclusion":"failure"}' ;;
+                missing) return 0 ;;
+                api_error) return 1 ;;
+            esac
+        }
+        wait_for_pr_ci tested-head 3 0 >/dev/null || exit 1
+        [[ "$mock_tick" -eq 2 ]] || exit 1
+        mock_mode=failed
+        if wait_for_pr_ci tested-head 3 0 >/dev/null 2>&1; then exit 1; fi
+        mock_mode=missing mock_tick=0
+        if wait_for_pr_ci tested-head 3 0 >/dev/null 2>&1; then exit 1; fi
+        [[ "$mock_tick" -eq 2 ]] || exit 1
+        mock_mode=api_error
+        if wait_for_pr_ci tested-head 3 0 >/dev/null 2>&1; then exit 1; fi
+    ); then
+        info "  ✓ CI waits for registration and success, rejects failures and times out"
+    else
+        error "  ✗ CI registration/completion gate regression"
         failed=$((failed + 1))
     fi
 

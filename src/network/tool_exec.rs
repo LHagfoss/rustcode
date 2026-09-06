@@ -176,12 +176,14 @@ pub(crate) async fn confirm_and_execute(
             | "copy_file"
     ) && result.success
         && let Some(cwd) = get_tool_project_root(name, args)
-        && let Some(errors) = run_compiler_check(&cwd).await
+        && let Some(errors) = run_compiler_check(&cwd, cancel_token).await
     {
         result.content.push_str("\n\nCompiler errors/warnings:\n");
         result.content.push_str(&errors);
-        result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
-        result.retryable = true;
+        if !errors.starts_with("__BUILD_UNVERIFIED__") {
+            result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
+            result.retryable = true;
+        }
     }
 
     (result, diff, user_wait)
@@ -894,7 +896,7 @@ different, read another range or make an edit first; repeating this call returns
             .or_else(|| edit_root.clone())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         if let Some(compiler_errors) =
-            cached_compiler_check(&root, compile_dirty, compile_cache).await
+            cached_compiler_check(&root, compile_dirty, compile_cache, cancel_token).await
         {
             dbg_log!("Inline compiler check returned diagnostics after edit");
             if let Some(result) = results

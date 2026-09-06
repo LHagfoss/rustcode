@@ -3,164 +3,157 @@ use super::events::ToolResult;
 use super::text::strip_ansi_escapes;
 use crate::platform::{compiler_augmented_path, resolve_bin};
 use regex::Regex;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
+use tokio_util::sync::CancellationToken;
 
-pub(crate) async fn run_compiler_check(cwd: &std::path::Path) -> Option<String> {
-    if cwd.join("Cargo.toml").exists() {
-        let mut cmd = tokio::process::Command::new("/bin/sh");
-        cmd.args(["-c", "cargo check --message-format=json"])
-            .current_dir(cwd)
-            .env("PATH", compiler_augmented_path())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        let child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                dbg_log!("Could not spawn cargo check ({e}), skipping compiler check");
-                return Some(format!(
-                    "__BUILD_UNVERIFIED__: could not run `cargo check` ({e}). \
-                     The build was NOT verified — do not claim the task compiles."
-                ));
-            }
+pub(crate) async fn run_compiler_check(
+    cwd: &std::path::Path,
+    cancel_token: &CancellationToken,
+) -> Option<String> {
+    let (command, cargo, timeout) = if cwd.join("Cargo.toml").exists() {
+        ("cargo check --message-format=json", true, 120)
+    } else if cwd.join("biome.json").exists() || cwd.join("biome.jsonc").exists() {
+        let command = if resolve_bin("bunx").exists() {
+            "bunx biome check ."
+        } else {
+            "npx @biomejs/biome check ."
         };
-
-        let timeout_duration = std::time::Duration::from_secs(120);
-        let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
-
-        let output = match output_res {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                dbg_log!("cargo check failed to run ({e}), skipping compiler check");
-                return Some(format!(
-                    "__BUILD_UNVERIFIED__: `cargo check` failed to run ({e}). \
-                     The build was NOT verified."
-                ));
-            }
-            Err(_) => {
-                dbg_log!("cargo check timed out, skipping compiler check");
-                return Some(
-                    "__BUILD_UNVERIFIED__: `cargo check` timed out. \
-                     The build was NOT verified."
-                        .to_string(),
-                );
-            }
+        (command, false, 60)
+    } else if cwd.join("tsconfig.json").exists() {
+        let command = if resolve_bin("bunx").exists() {
+            "bunx tsc --noEmit"
+        } else {
+            "npx tsc --noEmit"
         };
+        (command, false, 60)
+    } else {
+        return None;
+    };
+    run_compiler_command(
+        cwd,
+        command,
+        cargo,
+        std::time::Duration::from_secs(timeout),
+        cancel_token,
+    )
+    .await
+}
 
-        let stdout_str = String::from_utf8_lossy(&output.stdout);
-        let mut errors = Vec::new();
+async fn run_compiler_command(
+    cwd: &std::path::Path,
+    command: &str,
+    cargo: bool,
+    timeout: std::time::Duration,
+    cancel_token: &CancellationToken,
+) -> Option<String> {
+    let unverified = |reason: &str| {
+        Some(format!(
+            "__BUILD_UNVERIFIED__: `{command}` {reason}. The build was NOT verified — do not claim the task compiles."
+        ))
+    };
+    if cancel_token.is_cancelled() {
+        return unverified("was cancelled");
+    }
+    // A child token also stops the blocking worker if this async future is dropped.
+    let worker_token = cancel_token.child_token();
+    let _cancel_on_drop = worker_token.clone().drop_guard();
+    let request = rustcode_command::CommandRequest {
+        command: command.to_owned(),
+        cwd: Some(cwd.to_path_buf()),
+        env: vec![("PATH".into(), compiler_augmented_path().into())],
+        timeout,
+        process_group: true,
+    };
+    let output = tokio::task::spawn_blocking(move || {
+        rustcode_command::run_with_timeout_cancellable(
+            &request,
+            None,
+            Some(Arc::new(move || worker_token.is_cancelled())),
+        )
+    })
+    .await;
+    match output {
+        Ok(Ok(output)) => compiler_output_diagnostics(command, cargo, &output),
+        Ok(Err(error)) => unverified(&error),
+        Err(error) => unverified(&format!("could not complete ({error})")),
+    }
+}
 
-        for line in stdout_str.lines() {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line)
-                && val.get("reason").and_then(|r| r.as_str()) == Some("compiler-message")
-                && let Some(msg) = val.get("message")
-                && let Some(level) = msg.get("level").and_then(|l| l.as_str())
-                && level == "error"
-                && let Some(rendered) = msg.get("rendered").and_then(|r| r.as_str())
-            {
-                errors.push(strip_ansi_escapes(rendered));
-            }
-        }
-
+fn compiler_output_diagnostics(
+    command: &str,
+    cargo: bool,
+    output: &rustcode_command::CommandOutput,
+) -> Option<String> {
+    let stdout = String::from_utf8_lossy(output.stdout.bytes());
+    if cargo {
+        let errors = stdout
+            .lines()
+            .filter_map(|line| {
+                let value: serde_json::Value = serde_json::from_str(line).ok()?;
+                if value.get("reason")?.as_str()? != "compiler-message" {
+                    return None;
+                }
+                let message = value.get("message")?;
+                (message.get("level")?.as_str()? == "error")
+                    .then(|| message.get("rendered")?.as_str().map(strip_ansi_escapes))
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
         if !errors.is_empty() {
             return Some(errors.join("\n"));
         }
-    } else if cwd.join("biome.json").exists() || cwd.join("biome.jsonc").exists() {
-        let (runner, bin_arg) = if resolve_bin("bunx").exists() {
-            (resolve_bin("bunx"), "biome")
-        } else {
-            (resolve_bin("npx"), "@biomejs/biome")
-        };
-
-        let mut cmd = tokio::process::Command::new(runner);
-        cmd.args([bin_arg, "check", "."])
-            .current_dir(cwd)
-            .env("PATH", compiler_augmented_path())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        let child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                dbg_log!("Could not spawn biome check ({e}), skipping compiler check");
-                return None;
-            }
-        };
-
-        let timeout_duration = std::time::Duration::from_secs(60);
-        let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
-
-        let output = match output_res {
-            Ok(Ok(out)) => out,
-            Ok(Err(_)) | Err(_) => return None,
-        };
-
-        if !output.status.success() {
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            let stderr_str = String::from_utf8_lossy(&output.stderr);
-            let combined = format!("{stdout_str}\n{stderr_str}");
-            let trimmed = combined.trim();
-            if !trimmed.is_empty() {
-                return Some(strip_ansi_escapes(trimmed));
-            }
-        }
-    } else if cwd.join("tsconfig.json").exists() {
-        let (runner, bin_arg) = if resolve_bin("bunx").exists() {
-            (resolve_bin("bunx"), "tsc")
-        } else {
-            (resolve_bin("npx"), "tsc")
-        };
-
-        let mut cmd = tokio::process::Command::new(runner);
-        cmd.args([bin_arg, "--noEmit"])
-            .current_dir(cwd)
-            .env("PATH", compiler_augmented_path())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        let child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                dbg_log!("Could not spawn {bin_arg} ({e}), skipping compiler check");
-                return None;
-            }
-        };
-
-        let timeout_duration = std::time::Duration::from_secs(60);
-        let output_res = tokio::time::timeout(timeout_duration, child.wait_with_output()).await;
-
-        let output = match output_res {
-            Ok(Ok(out)) => out,
-            Ok(Err(_)) | Err(_) => return None,
-        };
-
-        if !output.status.success() {
-            let stdout_str = String::from_utf8_lossy(&output.stdout);
-            let stderr_str = String::from_utf8_lossy(&output.stderr);
-            let combined = format!("{stdout_str}\n{stderr_str}");
-            let trimmed = combined.trim();
-            if !trimmed.is_empty() {
-                return Some(strip_ansi_escapes(trimmed));
-            }
-        }
     }
-
-    None
+    if output.success {
+        return None;
+    }
+    // Cargo's manifest, dependency, and toolchain failures often have no JSON
+    // diagnostic. A nonzero exit must never be cached or reported as a pass.
+    let stderr = String::from_utf8_lossy(output.stderr.bytes());
+    let diagnostics = strip_ansi_escapes(&format!("{stdout}\n{stderr}"));
+    let mut diagnostics = diagnostics.trim().to_owned();
+    const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+    if diagnostics.len() > MAX_DIAGNOSTIC_BYTES {
+        let mut end = MAX_DIAGNOSTIC_BYTES;
+        while !diagnostics.is_char_boundary(end) {
+            end -= 1;
+        }
+        diagnostics.truncate(end);
+        diagnostics.push_str("\n[compiler diagnostics truncated]");
+    }
+    let status = output.exit_code.map_or_else(
+        || "terminated without an exit code".to_owned(),
+        |code| format!("exited with status {code}"),
+    );
+    Some(
+        format!("`{command}` {status}.\n{diagnostics}")
+            .trim_end()
+            .to_owned(),
+    )
 }
 
 pub(crate) async fn cached_compiler_check(
     root: &std::path::Path,
     dirty: &mut bool,
     cache: &mut Option<(std::path::PathBuf, Option<String>)>,
+    cancel_token: &CancellationToken,
 ) -> Option<String> {
-    if !*dirty
+    if !cancel_token.is_cancelled()
+        && !*dirty
         && let Some((cached_root, cached_result)) = cache.as_ref()
         && cached_root == root
     {
         dbg_log!("Compiler check: reusing cached result (tree unchanged since last check)");
         return cached_result.clone();
     }
-    let result = run_compiler_check(root).await;
+    let result = run_compiler_check(root, cancel_token).await;
+    if result
+        .as_deref()
+        .is_some_and(|text| text.starts_with("__BUILD_UNVERIFIED__"))
+    {
+        *dirty = true;
+        *cache = None;
+        return result;
+    }
     *cache = Some((root.to_path_buf(), result.clone()));
     *dirty = false;
     result
@@ -232,6 +225,153 @@ pub(crate) fn compiler_diagnostics_with_snippets(diagnostics: &str) -> String {
 }
 
 const COMPILER_DIAGNOSTIC_MARKER: &str = "LSP/Compiler errors detected in workspace, please fix:";
+
+#[cfg(test)]
+mod compiler_execution_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn stderr_only_cargo_failure_is_not_cached_as_passed() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"invalid_fixture\"\nversion = \"not-a-version\"\n[workspace]\n",
+        )
+        .unwrap();
+        let token = CancellationToken::new();
+        let mut dirty = true;
+        let mut cache = None;
+        let result = cached_compiler_check(project.path(), &mut dirty, &mut cache, &token)
+            .await
+            .unwrap();
+        assert!(result.contains("status 101"), "{result}");
+        assert!(result.contains("not-a-version"), "{result}");
+        assert!(!result.starts_with("__BUILD_UNVERIFIED__"));
+        assert!(!dirty);
+        assert_eq!(
+            cached_compiler_check(project.path(), &mut dirty, &mut cache, &token).await,
+            Some(result)
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_cargo_check_is_cached_as_passed() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("Cargo.toml"), "[package]\nname = \"valid_compiler_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n").unwrap();
+        std::fs::write(project.path().join("lib.rs"), "pub fn valid() {}\n").unwrap();
+        let token = CancellationToken::new();
+        let mut dirty = true;
+        let mut cache = None;
+        assert!(
+            cached_compiler_check(project.path(), &mut dirty, &mut cache, &token)
+                .await
+                .is_none()
+        );
+        assert!(!dirty);
+        assert_eq!(cache, Some((project.path().to_owned(), None)));
+    }
+
+    #[tokio::test]
+    async fn cancelled_check_does_not_reuse_clean_cache() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(project.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut dirty = false;
+        let mut cache = Some((project.path().to_owned(), None));
+        let result = cached_compiler_check(project.path(), &mut dirty, &mut cache, &token)
+            .await
+            .unwrap();
+        assert!(result.starts_with("__BUILD_UNVERIFIED__"));
+        assert!(result.contains("cancelled"));
+        assert!(dirty);
+        assert!(cache.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn nonzero_without_diagnostics_is_failure_and_zero_is_passed() {
+        let project = tempfile::tempdir().unwrap();
+        let token = CancellationToken::new();
+        let failure = run_compiler_command(
+            project.path(),
+            "exit 9",
+            false,
+            Duration::from_secs(5),
+            &token,
+        )
+        .await
+        .unwrap();
+        assert!(failure.contains("status 9"));
+        assert!(
+            run_compiler_command(
+                project.path(),
+                "exit 0",
+                false,
+                Duration::from_secs(5),
+                &token
+            )
+            .await
+            .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    async fn assert_compiler_tree_cleanup(cancel: bool) {
+        let project = tempfile::tempdir().unwrap();
+        let token = CancellationToken::new();
+        let timeout = if cancel {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_millis(500)
+        };
+        let command =
+            "(sleep 2; printf survived > descendant-marker) & printf ready > started; wait";
+        let execution = run_compiler_command(project.path(), command, false, timeout, &token);
+        let trigger = async {
+            if cancel {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !project.path().join("started").exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                token.cancel();
+            }
+        };
+        let (result, _) = tokio::time::timeout(Duration::from_secs(6), async {
+            tokio::join!(execution, trigger)
+        })
+        .await
+        .unwrap();
+        let result = result.unwrap();
+        assert!(result.starts_with("__BUILD_UNVERIFIED__"), "{result}");
+        assert!(
+            result.contains(if cancel { "cancelled" } else { "timed out" }),
+            "{result}"
+        );
+        assert!(project.path().join("started").exists());
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        assert!(
+            !project.path().join("descendant-marker").exists(),
+            "compiler descendant survived termination"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn compiler_timeout_kills_descendants() {
+        assert_compiler_tree_cleanup(false).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn compiler_cancellation_kills_descendants() {
+        assert_compiler_tree_cleanup(true).await;
+    }
+}
 
 pub(crate) fn compiler_diagnostic_fingerprint(content: &str) -> Option<String> {
     let diagnostics = content.split_once(COMPILER_DIAGNOSTIC_MARKER)?.1.trim();
