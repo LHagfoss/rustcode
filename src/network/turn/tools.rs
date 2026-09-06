@@ -294,7 +294,15 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             truncated_batch_summary_with_dropped(&parsed_tool_calls, &dropped_calls);
     }
     let oversized_batch = dropped_count > 0;
-    if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls, max_mutating_calls) {
+    let validation_errors = crate::tools::validation_errors_by_call(&parsed_tool_calls);
+    let executable_tool_calls = parsed_tool_calls
+        .iter()
+        .zip(&validation_errors)
+        .filter_map(|(call, error)| error.is_none().then(|| call.clone()))
+        .collect::<Vec<_>>();
+    if let Err(reason) =
+        crate::tools::validate_tool_calls(&executable_tool_calls, max_mutating_calls)
+    {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
         }
@@ -361,8 +369,9 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         return ToolHandlingOutcome::Continue;
     }
     ctx.recovery.oversized_batch_rejections = 0;
-    let (tool_calls, deferred_tool_calls) =
-        crate::tools::isolate_control_plane_call(parsed_tool_calls);
+    let (executable_tool_calls, deferred_tool_calls) =
+        crate::tools::isolate_control_plane_call(executable_tool_calls);
+    let tool_calls = parsed_tool_calls;
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
@@ -480,7 +489,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         if !cancel_token.is_cancelled() {
             ctx.budget.tool_rounds += 1;
 
-            let approved = policy.should_approve(state, &tool_calls).await;
+            let approved = policy.should_approve(state, &executable_tool_calls).await;
 
             {
                 let mut s = state.lock().await;
@@ -539,7 +548,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 client,
                 state,
                 cancel_token,
-                &tool_calls,
+                &executable_tool_calls,
                 ctx.lifecycle.turn_machine.state() == events::TurnState::ExecutingTools,
                 &ctx.compiler.edit_root,
                 &mut ctx.compiler.dirty,
@@ -548,6 +557,35 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 deferred_notice,
             )
             .await;
+            let mut executed_results = results.into_iter();
+            let results = validation_errors
+                .into_iter()
+                .enumerate()
+                .map(|(index, error)| {
+                    error.map_or_else(
+                        || {
+                            executed_results
+                                .next()
+                                .expect("validated call must produce a result")
+                        },
+                        |reason| ToolResult {
+                            tool_name: tool_calls
+                                .get(index)
+                                .map(|call| call.name.clone())
+                                .expect("validation failure must have a tool call"),
+                            content: format!("error: {reason}"),
+                            diff: None,
+                            file_preview: None,
+                            metadata: crate::network::events::ToolResultMetadata {
+                                success: false,
+                                error_kind: Some(crate::tools::ToolErrorKind::Validation),
+                                retryable: false,
+                                ..Default::default()
+                            },
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
 
             ctx.metrics.tool_calls += results.len();
             let mutation_batch = results

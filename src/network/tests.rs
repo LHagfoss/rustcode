@@ -982,6 +982,33 @@ fn output_limited_call_results_are_retryable_and_bounded() {
 }
 
 #[test]
+fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
+    let calls = [
+        crate::tools::ToolCall {
+            name: "grep".to_string(),
+            arguments: serde_json::json!({}),
+            call_id: Some("call_invalid".to_string()),
+        },
+        crate::tools::ToolCall {
+            name: "grep".to_string(),
+            arguments: serde_json::json!({"pattern": "TODO"}),
+            call_id: Some("call_valid".to_string()),
+        },
+    ];
+
+    let errors = crate::tools::validation_errors_by_call(&calls);
+
+    assert_eq!(calls[0].call_id.as_deref(), Some("call_invalid"));
+    assert!(
+        errors[0]
+            .as_deref()
+            .is_some_and(|error| error.contains("invalid arguments for 'grep'"))
+    );
+    assert_eq!(calls[1].call_id.as_deref(), Some("call_valid"));
+    assert!(errors[1].is_none(), "valid call inherited: {:?}", errors[1]);
+}
+
+#[test]
 fn call_refs_are_empty_without_provider_ids() {
     let calls = vec![crate::tools::ToolCall {
         name: "grep".to_string(),

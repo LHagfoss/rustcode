@@ -293,25 +293,7 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
             return Err(format!("duplicate tool call rejected: {}", call.name));
         }
 
-        let Some(schema) = registered_tool_schema(&call.name) else {
-            return Err(format!(
-                "unknown or unavailable tool '{}'; use only tools in the current registry",
-                call.name
-            ));
-        };
-
-        // Only built-in handlers coerce string-encoded integers
-        // (parse_json_number); MCP servers receive arguments verbatim.
-        let string_integers = TOOLS.iter().any(|tool| tool.name == call.name);
-        if let Err(reason) =
-            validate_value_against_schema(&call.arguments, &schema, "$", string_integers)
-        {
-            let guidance = tool_argument_guidance(&call.name).unwrap_or_default();
-            return Err(format!(
-                "invalid arguments for '{}'. Schema path: {reason}.{guidance}",
-                call.name
-            ));
-        }
+        validate_tool_call(call)?;
     }
 
     let mutating = calls
@@ -321,6 +303,39 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
     if mutating > max_mutating_calls {
         return Err(format!(
             "too many workspace-changing tool calls in one response ({mutating}; maximum is {max_mutating_calls}); emit the next action after receiving the previous result"
+        ));
+    }
+
+    Ok(())
+}
+
+/// Return validation failures in input order so callers can answer each
+/// provider tool call without attributing one call's schema error to another.
+pub(crate) fn validation_errors_by_call(calls: &[ToolCall]) -> Vec<Option<String>> {
+    calls
+        .iter()
+        .map(|call| validate_tool_call(call).err())
+        .collect()
+}
+
+fn validate_tool_call(call: &ToolCall) -> Result<(), String> {
+    let Some(schema) = registered_tool_schema(&call.name) else {
+        return Err(format!(
+            "unknown or unavailable tool '{}'; use only tools in the current registry",
+            call.name
+        ));
+    };
+
+    // Only built-in handlers coerce string-encoded integers
+    // (parse_json_number); MCP servers receive arguments verbatim.
+    let string_integers = TOOLS.iter().any(|tool| tool.name == call.name);
+    if let Err(reason) =
+        validate_value_against_schema(&call.arguments, &schema, "$", string_integers)
+    {
+        let guidance = tool_argument_guidance(&call.name).unwrap_or_default();
+        return Err(format!(
+            "invalid arguments for '{}'. Schema path: {reason}.{guidance}",
+            call.name
         ));
     }
 
