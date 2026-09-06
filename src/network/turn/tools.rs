@@ -52,7 +52,7 @@ fn batch_invalidates_read_recovery(
 
 fn mutation_batch_guidance(limit: usize) -> String {
     format!(
-        "Keep mutation-budget calls to at most {limit} per response. Every run_command, including read-only shell commands, counts toward this limit, as do workspace-editing tools. For parallel read-only inspection, use grep, glob, or view_file instead."
+        "Keep mutation-budget calls to at most {limit} per response. Only workspace-changing calls count toward this limit: mutating run_command invocations and workspace-editing tools. Read-only shell inspection (such as git status, ls, or cat) never consumes it. For parallel read-only inspection, use grep, glob, view_file, or a read-only shell command instead."
     )
 }
 
@@ -1480,12 +1480,14 @@ mod tests {
     }
 
     #[test]
-    fn dropped_call_guidance_includes_read_only_shell_commands_in_actual_limit() {
+    fn dropped_call_guidance_exempts_read_only_shell_commands_from_the_limit() {
         for limit in [1, 3] {
             let guidance = mutation_batch_guidance(limit);
             assert!(guidance.contains(&format!("at most {limit} per response")));
-            assert!(guidance.contains("Every run_command, including read-only shell commands"));
-            assert!(guidance.contains("grep, glob, or view_file"));
+            assert!(guidance.contains("Read-only shell inspection"));
+            assert!(guidance.contains("never consumes it"));
+            assert!(!guidance.contains("including read-only shell commands"));
+            assert!(guidance.contains("grep, glob, view_file"));
         }
     }
 

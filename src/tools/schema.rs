@@ -974,8 +974,8 @@ pub(crate) fn append_tool_response_limit(prompt: &mut String, max_mutating_calls
         "\n\n# Tool response limit\n\
 The effective max_mutating_calls_per_response is {max_mutating_calls}. \
 Emit at most {max_mutating_calls} mutating tool calls in one assistant response. \
-This includes every `run_command` call (even read-only shell commands), file writes/edits, \
-and other tools with side effects. Extra mutating calls are dropped, not queued. \
+This includes mutating `run_command` calls, file writes/edits, \
+and other tools with side effects. Read-only shell inspection never consumes this limit. Extra mutating calls are dropped, not queued. \
 Wait for the tool results before emitting the next batch; never assume a dropped call ran. \
 Use `grep`, `glob`, and `view_file` for independent reads, which do not consume this mutation limit.\n"
     )
@@ -1015,7 +1015,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 - If `git-feature-workflow` is available and files change, load it and follow its branch/status, focused-staging, verification, publish, and return-to-main steps. Preserve unrelated work; never use `git add .`, `git add -A`, or `git add --all`.\n\
 - Tool results are authoritative: claim checks only after an observed exit code 0. Fix compiler/tool errors first and rerun fresh checks after stale or failed verification. Subagent reports are advisory; inspect the workspace yourself.\n\
 - Use native `grep`/`glob` for exact discovery, `rg` through `run_command` for advanced searches, and SocratiCode `codebase_*` for semantic relationships. Inspect the exact range before editing; never guess lines, APIs, or dependencies.\n\
-- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel. Wait for dependent results. Emit at most one workspace-changing call, command, or delegation per response, and wait for its result before issuing another.\n\
+- ISSUE INDEPENDENT READS TOGETHER: `view_file`, `grep`, `glob`, `list_directory`, `find_symbol`, `get_project_map`, `search_web`, and `use_skill` run in parallel, as do read-only shell inspections. Wait for dependent results. Emit at most four workspace-changing calls, commands, or delegations per response (fewer when the tool response limit below says so), and wait for results before issuing another.\n\
 - Chained shell observations are fine when small and inspectable. `view_file` returns numbered text and continuation metadata; do not retrieve the same range again with `cat`, `sed`, or `awk`.\n\
 - Match neighboring signatures, state/lock, and error conventions.\n\
 - Prefer the smallest focused sequence.\n\
@@ -1185,16 +1185,17 @@ mod response_limit_tests {
                     )));
                     assert_eq!(prompt.matches("# Tool response limit").count(), 1);
                     assert!(
-                        prompt.contains("every `run_command` call (even read-only shell commands)")
+                        prompt.contains("Read-only shell inspection never consumes this limit")
                     );
                     assert!(prompt.contains("dropped, not queued"));
 
                     // The shell guidance must agree with the actual executor:
-                    // even discovery commands consume the mutation allowance.
+                    // mutating commands consume the mutation allowance while
+                    // read-only inspection does not.
                     let calls = (0..=limit)
                         .map(|_| crate::tools::ToolCall {
                             name: "run_command".into(),
-                            arguments: serde_json::json!({"command": "pwd"}),
+                            arguments: serde_json::json!({"command": "cargo test"}),
                             call_id: None,
                         })
                         .collect();

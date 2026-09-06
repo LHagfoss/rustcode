@@ -19,7 +19,10 @@ pub const DEFAULT_TOOL_ROUND_MAX_TOKENS: u32 = 8192;
 /// remains below the normal context-budget ceiling for a 128k context model.
 pub const MAX_CONFIGURED_TOOL_ROUND_MAX_TOKENS: u32 = 32768;
 /// Safe default for workspace-changing calls emitted in one model response.
-pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 1;
+/// Read-only inspection (`grep`, `glob`, `view_file`, and read-only shell
+/// commands) is classified separately and never consumes this budget, so the
+/// default covers a small focused sequence of edits or mutating commands.
+pub const DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE: usize = 4;
 /// Keep profile overrides bounded even when a config typo requests an
 /// unreasonably large mutation batch.
 pub const MAX_CONFIGURED_MUTATING_CALLS_PER_RESPONSE: usize = 8;
@@ -148,7 +151,7 @@ pub struct ModelProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_context_window: Option<u32>,
     /// Maximum number of workspace-changing tool calls accepted from one
-    /// response. Omitted profiles retain the safe one-call default.
+    /// response. Omitted profiles retain the safe four-call default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mutating_calls_per_response: Option<usize>,
 }

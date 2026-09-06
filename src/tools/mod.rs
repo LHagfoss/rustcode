@@ -194,7 +194,8 @@ impl ToolExecutionOutput {
 ///
 /// The limit exists so each edit is grounded in the result of the previous one,
 /// not to ration throughput: a model planning six edits ahead is predicting file
-/// contents it has not read. Shell commands may still chain with any normal
+/// contents it has not read. Read-only inspection never consumes this budget —
+/// see [`is_read_only_call`]. Shell commands may still chain with any normal
 /// operator because they are one call.
 /// Backwards-compatible name for the safe default. Runtime orchestration
 /// resolves the active profile's limit and passes it to policy functions.
@@ -210,9 +211,11 @@ pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 32;
 /// the kept calls and the calls that were dropped.
 ///
 /// Read-only calls are retained throughout the bounded provider batch. The
-/// mutation budget limits only non-parallel calls, so a later read is not lost
-/// merely because an earlier mutation used the budget. The absolute call
-/// ceiling still bounds every batch, and order among retained calls is kept.
+/// mutation budget limits only mutating calls (see [`is_read_only_call`]), so
+/// a later read — or a read-only shell inspection such as `git status` — is
+/// not lost merely because an earlier mutation used the budget. The absolute
+/// call ceiling still bounds every batch, and order among retained calls is
+/// kept.
 ///
 /// A control-plane call must execute alone, so it is either the entire kept
 /// batch — when it leads — or the boundary where the retained prefix stops.
@@ -233,7 +236,7 @@ pub fn partition_tool_batch(
             if is_control(call) {
                 break;
             }
-            if !supports_parallel_execution(&call.name) {
+            if !is_read_only_call(call) {
                 if mutating >= max_mutating_calls {
                     continue;
                 }
@@ -287,10 +290,7 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
         validate_tool_call(call)?;
     }
 
-    let mutating = calls
-        .iter()
-        .filter(|call| !supports_parallel_execution(&call.name))
-        .count();
+    let mutating = calls.iter().filter(|call| !is_read_only_call(call)).count();
     if mutating > max_mutating_calls {
         return Err(format!(
             "too many workspace-changing tool calls in one response ({mutating}; maximum is {max_mutating_calls}); emit the next action after receiving the previous result"
@@ -837,6 +837,25 @@ pub fn tool_safety(name: &str) -> ToolSafety {
 
 pub fn supports_parallel_execution(name: &str) -> bool {
     matches!(tool_safety(name), ToolSafety::ReadOnly)
+}
+
+/// Whether a single call is read-only inspection that never consumes the
+/// mutation budget. Native read tools (see [`supports_parallel_execution`])
+/// qualify, as do `run_command` calls whose shell text needs no confirmation
+/// under the existing command policy — e.g. `git status`, `ls`, `cat`, or a
+/// `rg … | head` pipeline. Anything unclassified stays mutating: a missing
+/// command, an unknown binary, or a write-like shell (`cargo test`, `rm`,
+/// redirections) still counts toward the limit. Evaluate this before the
+/// mutating cap in every batch path, including recovery, so inspection is
+/// never dropped or reprimanded for budget reasons.
+pub fn is_read_only_call(call: &ToolCall) -> bool {
+    if supports_parallel_execution(&call.name) {
+        return true;
+    }
+    if call.name == "run_command" {
+        return !command_requires_confirmation(&call.arguments);
+    }
+    false
 }
 
 /// Enforce a control-plane barrier. A control-plane call such as `use_skill`
