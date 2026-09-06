@@ -109,6 +109,31 @@ pub(crate) fn hydrate_explicit_verification_from_history(
     ledger.record_explicit_command(command, record.exit_code);
 }
 
+/// Warn once per logical turn, including when that turn resumes after a
+/// background wakeup. Keep the checkpoint count explicit: the notice can
+/// remain in history after subsequent rounds have consumed more budget.
+pub(crate) fn take_round_budget_notice(ctx: &mut TurnContext) -> Option<String> {
+    let remaining = ctx
+        .budget
+        .max_tool_rounds
+        .saturating_sub(ctx.budget.tool_rounds);
+    let warning_rounds = ctx.budget.max_tool_rounds.div_ceil(5).min(8);
+    if ctx.budget.round_budget_notice_sent || remaining == 0 || remaining > warning_rounds {
+        return None;
+    }
+    ctx.budget.round_budget_notice_sent = true;
+    Some(format!(
+        "[Turn budget checkpoint: {used}/{maximum} tool/recovery rounds used; \
+         {remaining} rounds remain at this checkpoint before the hard stop. \
+         This counts rounds, not individual tool calls. Prioritize outstanding errors \
+         and required validation; avoid expanding scope. If the task cannot be completed \
+         within the remaining budget, report the unfinished work and validation status \
+         accurately. Do not claim success without evidence or bypass safety checks.]",
+        used = ctx.budget.tool_rounds,
+        maximum = ctx.budget.max_tool_rounds,
+    ))
+}
+
 /// Record a tool-call protocol failure and return whether it is identical to
 /// the immediately preceding malformed request. Parsed calls use a stable
 /// name/arguments fingerprint; unparseable fences fall back to their bounded
@@ -128,6 +153,16 @@ pub async fn run_single_turn<P: policy::TurnPolicy + 'static>(
         && let Some(limit) = turn_budget_exceeded(ctx)
     {
         return stop_turn_for_budget(state, ctx, limit).await;
+    }
+
+    if !cancel_token.is_cancelled()
+        && let Some(notice) = take_round_budget_notice(ctx)
+    {
+        state
+            .lock()
+            .await
+            .history
+            .push(ChatMessage::new("system", notice));
     }
 
     if !ctx.recovery.force_final {

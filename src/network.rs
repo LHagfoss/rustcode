@@ -284,6 +284,9 @@ pub(crate) async fn stop_turn_for_budget(
         ctx.budget.tool_rounds
     );
     ctx.response.final_content = summary;
+    // The preceding tool response may already be persisted, but this new
+    // stop explanation still needs to reach the final transcript.
+    ctx.response.final_content_persisted = false;
     ctx.lifecycle.task_completed = false;
     ctx.budget.budget_stopped = Some(limit.to_string());
     ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::BudgetExceeded(limit.to_string()));
@@ -895,8 +898,8 @@ fn proactive_history_budget(budget: &crate::config::ContextBudget) -> u32 {
 /// Assemble the full provider request for one agent turn.
 ///
 /// Runs AI compaction if the history is long enough, snapshots the eligible
-/// history, then builds the message array: a STATIC system prefix (tool
-/// protocol + agent mode only, so the provider prompt cache stays warm) plus
+/// history, then builds the message array: a static system prefix (tool
+/// protocol + agent mode + resolved mutation limit, stable across rounds) plus
 /// the conversation, with all turn-varying context (environment delta,
 /// files-in-context, task plan) appended to the last message. Finally trims to
 /// the context-window budget and injects the system reminder. `tool_rounds` is
@@ -1080,10 +1083,16 @@ pub(crate) async fn prepare_turn_request(
         let protocol = s.active_tool_protocol();
         let agent_mode = s.agent_mode;
         let delegation_active = s.delegation_active;
-        let system_prompt = s
+        let mut system_prompt = s
             .prompt_cache
             .system_prompt(delegation_active, protocol, agent_mode)
             .to_string();
+        let max_mutating_calls = s
+            .active_model_profile()
+            .as_ref()
+            .map(|profile| profile.max_mutating_calls_per_response())
+            .unwrap_or(crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE);
+        crate::tools::append_tool_response_limit(&mut system_prompt, max_mutating_calls);
         let skill_metadata = s.prompt_cache.skill_metadata();
         let native_schema_policy = if matches!(protocol, crate::config::ToolProtocol::ApiNative) {
             Some(crate::tools::ToolSchemaPolicy::root_for_mode(

@@ -359,6 +359,7 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
     let mut state = AppState::new();
     let mut context = TurnContext::with_max_tool_rounds(7);
     context.budget.tool_rounds = 4;
+    context.budget.round_budget_notice_sent = true;
     context.progress.failed_mutations = 2;
     context.progress.consecutive_failed_mutations = 2;
     context
@@ -406,6 +407,7 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
 
     assert_eq!(resumed.budget.max_tool_rounds, 7);
     assert_eq!(resumed.budget.tool_rounds, 4);
+    assert!(resumed.budget.round_budget_notice_sent);
     assert_eq!(resumed.progress.failed_mutations, 2);
     assert_eq!(resumed.progress.consecutive_failed_mutations, 2);
     assert_eq!(
@@ -443,6 +445,7 @@ fn background_wakeup_reuses_the_logical_turn_context_after_orchestrator_yields()
 fn new_user_prompt_starts_fresh_turn_context() {
     let mut state = AppState::new();
     let mut context = TurnContext::new();
+    context.budget.round_budget_notice_sent = true;
     context.progress.failed_mutations = 3;
     context
         .progress
@@ -455,6 +458,7 @@ fn new_user_prompt_starts_fresh_turn_context() {
 
     assert_eq!(fresh.budget.max_tool_rounds, 9);
     assert_eq!(fresh.budget.tool_rounds, 0);
+    assert!(!fresh.budget.round_budget_notice_sent);
     assert_eq!(fresh.progress.failed_mutations, 0);
     assert!(fresh.progress.changed_paths.is_empty());
     assert!(fresh.verification.ledger.explicit_last_failure().is_none());
@@ -2584,6 +2588,77 @@ fn max_tool_rounds_triggers_the_budget() {
 }
 
 #[test]
+fn round_budget_notice_warns_once_before_the_hard_stop() {
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 31;
+    assert!(turn_engine::take_round_budget_notice(&mut ctx).is_none());
+    ctx.budget.tool_rounds = 32;
+    let notice = turn_engine::take_round_budget_notice(&mut ctx).unwrap();
+    assert!(notice.contains("32/40"));
+    assert!(notice.contains("8 rounds remain at this checkpoint"));
+    assert!(notice.contains("required validation"));
+    assert!(notice.contains("Do not claim success without evidence"));
+    for used in 32..40 {
+        ctx.budget.tool_rounds = used;
+        assert!(turn_engine::take_round_budget_notice(&mut ctx).is_none());
+        assert!(turn_budget_exceeded(&ctx).is_none());
+    }
+    ctx.budget.tool_rounds = 40;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(40))
+    ));
+    assert!(!ctx.lifecycle.task_completed);
+}
+
+#[test]
+fn round_budget_notice_respects_small_custom_and_exhausted_budgets() {
+    for maximum in [1, 3, 7, 100] {
+        let mut ctx = TurnContext::with_max_tool_rounds(maximum);
+        let threshold = maximum - maximum.div_ceil(5).min(8);
+        for used in 0..threshold {
+            ctx.budget.tool_rounds = used;
+            assert!(turn_engine::take_round_budget_notice(&mut ctx).is_none());
+        }
+        ctx.budget.tool_rounds = threshold;
+        let notice = turn_engine::take_round_budget_notice(&mut ctx).unwrap();
+        assert!(notice.contains(&format!("{threshold}/{maximum}")));
+        assert!(turn_budget_exceeded(&ctx).is_none());
+
+        let mut exhausted = TurnContext::with_max_tool_rounds(maximum);
+        exhausted.budget.tool_rounds = maximum;
+        assert!(turn_engine::take_round_budget_notice(&mut exhausted).is_none());
+        assert!(
+            matches!(turn_budget_exceeded(&exhausted), Some(TurnBudgetLimit::ToolRounds(n)) if n == maximum)
+        );
+    }
+}
+
+#[tokio::test]
+async fn round_budget_notice_reaches_the_provider_request() {
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 32;
+    let notice = turn_engine::take_round_budget_notice(&mut ctx).unwrap();
+    let mut app = AppState::new();
+    app.history
+        .push(ChatMessage::new("user", "Fix the compiler errors"));
+    app.history.push(ChatMessage::new("system", notice.clone()));
+    let messages = prepare_turn_request(
+        &reqwest::Client::new(),
+        &Arc::new(Mutex::new(app)),
+        ctx.budget.tool_rounds,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("request preparation");
+    assert!(messages.iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|content| content.contains(&notice))
+    }));
+}
+
+#[test]
 fn custom_tool_round_limit_triggers_at_the_configured_round() {
     let mut ctx = TurnContext::with_max_tool_rounds(3);
     ctx.budget.tool_rounds = 3;
@@ -2757,11 +2832,22 @@ async fn stopping_for_budget_never_falsely_reports_completion() {
     let mut ctx = TurnContext::new();
     ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
     ctx.lifecycle.task_completed = false;
+    ctx.response.final_content = "Applying the last edit".to_string();
+    ctx.response.final_content_persisted = true;
 
     let limit = turn_budget_exceeded(&ctx).expect("budget should be exceeded");
     let should_continue = stop_turn_for_budget(&state, &mut ctx, limit).await;
 
     assert!(!should_continue, "a budget stop must end the loop");
+    let transcript = lifecycle::final_transcript_content(
+        ctx.lifecycle.task_completed,
+        &ctx.response.final_content,
+        ctx.response.final_content_persisted,
+        ctx.lifecycle.stop_reason.as_ref().unwrap(),
+    )
+    .expect("the new budget explanation must be persisted");
+    assert_eq!(transcript, ctx.response.final_content);
+    assert!(transcript.contains("resume it in a new turn"));
     assert!(
         !ctx.lifecycle.task_completed,
         "a budget stop must never claim completion"

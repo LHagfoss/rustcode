@@ -10,6 +10,9 @@ use super::{
     view_file_unchanged_since_last_read,
 };
 
+#[cfg(test)]
+#[path = "tool_exec/compiler_tests.rs"]
+mod compiler_tests;
 #[path = "tool_exec/preview.rs"]
 mod preview;
 #[path = "tool_exec/result.rs"]
@@ -148,7 +151,7 @@ pub(crate) async fn confirm_and_execute(
     Option<String>,
     std::time::Duration,
 ) {
-    confirm_and_execute_for_call(
+    let (mut result, diff, user_wait) = confirm_and_execute_for_call(
         client,
         state,
         cancel_token,
@@ -160,7 +163,28 @@ pub(crate) async fn confirm_and_execute(
         live_key,
         None,
     )
-    .await
+    .await;
+
+    // Standalone subagent calls have no batch-level compiler check.
+    if matches!(
+        name,
+        "replace_file_content"
+            | "multi_replace_file_content"
+            | "write_to_file"
+            | "delete_file"
+            | "move_file"
+            | "copy_file"
+    ) && result.success
+        && let Some(cwd) = get_tool_project_root(name, args)
+        && let Some(errors) = run_compiler_check(&cwd).await
+    {
+        result.content.push_str("\n\nCompiler errors/warnings:\n");
+        result.content.push_str(&errors);
+        result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
+        result.retryable = true;
+    }
+
+    (result, diff, user_wait)
 }
 
 pub(crate) async fn confirm_and_execute_for_call(
@@ -228,7 +252,7 @@ pub(crate) async fn confirm_and_execute_for_call(
     );
     let mut user_wait_dur = std::time::Duration::ZERO;
     let mut confirmation_transition_redrawn = false;
-    let mut result = if !needs_confirm {
+    let result = if !needs_confirm {
         dbg_log!("Executing tool '{}' immediately...", name);
         let tool_name = name.to_string();
         {
@@ -530,26 +554,6 @@ pub(crate) async fn confirm_and_execute_for_call(
         }
         res
     };
-
-    if matches!(
-        name,
-        "replace_file_content"
-            | "multi_replace_file_content"
-            | "write_to_file"
-            | "delete_file"
-            | "move_file"
-            | "copy_file"
-    ) && result.success
-    {
-        if let Some(cwd) = get_tool_project_root(name, args) {
-            if let Some(errors) = run_compiler_check(&cwd).await {
-                result.content.push_str("\n\nCompiler errors/warnings:\n");
-                result.content.push_str(&errors);
-                result.error_kind = Some(crate::tools::ToolErrorKind::CompilerFailed);
-                result.retryable = true;
-            }
-        }
-    }
 
     (result, diff_opt, user_wait_dur)
 }
@@ -880,14 +884,19 @@ different, read another range or make an edit first; repeating this call returns
             s.recent_read_outputs.clear();
             s.read_file_mtimes.clear();
         }
-        let root = edit_root
-            .clone()
+        // Recursive batches share this cache; each successful edit invalidates it.
+        *compile_dirty = true;
+        let root = tool_calls
+            .iter()
+            .zip(&results)
+            .find(|(_, result)| is_mutating_tool(&result.tool_name) && result.metadata.success)
+            .and_then(|(call, _)| get_tool_project_root(&call.name, &call.arguments))
+            .or_else(|| edit_root.clone())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        if let Some(compiler_errors) = cached_compiler_check(&root, compile_dirty, compile_cache)
-            .await
-            .filter(|e| !e.starts_with("__BUILD_UNVERIFIED__"))
+        if let Some(compiler_errors) =
+            cached_compiler_check(&root, compile_dirty, compile_cache).await
         {
-            dbg_log!("Inline compiler check detected errors after edit");
+            dbg_log!("Inline compiler check returned diagnostics after edit");
             if let Some(result) = results
                 .iter_mut()
                 .find(|result| is_mutating_tool(&result.tool_name))

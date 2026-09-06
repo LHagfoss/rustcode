@@ -245,7 +245,7 @@ pub(crate) async fn run_subagent(
                 })
                 .unwrap_or_else(|| "Delegation contract unavailable; remain read-only.".to_string())
         };
-        let system_prompt = format!(
+        let mut system_prompt = format!(
             "{}\n\nYou are subagent {agent_id}, working for a main agent in the same \
 rustcode session. Complete the task you were given, then reply in plain text \
 with NO tool call — that reply is returned to the main agent. Keep the final \
@@ -260,6 +260,7 @@ reply compact and information-dense. {delegation_contract}\n\n{}",
                 .map(crate::context::environment_context_at)
                 .unwrap_or_else(crate::context::environment_context)
         );
+        crate::tools::append_tool_response_limit(&mut system_prompt, max_mutating_calls);
         let mut msgs: Vec<serde_json::Value> = vec![serde_json::json!({
             "role": "system",
             "content": system_prompt,

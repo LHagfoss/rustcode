@@ -964,6 +964,24 @@ pub(super) fn schema_for_agent_tool(name: &str) -> Value {
 pub(crate) const BASE_PROMPT_MAX_BYTES: usize = 4_700;
 pub(crate) const BASE_PROMPT_MAX_TOKENS: usize = 1_000;
 
+/// Append the resolved execution policy after the cached, profile-independent
+/// prompt so model switches cannot retain another profile's mutation limit.
+pub(crate) fn append_tool_response_limit(prompt: &mut String, max_mutating_calls: usize) {
+    use std::fmt::Write;
+
+    write!(
+        prompt,
+        "\n\n# Tool response limit\n\
+The effective max_mutating_calls_per_response is {max_mutating_calls}. \
+Emit at most {max_mutating_calls} mutating tool calls in one assistant response. \
+This includes every `run_command` call (even read-only shell commands), file writes/edits, \
+and other tools with side effects. Extra mutating calls are dropped, not queued. \
+Wait for the tool results before emitting the next batch; never assume a dropped call ran. \
+Use `grep`, `glob`, and `view_file` for independent reads, which do not consume this mutation limit.\n"
+    )
+    .expect("writing to a String cannot fail");
+}
+
 pub(crate) fn tool_system_prompt_for_policy(
     policy: ToolSchemaPolicy,
     protocol: crate::config::ToolProtocol,
@@ -1133,4 +1151,58 @@ pub fn tool_system_prompt(
         protocol,
         agent_mode,
     )
+}
+
+#[cfg(test)]
+mod response_limit_tests {
+    use super::*;
+    use crate::config::{AgentMode, ModelProfile, ToolProtocol};
+
+    #[test]
+    fn mutation_guidance_matches_effective_policy_for_every_protocol() {
+        for protocol in [
+            ToolProtocol::ApiNative,
+            ToolProtocol::Json,
+            ToolProtocol::Native,
+        ] {
+            for policy in [
+                ToolSchemaPolicy::root_for_mode(false, AgentMode::Build),
+                ToolSchemaPolicy::subagent(),
+            ] {
+                let base = tool_system_prompt_for_policy(policy, protocol, AgentMode::Build);
+                // Reuse the same base as the root prompt cache does, including
+                // switching back to the default after a profile override.
+                for configured in [None, Some(3), Some(0), Some(usize::MAX), None] {
+                    let profile = ModelProfile {
+                        max_mutating_calls_per_response: configured,
+                        ..ModelProfile::default()
+                    };
+                    let limit = profile.max_mutating_calls_per_response();
+                    let mut prompt = base.clone();
+                    append_tool_response_limit(&mut prompt, limit);
+                    assert!(prompt.contains(&format!(
+                        "effective max_mutating_calls_per_response is {limit}."
+                    )));
+                    assert_eq!(prompt.matches("# Tool response limit").count(), 1);
+                    assert!(
+                        prompt.contains("every `run_command` call (even read-only shell commands)")
+                    );
+                    assert!(prompt.contains("dropped, not queued"));
+
+                    // The shell guidance must agree with the actual executor:
+                    // even discovery commands consume the mutation allowance.
+                    let calls = (0..=limit)
+                        .map(|_| crate::tools::ToolCall {
+                            name: "run_command".into(),
+                            arguments: serde_json::json!({"command": "pwd"}),
+                            call_id: None,
+                        })
+                        .collect();
+                    let (kept, dropped) = crate::tools::partition_tool_batch(calls, limit);
+                    assert_eq!(kept.len(), limit);
+                    assert_eq!(dropped.len(), 1);
+                }
+            }
+        }
+    }
 }

@@ -20,6 +20,7 @@ pub struct BudgetState {
     pub max_tool_rounds: usize,
     pub tokens_used: u64,
     pub budget_stopped: Option<String>,
+    pub round_budget_notice_sent: bool,
 }
 
 pub struct RecoveryState {
@@ -106,6 +107,7 @@ impl TurnContext {
                 max_tool_rounds: max_tool_rounds.max(1),
                 tokens_used: 0,
                 budget_stopped: None,
+                round_budget_notice_sent: false,
             },
             recovery: RecoveryState {
                 oversized_batch_rejections: 0,

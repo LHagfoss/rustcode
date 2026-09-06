@@ -167,6 +167,11 @@ pub(crate) async fn cached_compiler_check(
 }
 
 pub(crate) fn append_compiler_diagnostics(result: &mut ToolResult, diagnostics: &str) {
+    if diagnostics.starts_with("__BUILD_UNVERIFIED__") {
+        result.content.push_str("\n\n");
+        result.content.push_str(diagnostics);
+        return;
+    }
     result
         .content
         .push_str("\n\nLSP/Compiler errors detected in workspace, please fix:\n");
