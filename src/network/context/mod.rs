@@ -215,39 +215,41 @@ mod tests {
         assert_eq!(prune_floor(8_000), 6_400);
     }
 
+    // #985 immutable-history contract: pruning passes observe but never
+    // rewrite stored messages. Pressure relief comes from FIFO head
+    // compaction (fixed summaries), so serialized history is identical
+    // before and after every pass — old and recent outputs alike.
     #[test]
-    fn prune_historical_keeps_recent_and_collapses_old() {
+    fn prune_historical_keeps_every_message_byte_identical() {
         let big = format!("run_command: {}", "x ".repeat(3000)); // > 1000 tokens
         // A large tool output at the front, and a large one near the tail.
-        let mut history = vec![tool_msg(&big)]; // index 0: will age out
+        let mut history = vec![tool_msg(&big)]; // index 0: aged out
         for i in 0..(KEEP_RECENT_TURNS + 1) {
             history.push(ChatMessage::new("user", format!("pad {i}")));
         }
         let recent_idx = history.len();
-        history.push(tool_msg(&big)); // within the last KEEP_RECENT_TURNS -> kept
+        history.push(tool_msg(&big)); // within the last KEEP_RECENT_TURNS
+        let before = serde_json::to_string(&history).unwrap();
 
-        prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
-
-        // Old, large tool output collapsed with prefix + token count preserved.
-        assert!(
-            history[0]
-                .content
-                .starts_with("run_command: [Tool Output Truncated:")
-        );
-        assert!(history[0].content.contains("tokens reduced to summary"));
-        // Recent large tool output left fully intact.
+        assert_eq!(prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS), 0);
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        // Old and recent large tool outputs are both left fully intact.
+        assert!(history[0].content.starts_with("run_command: x x"));
         assert!(history[recent_idx].content.starts_with("run_command: x x"));
     }
 
     #[test]
-    fn prune_historical_reports_exit_code() {
+    fn prune_historical_preserves_exit_code_evidence_verbatim() {
         let big = format!("run_command: {} exit code 2", "y ".repeat(3000));
-        let mut history = vec![tool_msg(&big)];
+        let history = vec![tool_msg(&big)];
+        let mut padded = history.clone();
         for i in 0..(KEEP_RECENT_TURNS + 2) {
-            history.push(ChatMessage::new("user", format!("m{i}")));
+            padded.push(ChatMessage::new("user", format!("m{i}")));
         }
-        prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
-        assert!(history[0].content.contains("Command exited with code 2."));
+        let before = serde_json::to_string(&padded).unwrap();
+        assert_eq!(prune_historical_tool_outputs(&padded, KEEP_RECENT_TURNS), 0);
+        assert_eq!(serde_json::to_string(&padded).unwrap(), before);
+        assert!(padded[0].content.contains("exit code 2"));
     }
 
     #[test]
@@ -256,7 +258,7 @@ mod tests {
         for i in 0..(KEEP_RECENT_TURNS + 2) {
             history.push(ChatMessage::new("user", format!("m{i}")));
         }
-        prune_historical_tool_outputs(&mut history, KEEP_RECENT_TURNS);
+        prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS);
         assert_eq!(history[0].content, "grep: match at line 4");
     }
 
@@ -268,40 +270,60 @@ mod tests {
         let mut history = vec![tool_msg(stub), tool_msg(recent)];
         let threshold = estimate_message_tokens(&history[1]) + 1;
 
-        let pruned = prune_old_tool_outputs(&mut history, threshold);
+        let pruned = prune_old_tool_outputs(&history, threshold);
 
         assert_eq!(pruned, 0);
         assert_eq!(history[0].content, stub);
     }
 
     #[test]
-    fn duplicate_old_file_reads_collapse_but_changed_reads_survive() {
+    fn duplicate_old_file_reads_are_excluded_at_render_not_in_storage() {
+        use crate::network::history::{
+            redundant_tool_result_indices, to_messages,
+        };
         let same = "view_file: [File: src/lib.rs]\n1: old";
         let changed = "view_file: [File: src/lib.rs]\n1: new";
-        let mut history = vec![
+        let history = vec![
             tool_msg(same),
             ChatMessage::new("assistant", "edit").with_diff(Some("real diff".to_string())),
             tool_msg(changed),
         ];
-        let collapsed = prune_duplicate_tool_results(&mut history, 1);
-        assert_eq!(collapsed, 0, "the duplicate is in the protected suffix");
+        let before = serde_json::to_string(&history).unwrap();
+        assert_eq!(prune_duplicate_tool_results(&history, 1), 0);
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        assert!(redundant_tool_result_indices(&history, 1).is_empty());
 
+        let mut history = history;
         history.extend([
             ChatMessage::new("assistant", "more work"),
             ChatMessage::new("user", "verify"),
         ]);
-        let collapsed = prune_duplicate_tool_results(&mut history, 2);
-        assert_eq!(collapsed, 0, "different file content is not a duplicate");
+        assert_eq!(prune_duplicate_tool_results(&history, 2), 0);
+        // Different file content is not a duplicate: everything renders.
+        assert!(redundant_tool_result_indices(&history, 2).is_empty());
 
         history.insert(0, tool_msg(same));
-        let collapsed = prune_duplicate_tool_results(&mut history, 2);
-        assert_eq!(collapsed, 1);
-        assert!(history[0].content.contains("Duplicate unchanged file read"));
+        // Age the older copy out of the protected recent window so the
+        // request-time rule applies.
+        for i in 0..11 {
+            history.push(ChatMessage::new("user", format!("follow-up {i}")));
+        }
+        let before = serde_json::to_string(&history).unwrap();
+        assert_eq!(prune_duplicate_tool_results(&history, 2), 0);
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        // Storage keeps the older copy verbatim; only the request drops it
+        // while the newer identical read is retained.
+        assert!(history[0].content.contains("1: old"));
+        assert_eq!(redundant_tool_result_indices(&history, 2), [0].into());
+        let rendered = serde_json::to_string(&to_messages(&history, "system")).unwrap();
+        assert_eq!(rendered.matches("1: old").count(), 1);
+        assert!(rendered.contains("1: new"));
     }
 
     #[test]
-    fn duplicate_read_pruning_requires_file_identity_and_complete_content() {
-        let mut history = vec![
+    fn duplicate_read_selection_requires_file_identity_and_complete_content() {
+        use crate::network::history::redundant_tool_result_indices;
+        let history = vec![
             tool_msg("view_file: [File: src/a.rs, Lines 1 to 1 of 1]\n1: same"),
             tool_msg("view_file: [File: src/a.rs, Lines 1 to 1 of 1]\n1: same"),
             tool_msg("view_file: [File: src/b.rs, Lines 1 to 1 of 1]\n1: same"),
@@ -309,10 +331,14 @@ mod tests {
             tool_msg(
                 "view_file: [File: src/d.rs, Lines 1 to 1 of 2]\n1: same\n[Truncated: lines 2-2 of 2]",
             ),
+            ChatMessage::new("user", "keep recent"),
         ];
-        history.push(ChatMessage::new("user", "keep recent"));
-        assert_eq!(prune_duplicate_tool_results(&mut history, 1), 1);
-        assert!(history[0].content.contains("Duplicate unchanged file read"));
+        let before = serde_json::to_string(&history).unwrap();
+        assert_eq!(prune_duplicate_tool_results(&history, 1), 0);
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        // Only the older of the two identical a.rs reads is redundant; other
+        // files, errors, and truncated reads always survive.
+        assert_eq!(redundant_tool_result_indices(&history, 1), [0].into());
         assert!(history[1].content.contains("src/a.rs"));
         assert!(history[2].content.contains("src/b.rs"));
         assert!(history[3].content.contains("cannot read"));
@@ -320,13 +346,13 @@ mod tests {
     }
 
     #[test]
-    fn old_failures_keep_compact_evidence() {
-        let mut history = vec![tool_msg(&format!(
-            "run_command: error: {}",
-            "diagnostic ".repeat(3_000)
-        ))];
-        prune_old_tool_outputs(&mut history, 1);
-        assert!(history[0].content.contains("failure/diagnostic evidence"));
+    fn old_failures_keep_full_evidence_verbatim() {
+        let content = format!("run_command: error: {}", "diagnostic ".repeat(3_000));
+        let history = vec![tool_msg(&content)];
+        let before = serde_json::to_string(&history).unwrap();
+        assert_eq!(prune_old_tool_outputs(&history, 1), 0);
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        assert_eq!(history[0].content, content);
     }
 
     #[test]
@@ -496,7 +522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_automatic_compaction_keeps_history_with_local_pruning_only() {
+    async fn cancelled_automatic_compaction_keeps_history_byte_identical() {
         let mut history = vec![ChatMessage::new("user", "keep the original task")];
         history.push(tool_msg(&format!("view_file: {}", "source ".repeat(3_000))));
         for i in 0..12 {
@@ -505,11 +531,9 @@ mod tests {
                 format!("FACT-{i}: {}", "progress ".repeat(30)),
             ));
         }
-        let expected_non_tool: Vec<(String, String)> = history
-            .iter()
-            .filter(|message| message.role != "tool")
-            .map(|message| (message.role.clone(), message.content.clone()))
-            .collect();
+        // #985: cancellation permits no storage rewrite at all — not even the
+        // deterministic local excerpting the old pipeline performed.
+        let expected = serde_json::to_string(&history).unwrap();
         let cancel_token = tokio_util::sync::CancellationToken::new();
         cancel_token.cancel();
 
@@ -523,14 +547,8 @@ mod tests {
         )
         .await;
 
-        let actual_non_tool: Vec<(String, String)> = history
-            .iter()
-            .filter(|message| message.role != "tool")
-            .map(|message| (message.role.clone(), message.content.clone()))
-            .collect();
         assert!(!compacted);
-        assert_eq!(actual_non_tool, expected_non_tool);
-        assert!(history[1].content.contains("Tool Output Truncated"));
+        assert_eq!(serde_json::to_string(&history).unwrap(), expected);
         assert!(
             !history
                 .iter()

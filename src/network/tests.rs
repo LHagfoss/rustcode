@@ -1741,6 +1741,9 @@ async fn interactive_confirmation_publication_invalidates_render_metrics_once() 
 
 #[tokio::test]
 async fn test_compact_history_strips_thinking_blocks() {
+    // #985 immutable-history contract: `<think>` blocks stay verbatim in
+    // storage and are stripped only at request-render time
+    // (`history::to_messages`), so compaction must not rewrite them.
     let mut history = vec![
         crate::app::ChatMessage::new(
             "assistant",
@@ -1749,8 +1752,18 @@ async fn test_compact_history_strips_thinking_blocks() {
         crate::app::ChatMessage::new("tool", "tool output"),
     ];
     compact_history_to_budget(&mut history, 5000).await;
-    assert_eq!(history[0].content, "\nHere is the answer");
+    assert_eq!(
+        history[0].content,
+        "<think>\nThinking about files...\n</think>\nHere is the answer"
+    );
     assert_eq!(history[1].content, "tool output");
+    let rendered = history::to_messages(&history, "system");
+    assert!(
+        rendered
+            .iter()
+            .any(|m| m.get("content").and_then(|c| c.as_str()) == Some("Here is the answer")),
+        "rendered request must strip the think block without touching storage"
+    );
 }
 
 #[test]
@@ -2132,7 +2145,10 @@ fn test_view_file_repeat_is_mtime_aware() {
 
 #[tokio::test]
 async fn test_compact_prunes_throwaway_before_file_contents() {
-    // Large throwaway command output + small file contents.
+    // #985 immutable-history contract: stored messages are append-only.
+    // Context pressure is absorbed by FIFO head compaction (the head becomes
+    // a deterministic record) — never by rewriting retained tool outputs in
+    // place. The retained tail must stay byte-identical.
     let big_cmd = format!(
         "run_command: {}",
         (0..60)
@@ -2141,25 +2157,43 @@ async fn test_compact_prunes_throwaway_before_file_contents() {
             .join("\n")
     );
     let file = "view_file: [File: src/main.rs, Lines 1 to 5 of 5]\n1: a\n2: b\n3: c\n4: d\n5: e";
-    let file_original = file.to_string();
     let mut history = vec![
-        ChatMessage::new("tool", big_cmd.clone()), // throwaway, oldest
-        ChatMessage::new("tool", file.to_string()), // file contents, newer
+        ChatMessage::new("user", "original goal: keep working on src/main.rs"),
+        ChatMessage::new("assistant", "plan: inspect the build output first"),
+        ChatMessage::new("tool", big_cmd),
+        ChatMessage::new("user", "noted; now check the current file contents"),
+        ChatMessage::new("assistant", "reading the file"),
+        ChatMessage::new("tool", file.to_string()),
+        ChatMessage::new("assistant", "working from the file contents"),
+        ChatMessage::new("user", "current follow-up: continue"),
     ];
-    // Budget forces compaction; the throwaway must absorb the cut so the file
-    // contents the agent is actively working on survive intact.
-    compact_history_to_budget(&mut history, 80).await;
-    assert_eq!(history[1].content, file_original, "file contents preserved");
-    assert_ne!(history[0].content, big_cmd, "throwaway was reduced");
+    let original = history.clone();
+    // Budget forces compaction; the head absorbs the cut so the retained
+    // tail survives byte-identical.
+    assert!(compact_history_to_budget(&mut history, 80).await);
     assert!(
-        !history[0].content.contains("line number 59"),
-        "throwaway truncated: {}",
+        history[0].content.starts_with("[Deterministic context record]"),
+        "head must become a deterministic record, got: {}",
         history[0].content
+    );
+    assert_eq!(
+        history[1..],
+        original[original.len() - (history.len() - 1)..],
+        "retained tail must stay byte-identical"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.contains("pruned to maintain context window")),
+        "no retained message may be rewritten in place"
     );
 }
 
 #[tokio::test]
 async fn test_compact_prunes_oldest_result_before_newer_result_in_same_class() {
+    // #985 immutable-history contract: same-class outputs are never excerpted
+    // in place. Pressure is absorbed by the head record; whatever tail is
+    // retained keeps its exact original bytes.
     let old = format!(
         "run_command: old output\n{}",
         (0..80)
@@ -2175,14 +2209,35 @@ async fn test_compact_prunes_oldest_result_before_newer_result_in_same_class() {
             .join("\n")
     );
     let mut history = vec![
-        ChatMessage::new("tool", old.clone()),
-        ChatMessage::new("tool", new.clone()),
+        ChatMessage::new("user", "original goal: diagnose the failure"),
+        ChatMessage::new("assistant", "plan: collect diagnostics"),
+        ChatMessage::new("tool", old),
+        ChatMessage::new("user", "noted; now check the newer result"),
+        ChatMessage::new("assistant", "reading the latest output"),
+        ChatMessage::new("tool", new),
+        ChatMessage::new("assistant", "analyzing the latest diagnostics"),
+        ChatMessage::new("user", "current follow-up: report findings"),
     ];
+    let original = history.clone();
 
-    compact_history_to_budget(&mut history, 70).await;
+    assert!(compact_history_to_budget(&mut history, 70).await);
 
-    assert_ne!(history[0].content, old);
-    assert_eq!(history[1].content, new);
+    assert!(
+        history[0].content.starts_with("[Deterministic context record]"),
+        "head must become a deterministic record, got: {}",
+        history[0].content
+    );
+    assert_eq!(
+        history[1..],
+        original[original.len() - (history.len() - 1)..],
+        "retained tail must stay byte-identical"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.contains("pruned to maintain context window")),
+        "no retained message may be rewritten in place"
+    );
 }
 
 #[tokio::test]
@@ -4117,7 +4172,7 @@ fn historical_assistant_reasoning_is_stripped_when_generating_messages() {
 
 #[test]
 fn compaction_prunes_massive_historical_reasoning() {
-    let mut history = vec![
+    let history = vec![
         ChatMessage::new("user", "Prompt 1"),
         ChatMessage::new(
             "assistant",
@@ -4143,20 +4198,35 @@ fn compaction_prunes_massive_historical_reasoning() {
         .map(compaction::estimate_message_tokens)
         .sum();
     assert!(before_tokens > 10000, "initial tokens should be large");
+    let before = serde_json::to_string(&history).unwrap();
 
-    let pruned = compaction::prune_historical_reasoning(&mut history, 2);
-    assert_eq!(pruned, 2, "must prune 2 historical assistant messages");
+    // #985: storage is append-only — the pass reports no storage change and
+    // every retained message stays byte-identical.
+    let pruned = compaction::prune_historical_reasoning(&history, 2);
+    assert_eq!(pruned, 0, "storage must not be rewritten");
+    assert_eq!(serde_json::to_string(&history).unwrap(), before);
 
-    let after_tokens: usize = history
-        .iter()
-        .map(compaction::estimate_message_tokens)
-        .sum();
+    // The request render still excludes the scratchpads while preserving the
+    // visible answers, so provider pressure is handled without touching
+    // history.
+    let messages = crate::network::history::to_messages(&history, "system");
+    let rendered = serde_json::to_string(&messages).unwrap();
     assert!(
-        after_tokens < 500,
-        "after reasoning pruning tokens should be drastically lower: got {after_tokens}"
+        !rendered.contains("deep thoughts"),
+        "historical assistant reasoning must not be sent to provider"
     );
-    assert_eq!(history[1].content, "Short answer 1");
-    assert_eq!(history[3].content, "Short answer 2");
+    assert!(
+        !rendered.contains("more thoughts"),
+        "historical assistant reasoning must not be sent to provider"
+    );
+    assert!(
+        rendered.contains("Short answer 1") && rendered.contains("Short answer 2"),
+        "visible answers must be preserved"
+    );
+    assert!(
+        history[1].content.contains("<think>") && history[3].content.contains("<think>"),
+        "stored scratchpads stay verbatim for the transcript"
+    );
 }
 
 #[test]

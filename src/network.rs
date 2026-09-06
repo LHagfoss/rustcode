@@ -24,7 +24,7 @@ pub(crate) use messages::{
 
 #[path = "network/text.rs"]
 pub(crate) mod text;
-use text::{is_cut_off, strip_think_blocks};
+use text::is_cut_off;
 
 #[path = "network/stream.rs"]
 pub(crate) mod stream;
@@ -363,85 +363,16 @@ pub(crate) fn failure_replan_message(tool: &str, category: &str, repeats: usize)
     )
 }
 
-/// True when a tool result has already been reduced to a stub (nothing left to prune).
-fn is_fully_stubbed(m: &ChatMessage) -> bool {
-    let rest = m
-        .content
-        .split_once(':')
-        .map(|x| x.1)
-        .unwrap_or("")
-        .trim_start();
-    rest.starts_with("[Tool output truncated") || rest.starts_with("[superseded")
-}
-
-/// Reduce one tool message a single notch toward a stub (full → 2 lines → fully
-/// stubbed). Returns the new token count. Idempotent on already-stubbed messages.
-async fn reduce_tool_msg(m: &mut ChatMessage, current_tokens: u32) -> u32 {
-    let tool_name = m
-        .content
-        .split(':')
-        .next()
-        .unwrap_or("tool")
-        .trim()
-        .to_string();
-    let rest = m
-        .content
-        .split_once(':')
-        .map(|x| x.1)
-        .unwrap_or("")
-        .to_string();
-
-    if is_fully_stubbed(m) {
-        return current_tokens;
-    }
-
-    let lines: Vec<&str> = rest.lines().collect();
-    if lines.len() > 2 {
-        let truncated = format!("{}: {}\n{}", tool_name, lines[0], lines[1]);
-        let t = count_tokens(&truncated);
-        m.content = truncated;
-        t
-    } else {
-        let stubbed = format!(
-            "{}: [Tool output truncated: {} tokens pruned to maintain context window]",
-            tool_name, current_tokens
-        );
-        count_tokens(&stubbed)
-    }
-}
-
-/// Repeatedly reduce the oldest non-stubbed tool result of `class` until under budget
-/// or the class is exhausted. Mutates `history`, `tokens`, and `total` in place.
-async fn prune_class(
-    history: &mut [ChatMessage],
-    tokens: &mut [u32],
-    total: &mut u32,
-    budget: u32,
-    class: &'static str,
-) {
-    let candidates: Vec<usize> = history
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| classify_tool_msg(m) == Some(class) && !is_fully_stubbed(m))
-        .map(|(i, _)| i)
-        .collect();
-
-    for idx in candidates {
-        while *total > budget && !is_fully_stubbed(&history[idx]) {
-            let before = tokens[idx];
-            let new_t = reduce_tool_msg(&mut history[idx], before).await;
-            if new_t >= before {
-                // Defensive: nothing more we can do here.
-                return;
-            }
-            *total = total.saturating_sub(before).saturating_add(new_t);
-            tokens[idx] = new_t;
-        }
-        if *total <= budget {
-            return;
-        }
-    }
-}
+/// #985 immutable-history contract: the in-place tool-output rewrite path
+/// (`reduce_tool_msg` / `prune_class` excerpting retained messages, plus the
+/// `<think>`-strip loop in `compact_history_to_budget`) is retired from the
+/// default turn path. Rewriting retained messages churns the prompt prefix on
+/// every turn, defeating KV-cache reuse and risking silent evidence loss.
+/// Under pressure, relief comes from FIFO head compaction
+/// (`compact_history_deterministically`: head replaced by a fixed record,
+/// retained tail stays byte-identical) plus request-time trimming of the
+/// rendered payload (`trim_msgs_to_budget`). Request rendering already strips
+/// `<think>` blocks (`history::to_messages`) without touching storage.
 
 const DETERMINISTIC_RECORD_MAX_CHARS: usize = 6_000;
 
@@ -501,67 +432,47 @@ pub(crate) async fn compact_history_to_budget(history: &mut Vec<ChatMessage>, bu
     }
     let before = history.clone();
 
-    // Strip <think> blocks from all assistant messages first to free up budget.
-    for m in history.iter_mut() {
-        if m.role == "assistant" {
-            m.content = strip_think_blocks(&m.content);
-        }
-    }
-
-    // Deterministic, content-aware pruning runs before the class-based fallback
-    // below. Keep the newest raw suffix and only collapse exact unchanged reads;
-    // a read with different content may reflect a real edit and must survive.
+    // Observe-only pass (never rewrites storage under #985; returns 0).
+    // Kept for the compaction metric below.
     let duplicate_reads = crate::network::compaction::prune_duplicate_tool_results(
-        history,
+        history.as_slice(),
         crate::network::compaction::KEEP_RECENT_TURNS,
     );
 
-    let mut tokens = Vec::with_capacity(history.len());
-    for m in history.iter() {
-        tokens.push(crate::network::compaction::estimate_message_tokens(m) as u32);
-    }
-    let mut total: u32 = tokens.iter().sum();
+    let total: u32 = history
+        .iter()
+        .map(|m| crate::network::compaction::estimate_message_tokens(m) as u32)
+        .sum();
     if total <= budget {
         return *history != before;
     }
 
     dbg_log!(
-        "History tokens ({}) exceed budget ({}). Compacting tool outputs by priority.",
+        "History tokens ({}) exceed budget ({}). Applying head-record compaction; retained tail stays byte-identical.",
         total,
         budget
     );
 
-    // Prune lowest-value outputs first: throwaway snapshots, then file contents,
-    // then anything else still taking space. Each class is flattened oldest-first.
-    prune_class(history, &mut tokens, &mut total, budget, "throwaway").await;
-    prune_class(history, &mut tokens, &mut total, budget, "file").await;
-    prune_class(history, &mut tokens, &mut total, budget, "other").await;
+    // Sole pressure relief on the default turn path: FIFO head compaction.
+    // The head is replaced by a fixed deterministic record while the retained
+    // tail is spliced verbatim. Any residual over-budget remainder is absorbed
+    // at request time by `trim_msgs_to_budget` over the rendered payload —
+    // never by editing stored messages.
+    let deterministic_record = compact_history_deterministically(history, budget);
 
-    let deterministic_record = if total > budget {
-        compact_history_deterministically(history, budget)
-    } else {
-        false
-    };
-    if deterministic_record {
-        tokens = history
-            .iter()
-            .map(|m| crate::network::compaction::estimate_message_tokens(m) as u32)
-            .collect();
-        total = tokens.iter().sum();
-        prune_class(history, &mut tokens, &mut total, budget, "throwaway").await;
-        prune_class(history, &mut tokens, &mut total, budget, "file").await;
-        prune_class(history, &mut tokens, &mut total, budget, "other").await;
-    }
-
+    let new_total: u32 = history
+        .iter()
+        .map(|m| crate::network::compaction::estimate_message_tokens(m) as u32)
+        .sum();
     dbg_log!(
         "Compact finished. New history tokens: {} (deterministic_record={})",
-        total,
+        new_total,
         deterministic_record
     );
     crate::logger::operational_event(
         "context.compaction",
         serde_json::json!({
-            "history_tokens": total,
+            "history_tokens": new_total,
             "budget": budget,
             "duplicate_reads_collapsed": duplicate_reads,
             "summary_generated": false,
