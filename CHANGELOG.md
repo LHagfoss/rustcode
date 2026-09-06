@@ -1,3 +1,10 @@
+## [v0.51.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.7) - 2026-09-06
+
+### Fixes
+- Avoid false loop escalation when a tool batch also produces fresh evidence; clarify shell-call limits in recovery feedback.
+- Preserve useful historical tool evidence with recoverable full-output artifacts and truthful completeness metadata; delay pruning until context pressure and correct reclaimed-token accounting.
+- Treat nonzero compiler exits as failures even without structured diagnostics, and cancel verification processes and their descendants on cancellation or timeout.
+- Prevent UTF-8 truncation panics in runtime context fragments and combined context tails.
 ## [v0.51.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.6) - 2026-09-06
 
 ### Fixes
