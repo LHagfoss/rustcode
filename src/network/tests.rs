@@ -2451,9 +2451,13 @@ fn harness_notes_reach_the_model_but_session_chatter_does_not() {
 }
 
 #[test]
-fn loop_abort_allows_one_bounded_recovery_before_forced_final() {
+fn loop_abort_allows_bounded_recoveries_before_forced_final() {
+    // #984: the harness offers several guided nudges with tools enabled
+    // before the terminal lockout, instead of disabling tools after one strike.
     assert_eq!(loop_recovery_action(0), LoopRecoveryAction::Recover);
-    assert_eq!(loop_recovery_action(1), LoopRecoveryAction::ForceFinal);
+    assert_eq!(loop_recovery_action(1), LoopRecoveryAction::Recover);
+    assert_eq!(loop_recovery_action(2), LoopRecoveryAction::Recover);
+    assert_eq!(loop_recovery_action(3), LoopRecoveryAction::ForceFinal);
     assert_eq!(
         loop_recovery_action(u8::MAX),
         LoopRecoveryAction::ForceFinal
@@ -2729,6 +2733,41 @@ fn custom_tool_round_limit_triggers_at_the_configured_round() {
         Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, 3),
         other => panic!("expected configured ToolRounds limit, got {other:?}"),
     }
+}
+
+#[test]
+fn loop_recovery_nudges_do_not_cap_the_turn_before_its_round_budget() {
+    // #984: autonomous turns are budgeted by max_tool_rounds (and the other
+    // safety budgets), not by recovery state. A turn mid-recovery keeps its
+    // tools until the bounded recovery budget is exhausted or a real budget
+    // trips — there is no artificial progress cap on top.
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 12;
+    ctx.recovery.loop_recovery_attempts = 2;
+    ctx.recovery.reasoning_recovery_attempts = 2;
+    assert_eq!(
+        loop_recovery_action(ctx.recovery.loop_recovery_attempts),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(ctx.recovery.reasoning_recovery_attempts),
+        LoopRecoveryAction::Recover
+    );
+    assert!(turn_budget_exceeded(&ctx).is_none());
+
+    // Exhausted recovery still escalates to a final answer, and the round
+    // budget remains the hard backstop for autonomous execution.
+    ctx.recovery.loop_recovery_attempts = 3;
+    assert_eq!(
+        loop_recovery_action(ctx.recovery.loop_recovery_attempts),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert!(turn_budget_exceeded(&ctx).is_none());
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(_))
+    ));
 }
 
 #[test]
@@ -4687,17 +4726,18 @@ fn test_local_model_profile_completion_reserve_defaults() {
 
 #[test]
 fn test_reasoning_loop_recovery_action_escalation() {
+    // #984: reasoning recovery matches the multi-round tool budget.
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(1),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(2),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(3),
@@ -4763,14 +4803,30 @@ fn test_reasoning_loop_detector_integration_and_resets() {
         );
     }
 
-    // 3. Cross-turn plan repetition
+    // 3. Cross-turn plan repetition with confirmed ledger stagnation.
+    // A bare repeated plan without stagnation is legitimate re-inspection
+    // (#984), so this path goes through evidence with streaks.
     let plan = "Plan: Inspect all routes in src/routes.rs and verify handler types.";
     assert_eq!(
-        detector.record_turn_reasoning(plan, false),
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
         loop_detect::ReasoningLoopStatus::Ok
     );
     assert!(matches!(
-        detector.record_turn_reasoning(plan, false),
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
         loop_detect::ReasoningLoopStatus::LoopDetected(_)
     ));
 
@@ -4998,16 +5054,21 @@ fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
 #[test]
 fn test_adversarial_6_bounded_recovery_escalation_prevents_runaway() {
     // Scenario 6: Loop detector fires, recovery loops again -> bounded recovery prevents runaway.
+    // #984: the bound is several guided rounds, not a single strike.
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(1),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(2),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(3),
         LoopRecoveryAction::ForceFinal
     );
     assert_eq!(

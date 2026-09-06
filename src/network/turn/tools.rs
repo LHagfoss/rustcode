@@ -1491,6 +1491,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn read_only_inspection_stays_executable_while_loop_recovery_is_pending() {
+        // #984 must not weaken #983: read-only classification is evaluated
+        // before the mutating cap in every batch path, including recovery, so
+        // inspection is never dropped or reprimanded for budget reasons while
+        // the harness nudges the model back on track.
+        use crate::tools::{is_read_only_call, partition_tool_batch, validate_tool_calls};
+
+        let shell = |command: &str| ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": command}),
+            call_id: None,
+        };
+        let batch = vec![
+            ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/a.ts",
+                    "edits": [{"old_string": "a", "new_string": "b"}]
+                }),
+                call_id: None,
+            },
+            shell("git status --short"),
+            shell("ls src"),
+            shell("cat src/app.ts"),
+        ];
+        assert!(!is_read_only_call(&batch[0]));
+        assert!(batch.iter().skip(1).all(is_read_only_call));
+        let limit = crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE;
+        let (kept, dropped) = partition_tool_batch(batch, limit);
+        assert!(
+            dropped.is_empty(),
+            "recovery must not drop inspection: {dropped:?}"
+        );
+        assert_eq!(kept.len(), 4);
+        assert!(validate_tool_calls(&kept, limit).is_ok());
+    }
+
     fn read_observation(action: &str) -> super::loop_detect::ProgressObservation {
         super::loop_detect::ProgressObservation {
             action: action.to_owned(),

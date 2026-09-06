@@ -124,15 +124,20 @@ any remaining tasks, and a recommendation for what to do next. This overrides al
 /// as unrecoverable.
 pub(crate) const EMPTY_RESPONSE_RECOVERY_PROMPT: &str = "The previous model response was empty. Use the tool result already provided and answer the user's request now. Do not call tools unless the answer truly requires another tool call. Be concise.";
 
-pub(crate) const LOOP_RECOVERY_PROMPT: &str = "The previous tool action repeated without making progress. Tools remain enabled for one recovery attempt. \
+pub(crate) const LOOP_RECOVERY_PROMPT: &str = "The previous tool action repeated without making progress. Tools remain enabled for bounded recovery attempts. \
 Do not repeat the same tool call or the same exact edit. Re-read a broader file region or use grep to verify exact target content, \
 then use a grounded approach. Use the active tool interface directly; never print tool-call syntax as prose. \
-If the requested change is already present or cannot be applied safely, explain that instead of retrying. This is the final recovery attempt.";
+If the requested change is already present or cannot be applied safely, explain that instead of retrying. Repeated stagnation consumes the bounded recovery budget, after which the harness requests a final text answer.";
 
-pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. Use the bounded reasoning budget for this one recovery attempt. Do not read files again or restate the requirements. If the user requested workspace changes, emit exactly one mutating tool call now using what you already learned. Otherwise, give the direct final answer.]";
+pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. Use the bounded reasoning budget for these recovery attempts. Do not read files again or restate the requirements. If the user requested workspace changes, emit exactly one mutating tool call now using what you already learned. Otherwise, give the direct final answer.]";
 
-pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 1;
-pub(crate) const MAX_REASONING_RECOVERY_ROUNDS: u8 = 1;
+/// Bounded recovery nudges before the harness asks for a final text answer.
+/// A single strike used to disable tools for the rest of the turn, which
+/// locked out legitimate multi-turn inspection and compiler debugging.
+/// Allow a few guided retries instead; the round/token safety budgets keep
+/// every turn bounded, and exhaustion still ends with a forced final answer.
+pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 3;
+pub(crate) const MAX_REASONING_RECOVERY_ROUNDS: u8 = 3;
 
 /// Safety budgets for a single agent turn. These are deliberately generous —
 /// the goal is to catch a runaway session (the benchmark that motivated this

@@ -237,7 +237,12 @@ impl ReasoningLoopDetector {
                     && prev.content_words.len() >= 4)
             {
                 self.consecutive_same_plan_turns += 1;
-                if self.consecutive_same_plan_turns >= 2 {
+                // A first repeated plan while the progress ledger still shows
+                // fresh evidence (streak 0/1) is legitimate inspection or
+                // debugging — reading library source or searching for an API
+                // across two turns naturally reuses wording. Only escalate
+                // once the ledger confirms true stagnation.
+                if self.consecutive_same_plan_turns >= 2 && evidence.no_progress_streak >= 2 {
                     return ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TURN_SAME_PLAN);
                 }
             } else {
