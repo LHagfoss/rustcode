@@ -84,7 +84,7 @@ pub(super) async fn render_frame(
                     .history
                     .iter()
                     .find(|m| m.role == "user" && !m.content.starts_with('/'))
-                    .map(|m| m.content.lines().next().unwrap_or("").trim().to_string())
+                    .map(|_| crate::config::session_title(&guard.history))
             });
         let snapshot = guard.render_snapshot();
         let activity =

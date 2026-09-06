@@ -338,10 +338,9 @@ fn render_conversation_recap(content: &str, width: u16) -> Vec<Line<'static>> {
     let label_style = get_themed_style(COLOR_PRIMARY(), COLOR_BG(), Modifier::BOLD, false);
     let label_width = label.width();
     let mut lines = vec![Line::from(vec![
-        Span::styled("  ", line_style),
         Span::styled(label, label_style),
         Span::styled(
-            "─".repeat((width as usize).saturating_sub(message_padding + label_width)),
+            "─".repeat((width as usize).saturating_sub(label_width)),
             line_style,
         ),
     ])];

@@ -412,7 +412,7 @@ pub fn classify_activity(status: &AppStatus, running_tools: &[String]) -> Activi
 }
 
 pub fn sanitize_session_name(raw: &str, max_chars: usize) -> String {
-    let normalized = raw
+    let normalized = rustcode_session::unwrap_title_paste_markers(raw)
         .chars()
         .map(|character| {
             if character == '|' {
@@ -541,6 +541,23 @@ mod tests {
     fn terminal_title_contains_state_and_short_name() {
         let title = format_terminal_title(ActivityKind::Working, "tower defense", 2);
         assert_eq!(title, "[••] Working · tower defense");
+    }
+
+    #[test]
+    fn terminal_titles_hide_complete_and_truncated_paste_framing() {
+        for raw in [
+            "<!--PASTE:15:Build chess MCP-->",
+            "<!--PASTE:1937:Build chess MCP",
+        ] {
+            assert_eq!(
+                format_terminal_title(ActivityKind::Ready, raw, 0),
+                "rustcode · Idle · Build chess MCP"
+            );
+        }
+        assert_eq!(
+            sanitize_session_name("<!--PASTE:5:棋棋棋棋棋-->", 3),
+            "棋棋棋"
+        );
     }
 
     #[test]

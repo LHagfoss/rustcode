@@ -20,6 +20,44 @@ const MAX_SESSIONS: usize = 30;
 mod workspace;
 pub use workspace::*;
 
+/// Remove composer paste framing from display titles, including old titles
+/// truncated before the closing marker. Conversation/input text stays intact.
+pub fn unwrap_title_paste_markers(raw: &str) -> std::borrow::Cow<'_, str> {
+    const MARKER: &str = "<!--PASTE:";
+    if !raw.contains(MARKER) {
+        return std::borrow::Cow::Borrowed(raw);
+    }
+    let mut text = String::new();
+    let mut rest = raw;
+    while let Some(index) = rest.find(MARKER) {
+        text.push_str(&rest[..index]);
+        let after = &rest[index + MARKER.len()..];
+        let (payload, remaining) = after.split_once("-->").unwrap_or((after, ""));
+        if let Some((_, body)) = payload.split_once(':') {
+            text.push_str(body);
+        } else {
+            text.push_str("Pasted text");
+        }
+        rest = remaining;
+    }
+    text.push_str(rest);
+    std::borrow::Cow::Owned(text)
+}
+
+fn title_from_prompt(content: &str) -> String {
+    let text = unwrap_title_paste_markers(content);
+    let title = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    if title.chars().count() > 48 {
+        format!("{}...", title.chars().take(45).collect::<String>())
+    } else {
+        title.to_string()
+    }
+}
+
 /// A history input that exposes immutable messages and, when available, a
 /// mutation revision for queued-write deduplication.
 pub trait HistorySnapshot {
@@ -222,24 +260,11 @@ impl SessionStore {
     }
 
     pub fn session_title(history: &[ChatMessage]) -> String {
-        let title = history
+        history
             .iter()
             .find(|message| message.role == "user" && !message.content.starts_with('/'))
-            .map(|message| {
-                message
-                    .content
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
-            })
-            .unwrap_or_else(|| "(no prompt)".to_string());
-        if title.chars().count() > 48 {
-            format!("{}...", title.chars().take(45).collect::<String>())
-        } else {
-            title
-        }
+            .map(|message| title_from_prompt(&message.content))
+            .unwrap_or_else(|| "(no prompt)".to_string())
     }
 
     pub fn session_id_from_path(path: &Path) -> Option<String> {
@@ -283,17 +308,15 @@ impl SessionStore {
             .as_deref()
             .and_then(|id| self.load_session_title(id))
             .unwrap_or_else(|| {
-                let first_user = messages
+                let title = messages
                     .iter()
                     .find(|message| message.role == "user" && !message.content.starts_with('/'))
-                    .map(|message| message.content.lines().next().unwrap_or("").trim())
-                    .unwrap_or("(no prompt)");
-                if first_user.chars().count() > 48 {
-                    format!("{}...", first_user.chars().take(45).collect::<String>())
-                } else if first_user.is_empty() {
+                    .map(|message| title_from_prompt(&message.content))
+                    .unwrap_or_else(|| "(no prompt)".to_string());
+                if title.is_empty() {
                     "(no prompt)".to_string()
                 } else {
-                    first_user.to_string()
+                    title
                 }
             });
 
@@ -358,7 +381,7 @@ impl SessionStore {
             .then(|| {
                 std::fs::read_to_string(path)
                     .ok()
-                    .map(|value| value.trim().to_string())
+                    .map(|value| unwrap_title_paste_markers(value.trim()).into_owned())
             })
             .flatten()
     }
@@ -624,6 +647,54 @@ mod tests {
             store.load_session_meta(&path).unwrap().title,
             "Custom title"
         );
+    }
+
+    #[test]
+    fn pasted_titles_are_unwrapped_before_first_line_and_truncation() {
+        let body = "\n## Build a Chess MCP Server in Rust\n\nImplement the server.";
+        let wrapped = format!("<!--PASTE:{}:{body}-->", body.chars().count());
+        let history = vec![message("user", &wrapped), message("assistant", "done")];
+        assert_eq!(
+            SessionStore::session_title(&history),
+            "## Build a Chess MCP Server in Rust"
+        );
+        assert_eq!(
+            history[0].content, wrapped,
+            "input folding must remain intact"
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(root.path());
+        store.save_session_history("paste", &history);
+        flush_history();
+        let path = store.session_dir("paste").join(HISTORY_FILE);
+        assert_eq!(
+            store.load_session_meta(&path).unwrap().title,
+            "## Build a Chess MCP Server in Rust"
+        );
+
+        let long = "棋".repeat(60);
+        let history = vec![message("user", &format!("<!--PASTE:60:{long}-->"))];
+        assert_eq!(
+            SessionStore::session_title(&history),
+            format!("{}...", "棋".repeat(45))
+        );
+    }
+
+    #[test]
+    fn persisted_truncated_paste_titles_are_readable() {
+        let root = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(root.path());
+        store.save_session_title("old", "<!--PASTE:1937:Build a Chess MCP...");
+        assert_eq!(
+            store.load_session_title("old").as_deref(),
+            Some("Build a Chess MCP...")
+        );
+        assert_eq!(
+            unwrap_title_paste_markers("Review <!--PASTE:4:this--> please"),
+            "Review this please"
+        );
+        assert_eq!(unwrap_title_paste_markers("<!--PASTE:1937"), "Pasted text");
     }
 
     #[test]

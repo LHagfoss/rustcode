@@ -553,7 +553,7 @@ phase_wait_and_merge() {
         die "PR checks failed. Inspect the PR at: $pr_url"
     fi
 
-    info "All checks passed. Merging PR #$pr_number…"
+    info "All checks passed. Merging PR #${pr_number}…"
     local merge_err=""
     if ! merge_err="$(gh pr merge "$RELEASE_BRANCH" --squash --delete-branch 2>&1)"; then
         local pr_url
@@ -910,4 +910,7 @@ main() {
     info "═══════════════════════════════════════════════════════"
 }
 
-main "$@"
+# Allow an interrupted release to resume through these same phase functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

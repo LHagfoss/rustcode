@@ -1,3 +1,12 @@
+## [v0.51.6](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.6) - 2026-09-06
+
+### Fixes
+- Keep large-paste framing out of session and terminal titles, including older saved titles.
+- Align the Conversation recap divider with the left edge of other separators while preserving its text gutter.
+- Avoid duplicate compiler checks and stale diagnostics after edits; preserve build-verification uncertainty.
+- Show models the effective tool-call limit, warn near the round budget, and retain the complete explanation when unfinished work stops.
+- Moved the live tokens-per-second metric from the activity line into the composer footer.
+- Rendered YOLO mode toggles as clear, centered in-chat status separators.
 ## [v0.51.5](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.5) - 2026-09-04
 
 ### Fixes
