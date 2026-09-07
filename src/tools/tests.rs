@@ -1803,6 +1803,48 @@ fn command_authorization_distinguishes_safe_and_unknown_shell_commands() {
 }
 
 #[test]
+fn command_authorization_allows_harmless_inspection_but_confirms_side_effects() {
+    for command in [
+        "cat src/main.rs",
+        "sed -n '1,40p' src/main.rs",
+        "head -40 src/main.rs",
+        "tail -40 src/main.rs",
+        "grep -n TODO src/main.rs",
+    ] {
+        assert_eq!(
+            authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": command}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            AuthorizationDecision::Allow,
+            "harmless inspection should remain available: {command}"
+        );
+    }
+
+    for command in [
+        "cat src/main.rs > /tmp/main.rs",
+        "sed -i 's/old/new/' file.txt",
+        "cat src/main.rs | tee /tmp/main.rs",
+        "git restore -- src/main.rs",
+    ] {
+        assert_eq!(
+            authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": command}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            AuthorizationDecision::RequireConfirmation,
+            "side-effectful command must remain gated: {command}"
+        );
+    }
+}
+
+#[test]
 fn prompt_makes_delegation_explicitly_opt_in() {
     let prompt = tool_system_prompt(
         false,

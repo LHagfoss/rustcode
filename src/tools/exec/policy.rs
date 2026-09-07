@@ -175,6 +175,7 @@ fn is_read_only_segment(segment: &str) -> bool {
             "cat" | "date" | "echo" | "false" | "grep" | "head" | "less" | "ls" | "more" | "printf"
             | "pwd" | "rg" | "stat" | "tail" | "test" | "true" | "type" | "uname" | "which",
         ) => true,
+        Some("sed") => is_read_only_sed(segment),
         Some("npm") => {
             matches!(tokens.get(1..).unwrap_or_default(), ["config", "get", key] if !key.starts_with('-'))
         }
@@ -182,177 +183,25 @@ fn is_read_only_segment(segment: &str) -> bool {
     }
 }
 
-fn split_inspection_segments(command: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for character in command.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-        } else if character == '\\' && quote != Some('\'') {
-            current.push(character);
-            escaped = true;
-        } else if let Some(delimiter) = quote {
-            current.push(character);
-            if character == delimiter {
-                quote = None;
-            }
-        } else if matches!(character, '\'' | '"') {
-            current.push(character);
-            quote = Some(character);
-        } else if matches!(character, ';' | '\n' | '|' | '&' | '(' | ')' | '{' | '}') {
-            segments.push(std::mem::take(&mut current));
-        } else {
-            current.push(character);
-        }
-    }
-    segments.push(current);
-    segments
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FileInspectionKind {
-    View,
-    Search,
-}
-
-fn has_file_operand(arguments: &[&str], options_with_values: &[&str]) -> bool {
-    let mut skip_next = false;
-    for argument in arguments {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if options_with_values.contains(argument) {
-            skip_next = true;
-            continue;
-        }
-        if *argument == "--" {
-            continue;
-        }
-        if !argument.starts_with('-') && *argument != "-" && !argument.contains('=') {
-            return true;
-        }
-    }
-    false
-}
-
-fn pure_file_inspection_kind(segment: &str) -> Option<FileInspectionKind> {
+fn is_read_only_sed(segment: &str) -> bool {
     let tokens = segment.split_whitespace().collect::<Vec<_>>();
-    let binary = tokens.first()?.rsplit(['/', '\\']).next()?;
-    let arguments = &tokens[1..];
-    match binary {
-        "cat" => has_file_operand(arguments, &[]).then_some(FileInspectionKind::View),
-        "head" => has_file_operand(arguments, &["-n", "--lines", "-c", "--bytes"])
-            .then_some(FileInspectionKind::View),
-        "tail" => (!arguments
-            .iter()
-            .any(|argument| matches!(*argument, "-f" | "-F" | "--follow")))
-        .then_some(())
-        .filter(|_| {
-            has_file_operand(
-                arguments,
-                &["-n", "--lines", "-c", "--bytes", "-s", "--sleep-interval"],
-            )
-        })
-        .map(|_| FileInspectionKind::View),
-        "sed" => {
-            let read_range = arguments.iter().any(|argument| {
-                *argument == "-n"
-                    || *argument == "--quiet"
-                    || *argument == "--silent"
-                    || argument.starts_with("-n")
-            });
-            let script_index = arguments
-                .iter()
-                .position(|argument| !argument.starts_with('-'))?;
-            let script = arguments[script_index];
-            let file = arguments[script_index + 1..].iter().any(|argument| {
-                !argument.starts_with('-') && *argument != "-" && !argument.contains('=')
-            });
-            let writes = arguments.iter().any(|argument| {
-                *argument == "-i" || *argument == "--in-place" || argument.starts_with("-i")
-            }) || script.contains('w')
-                || script.contains('W')
-                || script.contains('e');
-            (read_range && !writes && file).then_some(FileInspectionKind::View)
-        }
-        "awk" => {
-            let file = arguments.last().is_some_and(|argument| {
-                !argument.starts_with('-')
-                    && *argument != "-"
-                    && !argument.contains(['=', '{', '}', '$', '\'', '"'])
-            });
-            let script_reads_file =
-                segment.contains("NR") || segment.contains("$0") || segment.contains("print");
-            let script_writes = segment.contains("system")
-                || segment.contains("getline")
-                || segment.contains('>')
-                || segment.contains('|');
-            (file && script_reads_file && !script_writes).then_some(FileInspectionKind::View)
-        }
-        "grep" | "rg" => {
-            let operands = arguments
-                .iter()
-                .filter(|argument| !argument.starts_with('-'))
-                .count();
-            (arguments.iter().all(|argument| !argument.starts_with('-')) && operands >= 1)
-                .then_some(FileInspectionKind::Search)
-        }
-        _ => None,
-    }
-}
-
-/// Prevent simple file-content probes from consuming a shell turn. Native
-/// `view_file` preserves line ranges and metadata, while native `grep` is the
-/// structured path for content search. Keep this routing rule conservative:
-/// shell syntax, writes, and any non-read-only command leave the shell path
-/// available for legitimate workflows.
-pub(crate) fn reject_pure_file_inspection(command: &str) -> Option<String> {
-    let command = command.trim();
-    if command.is_empty()
-        || command
-            .chars()
-            .any(|character| matches!(character, '<' | '>' | '`'))
-    {
-        return None;
-    }
-
-    let mut inspected = false;
-    let mut search = false;
-    for segment in split_inspection_segments(command) {
-        let segment = segment.trim();
-        if segment.is_empty() {
-            continue;
-        }
-        if let Some(kind) = pure_file_inspection_kind(segment) {
-            inspected = true;
-            search |= kind == FileInspectionKind::Search;
-        } else if segment
-            .split_whitespace()
-            .next()
-            .is_some_and(|token| token.rsplit(['/', '\\']).next() == Some("cd"))
-        {
-            // A leading `cd` is shell setup, not file inspection itself.
-        } else {
-            // Any other command keeps the complete shell workflow available,
-            // including Git observations and advanced grep/rg modes.
-            return None;
-        }
-    }
-
-    inspected.then(|| {
-        format!(
-            "Pure file inspection through `run_command` is not supported for this command. {} Keep `run_command` for build/test/git commands and other shell workflows; advanced ripgrep flags, counts, and file-list modes remain supported there.",
-            if search {
-                "Use native `grep` with `pattern` and `path` to search file contents, and `view_file` with `path` and optional `start_line`/`end_line` when you need to read a file range."
-            } else {
-                "Use native `view_file` with `path` and optional `start_line`/`end_line` to read file contents, or native `grep` with `pattern` and `path` to search."
-            }
-        )
-    })
+    let arguments = tokens.get(1..).unwrap_or_default();
+    let Some(script_index) = arguments
+        .iter()
+        .position(|argument| !argument.starts_with('-'))
+    else {
+        return false;
+    };
+    let script = arguments[script_index];
+    let has_file = arguments[script_index + 1..]
+        .iter()
+        .any(|argument| !argument.starts_with('-') && *argument != "-" && !argument.contains('='));
+    let writes = arguments.iter().any(|argument| {
+        *argument == "-i" || *argument == "--in-place" || argument.starts_with("-i")
+    }) || script.contains('w')
+        || script.contains('W')
+        || script.contains('e');
+    has_file && !writes
 }
 
 pub(super) fn is_short_discovery_command(command: &str) -> bool {
