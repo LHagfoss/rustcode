@@ -33,7 +33,7 @@ fn compressed_core_prompt_preserves_contracts_and_reduces_size() {
         "ISSUE INDEPENDENT READS TOGETHER",
         "run in parallel",
         "already applied",
-        "harness ends the turn after a handful",
+        "advisory loop signals, not a hard stop",
         "native function-calling interface",
         "plain-text summary",
         "do NOT print tool calls as text or JSON",
@@ -1203,14 +1203,11 @@ fn json_protocol_tool_format_does_not_contradict_the_batching_rule() {
 
 // Regression: a repeated `replace_file_content` call that reports
 // "already applied" (PR #306's idempotency guard) is a true no-op — not a
-// silently-different second edit — and neither a no-op nor a failed
-// mutation counts toward progress, so the turn's safety budget
-// (MAX_CONSECUTIVE_NO_PROGRESS / MAX_CONSECUTIVE_FAILED_MUTATIONS in
-// src/network.rs) ends the turn after a handful of repeats. The prompt
-// must tell the model this instead of leaving it to rediscover by
-// retrying.
+// silently-different second edit. The prompt should discourage endlessly
+// repeating it while leaving room for a different inspection, edit, or test
+// when the task still needs work.
 #[test]
-fn prompt_explains_repeated_edits_are_pointless_noops() {
+fn prompt_treats_loop_signals_as_advisory() {
     let prompt = tool_system_prompt(
         false,
         crate::config::ToolProtocol::Json,
@@ -1219,9 +1216,18 @@ fn prompt_explains_repeated_edits_are_pointless_noops() {
 
     assert!(prompt.contains("already applied"), "got: {prompt}");
     assert!(
-        prompt.contains("harness ends the turn after a handful"),
+        prompt.contains("advisory loop signals, not a hard stop"),
         "got: {prompt}"
     );
+    for required in [
+        "different `view_file` range",
+        "`grep`, edit, or test",
+        "cached replay content",
+        "without new evidence",
+    ] {
+        assert!(prompt.contains(required), "missing {required:?}: {prompt}");
+    }
+    assert!(!prompt.contains("harness ends the turn after a handful"));
 }
 
 // The native tag protocol's parser (`parse_tool_calls_tags`) also walks
