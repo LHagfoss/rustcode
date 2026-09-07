@@ -323,12 +323,8 @@ pub fn classify_live_tools(calls: &[LiveToolCall]) -> Option<ActivitySnapshot> {
     };
     let label = if all_exploration {
         "Exploring".to_owned()
-    } else if calls.iter().any(|call| call.tool_name == "run_command") {
-        "Running".to_owned()
-    } else if calls.len() == 1 {
-        calls[0].action.clone()
     } else {
-        "Calling".to_owned()
+        "Running".to_owned()
     };
     Some(ActivitySnapshot {
         kind: ActivityKind::RunningTool,
@@ -658,6 +654,21 @@ mod tests {
             activity.detail.as_deref(),
             Some("Read src/main.rs, Search renderer in src")
         );
+    }
+
+    #[test]
+    fn live_custom_tool_activity_uses_running_label() {
+        let activity = classify_live_tools(&[LiveToolCall::new(
+            "mcp-call",
+            None,
+            "SearchEmails",
+            "SearchEmails",
+            "query=\"*\"",
+        )])
+        .expect("live activity");
+
+        assert_eq!(activity.label, "Running");
+        assert_eq!(activity.detail.as_deref(), Some("SearchEmails query=\"*\""));
     }
 
     #[test]
