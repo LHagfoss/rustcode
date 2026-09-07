@@ -44,8 +44,8 @@ pub struct AppState {
     pub(crate) last_user_activity_at: std::time::Instant,
     /// Prevents manual and automatic summaries from running concurrently.
     pub(crate) summary_in_flight: bool,
-    /// History length at which the last summary completed. A changed history
-    /// is required before the idle timer can summarize again.
+    /// Count of conversational messages at which the last summary completed.
+    /// A changed conversation is required before the idle timer can summarize again.
     pub(crate) last_summary_history_len: Option<usize>,
     pub cursor_position: usize,
 
@@ -346,9 +346,16 @@ impl AppState {
             && !background_tasks_active
             && !self.modal_open()
             && self.input_buffer.trim().is_empty()
-            && self.history.len() >= 2
-            && self.last_summary_history_len != Some(self.history.len())
+            && self.summary_history_len() >= 2
+            && self.last_summary_history_len != Some(self.summary_history_len())
             && now.duration_since(self.last_user_activity_at) >= idle_after
+    }
+
+    fn summary_history_len(&self) -> usize {
+        self.history
+            .iter()
+            .filter(|message| message.role != "system" && !message.conversation_recap)
+            .count()
     }
 
     pub(crate) fn claim_summary(&mut self) -> bool {
@@ -361,7 +368,7 @@ impl AppState {
 
     pub(crate) fn finish_summary(&mut self) {
         self.summary_in_flight = false;
-        self.last_summary_history_len = Some(self.history.len());
+        self.last_summary_history_len = Some(self.summary_history_len());
         self.last_user_activity_at = std::time::Instant::now();
     }
 

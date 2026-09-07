@@ -26,6 +26,10 @@ fn idle_summary_requires_a_quiet_session_with_new_history() {
         Duration::from_secs(600),
     ));
 
+    state.set_notice("YOLO mode enabled");
+    state.last_user_activity_at = Instant::now() - Duration::from_secs(601);
+    assert!(!state.should_start_idle_summary(Instant::now(), false, Duration::from_secs(600),));
+
     state.history.push(ChatMessage::new("user", "new request"));
     state.last_user_activity_at = Instant::now() - Duration::from_secs(601);
     assert!(state.should_start_idle_summary(Instant::now(), false, Duration::from_secs(600),));
