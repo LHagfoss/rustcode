@@ -1,3 +1,9 @@
+## [v0.51.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.12) - 2026-09-07
+
+### Fixes
+- Group single MCP tool activity under the `Running`/`Ran` UI headings.
+- Correct `view_file` continuation guidance to use schema-valid range arguments.
+- Reject semantically duplicate `view_file` reads before parallel execution.
 ## [v0.51.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.11) - 2026-09-07
 
 ### Fixes
