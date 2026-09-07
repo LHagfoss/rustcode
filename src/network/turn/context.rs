@@ -1,5 +1,5 @@
 use crate::app::TokenUsage;
-use crate::network::{events, lifecycle, loop_detect, verification};
+use crate::network::{ContextCheckpoint, events, lifecycle, loop_detect, verification};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -171,6 +171,34 @@ impl TurnContext {
                 user_wait_duration: Duration::ZERO,
                 stop_reason: None,
             },
+        }
+    }
+
+    /// Snapshot short-lived progress for the next request-local context tail.
+    /// This is deliberately derived from turn state rather than persisted in
+    /// history, so it cannot alter replay or compaction semantics.
+    pub(crate) fn context_checkpoint(&self) -> ContextCheckpoint {
+        let (edit_status, next_action) = if self.progress.made_edits {
+            (
+                "edits made; verification pending",
+                "verify the changed files and run focused checks",
+            )
+        } else if self.progress.failed_mutations > 0 {
+            (
+                "no edits applied; the last mutation failed",
+                "re-read the target and resolve the failed mutation",
+            )
+        } else {
+            (
+                "no edits made yet",
+                "inspect the relevant files, then make the smallest scoped change",
+            )
+        };
+
+        ContextCheckpoint {
+            objective: self.progress.phase_checkpoint.clone(),
+            edit_status,
+            next_action,
         }
     }
 

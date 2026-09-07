@@ -106,8 +106,9 @@ pub(crate) use title::{record_prompt_to_history, spawn_title_generation};
 #[path = "network/context_tail.rs"]
 pub(crate) mod context_tail;
 pub(crate) use context_tail::{
-    build_dynamic_context_tail, build_dynamic_context_tail_with_memory,
-    build_volatile_context_block, format_read_file_context_entry, prepend_skill_routing_hint,
+    ContextCheckpoint, build_dynamic_context_tail, build_dynamic_context_tail_with_checkpoint,
+    build_dynamic_context_tail_with_memory, build_volatile_context_block,
+    format_read_file_context_entry, prepend_skill_routing_hint,
 };
 
 /// Injected as a system directive for the final wrap-up turn after a loop is
@@ -832,6 +833,23 @@ pub(crate) async fn prepare_turn_request(
     tool_rounds: usize,
     cancel_token: &tokio_util::sync::CancellationToken,
 ) -> Result<Vec<serde_json::Value>, String> {
+    prepare_turn_request_with_checkpoint(
+        client,
+        state,
+        tool_rounds,
+        cancel_token,
+        ContextCheckpoint::default(),
+    )
+    .await
+}
+
+pub(crate) async fn prepare_turn_request_with_checkpoint(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    checkpoint: ContextCheckpoint,
+) -> Result<Vec<serde_json::Value>, String> {
     // Try AI-driven compaction if history is long enough.
     //
     // The summarizer is a network round-trip, so the AppState mutex must NOT be
@@ -1139,15 +1157,17 @@ pub(crate) async fn prepare_turn_request(
         .unwrap_or_default();
     let project_memory = crate::memory::render_relevant_async(
         workspace_root.clone(),
-        memory_query,
+        memory_query.clone(),
         (budget_token_limit / 16).min(192) as usize,
     )
     .await;
-    let mut dynamic_context = build_dynamic_context_tail_with_memory(
+    let mut dynamic_context = build_dynamic_context_tail_with_checkpoint(
         context_section,
         &read_files,
         &todos,
         project_memory,
+        &checkpoint,
+        Some(memory_query.as_str()),
     );
     prepend_skill_routing_hint(&mut dynamic_context, skill_hint.as_deref());
     let volatile_block =

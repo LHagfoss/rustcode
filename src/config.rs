@@ -186,6 +186,12 @@ impl std::fmt::Display for OutputTokenField {
 
 /// Fallback output ceiling used when a `ModelProfile` doesn't set its own.
 pub const DEFAULT_REQUEST_MAX_TOKENS: u32 = 32768;
+/// Provider chat templates and tokenizer dialects can add materially more
+/// framing than the local BPE estimate. This reserve is calibrated from
+/// observed provider prompt usage and is intentionally bounded below the
+/// context window so request trimming remains conservative.
+pub const DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT: u32 = 15;
+const MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN: u32 = 32768;
 /// Preserve visible answer/tool-call room when thinking shares the provider's
 /// total output ceiling. This is a reservation, not an increase to the
 /// provider request limit.
@@ -339,7 +345,13 @@ impl ModelProfile {
 
         let provider_overhead_margin = self
             .provider_overhead_margin
-            .unwrap_or_else(|| (context_window / 32).clamp(512, 2048))
+            .unwrap_or_else(|| {
+                let proportional = (u64::from(context_window)
+                    * u64::from(DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT)
+                    + 99)
+                    / 100;
+                (proportional as u32).clamp(1024, MAX_DEFAULT_PROVIDER_OVERHEAD_MARGIN)
+            })
             .min(context_window.saturating_sub(1));
 
         let hard_effective_limit = self

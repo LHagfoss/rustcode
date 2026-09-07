@@ -180,6 +180,23 @@ fn context_budget_reserves_completion_thinking_tools_and_safety() {
 }
 
 #[test]
+fn default_provider_margin_covers_observed_prompt_framing_gap() {
+    let mut profile = AppConfig::default().models[0].clone();
+    profile.context_window = Some(128_000);
+    profile.provider_overhead_margin = None;
+
+    let budget = profile.context_budget();
+    assert_eq!(
+        budget.provider_overhead_margin,
+        128_000 * DEFAULT_PROVIDER_OVERHEAD_MARGIN_PERCENT / 100
+    );
+    assert_eq!(
+        budget.hard_effective_limit,
+        128_000 - budget.provider_overhead_margin
+    );
+}
+
+#[test]
 fn local_default_completion_cap_is_4096_and_explicit_max_tokens_is_preserved() {
     let mut profile = ModelProfile {
         name: "local-ollama".to_string(),

@@ -1,6 +1,26 @@
 use super::history;
 use super::view_file_unchanged_since_last_read;
 
+/// Request-local progress that should stay visible while the durable history
+/// grows or is compacted. The strings are intentionally short and owned only
+/// for the duration of request assembly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContextCheckpoint {
+    pub(crate) objective: Option<String>,
+    pub(crate) edit_status: &'static str,
+    pub(crate) next_action: &'static str,
+}
+
+impl Default for ContextCheckpoint {
+    fn default() -> Self {
+        Self {
+            objective: None,
+            edit_status: "no edits made yet",
+            next_action: "inspect the relevant files, then make the smallest scoped change",
+        }
+    }
+}
+
 #[allow(unused_assignments)]
 pub(crate) fn build_volatile_context_block(
     token_usage: Option<&crate::app::TokenUsage>,
@@ -118,6 +138,42 @@ pub(crate) fn build_dynamic_context_tail_with_memory(
     todos: &[crate::app::TodoItem],
     project_memory: Option<String>,
 ) -> String {
+    build_dynamic_context_tail_internal(
+        context_section,
+        read_files,
+        todos,
+        project_memory,
+        None,
+        None,
+    )
+}
+
+pub(crate) fn build_dynamic_context_tail_with_checkpoint(
+    context_section: String,
+    read_files: &[String],
+    todos: &[crate::app::TodoItem],
+    project_memory: Option<String>,
+    checkpoint: &ContextCheckpoint,
+    objective_hint: Option<&str>,
+) -> String {
+    build_dynamic_context_tail_internal(
+        context_section,
+        read_files,
+        todos,
+        project_memory,
+        Some(checkpoint),
+        objective_hint,
+    )
+}
+
+fn build_dynamic_context_tail_internal(
+    context_section: String,
+    read_files: &[String],
+    todos: &[crate::app::TodoItem],
+    project_memory: Option<String>,
+    checkpoint: Option<&ContextCheckpoint>,
+    objective_hint: Option<&str>,
+) -> String {
     let mut fragments = vec![history::ContextFragment::new(
         "environment",
         context_section,
@@ -128,6 +184,28 @@ pub(crate) fn build_dynamic_context_tail_with_memory(
             project_memory,
         ));
     }
+
+    if let Some(checkpoint) = checkpoint {
+        let objective = checkpoint
+            .objective
+            .as_deref()
+            .map(str::to_string)
+            .or_else(|| objective_hint.map(compact_objective))
+            .unwrap_or_else(|| "Continue the user's request".to_string());
+        let files_status = if read_files.is_empty() {
+            "none recorded".to_string()
+        } else {
+            format!("{} tracked below", read_files.len())
+        };
+        fragments.push(history::ContextFragment::new(
+            "checkpoint",
+            format!(
+                "# Turn checkpoint (refresh each round)\n- Files already read: {files_status}\n- Current objective: {objective}\n- Edit status: {}\n- Next action: {}",
+                checkpoint.edit_status, checkpoint.next_action
+            ),
+        ));
+    }
+
     if !read_files.is_empty() || !todos.is_empty() {
         if let Some(map) = build_repo_map_fragment() {
             fragments.push(history::ContextFragment::new("repo_map", map));
@@ -202,6 +280,18 @@ pub(crate) fn build_dynamic_context_tail_with_memory(
     history::render_context_fragments(&fragments)
 }
 
+fn compact_objective(text: &str) -> String {
+    const MAX_OBJECTIVE_CHARS: usize = 180;
+    let compacted = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = compacted.chars();
+    let prefix = chars.by_ref().take(MAX_OBJECTIVE_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +360,48 @@ mod tests {
             "# Priority skill route\nCall use_skill with `solidtime` first.\n\n"
         );
         assert!(hint_end < files_start);
+    }
+
+    #[test]
+    fn checkpoint_is_visible_and_compact() {
+        let checkpoint = ContextCheckpoint {
+            objective: Some("Verify the request assembly".to_string()),
+            edit_status: "edits made; verification pending",
+            next_action: "run the focused tests",
+        };
+        let rendered = build_dynamic_context_tail_with_checkpoint(
+            "# Environment".to_string(),
+            &["src/network.rs (snapshot current)".to_string()],
+            &[],
+            None,
+            &checkpoint,
+            Some("this fallback must not win"),
+        );
+
+        assert!(rendered.contains("# Turn checkpoint (refresh each round)"));
+        assert!(rendered.contains("Files already read: 1 tracked below"));
+        assert!(rendered.contains("Current objective: Verify the request assembly"));
+        assert!(rendered.contains("Edit status: edits made; verification pending"));
+        assert!(rendered.contains("Next action: run the focused tests"));
+        assert!(!rendered.contains("this fallback must not win"));
+    }
+
+    #[test]
+    fn objective_hint_is_whitespace_collapsed_and_bounded() {
+        let rendered = build_dynamic_context_tail_with_checkpoint(
+            String::new(),
+            &[],
+            &[],
+            None,
+            &ContextCheckpoint::default(),
+            Some(&format!("  first\n{}", "x ".repeat(200))),
+        );
+        let objective = rendered
+            .lines()
+            .find(|line| line.starts_with("- Current objective: "))
+            .expect("checkpoint objective");
+        assert!(objective.starts_with("- Current objective: first x x"));
+        assert!(objective.chars().count() <= 220);
+        assert!(objective.ends_with('…'));
     }
 }

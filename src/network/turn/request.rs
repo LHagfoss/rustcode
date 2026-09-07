@@ -10,7 +10,8 @@ use super::super::runner;
 use super::super::stream::{FinalAnswerBoundary, ProviderFinalAnswerState, StreamBuffer};
 use super::super::stream_request::{estimate_token_usage, stream_request};
 use super::super::{
-    accumulate_tokens_used, prepare_turn_request, probe_function_calling, record_provider_error,
+    accumulate_tokens_used, prepare_turn_request_with_checkpoint, probe_function_calling,
+    record_provider_error,
 };
 use super::TurnContext;
 
@@ -86,7 +87,15 @@ pub(super) async fn collect_round(
         );
     }
 
-    let msgs = match prepare_turn_request(client, state, ctx.budget.tool_rounds, cancel_token).await
+    let checkpoint = ctx.context_checkpoint();
+    let msgs = match prepare_turn_request_with_checkpoint(
+        client,
+        state,
+        ctx.budget.tool_rounds,
+        cancel_token,
+        checkpoint,
+    )
+    .await
     {
         Ok(msgs) => msgs,
         Err(error) => {

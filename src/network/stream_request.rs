@@ -983,6 +983,13 @@ mod tests {
     }
 
     #[test]
+    fn prompt_estimation_delta_percent_makes_provider_drift_actionable() {
+        assert_eq!(prompt_estimation_delta_percent(10_000, 11_500), Some(15));
+        assert_eq!(prompt_estimation_delta_percent(10_000, 9_000), Some(-10));
+        assert_eq!(prompt_estimation_delta_percent(0, 100), None);
+    }
+
+    #[test]
     fn disabled_thinking_omits_reasoning_controls() {
         let profile = crate::config::ModelProfile {
             enable_thinking: Some(false),
@@ -1570,6 +1577,12 @@ pub(crate) async fn estimate_token_usage_with_tool_schemas(
     })
 }
 
+fn prompt_estimation_delta_percent(estimated: u32, observed: u64) -> Option<i64> {
+    (estimated > 0).then(|| {
+        (((observed as i128 - i128::from(estimated)) * 100) / i128::from(estimated)) as i64
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn stream_request(
     client: &reqwest::Client,
@@ -1702,6 +1715,11 @@ pub async fn stream_request(
             .hard_effective_limit
             .saturating_sub(estimated_prompt_tokens)
     });
+    let provider_overhead_margin = profile
+        .as_ref()
+        .map(|p| p.context_budget().provider_overhead_margin)
+        .unwrap_or_default();
+    let accounted_prompt_tokens = estimated_prompt_tokens.saturating_add(provider_overhead_margin);
     if let Some(capacity) = context_output_capacity {
         output_token_limit = output_token_limit.map(|limit| limit.min(capacity.max(1)));
     }
@@ -1810,7 +1828,9 @@ pub async fn stream_request(
             "payload_bytes": payload_byte_count,
             "tool_schema_tokens": tool_schema_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
-            "total_estimated_prompt_tokens": estimated_prompt_tokens,
+            "accounted_prompt_tokens": accounted_prompt_tokens,
+            "total_estimated_prompt_tokens": accounted_prompt_tokens,
+            "provider_overhead_margin": provider_overhead_margin,
             "output_token_field": output_token_limit.map(|_| output_token_field),
             "output_token_limit": output_token_limit,
             "tool_output_limit_override": tool_output_limit_override,
@@ -1854,7 +1874,9 @@ pub async fn stream_request(
             "payload_bytes": payload_byte_count,
             "tool_schema_tokens": tool_schema_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
-            "total_estimated_prompt_tokens": estimated_prompt_tokens,
+            "accounted_prompt_tokens": accounted_prompt_tokens,
+            "total_estimated_prompt_tokens": accounted_prompt_tokens,
+            "provider_overhead_margin": provider_overhead_margin,
             "tool_schema_phase": format!("{:?}", mcp_selection.phase),
             "builtin_tools": mcp_selection.builtin_selected,
             "available_builtin_tools": mcp_selection.builtin_available,
@@ -2354,6 +2376,8 @@ pub async fn stream_request(
                                         } else {
                                             None
                                         };
+                                        let estimation_delta_percent =
+                                            prompt_estimation_delta_percent(estimated_prompt_tokens, p);
 
                                         crate::logger::operational_event(
                                             "provider.completion",
@@ -2375,9 +2399,12 @@ pub async fn stream_request(
                                                 "completion_limit_reached": output_token_limit
                                                     .is_some_and(|limit| c >= u64::from(limit)),
                                                 "estimated_prompt_tokens": estimated_prompt_tokens,
+                                                "accounted_prompt_tokens": accounted_prompt_tokens,
                                                 "tool_schema_tokens": tool_schema_tokens,
-                                                "total_estimated_prompt_tokens": estimated_prompt_tokens,
+                                                "total_estimated_prompt_tokens": accounted_prompt_tokens,
+                                                "provider_overhead_margin": provider_overhead_margin,
                                                 "estimation_delta": estimation_delta,
+                                                "estimation_delta_percent": estimation_delta_percent,
                                                 "elapsed_ms": request_start_time.elapsed().as_millis() as u64,
                                             }),
                                         );
