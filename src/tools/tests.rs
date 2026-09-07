@@ -1156,6 +1156,14 @@ fn the_prompt_matches_what_the_executor_actually_does() {
         prompt.contains("at most four workspace-changing calls"),
         "got: {prompt}"
     );
+    assert!(
+        prompt.contains("use `view_file` with `start_line`/`end_line`"),
+        "got: {prompt}"
+    );
+    assert!(
+        !prompt.contains("next_start_line"),
+        "prompt must only advertise schema-valid view_file arguments: {prompt}"
+    );
 }
 
 // Regression: the JSON "Tool Format" section used to tell the model to

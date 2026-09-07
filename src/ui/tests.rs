@@ -2456,7 +2456,7 @@ fn live_tool_cell_is_a_projection_not_history() {
 }
 
 #[test]
-fn single_live_generic_tool_shows_its_action_without_using_heading() {
+fn single_live_generic_tool_is_nested_under_running_heading() {
     let call = crate::app::LiveToolCall::new(
         "local:1",
         None,
@@ -2469,7 +2469,7 @@ fn single_live_generic_tool_shows_its_action_without_using_heading() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
 
-    assert_eq!(rendered, ["• UseSkill release-automation"]);
+    assert_eq!(rendered, ["• Running", "  └ UseSkill release-automation"]);
 }
 
 #[test]
