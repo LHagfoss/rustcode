@@ -270,7 +270,9 @@ pub fn summarize_tool_call(name: &str, args: &serde_json::Value) -> (String, Str
                 ],
                 "",
             );
-            return (to_pascal_action(name), compact_target(&target));
+            let action =
+                crate::tools::mcp_tool_display_name(name).unwrap_or_else(|| to_pascal_action(name));
+            return (action, compact_target(&target));
         }
     };
     (action.to_string(), compact_target(&target))
@@ -669,6 +671,16 @@ mod tests {
 
         assert_eq!(activity.label, "Running");
         assert_eq!(activity.detail.as_deref(), Some("SearchEmails query=\"*\""));
+    }
+
+    #[test]
+    fn mcp_tool_activity_includes_server_name() {
+        let (action, target) = summarize_tool_call(
+            "mcp__mail_mcp__SearchEmails",
+            &serde_json::json!({"query": "*"}),
+        );
+        assert_eq!(action, "mail_mcp.SearchEmails");
+        assert_eq!(target, "*");
     }
 
     #[test]

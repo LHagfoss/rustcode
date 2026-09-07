@@ -692,6 +692,15 @@ fn mcp_names_are_deterministically_qualified() {
 }
 
 #[test]
+fn canonical_mcp_names_have_readable_display_labels() {
+    assert_eq!(
+        super::mcp_tool_display_name("mcp__mail_mcp__SearchEmails").as_deref(),
+        Some("mail_mcp.SearchEmails")
+    );
+    assert_eq!(super::mcp_tool_display_name("SearchEmails"), None);
+}
+
+#[test]
 fn test_repair_json() {
     assert_eq!(repair_json("{\"name\": \"test\""), "{\"name\": \"test\"}");
     assert_eq!(

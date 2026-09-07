@@ -743,6 +743,17 @@ fn custom_tools_render_pascalcase_with_param() {
 }
 
 #[test]
+fn mcp_tools_render_with_server_and_tool_name() {
+    let (label, arg) = super::format_pi_tool_action(
+        "mcp__mail_mcp__SearchEmails",
+        &serde_json::json!({"query": "*"}),
+        None,
+    );
+    assert_eq!(label, "mail_mcp.SearchEmails");
+    assert_eq!(arg, "query=\"*\"");
+}
+
+#[test]
 fn tool_path_formatting_uses_captured_snapshot_home() {
     let state = AppState::new();
     let snapshot = state.render_snapshot();

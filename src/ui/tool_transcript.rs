@@ -60,7 +60,7 @@ pub(super) fn format_pi_tool_action(
         "remember" => "Remember".to_string(),
         "recall_memory" | "recallmemory" => "Recall".to_string(),
         "forget_memory" | "forgetmemory" => "Forget".to_string(),
-        _ => to_pascal_case(name),
+        _ => crate::tools::mcp_tool_display_name(name).unwrap_or_else(|| to_pascal_case(name)),
     };
 
     let target_arg = match name_lower.as_str() {
