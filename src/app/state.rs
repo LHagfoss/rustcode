@@ -642,6 +642,7 @@ impl AppState {
             crate::config::load_config_for_workspace(&workspace);
         config.start_time = Some(std::time::SystemTime::now());
         let active_session_id = crate::config::start_session(&mut config);
+        crate::config::record_session_settings(&active_session_id, &config);
         let agent_mode = config.agent_mode;
         let verbosity = config.verbosity.clone();
         let subagent_supervisor =

@@ -8,6 +8,8 @@ use std::sync::{Mutex, OnceLock};
 
 const HISTORY_FILE: &str = rustcode_session::HISTORY_FILE;
 const SESSIONS_DIR: &str = rustcode_session::SESSIONS_DIR;
+pub const SESSION_SETTINGS_FILE: &str = "settings.json";
+const SESSION_SETTINGS_SCHEMA_VERSION: u32 = 1;
 
 fn store() -> Option<SessionStore> {
     get_config_dir().map(SessionStore::new)
@@ -109,6 +111,161 @@ pub fn save_history<H: HistorySnapshot + ?Sized>(history: &H) {
 pub fn save_session_history<H: HistorySnapshot + ?Sized>(session_id: &str, history: &H) {
     if let Some(session_store) = store() {
         session_store.save_session_history(session_id, history);
+    }
+}
+
+/// A redacted configuration snapshot used to explain how a session behaved.
+/// API keys and MCP environment values are never persisted here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSettingsSnapshot {
+    pub captured_at_ms: u64,
+    pub active_profile: String,
+    pub config: serde_json::Value,
+}
+
+/// Configuration snapshots are appended only when the effective settings
+/// change. Keeping this separate from history avoids polluting the model
+/// transcript while preserving the settings used across model switches.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionSettingsLog {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub snapshots: Vec<SessionSettingsSnapshot>,
+}
+
+fn session_settings_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn redact_session_config(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(api_key) = object.remove("api_key")
+                && api_key.as_str().is_some_and(|value| !value.is_empty())
+            {
+                object.insert(
+                    "api_key_configured".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+            if let Some(env) = object
+                .get_mut("env")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for value in env.values_mut() {
+                    *value = serde_json::Value::String("<redacted>".to_string());
+                }
+            }
+            for child in object.values_mut() {
+                redact_session_config(child);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                redact_session_config(child);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn session_settings_snapshot(config: &AppConfig) -> Option<SessionSettingsSnapshot> {
+    let active_profile = config.default.big().to_string();
+    let mut serialized = serde_json::to_value(config).ok()?;
+    if let Some(object) = serialized.as_object_mut() {
+        // These are process/session pointers, not settings used by the model.
+        object.remove("last_active_session_id");
+        object.remove("start_time");
+        object.remove("is_valid");
+    }
+    redact_session_config(&mut serialized);
+    Some(SessionSettingsSnapshot {
+        captured_at_ms: current_time_ms(),
+        active_profile,
+        config: serialized,
+    })
+}
+
+/// Record the current redacted runtime configuration for a session. Repeated
+/// saves of an unchanged configuration do not create duplicate entries.
+pub fn record_session_settings(session_id: &str, config: &AppConfig) {
+    if session_id.is_empty() || !config.is_valid {
+        return;
+    }
+    let Some(store) = store() else {
+        return;
+    };
+    let Some(snapshot) = session_settings_snapshot(config) else {
+        return;
+    };
+
+    let _guard = lock(session_settings_lock());
+    let session_dir = store.session_dir(session_id);
+    if fs::create_dir_all(&session_dir).is_err() {
+        return;
+    }
+    let path = session_dir.join(SESSION_SETTINGS_FILE);
+    let mut log = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<SessionSettingsLog>(&content).ok())
+        .unwrap_or_default();
+    log.schema_version = SESSION_SETTINGS_SCHEMA_VERSION;
+
+    let unchanged = log.snapshots.last().is_some_and(|previous| {
+        previous.active_profile == snapshot.active_profile && previous.config == snapshot.config
+    });
+    if unchanged {
+        return;
+    }
+    log.snapshots.push(snapshot);
+
+    let Ok(json) = serde_json::to_string_pretty(&log) else {
+        return;
+    };
+    let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
+    if fs::write(&temporary, json).is_ok() {
+        let _ = fs::rename(&temporary, path);
+    } else {
+        let _ = fs::remove_file(temporary);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_settings_snapshot_redacts_credentials() {
+        let mut config = AppConfig::default();
+        config.models[0].api_key = Some("model-secret".to_string());
+        config.mcp_servers.push(McpServerConfig {
+            name: "mail".to_string(),
+            command: "mail-mcp".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::from([(
+                "PASSWORD".to_string(),
+                "mcp-secret".to_string(),
+            )]),
+            enabled: true,
+        });
+
+        let snapshot = session_settings_snapshot(&config).expect("config should serialize");
+        let json = snapshot.config.to_string();
+        assert_eq!(snapshot.active_profile, config.default.big());
+        assert!(json.contains("api_key_configured"), "snapshot: {json}");
+        assert!(json.contains("<redacted>"));
+        assert!(!json.contains("model-secret"));
+        assert!(!json.contains("mcp-secret"));
+        assert!(!json.contains("last_active_session_id"));
     }
 }
 
