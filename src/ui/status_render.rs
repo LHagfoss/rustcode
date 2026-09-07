@@ -258,8 +258,8 @@ pub(super) fn is_turn_cancelled_notice(content: &str) -> bool {
 
 pub(super) fn yolo_mode_notice_label(content: &str) -> Option<&'static str> {
     match content.trim() {
-        "YOLO mode enabled" => Some("⚡ YOLO mode enabled"),
-        "YOLO mode disabled" => Some("✕ YOLO mode disabled"),
+        "YOLO mode enabled" => Some("YOLO mode enabled"),
+        "YOLO mode disabled" => Some("YOLO mode disabled"),
         _ => None,
     }
 }

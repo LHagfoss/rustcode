@@ -268,7 +268,7 @@ async fn summarize_session_inner(
 pub fn build_info_text() -> String {
     format!(
         "RustCode Info\n\
-        ⚡ AI-powered agentic coding assistant for terminal workflows.\n\n\
+        AI-powered agentic coding assistant for terminal workflows.\n\n\
         • Version:      v{}\n\
         • Repository:   https://github.com/LHagfoss/rustcode\n\n\
         Quick Commands:\n\
