@@ -1,3 +1,8 @@
+## [v0.51.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.13) - 2026-09-07
+
+### Features
+- Preserve structured MCP tool results for downstream consumers.
+- Record redacted per-session model and configuration snapshots for debugging and reproducibility.
 ## [v0.51.12](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.12) - 2026-09-07
 
 ### Fixes
