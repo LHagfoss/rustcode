@@ -57,8 +57,8 @@ pub use rustcode_core::ToolErrorKind;
 
 pub(crate) use exec::{
     CommandProgressCallback, abort_background_starts, background_task_manager,
-    command_confirmation_preview, command_requires_confirmation, reject_pure_file_inspection,
-    release_background_start, run_command_output_with_progress_cancellable,
+    command_confirmation_preview, command_requires_confirmation, release_background_start,
+    run_command_output_with_progress_cancellable,
     run_command_output_with_progress_cancellable_for_call, stop_background_tasks,
     task_event_to_tool_output,
 };
@@ -754,15 +754,6 @@ pub fn authorize_tool_with_args(
             "Plan mode blocks workspace mutation, command execution, delegation, and unknown tools"
                 .to_string(),
         );
-    }
-    if name == "run_command"
-        && let Some(reason) = reject_pure_file_inspection(
-            args.get("command")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        )
-    {
-        return AuthorizationDecision::Deny(reason);
     }
     let command_is_destructive = name == "run_command" && command_requires_confirmation(args);
     let requires_confirmation = if name == "run_command" {
