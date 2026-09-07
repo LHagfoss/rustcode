@@ -1627,6 +1627,24 @@ fn validation_rejects_unknown_duplicate_and_mixed_calls() {
         .is_ok()
     );
     assert!(validate_tool_calls(&[valid.clone(), valid], MAX_MUTATING_CALLS_PER_RESPONSE).is_err());
+    let default_view = ToolCall {
+        name: "view_file".to_string(),
+        arguments: serde_json::json!({"path": "src/main.rs"}),
+        call_id: None,
+    };
+    let explicit_default_view = ToolCall {
+        name: "view_file".to_string(),
+        arguments: serde_json::json!({"path": "src/main.rs", "start_line": "1"}),
+        call_id: None,
+    };
+    assert!(
+        validate_tool_calls(
+            &[default_view, explicit_default_view],
+            MAX_MUTATING_CALLS_PER_RESPONSE
+        )
+        .is_err(),
+        "effective duplicate reads must not enter the parallel scheduler"
+    );
     assert!(
         validate_tool_calls(
             &[ToolCall {

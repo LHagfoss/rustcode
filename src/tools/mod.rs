@@ -282,7 +282,7 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
     validate_control_plane_batch(calls)?;
 
     for call in calls {
-        let fingerprint = format!("{}:{}", call.name, call.arguments);
+        let fingerprint = duplicate_tool_call_key(call);
         if !seen.insert(fingerprint) {
             return Err(format!("duplicate tool call rejected: {}", call.name));
         }
@@ -298,6 +298,41 @@ pub fn validate_tool_calls(calls: &[ToolCall], max_mutating_calls: usize) -> Res
     }
 
     Ok(())
+}
+
+/// Build a semantic duplicate key for one provider call. Most schemas are
+/// already canonicalized by serde_json's object representation, but built-in
+/// handlers also accept string-encoded integers and `view_file` defaults a
+/// missing `start_line` to 1. Normalize those equivalent forms before the
+/// duplicate check so they cannot race through the parallel read scheduler.
+fn duplicate_tool_call_key(call: &ToolCall) -> String {
+    let mut arguments = call.arguments.clone();
+    if call.name == "view_file"
+        && let Some(object) = arguments.as_object_mut()
+    {
+        normalize_integer_argument(object, "start_line", Some(1));
+        normalize_integer_argument(object, "end_line", None);
+        normalize_integer_argument(object, "content_offset", None);
+    }
+    format!(
+        "{}:{}",
+        call.name,
+        serde_json::to_string(&arguments).unwrap_or_default()
+    )
+}
+
+fn normalize_integer_argument(
+    object: &mut serde_json::Map<String, Value>,
+    name: &str,
+    default: Option<u64>,
+) {
+    let normalized = object
+        .get(name)
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        .or(default);
+    if let Some(value) = normalized {
+        object.insert(name.to_string(), Value::from(value));
+    }
 }
 
 /// Control-plane calls must remain batch-wide barriers even when a sibling
