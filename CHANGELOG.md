@@ -1,3 +1,10 @@
+## [v0.51.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.15) - 2026-09-07
+
+### Fixes
+- Replay bounded cached bodies for unchanged native reads.
+- Keep read-only loop recovery advisory with tools available.
+- Allow harmless shell inspection while preserving safety enforcement.
+- Clarify model-facing loop guidance and cached-read recovery.
 ## [v0.51.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.14) - 2026-09-07
 
 ### Fixes
