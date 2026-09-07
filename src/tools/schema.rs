@@ -1024,7 +1024,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 # Avoiding loops\n\
 - Fix compiler/tool errors or warnings before proceeding, then rerun fresh checks.
 - Avoid unchanged rereads; use `view_file` with `start_line`/`end_line`, `grep`/`rg`, or existing evidence. Correct errors and change empty queries.
-- An edit that reports \"already applied\" changed nothing on disk; re-issuing the identical edit will report the same no-op again, not succeed differently. Neither a no-op nor a failed edit counts as progress, and the harness ends the turn after a handful of either in a row — re-read the file or change your approach instead of repeating the call.
+- Repeated reads, no-ops, and failed attempts are advisory loop signals, not a hard stop. Avoid endlessly repeating an identical call, but continue when needed with a different `view_file` range, `grep`, edit, or test. Use cached replay content when supplied; if a replayed read is incomplete or unavailable, choose another useful inspection. An edit that reports \"already applied\" changed nothing on disk, so do not re-issue that identical edit without new evidence.
 - Use `todo_write` only for complex 3+ step work, not routine edits, git, or simple questions; update it at milestones.\n\n"
     );
 
