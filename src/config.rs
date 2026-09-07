@@ -1118,6 +1118,9 @@ pub fn save_entire_config(config: &AppConfig) {
             }
         }
         save_config_to(&dir, &persisted);
+        if let Some(session_id) = persisted.last_active_session_id.as_deref() {
+            session::record_session_settings(session_id, &persisted);
+        }
     }
 }
 
