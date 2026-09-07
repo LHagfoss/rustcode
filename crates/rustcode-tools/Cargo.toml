@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-tools"
-version = "0.51.8"
+version = "0.51.9"
 edition = "2024"
 
 [dependencies]

@@ -1,3 +1,11 @@
+## [v0.51.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.9) - 2026-09-07
+
+### Fixes
+- Harden provider turn handling so mismatched tool-call results return explicit validation errors instead of panicking.
+- Handle subagents removed between state locks without panicking, and steer file-content searches toward the bounded grep tool.
+- Prevent system notices from retriggering automatic conversation recaps after idle time.
+- Compact the `/context` usage modal to remove excess blank space while preserving its category breakdown.
+- Make release automation dry runs side-effect free through the tag and publishing phases.
 ## [v0.51.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.8) - 2026-09-07
 
 ### Fixes
