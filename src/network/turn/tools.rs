@@ -564,15 +564,34 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 .map(|(index, error)| {
                     error.map_or_else(
                         || {
-                            executed_results
-                                .next()
-                                .expect("validated call must produce a result")
+                            let result = executed_results.next();
+                            match result {
+                                Some(res) => res,
+                                None => ToolResult {
+                                    tool_name: tool_calls
+                                        .get(index)
+                                        .map(|c| c.name.clone())
+                                        .unwrap_or_else(|| "<unknown>".to_string()),
+                                    content: format!(
+                                        "error: tool execution missing for this call ({})",
+                                        index
+                                    ),
+                                    diff: None,
+                                    file_preview: None,
+                                    metadata: crate::network::events::ToolResultMetadata {
+                                        success: false,
+                                        error_kind: Some(crate::tools::ToolErrorKind::Validation),
+                                        retryable: false,
+                                        ..Default::default()
+                                    },
+                                },
+                            }
                         },
                         |reason| ToolResult {
                             tool_name: tool_calls
                                 .get(index)
                                 .map(|call| call.name.clone())
-                                .expect("validation failure must have a tool call"),
+                                .unwrap_or_else(|| "<unknown>".to_string()),
                             content: format!("error: {reason}"),
                             diff: None,
                             file_preview: None,

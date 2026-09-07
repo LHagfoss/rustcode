@@ -242,7 +242,9 @@ pub(in crate::ui) fn render_context_modal(
     state: &RenderSnapshot,
     input_area: ratatui::layout::Rect,
 ) {
-    let modal_area = input_anchor_rect(f, input_area, 20);
+    // The stats column needs twelve content rows; keep one row of bottom
+    // breathing room instead of stretching the popup into the empty viewport.
+    let modal_area = input_anchor_rect(f, input_area, 16);
     f.render_widget(Clear, modal_area);
     f.render_widget(
         Block::default().style(Style::default().bg(COLOR_PANEL())),

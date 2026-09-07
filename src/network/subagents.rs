@@ -189,7 +189,7 @@ pub(crate) async fn run_subagent(
                 .subagents
                 .iter()
                 .find(|a| a.id == agent_id)
-                .expect("Subagent not found");
+                .ok_or_else(|| format!("error: no subagent with id {agent_id}"))?;
             let target_model_name = subagent.model.as_deref().unwrap_or(&s.model_name);
             let profile = s
                 .config
