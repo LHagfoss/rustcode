@@ -20,7 +20,7 @@ mod policy;
 
 pub(crate) use policy::{
     command_confirmation_preview, command_confirmation_scope, command_requires_confirmation,
-    reject_broad_git_stage,
+    reject_broad_git_stage, reject_pure_file_inspection,
 };
 use policy::{has_interactive_sudo, is_short_discovery_command};
 
@@ -190,7 +190,7 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. For searching file contents, prefer the `grep` search tool (ripgrep-backed, bounded, structured matches) over shell grep/rg; use shell search only for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use `view_file` for pure file reads such as cat/sed/head/tail/awk and use the native `grep` search tool for searching file contents; these simple inspection shells are routed to their native replacements. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
     arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
     handler: run_command,
     requires_confirmation: true,
@@ -310,6 +310,10 @@ fn run_command_output_inner(
         .get("command")
         .and_then(|c| c.as_str())
         .ok_or("missing 'command' argument")?;
+
+    if let Some(reason) = reject_pure_file_inspection(command_str) {
+        return Err(reason);
+    }
 
     if let Some(reason) = reject_broad_git_stage(command_str) {
         return Err(reason.to_string());
@@ -603,8 +607,9 @@ mod tests {
     use super::{
         cancel_result_message, command_confirmation_preview, command_confirmation_scope,
         command_requires_confirmation, has_interactive_sudo, manage_task_tool,
-        reject_broad_git_stage, run_command, run_command_output, run_command_output_cancellable,
-        run_command_output_with_progress, task_event_to_tool_output,
+        reject_broad_git_stage, reject_pure_file_inspection, run_command, run_command_output,
+        run_command_output_cancellable, run_command_output_with_progress,
+        task_event_to_tool_output,
     };
 
     #[cfg(unix)]
@@ -1120,6 +1125,80 @@ mod tests {
     }
 
     #[test]
+    fn pure_file_inspection_shells_are_routed_to_native_tools() {
+        for command in [
+            "cat src/main.rs",
+            "head -40 src/main.rs",
+            "tail -40 src/main.rs",
+            "sed -n '1,40p' src/main.rs",
+            "awk '{print $1}' src/main.rs",
+            "cat src/main.rs | grep TODO",
+        ] {
+            let reason = reject_pure_file_inspection(command)
+                .unwrap_or_else(|| panic!("expected native routing: {command}"));
+            assert!(reason.contains("view_file"), "{reason}");
+            assert!(reason.contains("grep"), "{reason}");
+            assert!(reason.contains("start_line"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn file_inspection_routing_preserves_shell_workflows() {
+        for command in [
+            "cat src/main.rs > /tmp/main.rs",
+            "sed -i 's/old/new/' file.txt",
+            "sed 'w output.txt' input.txt",
+            "tail -f app.log",
+            "awk 'BEGIN { system(\"date\") }' input.txt",
+            "cat src/main.rs && cargo test",
+            "git status --short && cat src/main.rs",
+            "cargo test && cat src/main.rs",
+            "cat src/main.rs | rg --files src",
+            "cat src/main.rs | rg -c TODO src/main.rs",
+        ] {
+            assert!(
+                reject_pure_file_inspection(command).is_none(),
+                "shell workflow must remain available: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_command_rejects_file_inspection_before_spawning_a_shell() {
+        let error = run_command(&serde_json::json!({
+            "command": "cat Cargo.toml"
+        }))
+        .expect_err("pure file inspection should use view_file");
+
+        assert!(error.contains("view_file"), "{error}");
+        assert!(error.contains("native `grep`"), "{error}");
+    }
+
+    #[test]
+    fn authorization_routes_file_inspection_without_confirmation() {
+        assert!(matches!(
+            crate::tools::authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": "sed -n '1,40p' src/main.rs"}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            crate::tools::AuthorizationDecision::Deny(reason) if reason.contains("view_file")
+        ));
+        assert_eq!(
+            crate::tools::authorize_tool_with_args(
+                "run_command",
+                &serde_json::json!({"command": "cargo test"}),
+                crate::config::AgentMode::Build,
+                false,
+                false,
+            ),
+            crate::tools::AuthorizationDecision::RequireConfirmation
+        );
+    }
+
+    #[test]
     fn sed_commands_require_confirmation() {
         for command in [
             "sed -i 's/old/new/' file.txt",
@@ -1264,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn cat_and_head_are_read_only_and_execute_cleanly() {
+    fn cat_and_head_are_read_only_but_route_to_native_tools() {
         assert!(!command_requires_confirmation(&serde_json::json!({
             "command": "cat Cargo.toml"
         })));
@@ -1272,11 +1351,10 @@ mod tests {
             "command": "head -n 5 Cargo.toml"
         })));
 
-        let result = run_command(&serde_json::json!({
+        let error = run_command(&serde_json::json!({
             "command": "head -n 2 Cargo.toml"
         }))
-        .expect("head command should execute cleanly");
-        assert!(result.contains("exit code: 0"));
-        assert!(result.contains("[package]"));
+        .expect_err("head inspection should use view_file");
+        assert!(error.contains("view_file"), "{error}");
     }
 }
