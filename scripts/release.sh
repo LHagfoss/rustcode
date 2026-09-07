@@ -843,7 +843,11 @@ phase_tag_and_publish() {
     info "Phase 11: Tagging and publishing"
 
     # On a resume that starts here, the merge commit was never captured.
-    if [[ -z "$MERGED_COMMIT" ]]; then
+    # Dry runs have no release PR to inspect; continue with a placeholder and
+    # let the remaining phases describe what they would do.
+    if $DRY_RUN; then
+        info "[dry-run] Would resolve the release PR merge commit."
+    elif [[ -z "$MERGED_COMMIT" ]]; then
         local pr_number
         pr_number="$(gh pr view "$RELEASE_BRANCH" --json number --jq '.number')"
         if [[ -z "$pr_number" ]]; then
