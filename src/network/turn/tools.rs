@@ -17,7 +17,7 @@ use super::super::{
     FORCE_ANSWER_PROMPT, LoopRecoveryAction, active_todo_checkpoint, cached_compiler_check,
     call_refs_for, compiler_diagnostic_fingerprint, completion_block_message,
     completion_claims_unapplied_work, failure_replan_message, is_mutating_tool,
-    loop_recovery_action, mutation_made_progress, push_or_replace_loop_warning,
+    loop_recovery_action_for, mutation_made_progress, push_or_replace_loop_warning,
     truncated_batch_summary_with_dropped, unanswered_call_results,
     unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
 };
@@ -372,6 +372,10 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     let (executable_tool_calls, deferred_tool_calls) =
         crate::tools::isolate_control_plane_call(executable_tool_calls);
     let tool_calls = parsed_tool_calls;
+    let read_only_batch = !tool_calls.is_empty()
+        && tool_calls
+            .iter()
+            .all(|call| loop_detect::is_read_only_call(&call.name, &call.arguments));
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
@@ -421,9 +425,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         }
         match loop_status {
             loop_detect::LoopStatus::Abort(n) => {
-                match loop_recovery_action(ctx.recovery.loop_recovery_attempts) {
+                match loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch)
+                {
                     LoopRecoveryAction::Recover => {
-                        ctx.recovery.loop_recovery_attempts += 1;
+                        ctx.recovery.loop_recovery_attempts =
+                            ctx.recovery.loop_recovery_attempts.saturating_add(1);
                         ctx.recovery.loop_detector.reset();
                         dbg_log!(
                             "Loop detector: abort after {} repeats — allowing bounded recovery turn",
@@ -1132,9 +1138,11 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     },
                     |notice| format!("[Evidence-based recovery: {notice}]"),
                 );
-                match loop_recovery_action(ctx.recovery.loop_recovery_attempts) {
+                match loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch)
+                {
                     LoopRecoveryAction::Recover => {
-                        ctx.recovery.loop_recovery_attempts += 1;
+                        ctx.recovery.loop_recovery_attempts =
+                            ctx.recovery.loop_recovery_attempts.saturating_add(1);
                         ctx.metrics.evidence_recoveries += 1;
                         ctx.recovery.loop_detector.reset();
                         ctx.recovery.reasoning_loop_detector.reset();

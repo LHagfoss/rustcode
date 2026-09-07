@@ -2523,6 +2523,57 @@ fn loop_abort_allows_bounded_recoveries_before_forced_final() {
     );
     assert!(LOOP_RECOVERY_PROMPT.contains("Tools remain enabled"));
     assert!(!LOOP_RECOVERY_PROMPT.contains("```tool"));
+    assert_eq!(
+        loop_recovery_action_for(3, false),
+        LoopRecoveryAction::ForceFinal,
+        "non-read-only loop recovery keeps its existing escalation"
+    );
+}
+
+#[test]
+fn repeated_read_only_inspection_keeps_tools_available_until_round_limit() {
+    let call = crate::tools::ToolCall {
+        name: "view_file".to_string(),
+        arguments: serde_json::json!({
+            "path": "src/network.rs",
+            "start_line": 1,
+            "end_line": 20
+        }),
+        call_id: None,
+    };
+    let (exact, category) = loop_detect::signatures(&call.name, &call.arguments);
+    let read_only_batch = loop_detect::is_read_only_call(&call.name, &call.arguments);
+    assert!(read_only_batch);
+    let mut detector = loop_detect::LoopDetector::new(6);
+    let mut ctx = TurnContext::with_max_tool_rounds(8);
+
+    for round in 0..6 {
+        let status = detector.check_tool(&call.name, &exact, &category);
+        if round >= 2 {
+            assert!(
+                matches!(
+                    status,
+                    loop_detect::LoopStatus::Warning(_) | loop_detect::LoopStatus::Abort(_)
+                ),
+                "repeated inspection should produce an advisory status"
+            );
+            assert_eq!(
+                loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch),
+                LoopRecoveryAction::Recover,
+                "inspection recovery must not force a final response"
+            );
+        }
+        ctx.recovery.loop_recovery_attempts = ctx.recovery.loop_recovery_attempts.saturating_add(1);
+        ctx.budget.tool_rounds += 1;
+    }
+
+    assert!(!ctx.recovery.force_final);
+    assert!(turn_budget_exceeded(&ctx).is_none());
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(_))
+    ));
 }
 
 #[test]
@@ -4874,8 +4925,9 @@ fn test_local_model_profile_completion_reserve_defaults() {
 }
 
 #[test]
-fn test_reasoning_loop_recovery_action_escalation() {
-    // #984: reasoning recovery matches the multi-round tool budget.
+fn test_reasoning_loop_recovery_keeps_tools_available() {
+    // Reasoning repetition is advisory; the ordinary tool-round budget is the
+    // terminal safety limit.
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
@@ -4890,7 +4942,7 @@ fn test_reasoning_loop_recovery_action_escalation() {
     );
     assert_eq!(
         reasoning_loop_recovery_action(3),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
 }
 
@@ -5201,9 +5253,9 @@ fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
 }
 
 #[test]
-fn test_adversarial_6_bounded_recovery_escalation_prevents_runaway() {
-    // Scenario 6: Loop detector fires, recovery loops again -> bounded recovery prevents runaway.
-    // #984: the bound is several guided rounds, not a single strike.
+fn test_adversarial_6_reasoning_recovery_keeps_tools_available() {
+    // Scenario 6: Loop detector fires, recovery loops again -> advisories keep
+    // the loop operational while the normal round budget prevents runaway.
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
@@ -5218,11 +5270,11 @@ fn test_adversarial_6_bounded_recovery_escalation_prevents_runaway() {
     );
     assert_eq!(
         reasoning_loop_recovery_action(3),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(u8::MAX),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("exactly one mutating tool call"));
 }
