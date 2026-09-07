@@ -1,3 +1,10 @@
+## [v0.51.14](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.14) - 2026-09-07
+
+### Fixes
+- Compact replayed file reads to prevent duplicate context growth.
+- Route shell-based file inspections to native tools.
+- Make workspace-change loop recovery task-aware.
+- Add provider-aware context accounting and visible checkpoints.
 ## [v0.51.13](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.13) - 2026-09-07
 
 ### Features
