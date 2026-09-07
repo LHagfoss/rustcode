@@ -231,7 +231,10 @@ mod tests {
         history.push(tool_msg(&big)); // within the last KEEP_RECENT_TURNS
         let before = serde_json::to_string(&history).unwrap();
 
-        assert_eq!(prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS), 0);
+        assert_eq!(
+            prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS),
+            0
+        );
         assert_eq!(serde_json::to_string(&history).unwrap(), before);
         // Old and recent large tool outputs are both left fully intact.
         assert!(history[0].content.starts_with("run_command: x x"));
@@ -278,9 +281,7 @@ mod tests {
 
     #[test]
     fn duplicate_old_file_reads_are_excluded_at_render_not_in_storage() {
-        use crate::network::history::{
-            redundant_tool_result_indices, to_messages,
-        };
+        use crate::network::history::{redundant_tool_result_indices, to_messages};
         let same = "view_file: [File: src/lib.rs]\n1: old";
         let changed = "view_file: [File: src/lib.rs]\n1: new";
         let history = vec![

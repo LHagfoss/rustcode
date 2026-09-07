@@ -26,10 +26,7 @@ pub const KEEP_RECENT_TURNS: usize = 12;
 /// because no stored message was changed. Deduplication now happens as pure
 /// selection at request-render time (see `history::to_messages`), and
 /// `<think>` blocks are likewise stripped only in the rendered request.
-pub fn prune_historical_tool_outputs(
-    history: &[ChatMessage],
-    keep_recent_count: usize,
-) -> usize {
+pub fn prune_historical_tool_outputs(history: &[ChatMessage], keep_recent_count: usize) -> usize {
     let _ = (history, keep_recent_count);
     0
 }
@@ -54,10 +51,7 @@ pub fn prune_historical_reasoning(history: &[ChatMessage], keep_recent_turns: us
 /// retaining the newer identical read verbatim
 /// (`history::redundant_tool_result_indices`), so stored history stays
 /// byte-identical across turns.
-pub fn prune_duplicate_tool_results(
-    history: &[ChatMessage],
-    keep_recent_count: usize,
-) -> usize {
+pub fn prune_duplicate_tool_results(history: &[ChatMessage], keep_recent_count: usize) -> usize {
     let _ = (history, keep_recent_count);
     0
 }
@@ -96,7 +90,10 @@ mod tests {
         history.push(large_tool_output());
         let before = serialized(&history);
 
-        assert_eq!(prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS), 0);
+        assert_eq!(
+            prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS),
+            0
+        );
         assert_eq!(serialized(&history), before);
         assert!(history[0].content.starts_with("run_command: x x"));
     }

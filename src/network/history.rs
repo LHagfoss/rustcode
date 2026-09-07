@@ -196,8 +196,7 @@ pub(crate) fn to_messages(
     // storage keeps them verbatim (#985). The id sets above still cover the
     // full history, so an excluded duplicate never synthesizes a spurious
     // "did not run" error for its announcer.
-    let redundant =
-        redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS);
+    let redundant = redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS);
 
     for (index, message) in history.iter().enumerate() {
         if redundant.contains(&index) {
@@ -622,18 +621,14 @@ mod tests {
         );
     }
 
-    fn structured_read(
-        id: &str,
-        content: &str,
-    ) -> (ChatMessage, ChatMessage) {
-        let assistant =
-            ChatMessage::new("assistant", "reading the file").with_tool_calls(vec![
-                crate::app::ToolCallRef {
-                    id: id.to_string(),
-                    name: "view_file".to_string(),
-                    arguments: "{}".to_string(),
-                },
-            ]);
+    fn structured_read(id: &str, content: &str) -> (ChatMessage, ChatMessage) {
+        let assistant = ChatMessage::new("assistant", "reading the file").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: id.to_string(),
+                name: "view_file".to_string(),
+                arguments: "{}".to_string(),
+            },
+        ]);
         let result = ChatMessage::new("tool", content).answering(Some(id.to_string()));
         (assistant, result)
     }
@@ -698,11 +693,7 @@ mod tests {
         assert_eq!(serde_json::to_string(&history).unwrap(), before);
         let rendered_ids: Vec<&str> = messages
             .iter()
-            .filter_map(|message| {
-                message
-                    .get("tool_call_id")
-                    .and_then(|id| id.as_str())
-            })
+            .filter_map(|message| message.get("tool_call_id").and_then(|id| id.as_str()))
             .collect();
         assert_eq!(rendered_ids, vec!["call_new"]);
         let assistant_ids: Vec<&str> = messages
@@ -727,9 +718,7 @@ mod tests {
             "a duplicate that ran must not be reported as never-run: {bodies:?}"
         );
         assert!(
-            bodies
-                .iter()
-                .any(|body| body.contains("1: old")),
+            bodies.iter().any(|body| body.contains("1: old")),
             "the retained read must survive verbatim: {bodies:?}"
         );
     }

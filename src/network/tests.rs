@@ -2172,7 +2172,9 @@ async fn test_compact_prunes_throwaway_before_file_contents() {
     // tail survives byte-identical.
     assert!(compact_history_to_budget(&mut history, 80).await);
     assert!(
-        history[0].content.starts_with("[Deterministic context record]"),
+        history[0]
+            .content
+            .starts_with("[Deterministic context record]"),
         "head must become a deterministic record, got: {}",
         history[0].content
     );
@@ -2223,7 +2225,9 @@ async fn test_compact_prunes_oldest_result_before_newer_result_in_same_class() {
     assert!(compact_history_to_budget(&mut history, 70).await);
 
     assert!(
-        history[0].content.starts_with("[Deterministic context record]"),
+        history[0]
+            .content
+            .starts_with("[Deterministic context record]"),
         "head must become a deterministic record, got: {}",
         history[0].content
     );

@@ -1892,10 +1892,7 @@ fn mutating_default_allows_a_focused_batch() {
     };
     let batch = vec![
         call("grep", serde_json::json!({"pattern": "TODO"})),
-        call(
-            "run_command",
-            serde_json::json!({"command": "cargo test"}),
-        ),
+        call("run_command", serde_json::json!({"command": "cargo test"})),
         call(
             "replace_file_content",
             serde_json::json!({
@@ -1903,12 +1900,21 @@ fn mutating_default_allows_a_focused_batch() {
                 "edits": [{"old_string": "a", "new_string": "b"}]
             }),
         ),
-        call("write_to_file", serde_json::json!({"path": "x", "content": "y"})),
+        call(
+            "write_to_file",
+            serde_json::json!({"path": "x", "content": "y"}),
+        ),
         call("view_file", serde_json::json!({"path": "src/a.ts"})),
     ];
-    let (kept, dropped) =
-        partition_tool_batch(batch, crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE);
-    assert_eq!(kept.len(), 5, "reads plus a focused mutation batch must survive");
+    let (kept, dropped) = partition_tool_batch(
+        batch,
+        crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE,
+    );
+    assert_eq!(
+        kept.len(),
+        5,
+        "reads plus a focused mutation batch must survive"
+    );
     assert!(dropped.is_empty());
     assert!(
         validate_tool_calls(
@@ -1951,7 +1957,10 @@ fn is_read_only_call_matches_the_confirmation_policy() {
         "cat src/app.ts",
         "rg foo src | head -20",
     ] {
-        assert!(is_read_only_call(&shell(command)), "{command} must be read-only");
+        assert!(
+            is_read_only_call(&shell(command)),
+            "{command} must be read-only"
+        );
     }
     // Mutating or unclassified work still consumes the budget.
     for command in [
@@ -1960,7 +1969,10 @@ fn is_read_only_call_matches_the_confirmation_policy() {
         "git restore -- src/GameScene.ts",
         "cargo test && rg foo src",
     ] {
-        assert!(!is_read_only_call(&shell(command)), "{command} must be mutating");
+        assert!(
+            !is_read_only_call(&shell(command)),
+            "{command} must be mutating"
+        );
     }
     // Fail closed: a missing command and unknown tools count as mutating.
     assert!(!is_read_only_call(&named("run_command")));
@@ -1994,7 +2006,10 @@ fn read_only_shell_commands_bypass_the_mutation_budget() {
     // Four inspections plus one edit fit under a mutation limit of one
     // because the inspections never consume it.
     let (kept, dropped) = partition_tool_batch(batch.clone(), 1);
-    assert!(dropped.is_empty(), "inspection must not be dropped: {dropped:?}");
+    assert!(
+        dropped.is_empty(),
+        "inspection must not be dropped: {dropped:?}"
+    );
     assert_eq!(kept.len(), batch.len());
     assert!(validate_tool_calls(&kept, 1).is_ok());
 
@@ -2004,7 +2019,11 @@ fn read_only_shell_commands_bypass_the_mutation_budget() {
     over.push(shell("cargo test"));
     over.push(shell("cargo test -- --nocapture"));
     let (kept, dropped) = partition_tool_batch(over.clone(), 1);
-    assert_eq!(dropped.len(), 2, "excess mutating shells must yield: {kept:?}");
+    assert_eq!(
+        dropped.len(),
+        2,
+        "excess mutating shells must yield: {kept:?}"
+    );
     assert!(validate_tool_calls(&over, 1).is_err());
     assert!(validate_tool_calls(&kept, 1).is_ok());
 }

@@ -940,7 +940,8 @@ fn cross_turn_same_plan_does_not_fire_on_first_repeat_with_fresh_evidence() {
     // (streak >= 2) escalates.
     let mut detector = ReasoningLoopDetector::default();
     let file = "src/rmcp/model.rs";
-    let inspect = "Plan: Read the rmcp model source to find the correct API for the compiler error.";
+    let inspect =
+        "Plan: Read the rmcp model source to find the correct API for the compiler error.";
 
     for streak in [0, 1] {
         assert_eq!(
