@@ -1023,7 +1023,7 @@ If the request context names a skill, load it first. For a likely specialized wo
 - Read-only tools run immediately; modifying/destructive operations require confirmation. Use `ask_question` only for ambiguous requirements or explicit validation, never routine confirmation. The UI supplies the write-in slot; do not include `Other`. Finish with a plain-text summary.\n\n\
 # Avoiding loops\n\
 - Fix compiler/tool errors or warnings before proceeding, then rerun fresh checks.
-- Do not reread unchanged file regions or switch between `view_file`, `cat`, `sed`, and `awk` to retrieve the same text. Follow `view_file`'s `next_start_line`, narrow with `grep`/`rg`, or proceed from the evidence already returned. On errors correct arguments, and on empty results change the query.
+- Avoid unchanged rereads; use `view_file` with `start_line`/`end_line`, `grep`/`rg`, or existing evidence. Correct errors and change empty queries.
 - An edit that reports \"already applied\" changed nothing on disk; re-issuing the identical edit will report the same no-op again, not succeed differently. Neither a no-op nor a failed edit counts as progress, and the harness ends the turn after a handful of either in a row — re-read the file or change your approach instead of repeating the call.
 - Use `todo_write` only for complex 3+ step work, not routine edits, git, or simple questions; update it at milestones.\n\n"
     );
