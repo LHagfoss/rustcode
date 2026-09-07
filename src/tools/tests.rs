@@ -1570,6 +1570,27 @@ fn validation_scopes_string_integer_leniency_to_builtin_tools() {
 }
 
 #[test]
+fn validation_accepts_json_schema_union_types() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": { "limit": { "type": ["integer", "null"] } }
+    });
+
+    assert!(
+        validate_value_against_schema(&serde_json::json!({"limit": 10}), &schema, "$", false)
+            .is_ok()
+    );
+    assert!(
+        validate_value_against_schema(&serde_json::json!({"limit": null}), &schema, "$", false)
+            .is_ok()
+    );
+    let error =
+        validate_value_against_schema(&serde_json::json!({"limit": "10"}), &schema, "$", false)
+            .expect_err("MCP validation must reject string-encoded integers");
+    assert_eq!(error, "$.limit must be integer or null");
+}
+
+#[test]
 fn validation_rejects_unknown_duplicate_and_mixed_calls() {
     let valid = ToolCall {
         name: "grep".to_string(),

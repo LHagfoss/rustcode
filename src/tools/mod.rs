@@ -419,15 +419,21 @@ fn validate_value_against_schema(
     path: &str,
     string_integers: bool,
 ) -> Result<(), String> {
-    let expected = schema
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("object");
-    let type_matches = match expected {
+    // JSON Schema permits either a single type string or an array of types.
+    // schemars emits the latter for optional MCP fields such as
+    // `{"type":["integer","null"]}`. Treat the array as a union instead of
+    // falling back to the root object's type.
+    let expected_types: Vec<&str> = match schema.get("type") {
+        Some(Value::String(expected)) => vec![expected.as_str()],
+        Some(Value::Array(expected)) => expected.iter().filter_map(Value::as_str).collect(),
+        _ => vec!["object"],
+    };
+    let type_matches = expected_types.iter().any(|expected| match *expected {
         "object" => value.is_object(),
         "array" => value.is_array(),
         "string" => value.is_string(),
         "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
         // Built-in handlers read line numbers through parse_json_number, which
         // also accepts string-encoded integers from lenient providers. MCP
         // tools receive arguments verbatim with no such coercion, so the
@@ -439,9 +445,9 @@ fn validate_value_against_schema(
         }
         "number" => value.is_number(),
         _ => true,
-    };
+    });
     if !type_matches {
-        return Err(format!("{path} must be {expected}"));
+        return Err(format!("{path} must be {}", expected_types.join(" or ")));
     }
 
     if let Some(object) = value.as_object() {
