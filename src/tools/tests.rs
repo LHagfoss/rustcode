@@ -1153,7 +1153,7 @@ fn the_prompt_matches_what_the_executor_actually_does() {
     }
     // And the stated limit on changes must be the one the executor enforces.
     assert!(
-        prompt.contains("at most one workspace-changing call"),
+        prompt.contains("at most four workspace-changing calls"),
         "got: {prompt}"
     );
 }
@@ -1408,8 +1408,16 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
     assert_eq!(kept.len(), 10);
     assert_eq!(dropped, 0);
 
-    // Only the first call that can change the workspace is kept, while reads
-    // before and after it remain available in this provider batch.
+    // The raised default keeps a small focused mutation sequence together.
+    assert!(
+        MAX_MUTATING_CALLS_PER_RESPONSE >= 3,
+        "the mutating default must allow a focused batch, got {}",
+        MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+
+    // Only the first call that can change the workspace is kept under a
+    // limit of one, while reads before and after it remain available in
+    // this provider batch.
     let over = vec![
         call("grep"),
         call("run_command"),
@@ -1419,8 +1427,8 @@ fn truncate_keeps_leading_calls_and_reports_the_drop() {
         call("run_command"),
         call("grep"),
     ];
-    let (kept, dropped) = truncate_tool_batch(over, MAX_MUTATING_CALLS_PER_RESPONSE);
-    assert_eq!(kept.len(), MAX_MUTATING_CALLS_PER_RESPONSE + 2);
+    let (kept, dropped) = truncate_tool_batch(over, 1);
+    assert_eq!(kept.len(), 1 + 2);
     assert_eq!(dropped, 4);
     assert_eq!(kept[0].name, "grep");
     assert_eq!(kept[1].name, "run_command");
@@ -1645,12 +1653,12 @@ fn validation_enforces_the_resolved_mutation_limit() {
     let calls = [
         ToolCall {
             name: "run_command".to_string(),
-            arguments: serde_json::json!({"command": "true"}),
+            arguments: serde_json::json!({"command": "cargo test"}),
             call_id: None,
         },
         ToolCall {
             name: "run_command".to_string(),
-            arguments: serde_json::json!({"command": "true", "timeout_ms": 1}),
+            arguments: serde_json::json!({"command": "cargo test", "timeout_ms": 1}),
             call_id: None,
         },
     ];
@@ -1864,4 +1872,158 @@ fn run_command_uses_active_workspace_root_when_cwd_is_omitted() {
     }));
     set_active_workspace_root(None);
     assert!(result.expect("workspace command").contains("exit code: 0"));
+}
+
+// Issue #983: the mutating default must hold a small focused sequence, and
+// read-only shell inspection must never consume it.
+#[test]
+fn mutating_default_allows_a_focused_batch() {
+    assert!(
+        crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE >= 3,
+        "got {}",
+        crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+    );
+    assert!(MAX_MUTATING_CALLS_PER_RESPONSE >= 3);
+
+    let call = |name: &str, arguments: serde_json::Value| ToolCall {
+        name: name.to_string(),
+        arguments,
+        call_id: None,
+    };
+    let batch = vec![
+        call("grep", serde_json::json!({"pattern": "TODO"})),
+        call("run_command", serde_json::json!({"command": "cargo test"})),
+        call(
+            "replace_file_content",
+            serde_json::json!({
+                "path": "src/a.ts",
+                "edits": [{"old_string": "a", "new_string": "b"}]
+            }),
+        ),
+        call(
+            "write_to_file",
+            serde_json::json!({"path": "x", "content": "y"}),
+        ),
+        call("view_file", serde_json::json!({"path": "src/a.ts"})),
+    ];
+    let (kept, dropped) = partition_tool_batch(
+        batch,
+        crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE,
+    );
+    assert_eq!(
+        kept.len(),
+        5,
+        "reads plus a focused mutation batch must survive"
+    );
+    assert!(dropped.is_empty());
+    assert!(
+        validate_tool_calls(
+            &kept,
+            crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn is_read_only_call_matches_the_confirmation_policy() {
+    let shell = |command: &str| ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": command}),
+        call_id: None,
+    };
+    let named = |name: &str| ToolCall {
+        name: name.to_string(),
+        arguments: serde_json::json!({}),
+        call_id: None,
+    };
+
+    // Native reads are inspection.
+    assert!(is_read_only_call(&ToolCall {
+        name: "grep".to_string(),
+        arguments: serde_json::json!({"pattern": "TODO"}),
+        call_id: None,
+    }));
+    assert!(is_read_only_call(&ToolCall {
+        name: "view_file".to_string(),
+        arguments: serde_json::json!({"path": "src/a.ts"}),
+        call_id: None,
+    }));
+    // Read-only shell inspection needs no confirmation, so it is inspection.
+    for command in [
+        "pwd",
+        "git status --short",
+        "ls src",
+        "cat src/app.ts",
+        "rg foo src | head -20",
+    ] {
+        assert!(
+            is_read_only_call(&shell(command)),
+            "{command} must be read-only"
+        );
+    }
+    // Mutating or unclassified work still consumes the budget.
+    for command in [
+        "cargo test",
+        "rm -rf /tmp/x",
+        "git restore -- src/GameScene.ts",
+        "cargo test && rg foo src",
+    ] {
+        assert!(
+            !is_read_only_call(&shell(command)),
+            "{command} must be mutating"
+        );
+    }
+    // Fail closed: a missing command and unknown tools count as mutating.
+    assert!(!is_read_only_call(&named("run_command")));
+    assert!(!is_read_only_call(&named("write_to_file")));
+    assert!(!is_read_only_call(&named("unknown_mcp_tool")));
+}
+
+// Issue #983: several inspection shells run together with mutations without
+// being dropped or reprimanded by the mutating cap.
+#[test]
+fn read_only_shell_commands_bypass_the_mutation_budget() {
+    let shell = |command: &str| ToolCall {
+        name: "run_command".to_string(),
+        arguments: serde_json::json!({"command": command}),
+        call_id: None,
+    };
+    let batch = vec![
+        shell("git status --short"),
+        shell("ls src"),
+        shell("cat src/app.ts"),
+        shell("rg foo src | head -20"),
+        ToolCall {
+            name: "replace_file_content".to_string(),
+            arguments: serde_json::json!({
+                "path": "src/a.ts",
+                "edits": [{"old_string": "a", "new_string": "b"}]
+            }),
+            call_id: None,
+        },
+    ];
+    // Four inspections plus one edit fit under a mutation limit of one
+    // because the inspections never consume it.
+    let (kept, dropped) = partition_tool_batch(batch.clone(), 1);
+    assert!(
+        dropped.is_empty(),
+        "inspection must not be dropped: {dropped:?}"
+    );
+    assert_eq!(kept.len(), batch.len());
+    assert!(validate_tool_calls(&kept, 1).is_ok());
+
+    // A genuinely mutating shell still counts: two more `cargo test` calls
+    // exceed a limit of one alongside the existing edit.
+    let mut over = batch;
+    over.push(shell("cargo test"));
+    over.push(shell("cargo test -- --nocapture"));
+    let (kept, dropped) = partition_tool_batch(over.clone(), 1);
+    assert_eq!(
+        dropped.len(),
+        2,
+        "excess mutating shells must yield: {kept:?}"
+    );
+    assert!(validate_tool_calls(&over, 1).is_err());
+    assert!(validate_tool_calls(&kept, 1).is_ok());
 }

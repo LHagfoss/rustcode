@@ -1973,7 +1973,7 @@ fn status_panels_render_minimal_inline() {
     assert_eq!(yolo_enabled_lines.len(), 2);
     assert_eq!(
         yolo_enabled_lines[1].spans[1].content,
-        " ⚡ YOLO mode enabled "
+        " YOLO mode enabled "
     );
 
     let mut yolo_disabled_lines = Vec::new();
@@ -1981,7 +1981,7 @@ fn status_panels_render_minimal_inline() {
     assert_eq!(yolo_disabled_lines.len(), 2);
     assert_eq!(
         yolo_disabled_lines[1].spans[1].content,
-        " ✕ YOLO mode disabled "
+        " YOLO mode disabled "
     );
 
     let mut cancelled_lines = Vec::new();
@@ -2149,7 +2149,7 @@ fn yolo_toggle_renders_as_a_human_status_separator() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("⚡ YOLO mode enabled"))
+            .any(|line| line.contains("YOLO mode enabled"))
     );
     assert!(!rendered.iter().any(|line| line == "  YOLO mode enabled"));
 }

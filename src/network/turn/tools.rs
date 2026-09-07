@@ -27,7 +27,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ToolHandlingOutcome {
+pub(crate) enum ToolHandlingOutcome {
     Continue,
     Stop,
     NotHandled,
@@ -52,7 +52,7 @@ fn batch_invalidates_read_recovery(
 
 fn mutation_batch_guidance(limit: usize) -> String {
     format!(
-        "Keep mutation-budget calls to at most {limit} per response. Every run_command, including read-only shell commands, counts toward this limit, as do workspace-editing tools. For parallel read-only inspection, use grep, glob, or view_file instead."
+        "Keep mutation-budget calls to at most {limit} per response. Only workspace-changing calls count toward this limit: mutating run_command invocations and workspace-editing tools. Read-only shell inspection (such as git status, ls, or cat) never consumes it. For parallel read-only inspection, use grep, glob, view_file, or a read-only shell command instead."
     )
 }
 
@@ -153,7 +153,7 @@ fn content_bearing_inspection_status(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
+pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
     client: &reqwest::Client,
     state: &Arc<Mutex<AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
@@ -294,7 +294,15 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
             truncated_batch_summary_with_dropped(&parsed_tool_calls, &dropped_calls);
     }
     let oversized_batch = dropped_count > 0;
-    if let Err(reason) = crate::tools::validate_tool_calls(&parsed_tool_calls, max_mutating_calls) {
+    let validation_errors = crate::tools::validation_errors_by_call(&parsed_tool_calls);
+    let executable_tool_calls = parsed_tool_calls
+        .iter()
+        .zip(&validation_errors)
+        .filter_map(|(call, error)| error.is_none().then(|| call.clone()))
+        .collect::<Vec<_>>();
+    if let Err(reason) = crate::tools::validate_control_plane_batch(&parsed_tool_calls)
+        .and_then(|_| crate::tools::validate_tool_calls(&executable_tool_calls, max_mutating_calls))
+    {
         if lifecycle::is_unavailable_tool_error(&reason) {
             ctx.lifecycle.stop_reason = Some(lifecycle::StopReason::UnavailableTool);
         }
@@ -361,8 +369,9 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         return ToolHandlingOutcome::Continue;
     }
     ctx.recovery.oversized_batch_rejections = 0;
-    let (tool_calls, deferred_tool_calls) =
-        crate::tools::isolate_control_plane_call(parsed_tool_calls);
+    let (executable_tool_calls, deferred_tool_calls) =
+        crate::tools::isolate_control_plane_call(executable_tool_calls);
+    let tool_calls = parsed_tool_calls;
     let call_refs = call_refs_for(&tool_calls, &ctx.response.streamed_call_ids);
     let turn_action = match ctx.lifecycle.turn_machine.model_finished(
         cancel_token.is_cancelled(),
@@ -480,7 +489,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
         if !cancel_token.is_cancelled() {
             ctx.budget.tool_rounds += 1;
 
-            let approved = policy.should_approve(state, &tool_calls).await;
+            let approved = policy.should_approve(state, &executable_tool_calls).await;
 
             {
                 let mut s = state.lock().await;
@@ -539,7 +548,7 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 client,
                 state,
                 cancel_token,
-                &tool_calls,
+                &executable_tool_calls,
                 ctx.lifecycle.turn_machine.state() == events::TurnState::ExecutingTools,
                 &ctx.compiler.edit_root,
                 &mut ctx.compiler.dirty,
@@ -548,6 +557,35 @@ pub(super) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                 deferred_notice,
             )
             .await;
+            let mut executed_results = results.into_iter();
+            let results = validation_errors
+                .into_iter()
+                .enumerate()
+                .map(|(index, error)| {
+                    error.map_or_else(
+                        || {
+                            executed_results
+                                .next()
+                                .expect("validated call must produce a result")
+                        },
+                        |reason| ToolResult {
+                            tool_name: tool_calls
+                                .get(index)
+                                .map(|call| call.name.clone())
+                                .expect("validation failure must have a tool call"),
+                            content: format!("error: {reason}"),
+                            diff: None,
+                            file_preview: None,
+                            metadata: crate::network::events::ToolResultMetadata {
+                                success: false,
+                                error_kind: Some(crate::tools::ToolErrorKind::Validation),
+                                retryable: false,
+                                ..Default::default()
+                            },
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
 
             ctx.metrics.tool_calls += results.len();
             let mutation_batch = results
@@ -1442,13 +1480,53 @@ mod tests {
     }
 
     #[test]
-    fn dropped_call_guidance_includes_read_only_shell_commands_in_actual_limit() {
+    fn dropped_call_guidance_exempts_read_only_shell_commands_from_the_limit() {
         for limit in [1, 3] {
             let guidance = mutation_batch_guidance(limit);
             assert!(guidance.contains(&format!("at most {limit} per response")));
-            assert!(guidance.contains("Every run_command, including read-only shell commands"));
-            assert!(guidance.contains("grep, glob, or view_file"));
+            assert!(guidance.contains("Read-only shell inspection"));
+            assert!(guidance.contains("never consumes it"));
+            assert!(!guidance.contains("including read-only shell commands"));
+            assert!(guidance.contains("grep, glob, view_file"));
         }
+    }
+
+    #[test]
+    fn read_only_inspection_stays_executable_while_loop_recovery_is_pending() {
+        // #984 must not weaken #983: read-only classification is evaluated
+        // before the mutating cap in every batch path, including recovery, so
+        // inspection is never dropped or reprimanded for budget reasons while
+        // the harness nudges the model back on track.
+        use crate::tools::{is_read_only_call, partition_tool_batch, validate_tool_calls};
+
+        let shell = |command: &str| ToolCall {
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({"command": command}),
+            call_id: None,
+        };
+        let batch = vec![
+            ToolCall {
+                name: "replace_file_content".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/a.ts",
+                    "edits": [{"old_string": "a", "new_string": "b"}]
+                }),
+                call_id: None,
+            },
+            shell("git status --short"),
+            shell("ls src"),
+            shell("cat src/app.ts"),
+        ];
+        assert!(!is_read_only_call(&batch[0]));
+        assert!(batch.iter().skip(1).all(is_read_only_call));
+        let limit = crate::config::DEFAULT_MAX_MUTATING_CALLS_PER_RESPONSE;
+        let (kept, dropped) = partition_tool_batch(batch, limit);
+        assert!(
+            dropped.is_empty(),
+            "recovery must not drop inspection: {dropped:?}"
+        );
+        assert_eq!(kept.len(), 4);
+        assert!(validate_tool_calls(&kept, limit).is_ok());
     }
 
     fn read_observation(action: &str) -> super::loop_detect::ProgressObservation {

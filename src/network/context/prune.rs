@@ -1,6 +1,4 @@
-use super::tokens::{estimate_message_tokens, memo_key};
 use crate::app::ChatMessage;
-use std::collections::HashSet;
 
 pub const DEFAULT_PRUNE_TOKEN_THRESHOLD: usize = 90_000;
 
@@ -13,259 +11,49 @@ pub static LAST_COMPACTION_RECLAIMED: std::sync::atomic::AtomicUsize =
 /// structured compaction, everything before this suffix is folded into a summary.
 pub const KEEP_RECENT_TURNS: usize = 12;
 
-/// Minimum output size worth replacing with a recoverable excerpt.
-const PRUNE_TOKEN_THRESHOLD: usize = 1000;
-
-/// Message-count-based pruning of historical tool outputs.
+/// Immutable-history contract (#985): stored conversation messages are
+/// append-only and never rewritten in place.
 ///
-/// Keeps the most recent `keep_recent_count` messages fully intact for accuracy.
-/// For older messages, any tool result larger than [`PRUNE_TOKEN_THRESHOLD`] is
-/// replaced with bounded evidence and an artifact reference, preserving the
-/// `tool_name:` prefix, execution status, and truthful completeness metadata.
-pub fn prune_historical_tool_outputs(
-    history: &mut [ChatMessage],
-    keep_recent_count: usize,
-) -> usize {
-    let len = history.len();
-    if len <= keep_recent_count {
-        return 0;
-    }
-    let cutoff = len - keep_recent_count;
-    let mut pruned = 0;
-    for m in history[..cutoff].iter_mut() {
-        if m.role != "tool" {
-            continue;
-        }
-        // Skip anything already collapsed by a prior pass.
-        if m.content.contains("[Tool Output Truncated")
-            || m.content.contains("content cleared to save context")
-        {
-            continue;
-        }
-        let tokens = estimate_message_tokens(m);
-        if tokens <= PRUNE_TOKEN_THRESHOLD {
-            continue;
-        }
-        pruned += usize::from(compact_tool_evidence(m, tokens));
-    }
-    pruned
-}
-
-/// Preserve a recoverable snapshot before replacing evidence. If storage is
-/// unavailable, retaining the original result is safer than an unrecoverable
-/// placeholder. Execution success is independent of transcript completeness.
-fn compact_tool_evidence(message: &mut ChatMessage, tokens: usize) -> bool {
-    compact_tool_evidence_with_save(
-        message,
-        tokens,
-        crate::network::output::save_full_tool_output,
-    )
-}
-
-fn compact_tool_evidence_with_save(
-    message: &mut ChatMessage,
-    tokens: usize,
-    save: impl FnOnce(&str, &str) -> Option<String>,
-) -> bool {
-    if is_stubbed_tool_output(&message.content) || message.content.len() <= 2048 {
-        return false;
-    }
-    let (name, body) = message
-        .content
-        .split_once(": ")
-        .unwrap_or(("tool", &message.content));
-    let artifact = message
-        .tool_result
-        .as_ref()
-        .and_then(|record| record.full_output_artifact.clone())
-        .or_else(|| save(name, body));
-    let Some(artifact) = artifact else {
-        return false;
-    };
-    let status = detect_exit_status(body);
-    // Keep the header, bounded diagnostic lines, and tail. A single enormous
-    // line must not defeat this bound (nor split a UTF-8 character).
-    let head: String = body.chars().take(512).collect();
-    let diagnostics = body
-        .lines()
-        .filter(|line| has_failure_or_diagnostic(line) || line.contains("diagnostic:"))
-        .take(4)
-        .map(|line| line.chars().take(256).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let tail: String = body
-        .chars()
-        .rev()
-        .take(256)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    let content = format!(
-        "{name}: [Tool Output Truncated: {tokens} tokens reduced to summary.{status}]\n\
-         Retained excerpt (including failure/diagnostic evidence when present):\n{head}\n\
-         ...\n{diagnostics}\n...\n{tail}\n\
-         Full output saved to: {artifact}\n\
-         Use grep or view_file with line offsets to recover the omitted evidence.\n\
-         [tool_result_incomplete: completeness=byte_truncated; historical output is partial.]"
-    );
-    // The rolling cap may encounter tiny messages. Never grow those while
-    // claiming reclamation.
-    if content.len() >= message.content.len() {
-        return false;
-    }
-    if let Some(record) = message.tool_result.as_mut() {
-        record.truncated = true;
-        record.completeness = rustcode_core::ToolResultCompleteness::ByteTruncated;
-        record.full_output_artifact = Some(artifact);
-        if let Some(inspection) = record.inspection.as_mut() {
-            inspection.complete = false;
-            inspection.returned_range = None;
-            inspection.delivered_ranges.clear();
-            inspection.next_range = inspection.requested_range.clone();
-        }
-    }
-    message.content = content;
-    true
-}
-
-/// Best-effort extraction of a command exit code from raw tool output, so the
-/// pruned summary can still report whether the command succeeded.
-fn detect_exit_status(content: &str) -> String {
-    if let Some(idx) = content.find("exit code") {
-        let code: String = content[idx..]
-            .chars()
-            .skip_while(|c| !c.is_ascii_digit())
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        if !code.is_empty() {
-            return format!(" Command exited with code {code}.");
-        }
-    }
-    String::new()
-}
-
-pub fn prune_old_tool_outputs(history: &mut [ChatMessage], threshold: usize) -> usize {
-    let mut total_tool_tokens = 0;
-    let mut pruned = 0;
-    // Walk backward through history
-    for m in history.iter_mut().rev() {
-        if m.role == "tool" && !is_stubbed_tool_output(&m.content) {
-            let tokens = estimate_message_tokens(m);
-            total_tool_tokens += tokens;
-            // Protect the last ~90k tokens of tool outputs (approx 360k chars).
-            // Prune older ones to save context window space. Sized for the 128k
-            // main model's ~108k budget so a whole large source file (e.g. a
-            // 32k-token network.rs) stays fully in context instead of being
-            // wiped mid-read — the amnesia that made the agent re-read forever.
-            // NOTE: still a fixed cap; if you run a small-context model as the
-            // main model, lower this to fit its window.
-            if total_tool_tokens > threshold {
-                pruned += usize::from(compact_tool_evidence(m, tokens));
-            }
-        }
-    }
-    pruned
-}
-
-fn is_stubbed_tool_output(content: &str) -> bool {
-    content.contains("[Tool output truncated")
-        || content.contains("[Tool Output Truncated")
-        || content.contains("content cleared to save context")
-        || content.contains("output cleared to save context")
-        || content.contains("[Duplicate unchanged file read omitted")
-        || content.contains("[superseded")
-}
-
-/// Strip `<think>...</think>` blocks from older assistant messages.
+/// Rewriting retained messages (collapsing tool outputs to excerpts,
+/// stripping reasoning blocks, replacing duplicates with placeholders)
+/// changes the bytes of the prompt prefix on every turn, defeating KV-cache
+/// reuse and risking silent evidence loss. Under context pressure, relief
+/// comes from FIFO head compaction (a fixed summary/record replaces the head
+/// while the retained tail stays byte-identical) and from request-time
+/// trimming of the rendered payload — never from editing history.
 ///
-/// Historical reasoning scratchpads in completed turns dominate context growth
-/// without providing continuity value once the answer or tool call is finalized.
-pub fn prune_historical_reasoning(history: &mut [ChatMessage], keep_recent_turns: usize) -> usize {
-    let mut pruned = 0;
-    let cutoff = history.len().saturating_sub(keep_recent_turns);
-    for message in &mut history[..cutoff] {
-        if message.role == "assistant" && message.content.contains("<think>") {
-            let stripped = crate::network::text::strip_think_blocks(&message.content);
-            let trimmed = stripped.trim();
-            let new_content = if trimmed.is_empty() {
-                "(completed reasoning)".to_string()
-            } else {
-                trimmed.to_string()
-            };
-            if new_content != message.content {
-                message.content = new_content;
-                pruned += 1;
-            }
-        }
-    }
-    pruned
+/// The functions below therefore observe but do not mutate: they return 0
+/// because no stored message was changed. Deduplication now happens as pure
+/// selection at request-render time (see `history::to_messages`), and
+/// `<think>` blocks are likewise stripped only in the rendered request.
+pub fn prune_historical_tool_outputs(history: &[ChatMessage], keep_recent_count: usize) -> usize {
+    let _ = (history, keep_recent_count);
+    0
 }
 
-fn has_failure_or_diagnostic(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    lower.contains("compiler errors")
-        || lower.contains("lsp/compiler")
-        || lower.contains("error:")
-        || lower.contains("exit code: 1")
-        || lower.contains("exit code: 2")
-        || lower.contains("exit code: 3")
-        || lower.contains("exit code: 4")
-        || lower.contains("exit code: 5")
-        || lower.contains("exit code: 6")
-        || lower.contains("exit code: 7")
-        || lower.contains("exit code: 8")
-        || lower.contains("exit code: 9")
+pub fn prune_old_tool_outputs(history: &[ChatMessage], threshold: usize) -> usize {
+    let _ = (history, threshold);
+    0
 }
 
-fn file_read_key(content: &str) -> Option<u64> {
-    let (name, body) = content.split_once(": ")?;
-    if !matches!(name, "view_file" | "read_file") {
-        return None;
-    }
-    // A normal view_file result starts with a path/range header. Require that
-    // identity before deduplicating: identical contents from two different
-    // files, a failed read, a replay notice, or a truncated read must never be
-    // collapsed merely because their rendered bodies happen to match.
-    let header = body.lines().next()?;
-    if !header.starts_with("[File: ")
-        || body.contains("[Truncated:")
-        || body.starts_with("[Unchanged since")
-    {
-        return None;
-    }
-    Some(memo_key(&format!("{name}\0{header}\0{body}")).1)
+/// Historical reasoning scratchpads are left verbatim in storage. The
+/// provider request already excludes them at render time
+/// (`history::to_messages` strips `<think>` blocks into a non-mutating view),
+/// so rewriting storage would only churn the persisted prefix for no
+/// request-side gain.
+pub fn prune_historical_reasoning(history: &[ChatMessage], keep_recent_turns: usize) -> usize {
+    let _ = (history, keep_recent_turns);
+    0
 }
 
-/// Collapse exact duplicate file reads outside the recent suffix. A newer
-/// identical read is authoritative for the current workspace; keeping every
-/// copy only encourages small-context models to attend to stale repetitions.
-/// Reads with different content remain intact, as do errors and recent raw
-/// context.
-pub fn prune_duplicate_tool_results(
-    history: &mut [ChatMessage],
-    keep_recent_count: usize,
-) -> usize {
-    let cutoff = history.len().saturating_sub(keep_recent_count);
-    let mut seen = HashSet::new();
-    let mut pruned = 0;
-    for index in (0..history.len()).rev() {
-        let Some(key) = file_read_key(&history[index].content) else {
-            continue;
-        };
-        if !seen.insert(key) && index < cutoff {
-            let prefix = history[index]
-                .content
-                .split_once(": ")
-                .map(|(name, _)| format!("{name}: "))
-                .unwrap_or_default();
-            history[index].content = format!(
-                "{prefix}[Duplicate unchanged file read omitted; the newer identical read is retained.]"
-            );
-            pruned += 1;
-        }
-    }
-    pruned
+/// Duplicate file reads are no longer collapsed by rewriting the older copy
+/// in storage. The rendered request excludes the redundant older read while
+/// retaining the newer identical read verbatim
+/// (`history::redundant_tool_result_indices`), so stored history stays
+/// byte-identical across turns.
+pub fn prune_duplicate_tool_results(history: &[ChatMessage], keep_recent_count: usize) -> usize {
+    let _ = (history, keep_recent_count);
+    0
 }
 
 /// Share of the budget that must be in use before old tool output is collapsed.
@@ -282,94 +70,101 @@ pub(super) fn prune_floor(budget: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{ToolCallRef, ToolResultRecord};
-    use rustcode_core::{InspectionResultMetadata, ToolResultCompleteness};
 
-    fn evidence() -> ChatMessage {
-        ChatMessage::new(
-            "tool",
-            format!(
-                "run_command: diagnostic: symbol_not_found\n{}",
-                "x ".repeat(3000)
-            ),
-        )
-        .with_tool_result(ToolResultRecord {
-            tool_name: "run_command".into(),
-            success: true,
-            exit_code: Some(0),
-            inspection: Some(InspectionResultMetadata {
-                complete: true,
-                ..Default::default()
-            }),
-            ..Default::default()
-        })
+    fn large_tool_output() -> ChatMessage {
+        ChatMessage::new("tool", format!("run_command: {}", "x ".repeat(3000)))
     }
 
+    fn serialized(history: &[ChatMessage]) -> String {
+        serde_json::to_string(history).unwrap()
+    }
+
+    // #985: pruning passes must never rewrite stored messages. Whatever they
+    // report, the serialized history before and after must be identical.
     #[test]
-    fn pruned_evidence_is_recoverable_and_truthful_in_persisted_native_and_text_history() {
-        let mut result = evidence();
-        let original = result.content.split_once(": ").unwrap().1.to_string();
-        assert!(compact_tool_evidence(&mut result, 3000));
-        assert!(result.content.contains("diagnostic: symbol_not_found"));
-        let metadata = result.tool_result.as_ref().unwrap();
-        assert!(metadata.success);
-        assert_eq!(metadata.exit_code, Some(0));
-        assert!(metadata.truncated);
-        assert_eq!(metadata.completeness, ToolResultCompleteness::ByteTruncated);
-        assert!(!metadata.inspection.as_ref().unwrap().complete);
-        let path = metadata.full_output_artifact.clone().unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-        let persisted = serde_json::to_string(&result).unwrap();
-        let restored: ChatMessage = serde_json::from_str(&persisted).unwrap();
-        for native in [false, true] {
-            let mut result = restored.clone();
-            let mut history = Vec::new();
-            if native {
-                history.push(ChatMessage::new("assistant", "").with_tool_calls(vec![
-                    ToolCallRef {
-                        id: "call-1".into(),
-                        name: "run_command".into(),
-                        arguments: "{}".into(),
-                    },
-                ]));
-                result.tool_call_id = Some("call-1".into());
-            }
-            history.push(result);
-            let messages = crate::network::history::to_messages(&history, "system");
-            let content = messages.last().unwrap()["content"].as_str().unwrap();
-            assert!(content.contains("\"completeness\":\"byte_truncated\""));
-            assert!(content.contains("\"success\":true"));
-            assert!(content.contains(&path));
+    fn historical_tool_outputs_are_never_rewritten() {
+        let mut history = vec![large_tool_output()];
+        for i in 0..(KEEP_RECENT_TURNS + 2) {
+            history.push(ChatMessage::new("user", format!("m{i}")));
         }
-        std::fs::remove_file(path).unwrap();
-    }
+        history.push(large_tool_output());
+        let before = serialized(&history);
 
-    #[test]
-    fn failed_artifact_write_keeps_original_evidence_and_metadata() {
-        let mut result = evidence();
-        let before = serde_json::to_string(&result).unwrap();
-        assert!(!compact_tool_evidence_with_save(
-            &mut result,
-            3000,
-            |_, _| None
-        ));
-        assert_eq!(serde_json::to_string(&result).unwrap(), before);
-    }
-
-    #[test]
-    fn existing_original_artifact_survives_historical_pruning() {
-        let mut result = evidence();
-        result.tool_result.as_mut().unwrap().full_output_artifact =
-            Some("/original/full-output.txt".into());
-        assert!(compact_tool_evidence_with_save(
-            &mut result,
-            3000,
-            |_, _| panic!("must retain original artifact")
-        ));
-        assert!(result.content.contains("/original/full-output.txt"));
-        assert!(
-            !compact_tool_evidence(&mut result, 3000),
-            "an excerpt should not be expanded by repeated pruning"
+        assert_eq!(
+            prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS),
+            0
         );
+        assert_eq!(serialized(&history), before);
+        assert!(history[0].content.starts_with("run_command: x x"));
+    }
+
+    #[test]
+    fn old_tool_outputs_are_never_rewritten() {
+        let mut history = vec![large_tool_output()];
+        for i in 0..(KEEP_RECENT_TURNS + 2) {
+            history.push(ChatMessage::new("user", format!("m{i}")));
+        }
+        let before = serialized(&history);
+
+        assert_eq!(prune_old_tool_outputs(&history, 1), 0);
+        assert_eq!(serialized(&history), before);
+    }
+
+    #[test]
+    fn historical_reasoning_is_never_rewritten() {
+        let mut history = vec![ChatMessage::new(
+            "assistant",
+            "<think>private scratchpad</think>final answer",
+        )];
+        for i in 0..(KEEP_RECENT_TURNS + 2) {
+            history.push(ChatMessage::new("user", format!("m{i}")));
+        }
+        let before = serialized(&history);
+
+        assert_eq!(prune_historical_reasoning(&history, KEEP_RECENT_TURNS), 0);
+        assert_eq!(serialized(&history), before);
+        assert!(history[0].content.contains("<think>"));
+    }
+
+    #[test]
+    fn duplicate_reads_are_never_rewritten() {
+        let same = "view_file: [File: src/lib.rs]\n1: old";
+        let history = vec![
+            ChatMessage::new("tool", same),
+            ChatMessage::new("assistant", "edit"),
+            ChatMessage::new("tool", same),
+            ChatMessage::new("user", "verify"),
+        ];
+        let before = serialized(&history);
+
+        assert_eq!(prune_duplicate_tool_results(&history, 1), 0);
+        assert_eq!(serialized(&history), before);
+    }
+
+    // End-to-end through every pass: repeated turns must observe identical
+    // bytes for every retained message.
+    #[test]
+    fn repeated_turns_leave_all_retained_bytes_identical() {
+        let same = "view_file: [File: src/lib.rs]\n1: old";
+        let mut history = vec![
+            ChatMessage::new("user", "inspect this"),
+            ChatMessage::new("assistant", "<think>plan</think>reading"),
+            ChatMessage::new("tool", same),
+            ChatMessage::new("tool", large_tool_output().content),
+        ];
+        // A second turn repeats the identical read, then adds new work.
+        history.push(ChatMessage::new("assistant", "re-checking"));
+        history.push(ChatMessage::new("tool", same));
+        history.push(ChatMessage::new("user", "next step"));
+        let before = serialized(&history);
+
+        prune_duplicate_tool_results(&history, KEEP_RECENT_TURNS);
+        prune_historical_tool_outputs(&history, KEEP_RECENT_TURNS);
+        prune_historical_reasoning(&history, KEEP_RECENT_TURNS);
+        prune_old_tool_outputs(&history, 1);
+        let messages = crate::network::history::to_messages(&history, "system");
+
+        assert_eq!(serialized(&history), before);
+        assert!(!messages.is_empty());
     }
 }

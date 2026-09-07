@@ -61,6 +61,54 @@ fn normalize_message(message: &ChatMessage) -> HistoryEntry<'_> {
     }
 }
 
+/// Indices of older exact-duplicate file reads excluded from the request.
+///
+/// Pure, non-mutating selection (#985): storage keeps every message verbatim
+/// and only the rendered request drops the redundant older copy, while the
+/// newer identical read is retained verbatim. Reads with different content
+/// remain intact, as do errors, truncated reads, and recent raw context.
+///
+/// `answered`/`announced` id sets in [`to_messages`] are still computed over
+/// the full history, so excluding an older duplicate never orphans its
+/// announcing call into a synthetic "did not run" error and never disturbs
+/// the `tool_call_id` mapping of the retained pairs.
+pub(crate) fn redundant_tool_result_indices(
+    history: &[ChatMessage],
+    keep_recent_count: usize,
+) -> std::collections::HashSet<usize> {
+    let cutoff = history.len().saturating_sub(keep_recent_count);
+    let mut seen = std::collections::HashSet::new();
+    let mut redundant = std::collections::HashSet::new();
+    for (index, message) in history.iter().enumerate().rev() {
+        let Some(key) = duplicate_file_read_key(&message.content) else {
+            continue;
+        };
+        if !seen.insert(key) && index < cutoff {
+            redundant.insert(index);
+        }
+    }
+    redundant
+}
+
+fn duplicate_file_read_key(content: &str) -> Option<String> {
+    let (name, body) = content.split_once(": ")?;
+    if !matches!(name, "view_file" | "read_file") {
+        return None;
+    }
+    // A normal view_file result starts with a path/range header. Require that
+    // identity before deduplicating: identical contents from two different
+    // files, a failed read, a replay notice, or a truncated read must never be
+    // collapsed merely because their rendered bodies happen to match.
+    let header = body.lines().next()?;
+    if !header.starts_with("[File: ")
+        || body.contains("[Truncated:")
+        || body.starts_with("[Unchanged since")
+    {
+        return None;
+    }
+    Some(format!("{name}\0{header}\0{body}"))
+}
+
 /// A bounded, named piece of turn-varying context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContextFragment {
@@ -144,7 +192,16 @@ pub(crate) fn to_messages(
         .map(|call| call.id.as_str())
         .collect();
 
-    for message in history {
+    // Older exact-duplicate file reads are excluded from the request while
+    // storage keeps them verbatim (#985). The id sets above still cover the
+    // full history, so an excluded duplicate never synthesizes a spurious
+    // "did not run" error for its announcer.
+    let redundant = redundant_tool_result_indices(history, super::compaction::KEEP_RECENT_TURNS);
+
+    for (index, message) in history.iter().enumerate() {
+        if redundant.contains(&index) {
+            continue;
+        }
         if message.conversation_recap {
             continue;
         }
@@ -562,5 +619,159 @@ mod tests {
                 .unwrap()
                 .contains("metadata:")
         );
+    }
+
+    fn structured_read(id: &str, content: &str) -> (ChatMessage, ChatMessage) {
+        let assistant = ChatMessage::new("assistant", "reading the file").with_tool_calls(vec![
+            crate::app::ToolCallRef {
+                id: id.to_string(),
+                name: "view_file".to_string(),
+                arguments: "{}".to_string(),
+            },
+        ]);
+        let result = ChatMessage::new("tool", content).answering(Some(id.to_string()));
+        (assistant, result)
+    }
+
+    // #985: rendering the request must never mutate storage. Every retained
+    // message stays byte-identical across prune passes and request builds.
+    #[test]
+    fn rendering_and_pruning_leave_stored_bytes_identical() {
+        let (first_call, first_read) =
+            structured_read("call_old", "view_file: [File: src/lib.rs]\n1: old");
+        let (second_call, second_read) =
+            structured_read("call_new", "view_file: [File: src/lib.rs]\n1: old");
+        let history = vec![
+            ChatMessage::new("user", "inspect this"),
+            first_call,
+            first_read,
+            ChatMessage::new("assistant", "<think>scratch</think>done"),
+            second_call,
+            second_read,
+            ChatMessage::new("user", "next"),
+        ];
+        let before = serde_json::to_string(&history).unwrap();
+
+        crate::network::compaction::prune_duplicate_tool_results(&history, 1);
+        crate::network::compaction::prune_historical_tool_outputs(&history, 1);
+        crate::network::compaction::prune_historical_reasoning(&history, 1);
+        crate::network::compaction::prune_old_tool_outputs(&history, 1);
+        let first_render = to_messages(&history, "system");
+        let second_render = to_messages(&history, "system");
+
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        assert_eq!(first_render, second_render);
+    }
+
+    // The older duplicate is excluded from the request, the newer identical
+    // read is retained verbatim, and both structured pairs keep their
+    // tool_call_id mapping: no result is re-attributed and no synthetic
+    // "did not run" error appears for a call that ran.
+    #[test]
+    fn render_time_dedup_keeps_newest_and_preserves_call_mapping() {
+        let (first_call, first_read) =
+            structured_read("call_old", "view_file: [File: src/lib.rs]\n1: old");
+        let (second_call, second_read) =
+            structured_read("call_new", "view_file: [File: src/lib.rs]\n1: old");
+        let mut history = vec![
+            ChatMessage::new("user", "inspect this"),
+            first_call,
+            first_read,
+        ];
+        // Age the first read out of the protected recent window so the
+        // render-time rule applies; the newer read stays recent.
+        for i in 0..11 {
+            history.push(ChatMessage::new("assistant", format!("progress note {i}")));
+        }
+        history.push(ChatMessage::new("assistant", "re-checking"));
+        history.push(second_call);
+        history.push(second_read);
+        let before = serde_json::to_string(&history).unwrap();
+
+        let messages = to_messages(&history, "system");
+
+        assert_eq!(serde_json::to_string(&history).unwrap(), before);
+        let rendered_ids: Vec<&str> = messages
+            .iter()
+            .filter_map(|message| message.get("tool_call_id").and_then(|id| id.as_str()))
+            .collect();
+        assert_eq!(rendered_ids, vec!["call_new"]);
+        let assistant_ids: Vec<&str> = messages
+            .iter()
+            .filter_map(|message| {
+                message
+                    .get("tool_calls")
+                    .and_then(|calls| calls.as_array())
+                    .and_then(|calls| calls.first())
+                    .and_then(|call| call.get("id"))
+                    .and_then(|id| id.as_str())
+            })
+            .collect();
+        assert!(assistant_ids.contains(&"call_old"));
+        assert!(assistant_ids.contains(&"call_new"));
+        let bodies: Vec<&str> = messages
+            .iter()
+            .filter_map(|message| message.get("content").and_then(|c| c.as_str()))
+            .collect();
+        assert!(
+            !bodies.iter().any(|body| body.contains("did not run")),
+            "a duplicate that ran must not be reported as never-run: {bodies:?}"
+        );
+        assert!(
+            bodies.iter().any(|body| body.contains("1: old")),
+            "the retained read must survive verbatim: {bodies:?}"
+        );
+    }
+
+    // Reads with different content, errors, and truncated reads are never
+    // treated as duplicates, even outside the recent window.
+    #[test]
+    fn render_time_dedup_requires_file_identity_and_complete_content() {
+        let history = vec![
+            ChatMessage::new("tool", "view_file: [File: src/a.rs]\n1: same"),
+            ChatMessage::new("tool", "view_file: [File: src/a.rs]\n1: same"),
+            ChatMessage::new("tool", "view_file: [File: src/b.rs]\n1: same"),
+            ChatMessage::new("tool", "view_file: error: cannot read 'src/c.rs'"),
+            ChatMessage::new(
+                "tool",
+                "view_file: [File: src/d.rs]\n1: same\n[Truncated: lines 2-2 of 2]",
+            ),
+            ChatMessage::new("user", "keep recent"),
+        ];
+
+        let excluded = redundant_tool_result_indices(&history, 1);
+
+        assert_eq!(excluded, std::collections::HashSet::from([0]));
+        let messages = to_messages(&history, "system");
+        let rendered: String = serde_json::to_string(&messages).unwrap();
+        assert!(rendered.contains("src/b.rs"));
+        assert!(rendered.contains("cannot read"));
+        assert!(rendered.contains("Truncated"));
+    }
+
+    // Repeated turns keep a stable prompt prefix: rendering turn two replays
+    // turn one's messages byte-identically (system prompt plus history),
+    // which is what keeps prefix KV-caches hot across turns.
+    #[test]
+    fn repeated_turns_replay_a_stable_message_prefix() {
+        let turn_one = vec![
+            ChatMessage::new("user", "inspect this"),
+            ChatMessage::new("assistant", "reading"),
+            ChatMessage::new("tool", "view_file: [File: src/lib.rs]\n1: old"),
+        ];
+        let first_render = to_messages(&turn_one, "system");
+
+        let mut turn_two = turn_one.clone();
+        turn_two.push(ChatMessage::new("assistant", "verified"));
+        turn_two.push(ChatMessage::new("user", "next step"));
+        let before = serde_json::to_string(&turn_two).unwrap();
+        crate::network::compaction::prune_duplicate_tool_results(&turn_two, 12);
+        crate::network::compaction::prune_historical_tool_outputs(&turn_two, 12);
+        crate::network::compaction::prune_historical_reasoning(&turn_two, 12);
+        crate::network::compaction::prune_old_tool_outputs(&turn_two, usize::MAX);
+        let second_render = to_messages(&turn_two, "system");
+
+        assert_eq!(serde_json::to_string(&turn_two).unwrap(), before);
+        assert_eq!(&second_render[..first_render.len()], &first_render[..]);
     }
 }

@@ -892,8 +892,35 @@ fn reasoning_loop_detector_catches_cross_turn_stagnant_plan() {
         detector.record_turn_reasoning(plan, false),
         ReasoningLoopStatus::Ok
     );
+    // A single repeated plan without ledger stagnation is legitimate
+    // re-inspection, not a loop (#984).
     assert_eq!(
         detector.record_turn_reasoning(plan, false),
+        ReasoningLoopStatus::Ok
+    );
+
+    // The same plan with confirmed ledger stagnation still escalates.
+    detector.reset();
+    assert_eq!(
+        detector.record_turn_evidence(&TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
+        ReasoningLoopStatus::Ok
+    );
+    assert_eq!(
+        detector.record_turn_evidence(&TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
         ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TURN_SAME_PLAN)
     );
 
@@ -902,6 +929,46 @@ fn reasoning_loop_detector_catches_cross_turn_stagnant_plan() {
     assert_eq!(
         detector.record_turn_reasoning(plan, false),
         ReasoningLoopStatus::Ok
+    );
+}
+
+#[test]
+fn cross_turn_same_plan_does_not_fire_on_first_repeat_with_fresh_evidence() {
+    // Mirrors #984 session evidence: reading library source across two turns
+    // reuses plan wording while the ledger still shows fresh evidence
+    // (streak 0/1). That must not panic-intervene; only true stagnation
+    // (streak >= 2) escalates.
+    let mut detector = ReasoningLoopDetector::default();
+    let file = "src/rmcp/model.rs";
+    let inspect =
+        "Plan: Read the rmcp model source to find the correct API for the compiler error.";
+
+    for streak in [0, 1] {
+        assert_eq!(
+            detector.record_turn_evidence(&TurnEvidence {
+                reasoning: inspect,
+                target_files: &[file],
+                made_progress: streak == 0,
+                had_edits: false,
+                tool_count: 1,
+                no_progress_streak: streak,
+            }),
+            ReasoningLoopStatus::Ok,
+            "fresh inspection at streak {streak} must not trigger cross-turn same-plan"
+        );
+    }
+
+    // The identical plan with confirmed stagnation still interrupts.
+    assert_eq!(
+        detector.record_turn_evidence(&TurnEvidence {
+            reasoning: inspect,
+            target_files: &[file],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
+        ReasoningLoopStatus::LoopDetected(DIAG_CROSS_TURN_SAME_PLAN)
     );
 }
 

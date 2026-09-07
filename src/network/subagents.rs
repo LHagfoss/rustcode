@@ -1192,11 +1192,14 @@ mod tests {
         let mut calls = vec![
             (call("grep", serde_json::json!({"pattern": "TODO"})), None),
             (
-                call("run_command", serde_json::json!({"command": "true"})),
+                call("run_command", serde_json::json!({"command": "cargo test"})),
                 None,
             ),
             (
-                call("run_command", serde_json::json!({"command": "false"})),
+                call(
+                    "run_command",
+                    serde_json::json!({"command": "cargo test -- --nocapture"}),
+                ),
                 None,
             ),
         ];
@@ -1206,7 +1209,10 @@ mod tests {
         assert!(validation.is_ok());
 
         calls.push((
-            call("run_command", serde_json::json!({"command": "false"})),
+            call(
+                "run_command",
+                serde_json::json!({"command": "cargo test -- --nocapture"}),
+            ),
             None,
         ));
         let (requested, dropped, validation) = prepare_subagent_tool_batch(&mut calls, 2);
@@ -1220,7 +1226,7 @@ mod tests {
             (
                 crate::tools::ToolCall {
                     name: "run_command".to_owned(),
-                    arguments: serde_json::json!({"command": "true"}),
+                    arguments: serde_json::json!({"command": "cargo test"}),
                     call_id: None,
                 },
                 None,

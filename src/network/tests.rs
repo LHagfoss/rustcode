@@ -981,6 +981,69 @@ fn output_limited_call_results_are_retryable_and_bounded() {
     assert!(answers[0].content.len() < 200);
 }
 
+#[tokio::test]
+async fn mixed_batch_validation_errors_are_isolated_to_the_failing_call_id() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    {
+        let mut state = state.lock().await;
+        state.auto_confirm = true;
+        let api_base_url = state.api_base_url.clone();
+        state.record_function_calling_support(&api_base_url, true);
+    }
+    let policy = Arc::new(super::policy::InteractivePolicy);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let mut ctx = TurnContext::new();
+
+    super::turn_engine::tools::handle_tool_response(
+        &reqwest::Client::new(),
+        &state,
+        &cancel_token,
+        &policy,
+        &mut ctx,
+        Some("tool_calls"),
+        0,
+        None,
+        None,
+        None,
+        vec![
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_invalid".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::ToolCallEnvelope {
+                call_id: "call_valid".to_string(),
+                tool_name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "TODO"}),
+            },
+        ],
+    )
+    .await;
+
+    let history = state.lock().await;
+    let tool_results = history
+        .history
+        .iter()
+        .filter(|message| message.role == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(tool_results.len(), 2);
+    assert_eq!(
+        tool_results[0].tool_call_id.as_deref(),
+        Some("call_invalid")
+    );
+    assert!(
+        tool_results[0]
+            .content
+            .contains("invalid arguments for 'grep'")
+    );
+    assert_eq!(tool_results[1].tool_call_id.as_deref(), Some("call_valid"));
+    assert!(
+        !tool_results[1]
+            .content
+            .contains("invalid arguments for 'grep'")
+    );
+}
+
 #[test]
 fn call_refs_are_empty_without_provider_ids() {
     let calls = vec![crate::tools::ToolCall {
@@ -1678,6 +1741,9 @@ async fn interactive_confirmation_publication_invalidates_render_metrics_once() 
 
 #[tokio::test]
 async fn test_compact_history_strips_thinking_blocks() {
+    // #985 immutable-history contract: `<think>` blocks stay verbatim in
+    // storage and are stripped only at request-render time
+    // (`history::to_messages`), so compaction must not rewrite them.
     let mut history = vec![
         crate::app::ChatMessage::new(
             "assistant",
@@ -1686,8 +1752,18 @@ async fn test_compact_history_strips_thinking_blocks() {
         crate::app::ChatMessage::new("tool", "tool output"),
     ];
     compact_history_to_budget(&mut history, 5000).await;
-    assert_eq!(history[0].content, "\nHere is the answer");
+    assert_eq!(
+        history[0].content,
+        "<think>\nThinking about files...\n</think>\nHere is the answer"
+    );
     assert_eq!(history[1].content, "tool output");
+    let rendered = history::to_messages(&history, "system");
+    assert!(
+        rendered
+            .iter()
+            .any(|m| m.get("content").and_then(|c| c.as_str()) == Some("Here is the answer")),
+        "rendered request must strip the think block without touching storage"
+    );
 }
 
 #[test]
@@ -2069,7 +2145,10 @@ fn test_view_file_repeat_is_mtime_aware() {
 
 #[tokio::test]
 async fn test_compact_prunes_throwaway_before_file_contents() {
-    // Large throwaway command output + small file contents.
+    // #985 immutable-history contract: stored messages are append-only.
+    // Context pressure is absorbed by FIFO head compaction (the head becomes
+    // a deterministic record) — never by rewriting retained tool outputs in
+    // place. The retained tail must stay byte-identical.
     let big_cmd = format!(
         "run_command: {}",
         (0..60)
@@ -2078,25 +2157,45 @@ async fn test_compact_prunes_throwaway_before_file_contents() {
             .join("\n")
     );
     let file = "view_file: [File: src/main.rs, Lines 1 to 5 of 5]\n1: a\n2: b\n3: c\n4: d\n5: e";
-    let file_original = file.to_string();
     let mut history = vec![
-        ChatMessage::new("tool", big_cmd.clone()), // throwaway, oldest
-        ChatMessage::new("tool", file.to_string()), // file contents, newer
+        ChatMessage::new("user", "original goal: keep working on src/main.rs"),
+        ChatMessage::new("assistant", "plan: inspect the build output first"),
+        ChatMessage::new("tool", big_cmd),
+        ChatMessage::new("user", "noted; now check the current file contents"),
+        ChatMessage::new("assistant", "reading the file"),
+        ChatMessage::new("tool", file.to_string()),
+        ChatMessage::new("assistant", "working from the file contents"),
+        ChatMessage::new("user", "current follow-up: continue"),
     ];
-    // Budget forces compaction; the throwaway must absorb the cut so the file
-    // contents the agent is actively working on survive intact.
-    compact_history_to_budget(&mut history, 80).await;
-    assert_eq!(history[1].content, file_original, "file contents preserved");
-    assert_ne!(history[0].content, big_cmd, "throwaway was reduced");
+    let original = history.clone();
+    // Budget forces compaction; the head absorbs the cut so the retained
+    // tail survives byte-identical.
+    assert!(compact_history_to_budget(&mut history, 80).await);
     assert!(
-        !history[0].content.contains("line number 59"),
-        "throwaway truncated: {}",
+        history[0]
+            .content
+            .starts_with("[Deterministic context record]"),
+        "head must become a deterministic record, got: {}",
         history[0].content
+    );
+    assert_eq!(
+        history[1..],
+        original[original.len() - (history.len() - 1)..],
+        "retained tail must stay byte-identical"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.contains("pruned to maintain context window")),
+        "no retained message may be rewritten in place"
     );
 }
 
 #[tokio::test]
 async fn test_compact_prunes_oldest_result_before_newer_result_in_same_class() {
+    // #985 immutable-history contract: same-class outputs are never excerpted
+    // in place. Pressure is absorbed by the head record; whatever tail is
+    // retained keeps its exact original bytes.
     let old = format!(
         "run_command: old output\n{}",
         (0..80)
@@ -2112,14 +2211,37 @@ async fn test_compact_prunes_oldest_result_before_newer_result_in_same_class() {
             .join("\n")
     );
     let mut history = vec![
-        ChatMessage::new("tool", old.clone()),
-        ChatMessage::new("tool", new.clone()),
+        ChatMessage::new("user", "original goal: diagnose the failure"),
+        ChatMessage::new("assistant", "plan: collect diagnostics"),
+        ChatMessage::new("tool", old),
+        ChatMessage::new("user", "noted; now check the newer result"),
+        ChatMessage::new("assistant", "reading the latest output"),
+        ChatMessage::new("tool", new),
+        ChatMessage::new("assistant", "analyzing the latest diagnostics"),
+        ChatMessage::new("user", "current follow-up: report findings"),
     ];
+    let original = history.clone();
 
-    compact_history_to_budget(&mut history, 70).await;
+    assert!(compact_history_to_budget(&mut history, 70).await);
 
-    assert_ne!(history[0].content, old);
-    assert_eq!(history[1].content, new);
+    assert!(
+        history[0]
+            .content
+            .starts_with("[Deterministic context record]"),
+        "head must become a deterministic record, got: {}",
+        history[0].content
+    );
+    assert_eq!(
+        history[1..],
+        original[original.len() - (history.len() - 1)..],
+        "retained tail must stay byte-identical"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|m| m.content.contains("pruned to maintain context window")),
+        "no retained message may be rewritten in place"
+    );
 }
 
 #[tokio::test]
@@ -2388,9 +2510,13 @@ fn harness_notes_reach_the_model_but_session_chatter_does_not() {
 }
 
 #[test]
-fn loop_abort_allows_one_bounded_recovery_before_forced_final() {
+fn loop_abort_allows_bounded_recoveries_before_forced_final() {
+    // #984: the harness offers several guided nudges with tools enabled
+    // before the terminal lockout, instead of disabling tools after one strike.
     assert_eq!(loop_recovery_action(0), LoopRecoveryAction::Recover);
-    assert_eq!(loop_recovery_action(1), LoopRecoveryAction::ForceFinal);
+    assert_eq!(loop_recovery_action(1), LoopRecoveryAction::Recover);
+    assert_eq!(loop_recovery_action(2), LoopRecoveryAction::Recover);
+    assert_eq!(loop_recovery_action(3), LoopRecoveryAction::ForceFinal);
     assert_eq!(
         loop_recovery_action(u8::MAX),
         LoopRecoveryAction::ForceFinal
@@ -2666,6 +2792,41 @@ fn custom_tool_round_limit_triggers_at_the_configured_round() {
         Some(TurnBudgetLimit::ToolRounds(n)) => assert_eq!(n, 3),
         other => panic!("expected configured ToolRounds limit, got {other:?}"),
     }
+}
+
+#[test]
+fn loop_recovery_nudges_do_not_cap_the_turn_before_its_round_budget() {
+    // #984: autonomous turns are budgeted by max_tool_rounds (and the other
+    // safety budgets), not by recovery state. A turn mid-recovery keeps its
+    // tools until the bounded recovery budget is exhausted or a real budget
+    // trips — there is no artificial progress cap on top.
+    let mut ctx = TurnContext::with_max_tool_rounds(40);
+    ctx.budget.tool_rounds = 12;
+    ctx.recovery.loop_recovery_attempts = 2;
+    ctx.recovery.reasoning_recovery_attempts = 2;
+    assert_eq!(
+        loop_recovery_action(ctx.recovery.loop_recovery_attempts),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(ctx.recovery.reasoning_recovery_attempts),
+        LoopRecoveryAction::Recover
+    );
+    assert!(turn_budget_exceeded(&ctx).is_none());
+
+    // Exhausted recovery still escalates to a final answer, and the round
+    // budget remains the hard backstop for autonomous execution.
+    ctx.recovery.loop_recovery_attempts = 3;
+    assert_eq!(
+        loop_recovery_action(ctx.recovery.loop_recovery_attempts),
+        LoopRecoveryAction::ForceFinal
+    );
+    assert!(turn_budget_exceeded(&ctx).is_none());
+    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
+    assert!(matches!(
+        turn_budget_exceeded(&ctx),
+        Some(TurnBudgetLimit::ToolRounds(_))
+    ));
 }
 
 #[test]
@@ -4015,7 +4176,7 @@ fn historical_assistant_reasoning_is_stripped_when_generating_messages() {
 
 #[test]
 fn compaction_prunes_massive_historical_reasoning() {
-    let mut history = vec![
+    let history = vec![
         ChatMessage::new("user", "Prompt 1"),
         ChatMessage::new(
             "assistant",
@@ -4041,20 +4202,35 @@ fn compaction_prunes_massive_historical_reasoning() {
         .map(compaction::estimate_message_tokens)
         .sum();
     assert!(before_tokens > 10000, "initial tokens should be large");
+    let before = serde_json::to_string(&history).unwrap();
 
-    let pruned = compaction::prune_historical_reasoning(&mut history, 2);
-    assert_eq!(pruned, 2, "must prune 2 historical assistant messages");
+    // #985: storage is append-only — the pass reports no storage change and
+    // every retained message stays byte-identical.
+    let pruned = compaction::prune_historical_reasoning(&history, 2);
+    assert_eq!(pruned, 0, "storage must not be rewritten");
+    assert_eq!(serde_json::to_string(&history).unwrap(), before);
 
-    let after_tokens: usize = history
-        .iter()
-        .map(compaction::estimate_message_tokens)
-        .sum();
+    // The request render still excludes the scratchpads while preserving the
+    // visible answers, so provider pressure is handled without touching
+    // history.
+    let messages = crate::network::history::to_messages(&history, "system");
+    let rendered = serde_json::to_string(&messages).unwrap();
     assert!(
-        after_tokens < 500,
-        "after reasoning pruning tokens should be drastically lower: got {after_tokens}"
+        !rendered.contains("deep thoughts"),
+        "historical assistant reasoning must not be sent to provider"
     );
-    assert_eq!(history[1].content, "Short answer 1");
-    assert_eq!(history[3].content, "Short answer 2");
+    assert!(
+        !rendered.contains("more thoughts"),
+        "historical assistant reasoning must not be sent to provider"
+    );
+    assert!(
+        rendered.contains("Short answer 1") && rendered.contains("Short answer 2"),
+        "visible answers must be preserved"
+    );
+    assert!(
+        history[1].content.contains("<think>") && history[3].content.contains("<think>"),
+        "stored scratchpads stay verbatim for the transcript"
+    );
 }
 
 #[test]
@@ -4624,17 +4800,18 @@ fn test_local_model_profile_completion_reserve_defaults() {
 
 #[test]
 fn test_reasoning_loop_recovery_action_escalation() {
+    // #984: reasoning recovery matches the multi-round tool budget.
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(1),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(2),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(3),
@@ -4700,14 +4877,30 @@ fn test_reasoning_loop_detector_integration_and_resets() {
         );
     }
 
-    // 3. Cross-turn plan repetition
+    // 3. Cross-turn plan repetition with confirmed ledger stagnation.
+    // A bare repeated plan without stagnation is legitimate re-inspection
+    // (#984), so this path goes through evidence with streaks.
     let plan = "Plan: Inspect all routes in src/routes.rs and verify handler types.";
     assert_eq!(
-        detector.record_turn_reasoning(plan, false),
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 1,
+        }),
         loop_detect::ReasoningLoopStatus::Ok
     );
     assert!(matches!(
-        detector.record_turn_reasoning(plan, false),
+        detector.record_turn_evidence(&loop_detect::TurnEvidence {
+            reasoning: plan,
+            target_files: &[],
+            made_progress: false,
+            had_edits: false,
+            tool_count: 1,
+            no_progress_streak: 2,
+        }),
         loop_detect::ReasoningLoopStatus::LoopDetected(_)
     ));
 
@@ -4935,16 +5128,21 @@ fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
 #[test]
 fn test_adversarial_6_bounded_recovery_escalation_prevents_runaway() {
     // Scenario 6: Loop detector fires, recovery loops again -> bounded recovery prevents runaway.
+    // #984: the bound is several guided rounds, not a single strike.
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(1),
-        LoopRecoveryAction::ForceFinal
+        LoopRecoveryAction::Recover
     );
     assert_eq!(
         reasoning_loop_recovery_action(2),
+        LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(3),
         LoopRecoveryAction::ForceFinal
     );
     assert_eq!(

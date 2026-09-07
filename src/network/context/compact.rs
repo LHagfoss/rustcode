@@ -106,11 +106,12 @@ pub async fn maybe_compact_with_local_policy_and_usage(
     //    which is both slower and how repeat-loops start. Below the threshold
     //    the history is left exactly as it happened.
     //
-    //    These two passes each rewrite the messages they collapse, so their
-    //    counts are deliberately not shared: a collapsed message is a different
-    //    string and must be counted as such. The memo in `estimate_tokens` is
-    //    what keeps the passes cheap — every message the passes leave alone is
-    //    encoded once and looked up thereafter.
+    //    These passes observe but never rewrite stored messages (#985
+    //    immutable-history contract): they report how many messages would be
+    //    eligible while leaving every byte intact, so their counts stay
+    //    comparable against the same strings. The memo in `estimate_tokens`
+    //    is what keeps the passes cheap — every message the passes leave
+    //    alone is encoded once and looked up thereafter.
     let raw_tokens = provider_adjusted_tokens(history, provider_usage);
     if raw_tokens < prune_floor(budget) {
         return false;
@@ -964,13 +965,17 @@ mod preserved_user_request_tests {
     }
 
     #[tokio::test]
-    async fn pruning_measured_prefix_restores_headroom_without_summary_request() {
-        let mut history = vec![ChatMessage::new(
-            "tool",
-            format!("view_file: {}", "dependency source\n".repeat(3000)),
-        )];
-        for _ in 0..13 {
-            history.push(ChatMessage::new("assistant", "inspect"));
+    async fn measured_prefix_pressure_uses_head_compaction_without_rewriting() {
+        // Six full turns so the head holds enough summarizable messages for
+        // the FIFO path once in-place excerpting is retired.
+        let mut history = Vec::new();
+        for turn in 0..6 {
+            history.push(ChatMessage::new("user", format!("task {turn}")));
+            history.push(ChatMessage::new("assistant", format!("work {turn}")));
+            history.push(ChatMessage::new(
+                "tool",
+                format!("view_file: {}", "dependency source\n".repeat(1500)),
+            ));
         }
         let usage = TokenUsage {
             prompt_tokens: 21_000,
@@ -979,7 +984,10 @@ mod preserved_user_request_tests {
             cached_tokens: None,
         };
         history.last_mut().unwrap().token_usage = Some(usage.clone());
-        let original_len = history.len();
+        let original = history.clone();
+        // #985: no historical message may be rewritten to an excerpt. The
+        // summarizer endpoint is unreachable, so the deterministic
+        // fixed-record head compaction absorbs the cut instead.
         assert!(
             maybe_compact_with_local_policy_and_usage(
                 &reqwest::Client::new(),
@@ -993,12 +1001,30 @@ mod preserved_user_request_tests {
             )
             .await
         );
-        assert_eq!(
-            history.len(),
-            original_len,
-            "local reclamation must avoid unnecessary structured compaction"
+        assert!(
+            history.len() < original.len(),
+            "head compaction must absorb the cut"
         );
-        assert!(history[0].content.contains("Full output saved to:"));
+        assert!(
+            history[0]
+                .content
+                .starts_with(crate::network::compaction::STRUCTURED_MEMORY_MARKER)
+        );
+        assert!(
+            history[0].compaction_boundary.is_some(),
+            "head compaction must persist a typed boundary"
+        );
+        // The retained tail is the original suffix, byte-identical.
+        assert_eq!(
+            history[1..],
+            original[original.len() - (history.len() - 1)..]
+        );
+        assert!(
+            !history
+                .iter()
+                .any(|message| message.content.contains("Tool Output Truncated")),
+            "no retained message may be rewritten in place"
+        );
     }
 
     #[test]
