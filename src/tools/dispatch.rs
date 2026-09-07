@@ -20,6 +20,35 @@ pub(super) fn as_error_message(message: &str) -> String {
     }
 }
 
+/// Extract model-facing text from an MCP tool result. MCP servers may expose
+/// their payload in `structuredContent` without duplicating it in `content`;
+/// preserve the structured value in that case so RustCode does not hand the
+/// model an empty tool result.
+fn mcp_result_content(value: &Value) -> String {
+    let result = value.get("result");
+    let text = result
+        .and_then(|r| r.get("content"))
+        .and_then(Value::as_array)
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    if !text.trim().is_empty() {
+        return text;
+    }
+
+    if let Some(structured) = result.and_then(|r| r.get("structuredContent")) {
+        return serde_json::to_string_pretty(structured).unwrap_or_default();
+    }
+
+    serde_json::to_string_pretty(value).unwrap_or_default()
+}
+
 pub(crate) fn execute_with_metadata(name: &str, args: &Value) -> ToolExecutionOutput {
     execute_with_metadata_cancellable(name, args, None)
 }
@@ -108,42 +137,17 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                             .and_then(|result| result.get("isError"))
                             .and_then(Value::as_bool)
                             .unwrap_or(false);
-                        if let Some(content_arr) = val
-                            .get("result")
-                            .and_then(|r| r.get("content"))
-                            .and_then(|c| c.as_array())
-                        {
-                            let mut text_parts = Vec::new();
-                            for item in content_arr {
-                                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                                    text_parts.push(text.to_string());
-                                }
-                            }
-                            ToolExecutionOutput {
-                                content: text_parts.join("\n"),
-                                success,
-                                pending: false,
-                                command: None,
-                                exit_code: None,
-                                truncated: false,
-                                completeness: rustcode_core::ToolResultCompleteness::Complete,
-                                replayed: false,
-                                error_kind: (!success).then_some(ToolErrorKind::McpFailed),
-                                retryable: false,
-                            }
-                        } else {
-                            ToolExecutionOutput {
-                                content: serde_json::to_string_pretty(&val).unwrap_or_default(),
-                                success,
-                                pending: false,
-                                command: None,
-                                exit_code: None,
-                                truncated: false,
-                                completeness: rustcode_core::ToolResultCompleteness::Complete,
-                                replayed: false,
-                                error_kind: (!success).then_some(ToolErrorKind::McpFailed),
-                                retryable: false,
-                            }
+                        ToolExecutionOutput {
+                            content: mcp_result_content(&val),
+                            success,
+                            pending: false,
+                            command: None,
+                            exit_code: None,
+                            truncated: false,
+                            completeness: rustcode_core::ToolResultCompleteness::Complete,
+                            replayed: false,
+                            error_kind: (!success).then_some(ToolErrorKind::McpFailed),
+                            retryable: false,
                         }
                     }
                     Err(e) => ToolExecutionOutput::failure_with_kind(
@@ -252,4 +256,33 @@ pub fn needs_confirmation(name: &str) -> bool {
         .find(|t| t.name == name)
         .map(|t| t.requires_confirmation)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mcp_result_content;
+
+    #[test]
+    fn structured_only_mcp_results_reach_the_model() {
+        let result = serde_json::json!({
+            "result": {
+                "structuredContent": {"mailboxes": [{"name": "INBOX"}]},
+                "content": []
+            }
+        });
+        let content = mcp_result_content(&result);
+        assert!(content.contains("mailboxes"));
+        assert!(content.contains("INBOX"));
+    }
+
+    #[test]
+    fn ordinary_mcp_text_content_is_not_duplicated() {
+        let result = serde_json::json!({
+            "result": {
+                "structuredContent": {"value": 1},
+                "content": [{"type": "text", "text": "already formatted"}]
+            }
+        });
+        assert_eq!(mcp_result_content(&result), "already formatted");
+    }
 }
