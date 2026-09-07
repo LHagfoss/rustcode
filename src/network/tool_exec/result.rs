@@ -197,6 +197,64 @@ pub(crate) fn stable_arguments_hash(arguments: &serde_json::Value) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+fn compact_reference_path(path: &str) -> String {
+    const MAX_PATH_CHARS: usize = 256;
+    if path.len() <= MAX_PATH_CHARS {
+        return path.to_string();
+    }
+    let mut bounded = path[..path.floor_char_boundary(MAX_PATH_CHARS)].to_string();
+    bounded.push_str("...");
+    bounded
+}
+
+/// Render the model-facing payload for an unchanged repeat without replaying
+/// the read body. The first result remains the source of truth in history;
+/// this payload only points back to it and gives the model an actionable way
+/// to request different evidence.
+pub(crate) fn compact_replayed_read_result(
+    tool_name: &str,
+    args: &serde_json::Value,
+    previous_content: Option<&str>,
+) -> String {
+    let range = previous_content
+        .and_then(parse_view_header)
+        .map(|(path, start, end, total)| {
+            format!(
+                "{} lines {start} to {end} of {total}",
+                compact_reference_path(&path)
+            )
+        })
+        .or_else(|| {
+            crate::network::loop_detect::read_target(tool_name, args).map(|(path, start, end)| {
+                format!(
+                    "{} lines {start} to {}",
+                    compact_reference_path(&path),
+                    end.map_or_else(|| "end".to_string(), |end| end.to_string())
+                )
+            })
+        })
+        .unwrap_or_else(|| "the same exact read arguments".to_string());
+    let fingerprint = stable_arguments_hash(args);
+
+    let header = previous_content
+        .and_then(|content| content.lines().next())
+        .filter(|line| parse_view_header(line).is_some())
+        .map(|line| line.to_string());
+    let mut reference = header.unwrap_or_default();
+    if !reference.is_empty() {
+        reference.push('\n');
+    }
+    reference.push_str(&format!(
+        "[Unchanged read replay: tool={tool_name}; fingerprint={fingerprint}; range={range}. "
+    ));
+    reference.push_str(
+        "The earlier result contains this unchanged output; use it instead of repeating the read. ",
+    );
+    reference
+        .push_str("Request a different start_line/end_line range or use grep for new evidence.]");
+    reference
+}
+
 pub(crate) fn tool_result_from_execution(
     tool_name: &str,
     args: &serde_json::Value,

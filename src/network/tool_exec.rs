@@ -23,8 +23,8 @@ pub(crate) use preview::{
     tool_result_precludes_preview_fallback,
 };
 pub(crate) use result::{
-    bounded_tool_result_history_message, finalize_tool_result, subagent_tool_history_message,
-    tool_result_from_execution, tool_result_history_message,
+    bounded_tool_result_history_message, compact_replayed_read_result, finalize_tool_result,
+    subagent_tool_history_message, tool_result_from_execution, tool_result_history_message,
 };
 pub(crate) async fn ask_user_question(
     state: &Arc<Mutex<AppState>>,
@@ -717,23 +717,16 @@ pub(crate) async fn execute_tool_batch(
                 };
                 let tuple = match cached {
                     Some(previous) => {
-                        let content = if let Some(mut content) = previous.replayable_content {
-                            content.insert_str(
-                                0,
-                                "[Unchanged since the last read of this exact range — repeating that output. \
-Re-reading will not produce anything new; if an edit failed to match, expand start_line/end_line range or use grep to verify exact target content.]\n",
-                            );
-                            content
-                        } else {
-                            let mut notice = "[Notice: This exact read was already executed, but its output exceeded the repeat cache limit and is not repeated. Use the original result or request a narrower range.".to_string();
-                            if let Some(path) = previous.full_output_artifact.as_deref() {
-                                notice.push_str(&format!(
-                                    " The bounded output remains available at: {path}."
-                                ));
-                            }
-                            notice.push(']');
-                            notice
-                        };
+                        let mut content = compact_replayed_read_result(
+                            &name_clone,
+                            &args_clone,
+                            previous.replayable_content.as_deref(),
+                        );
+                        if let Some(path) = previous.full_output_artifact.as_deref() {
+                            content.push_str(&format!(
+                                " The bounded output remains available at: {path}."
+                            ));
+                        }
                         replay_artifact = previous.full_output_artifact;
                         (
                             crate::tools::ToolExecutionOutput {
@@ -752,16 +745,18 @@ Re-reading will not produce anything new; if an edit failed to match, expand sta
                         )
                     }
                     None => (
-                        crate::tools::ToolExecutionOutput::success("[Notice: This exact read tool call was previously executed with identical arguments, \
-and the file has not changed since. Its output is above in the context — use it. To see something \
-different, read another range or make an edit first; repeating this call returns this same notice.]"
-                            .to_string()),
+                        crate::tools::ToolExecutionOutput {
+                            content: compact_replayed_read_result(&name_clone, &args_clone, None),
+                            replayed: true,
+                            ..crate::tools::ToolExecutionOutput::success(String::new())
+                        },
                         None,
                     ),
                 };
                 (tuple.0, tuple.1, std::time::Duration::ZERO)
             } else if name_clone == "ask_question" {
-                let (output, wait) = ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await;
+                let (output, wait) =
+                    ask_user_question(&state_clone, &cancel_token_clone, &args_clone).await;
                 (output, None, wait)
             } else if plan_mode_denied {
                 (
@@ -819,8 +814,7 @@ different, read another range or make an edit first; repeating this call returns
                     s.recent_read_outputs.insert(
                         sig.clone(),
                         crate::app::CachedReadOutput {
-                            replayable_content: (execution.content.len()
-                                <= REPLAYABLE_READ_LIMIT)
+                            replayable_content: (execution.content.len() <= REPLAYABLE_READ_LIMIT)
                                 .then(|| execution.content.clone()),
                             success: execution.success,
                             exit_code: execution.exit_code,

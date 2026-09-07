@@ -3629,11 +3629,13 @@ async fn repeated_failed_read_preserves_structured_failure() {
 
     assert!(!first.metadata.success, "got: {}", first.content);
     assert!(!repeated.metadata.success, "got: {}", repeated.content);
+    assert!(repeated.metadata.replayed);
     assert!(
-        repeated.content.contains(&first.content),
-        "replay omitted the original failure: {}",
+        !repeated.content.contains(&first.content),
+        "replay unexpectedly repeated the original failure: {}",
         repeated.content
     );
+    assert!(repeated.content.contains("Unchanged read replay"));
 }
 
 #[tokio::test]
@@ -3650,15 +3652,88 @@ async fn repeated_truncated_read_preserves_structured_truncation() {
     let repeated = run_one_tool_with_state(&state, call).await;
 
     assert!(first.metadata.truncated, "got: {}", first.content);
+    assert!(repeated.metadata.replayed);
     assert!(
         repeated.metadata.truncated,
         "replay lost structured truncation: {}",
         repeated.content
     );
     assert!(
-        repeated.content.contains(&first.content),
-        "replay omitted the original truncated output"
+        !repeated.content.contains(&first.content),
+        "replay unexpectedly repeated the original truncated output"
     );
+    assert!(repeated.content.contains("Unchanged read replay"));
+    assert!(repeated.content.contains("[tool_result_incomplete:"));
+    assert_eq!(repeated.metadata.completeness, first.metadata.completeness);
+}
+
+#[tokio::test]
+async fn repeated_unchanged_view_file_keeps_first_result_and_compacts_replay() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("source.rs");
+    let content: String = (1..=400)
+        .map(|line| format!("line {line}: fn function_{line}() {{}}\n"))
+        .collect();
+    std::fs::write(&file, content).expect("write");
+    let path = file.to_string_lossy().to_string();
+    let call = test_tool_call(
+        "view_file",
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 400}),
+    );
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(!first.metadata.replayed);
+    assert!(
+        first.content.len() > 8_000,
+        "fixture did not exercise the regression"
+    );
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(repeated.metadata.replayed);
+    assert!(
+        repeated.content.len() < 1_000,
+        "replayed read was not compact: {} bytes",
+        repeated.content.len()
+    );
+    assert!(!repeated.content.contains("function_200"));
+    assert!(repeated.content.contains("fingerprint="));
+    assert!(repeated.content.contains("Lines 1 to 400"));
+    assert!(repeated.content.contains("earlier result"));
+    assert!(repeated.content.contains("start_line/end_line"));
+    assert_eq!(
+        repeated
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.returned_range.clone()),
+        first
+            .metadata
+            .inspection
+            .as_ref()
+            .and_then(|inspection| inspection.returned_range.clone())
+    );
+
+    // History stores the original body and the compact replay as separate
+    // durable results; request rendering must retain both without inflating
+    // the replay back into the original body.
+    let first_history = tool_result_history_message(first.clone(), None);
+    let repeated_history = tool_result_history_message(repeated.clone(), None);
+    assert!(first_history.content.contains("function_200"));
+    assert!(!repeated_history.content.contains("function_200"));
+    assert!(
+        repeated_history
+            .tool_result
+            .as_ref()
+            .expect("metadata")
+            .replayed
+    );
+    let rendered = history::to_messages(&[first_history, repeated_history], "system");
+    let rendered = serde_json::to_string(&rendered).expect("render history");
+    assert!(rendered.contains("function_200"));
+    assert!(rendered.contains("Unchanged read replay"));
 }
 
 #[tokio::test]
@@ -3676,7 +3751,7 @@ async fn repeated_over_limit_failed_read_preserves_structured_failure() {
     assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
     assert_eq!(repeated.metadata.truncated, first.metadata.truncated);
     assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
-    assert!(repeated.content.contains("not repeated"));
+    assert!(repeated.content.contains("Unchanged read replay"));
     assert!(!repeated.content.contains(&first.content));
 }
 
@@ -3716,7 +3791,7 @@ async fn repeated_over_limit_truncated_read_preserves_metadata_and_recovery_arti
         Some(artifact)
     );
     assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
-    assert!(repeated.content.contains("not repeated"));
+    assert!(repeated.content.contains("Unchanged read replay"));
     assert!(repeated.content.contains(artifact));
     assert!(!repeated.content.contains(&first.content));
 }

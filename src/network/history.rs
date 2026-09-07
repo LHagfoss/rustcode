@@ -102,6 +102,7 @@ fn duplicate_file_read_key(content: &str) -> Option<String> {
     let header = body.lines().next()?;
     if !header.starts_with("[File: ")
         || body.contains("[Truncated:")
+        || body.contains("[Unchanged read replay:")
         || body.starts_with("[Unchanged since")
     {
         return None;
@@ -773,5 +774,25 @@ mod tests {
 
         assert_eq!(serde_json::to_string(&turn_two).unwrap(), before);
         assert_eq!(&second_render[..first_render.len()], &first_render[..]);
+    }
+
+    #[test]
+    fn compact_replayed_read_does_not_replace_the_original_result() {
+        let history = vec![
+            ChatMessage::new(
+                "tool",
+                "view_file: [File: src/lib.rs, Lines 1 to 2 of 2]\n1: original\n2: result",
+            ),
+            ChatMessage::new(
+                "tool",
+                "view_file: [File: src/lib.rs, Lines 1 to 2 of 2]\n[Unchanged read replay: fingerprint=abc; range=src/lib.rs lines 1 to 2 of 2. The earlier result contains this unchanged output.]",
+            ),
+        ];
+
+        assert!(redundant_tool_result_indices(&history, 0).is_empty());
+        let messages = to_messages(&history, "system");
+        let rendered = serde_json::to_string(&messages).expect("render history");
+        assert!(rendered.contains("1: original"));
+        assert!(rendered.contains("Unchanged read replay"));
     }
 }
