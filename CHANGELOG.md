@@ -1,3 +1,13 @@
+## [v0.51.8](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.8) - 2026-09-07
+
+### Fixes
+# v0.51.8 — Fixes
+
+- Fix batch validation attribution so schema errors map to the failing tool-call ID only (#982).
+- Raise the mutating batch limit from 1 to 4 and exempt read-only shell inspection from the budget (#983).
+- Bound loop recovery to 3 rounds, gate cross-turn diagnostics on real stagnation, and keep autonomous turns on round/token budgets (#984).
+- Keep prompt history immutable under pruning pressure via head-compaction and render-time dedup (#985).
+- Drop emoji prefixes from YOLO notices and info text.
 ## [v0.51.7](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.7) - 2026-09-06
 
 ### Fixes
