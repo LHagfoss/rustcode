@@ -3968,7 +3968,15 @@ fn acceptance_context_modal_renders_usage_and_breakdown() {
         .iter()
         .position(|line| line.contains("Token usage by category"))
         .expect("category header should be rendered");
+    let free_space_row = lines
+        .iter()
+        .position(|line| line.contains("Free space"))
+        .expect("free-space row should be rendered");
     assert_eq!(summary_row, header_row + 3);
     assert_eq!(first_grid_row, summary_row);
     assert_eq!(category_header_row, summary_row + 2);
+    assert!(
+        21usize.saturating_sub(free_space_row + 1) <= 1,
+        "context modal should not leave a large gap after its stats: free_space_row={free_space_row}, rendered={rendered:?}"
+    );
 }
