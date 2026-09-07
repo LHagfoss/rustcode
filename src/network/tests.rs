@@ -3719,18 +3719,40 @@ async fn repeated_truncated_read_preserves_structured_truncation() {
 }
 
 #[tokio::test]
-async fn repeated_unchanged_view_file_keeps_first_result_and_compacts_replay() {
+async fn repeated_unchanged_small_view_file_replays_cached_body() {
+    let state = Arc::new(Mutex::new(AppState::new()));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("small.txt");
+    std::fs::write(&file, "first line\nrecoverable body\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+    let call = test_tool_call("view_file", serde_json::json!({"path": path}));
+
+    let first = run_one_tool_with_state(&state, call.clone()).await;
+    let repeated = run_one_tool_with_state(&state, call).await;
+
+    assert!(first.metadata.success, "got: {}", first.content);
+    assert!(!first.metadata.replayed);
+    assert!(repeated.metadata.success, "got: {}", repeated.content);
+    assert!(repeated.metadata.replayed);
+    assert!(repeated.content.contains("recoverable body"));
+    assert!(repeated.content.contains("Unchanged read replay"));
+    assert!(repeated.content.len() <= 50 * 1024);
+    assert_eq!(repeated.metadata.inspection, first.metadata.inspection);
+}
+
+#[tokio::test]
+async fn repeated_unchanged_large_cached_view_file_stays_bounded() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("source.rs");
-    let content: String = (1..=400)
-        .map(|line| format!("line {line}: fn function_{line}() {{}}\n"))
+    let content: String = (1..=800)
+        .map(|line| format!("line {line}: {}\n", "x".repeat(13)))
         .collect();
     std::fs::write(&file, content).expect("write");
     let path = file.to_string_lossy().to_string();
     let call = test_tool_call(
         "view_file",
-        serde_json::json!({"path": path, "start_line": 1, "end_line": 400}),
+        serde_json::json!({"path": path, "start_line": 1, "end_line": 800}),
     );
 
     let first = run_one_tool_with_state(&state, call.clone()).await;
@@ -3739,19 +3761,24 @@ async fn repeated_unchanged_view_file_keeps_first_result_and_compacts_replay() {
     assert!(first.metadata.success, "got: {}", first.content);
     assert!(!first.metadata.replayed);
     assert!(
-        first.content.len() > 8_000,
+        first.content.len() > 20_000,
         "fixture did not exercise the regression"
+    );
+    assert!(
+        first.content.len() <= REPLAYABLE_READ_LIMIT,
+        "fixture must remain cacheable: {} bytes",
+        first.content.len()
     );
     assert!(repeated.metadata.success, "got: {}", repeated.content);
     assert!(repeated.metadata.replayed);
     assert!(
-        repeated.content.len() < 1_000,
-        "replayed read was not compact: {} bytes",
+        repeated.content.len() <= 50 * 1024,
+        "replayed read exceeded the context limit: {} bytes",
         repeated.content.len()
     );
-    assert!(!repeated.content.contains("function_200"));
+    assert!(repeated.content.contains("line 200:"));
     assert!(repeated.content.contains("fingerprint="));
-    assert!(repeated.content.contains("Lines 1 to 400"));
+    assert!(repeated.content.contains("Lines 1 to 800"));
     assert!(repeated.content.contains("earlier result"));
     assert!(repeated.content.contains("start_line/end_line"));
     assert_eq!(
@@ -3768,12 +3795,12 @@ async fn repeated_unchanged_view_file_keeps_first_result_and_compacts_replay() {
     );
 
     // History stores the original body and the compact replay as separate
-    // durable results; request rendering must retain both without inflating
-    // the replay back into the original body.
+    // durable results; request rendering must retain the canonical first body
+    // and the replay metadata.
     let first_history = tool_result_history_message(first.clone(), None);
     let repeated_history = tool_result_history_message(repeated.clone(), None);
-    assert!(first_history.content.contains("function_200"));
-    assert!(!repeated_history.content.contains("function_200"));
+    assert!(first_history.content.contains("line 200:"));
+    assert!(repeated_history.content.contains("line 200:"));
     assert!(
         repeated_history
             .tool_result
@@ -3783,7 +3810,7 @@ async fn repeated_unchanged_view_file_keeps_first_result_and_compacts_replay() {
     );
     let rendered = history::to_messages(&[first_history, repeated_history], "system");
     let rendered = serde_json::to_string(&rendered).expect("render history");
-    assert!(rendered.contains("function_200"));
+    assert!(rendered.contains("line 200:"));
     assert!(rendered.contains("Unchanged read replay"));
 }
 

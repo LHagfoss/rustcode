@@ -207,10 +207,11 @@ fn compact_reference_path(path: &str) -> String {
     bounded
 }
 
-/// Render the model-facing payload for an unchanged repeat without replaying
-/// the read body. The first result remains the source of truth in history;
-/// this payload only points back to it and gives the model an actionable way
-/// to request different evidence.
+/// Render the model-facing payload for an unchanged repeat. A bounded
+/// successful read body is included so the model can recover if the earlier
+/// result fell out of its active context; failures and truncated reads pass
+/// `None` and remain compact metadata-only replays. The first result remains
+/// the canonical source in history.
 pub(crate) fn compact_replayed_read_result(
     tool_name: &str,
     args: &serde_json::Value,
@@ -240,18 +241,19 @@ pub(crate) fn compact_replayed_read_result(
         .and_then(|content| content.lines().next())
         .filter(|line| parse_view_header(line).is_some())
         .map(|line| line.to_string());
-    let mut reference = header.unwrap_or_default();
-    if !reference.is_empty() {
-        reference.push('\n');
-    }
-    reference.push_str(&format!(
+    let notice = format!(
         "[Unchanged read replay: tool={tool_name}; fingerprint={fingerprint}; range={range}. "
-    ));
-    reference.push_str(
-        "The earlier result contains this unchanged output; use it instead of repeating the read. ",
-    );
-    reference
-        .push_str("Request a different start_line/end_line range or use grep for new evidence.]");
+    ) + "The earlier result contains this unchanged output; use it instead of repeating the read. "
+        + "Request a different start_line/end_line range or use grep for new evidence.]";
+
+    let mut reference = previous_content
+        .map(str::to_owned)
+        .or(header)
+        .unwrap_or_default();
+    if !reference.is_empty() {
+        reference.push_str("\n\n");
+    }
+    reference.push_str(&notice);
     reference
 }
 

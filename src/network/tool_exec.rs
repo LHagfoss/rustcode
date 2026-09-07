@@ -814,7 +814,9 @@ pub(crate) async fn execute_tool_batch(
                     s.recent_read_outputs.insert(
                         sig.clone(),
                         crate::app::CachedReadOutput {
-                            replayable_content: (execution.content.len() <= REPLAYABLE_READ_LIMIT)
+                            replayable_content: (execution.success
+                                && !execution.truncated
+                                && execution.content.len() <= REPLAYABLE_READ_LIMIT)
                                 .then(|| execution.content.clone()),
                             success: execution.success,
                             exit_code: execution.exit_code,
