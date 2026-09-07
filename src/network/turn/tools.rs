@@ -14,14 +14,14 @@ use super::super::tool_exec::{
 };
 use super::super::verification;
 use super::super::{
-    FORCE_ANSWER_PROMPT, LOOP_RECOVERY_PROMPT, LoopRecoveryAction, active_todo_checkpoint,
-    cached_compiler_check, call_refs_for, compiler_diagnostic_fingerprint,
-    completion_block_message, completion_claims_unapplied_work, failure_replan_message,
-    is_mutating_tool, loop_recovery_action, mutation_made_progress, push_or_replace_loop_warning,
+    FORCE_ANSWER_PROMPT, LoopRecoveryAction, active_todo_checkpoint, cached_compiler_check,
+    call_refs_for, compiler_diagnostic_fingerprint, completion_block_message,
+    completion_claims_unapplied_work, failure_replan_message, is_mutating_tool,
+    loop_recovery_action, mutation_made_progress, push_or_replace_loop_warning,
     truncated_batch_summary_with_dropped, unanswered_call_results,
     unanswered_call_results_with_kind, update_compiler_diagnostic_streak,
 };
-use super::recovery::record_malformed_call;
+use super::recovery::{loop_recovery_prompt, record_malformed_call};
 use super::{
     TurnContext, append_cancelled_batch_results, hydrate_explicit_verification_from_history,
 };
@@ -437,8 +437,13 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         msg.thought_tokens = thought_tokens;
                         s.history.push(msg);
                         ctx.response.final_content_persisted = true;
-                        s.history
-                            .push(ChatMessage::new("system", LOOP_RECOVERY_PROMPT));
+                        let recovery_prompt = loop_recovery_prompt(
+                            &s.history,
+                            ctx.progress.made_edits,
+                            ctx.compiler.consecutive_diagnostics > 0
+                                || ctx.compiler.consecutive_error_gates > 0,
+                        );
+                        s.history.push(ChatMessage::new("system", recovery_prompt));
                         crate::config::save_history(&s.history);
                         s.clear_current_response();
                         s.status = AppStatus::Streaming;
@@ -1133,9 +1138,15 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         ctx.metrics.evidence_recoveries += 1;
                         ctx.recovery.loop_detector.reset();
                         ctx.recovery.reasoning_loop_detector.reset();
+                        let recovery_prompt = loop_recovery_prompt(
+                            &s.history,
+                            ctx.progress.made_edits,
+                            ctx.compiler.consecutive_diagnostics > 0
+                                || ctx.compiler.consecutive_error_gates > 0,
+                        );
                         s.history.push(ChatMessage::new(
                             "system",
-                            format!("{evidence}\n{LOOP_RECOVERY_PROMPT}"),
+                            format!("{evidence}\n{recovery_prompt}"),
                         ));
                         crate::config::save_history(&s.history);
                         s.clear_current_response();

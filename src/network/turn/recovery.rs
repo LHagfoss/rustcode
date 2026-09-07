@@ -1,4 +1,5 @@
 use super::TurnContext;
+use crate::app::ChatMessage;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 fn malformed_call_fingerprint(raw_content: &str, calls: &[crate::tools::ToolCall]) -> String {
@@ -33,6 +34,117 @@ pub(crate) fn record_malformed_call(
 
 pub(super) fn reasoning_loop_final_response() -> &'static str {
     "I stopped after repeated reasoning to avoid looping. Please review the current changes and continue from there."
+}
+
+/// Whether the latest user request explicitly asks the agent to change the
+/// workspace. Restrict this to the latest user message so prior conversation
+/// turns cannot accidentally turn a read-only investigation into a mutation
+/// mandate.
+fn explicit_workspace_change_request(prompt: &str) -> bool {
+    let normalized = prompt.to_ascii_lowercase();
+    if [
+        "do not edit",
+        "don't edit",
+        "do not change",
+        "don't change",
+        "do not modify",
+        "don't modify",
+        "without changing",
+        "without editing",
+        "read-only",
+        "read only",
+        "review only",
+        "only inspect",
+        "just inspect",
+        "just review",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+        || normalized.contains("how do i")
+        || normalized.contains("how can i")
+        || normalized.contains("how should i")
+        || normalized.contains("what should")
+        || normalized.contains("should we")
+    {
+        return false;
+    }
+
+    normalized
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|word| !word.is_empty())
+        .any(|word| {
+            matches!(
+                word,
+                "add"
+                    | "apply"
+                    | "create"
+                    | "delete"
+                    | "edit"
+                    | "fix"
+                    | "implement"
+                    | "modify"
+                    | "move"
+                    | "patch"
+                    | "refactor"
+                    | "remove"
+                    | "rename"
+                    | "replace"
+                    | "rework"
+                    | "rewrite"
+                    | "update"
+                    | "write"
+                    | "change"
+                    | "changes"
+            )
+        })
+}
+
+/// Select the recovery policy from the task, while preserving the ordinary
+/// recovery path for read-only work and compiler debugging. Compiler state is
+/// supplied by the caller because diagnostics can be discovered by a tool
+/// result rather than by the user's wording.
+pub(super) fn loop_recovery_prompt(
+    history: &[ChatMessage],
+    made_edits: bool,
+    compiler_debugging: bool,
+) -> &'static str {
+    task_aware_recovery_prompt(
+        history,
+        made_edits,
+        compiler_debugging,
+        super::super::LOOP_RECOVERY_PROMPT,
+    )
+}
+
+fn reasoning_loop_recovery_prompt(
+    history: &[ChatMessage],
+    made_edits: bool,
+    compiler_debugging: bool,
+) -> &'static str {
+    task_aware_recovery_prompt(
+        history,
+        made_edits,
+        compiler_debugging,
+        super::super::REASONING_LOOP_RECOVERY_PROMPT,
+    )
+}
+
+fn task_aware_recovery_prompt(
+    history: &[ChatMessage],
+    made_edits: bool,
+    compiler_debugging: bool,
+    ordinary_prompt: &'static str,
+) -> &'static str {
+    let explicit_change = history
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .is_some_and(|message| explicit_workspace_change_request(&message.content));
+    if explicit_change && !made_edits && !compiler_debugging {
+        super::super::WORKSPACE_CHANGE_LOOP_RECOVERY_PROMPT
+    } else {
+        ordinary_prompt
+    }
 }
 
 pub(super) fn completed_inspection_synthesis(
@@ -89,7 +201,7 @@ pub(super) async fn handle_response_recovery(
     use super::super::text::{self, strip_tool_call_syntax};
     use super::super::{
         EMPTY_RESPONSE_RECOVERY_PROMPT, LoopRecoveryAction, MAX_REASONING_RECOVERY_ROUNDS,
-        REASONING_LOOP_RECOVERY_PROMPT, reasoning_loop_recovery_action,
+        reasoning_loop_recovery_action,
     };
     use crate::app::{AppStatus, ChatMessage, StreamTracker};
     if ctx.response.final_content.is_empty() && native_tool_calls_empty {
@@ -182,8 +294,13 @@ pub(super) async fn handle_response_recovery(
                 msg.thought_tokens = thought_tokens;
                 s.history.push(msg);
                 ctx.response.final_content_persisted = true;
-                s.history
-                    .push(ChatMessage::new("system", REASONING_LOOP_RECOVERY_PROMPT));
+                let recovery_prompt = reasoning_loop_recovery_prompt(
+                    &s.history,
+                    ctx.progress.made_edits,
+                    ctx.compiler.consecutive_diagnostics > 0
+                        || ctx.compiler.consecutive_error_gates > 0,
+                );
+                s.history.push(ChatMessage::new("system", recovery_prompt));
                 crate::config::save_history(&s.history);
                 s.clear_current_response();
                 s.status = AppStatus::Streaming;
@@ -248,15 +365,68 @@ pub(super) async fn handle_response_recovery(
 
 #[cfg(test)]
 mod tests {
-    use super::{completed_inspection_synthesis, reasoning_loop_final_response};
+    use super::{
+        completed_inspection_synthesis, loop_recovery_prompt, reasoning_loop_final_response,
+        reasoning_loop_recovery_prompt,
+    };
+    use crate::app::ChatMessage;
     use crate::network::TurnContext;
     use crate::network::stream::{FinalAnswerBoundary, ProviderFinalAnswerState};
+    use crate::network::{LOOP_RECOVERY_PROMPT, REASONING_LOOP_RECOVERY_PROMPT};
 
     fn completed_inspection_context(content: &str) -> TurnContext {
         let mut ctx = TurnContext::new();
         ctx.progress.complete_inspection_results = 4;
         ctx.response.final_content = content.to_string();
         ctx
+    }
+
+    #[test]
+    fn explicit_change_recovery_requires_mutation_or_focused_exit() {
+        let history = vec![ChatMessage::new(
+            "user",
+            "The current state is clear; maybe we should rework stuff now.",
+        )];
+        let prompt = loop_recovery_prompt(&history, false, false);
+        assert!(prompt.contains("exactly one concrete, safe mutating tool call"));
+        assert!(prompt.contains("one focused question"));
+        assert!(prompt.contains("Do not inspect, search, reread"));
+    }
+
+    #[test]
+    fn read_only_and_compiler_recovery_keep_existing_guidance() {
+        let read_only_history = vec![ChatMessage::new(
+            "user",
+            "Inspect the codebase and report the current architecture.",
+        )];
+        assert_eq!(
+            loop_recovery_prompt(&read_only_history, false, false),
+            LOOP_RECOVERY_PROMPT
+        );
+
+        let question_history = vec![ChatMessage::new(
+            "user",
+            "What should I change to improve this implementation?",
+        )];
+        assert_eq!(
+            loop_recovery_prompt(&question_history, false, false),
+            LOOP_RECOVERY_PROMPT
+        );
+
+        assert_eq!(
+            reasoning_loop_recovery_prompt(&read_only_history, false, false),
+            REASONING_LOOP_RECOVERY_PROMPT
+        );
+
+        let change_history = vec![ChatMessage::new("user", "Please rework the parser.")];
+        assert_eq!(
+            loop_recovery_prompt(&change_history, false, true),
+            LOOP_RECOVERY_PROMPT
+        );
+        assert_eq!(
+            loop_recovery_prompt(&change_history, true, false),
+            LOOP_RECOVERY_PROMPT
+        );
     }
 
     #[test]

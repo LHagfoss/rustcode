@@ -129,6 +129,12 @@ Do not repeat the same tool call or the same exact edit. Re-read a broader file 
 then use a grounded approach. Use the active tool interface directly; never print tool-call syntax as prose. \
 If the requested change is already present or cannot be applied safely, explain that instead of retrying. Repeated stagnation consumes the bounded recovery budget, after which the harness requests a final text answer.";
 
+/// Recovery directive for a task that explicitly asks for workspace changes
+/// but has not produced a successful edit yet. This is intentionally a
+/// separate prompt: broad inspection is healthy for read-only tasks, but can
+/// turn an already-grounded change request into an unbounded read loop.
+pub(crate) const WORKSPACE_CHANGE_LOOP_RECOVERY_PROMPT: &str = "The user explicitly requested a workspace change, but no edit has been applied. Recovery is limited to one next step: emit exactly one concrete, safe mutating tool call using the evidence already gathered, or ask one focused question / give a final response explaining the blocker. Do not inspect, search, reread, or broaden scope before that step. Do not repeat a no-op or failed edit; if the known target is not safe to change, stop and explain.";
+
 pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. Use the bounded reasoning budget for these recovery attempts. Do not read files again or restate the requirements. If the user requested workspace changes, emit exactly one mutating tool call now using what you already learned. Otherwise, give the direct final answer.]";
 
 /// Bounded recovery nudges before the harness asks for a final text answer.
