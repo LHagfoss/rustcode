@@ -81,6 +81,14 @@ fn is_read_only_category(name: &str, category: &str) -> bool {
     )
 }
 
+/// Classify a concrete call using the same normalized category as the loop
+/// detector. This lets recovery keep tools available for a batch made only of
+/// inspection calls, including stable read-only git commands.
+pub fn is_read_only_call(name: &str, args: &Value) -> bool {
+    let (_, category) = signatures(name, args);
+    is_read_only_category(name, &category)
+}
+
 /// Classify a shell command that only inspects stable repository state. These
 /// checks may legitimately repeat while the model is orienting itself, so the
 /// progress ledger should not treat their identical output as a failed edit.

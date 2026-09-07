@@ -200,8 +200,7 @@ pub(super) async fn handle_response_recovery(
     use super::super::loop_detect;
     use super::super::text::{self, strip_tool_call_syntax};
     use super::super::{
-        EMPTY_RESPONSE_RECOVERY_PROMPT, LoopRecoveryAction, MAX_REASONING_RECOVERY_ROUNDS,
-        reasoning_loop_recovery_action,
+        EMPTY_RESPONSE_RECOVERY_PROMPT, LoopRecoveryAction, reasoning_loop_recovery_action,
     };
     use crate::app::{AppStatus, ChatMessage, StreamTracker};
     if ctx.response.final_content.is_empty() && native_tool_calls_empty {
@@ -270,13 +269,13 @@ pub(super) async fn handle_response_recovery(
         }
         ctx.recovery.reasoning_loops_detected += 1;
         dbg_log!(
-            "Reasoning loop detected during stream (attempt {}/{})",
+            "Reasoning loop detected during stream (recovery attempt {})",
             ctx.recovery.reasoning_recovery_attempts + 1,
-            MAX_REASONING_RECOVERY_ROUNDS
         );
         match reasoning_loop_recovery_action(ctx.recovery.reasoning_recovery_attempts) {
             LoopRecoveryAction::Recover => {
-                ctx.recovery.reasoning_recovery_attempts += 1;
+                ctx.recovery.reasoning_recovery_attempts =
+                    ctx.recovery.reasoning_recovery_attempts.saturating_add(1);
                 ctx.recovery.reasoning_recovery_pending = true;
                 ctx.recovery.reasoning_loop_detector.reset();
                 crate::logger::operational_event(
