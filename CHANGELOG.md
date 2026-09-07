@@ -1,3 +1,8 @@
+## [v0.51.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.10) - 2026-09-07
+
+### Fixes
+- Pass configured environment variables to MCP server processes and capture their stderr in debug logs.
+- Fail pending MCP requests promptly when a server exits, with regression coverage for environment forwarding and early shutdown.
 ## [v0.51.9](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.9) - 2026-09-07
 
 ### Fixes

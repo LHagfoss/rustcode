@@ -197,10 +197,39 @@ fn render_snapshot_preserves_existing_ui_output() {
     // These fixtures are the independent rendering oracle: changing the
     // snapshot renderer changes a terminal cell and fails this test.
     fn expand_golden_fixture(fixture: &str) -> String {
+        let version = env!("CARGO_PKG_VERSION");
         fixture
             .trim_end()
             .replace('␠', " ")
-            .replace("v0.00.0", concat!("v", env!("CARGO_PKG_VERSION")))
+            .lines()
+            .map(|line| {
+                let Some(version_start) = line.find("v0.00.0") else {
+                    return line.to_owned();
+                };
+                let version_end = version_start + "v0.00.0".len();
+                let suffix = &line[version_end..];
+                let Some(border_start) = suffix.rfind('╮') else {
+                    return line.to_owned();
+                };
+
+                let fill_count = suffix[..border_start]
+                    .chars()
+                    .filter(|&character| character == '─')
+                    .count();
+                let version_delta = version.len() as isize - "0.00.0".len() as isize;
+                let adjusted_fill = (fill_count as isize - version_delta).max(0) as usize;
+                let trailing = &suffix[border_start + '╮'.len_utf8()..];
+
+                format!(
+                    "{}v{} {}╮{}",
+                    &line[..version_start],
+                    version,
+                    "─".repeat(adjusted_fill),
+                    trailing
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     let golden_outputs = [
