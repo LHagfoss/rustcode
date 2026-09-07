@@ -1,3 +1,8 @@
+## [v0.51.11](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.11) - 2026-09-07
+
+### Fixes
+- Fixed JSON Schema type-union validation for MCP and provider tool schemas.
+- Removed obsolete `.superpowers/` tracking from the repository.
 ## [v0.51.10](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.10) - 2026-09-07
 
 ### Fixes
