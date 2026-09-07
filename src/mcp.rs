@@ -90,17 +90,20 @@ impl McpClient {
         name: String,
         command: String,
         args: Vec<String>,
+        env: HashMap<String, String>,
     ) -> Result<Arc<Self>, String> {
         let mut child = Command::new(&command)
             .args(&args)
+            .envs(&env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to spawn MCP server {name}: {e}"))?;
 
         let stdin = child.stdin.take().ok_or("Failed to open stdin")?;
         let stdout = child.stdout.take().ok_or("Failed to open stdout")?;
+        let stderr = child.stderr.take().ok_or("Failed to open stderr")?;
 
         let (tx, mut rx) = mpsc::channel::<Value>(32);
         let pending = Arc::new(Mutex::new(HashMap::<
@@ -146,6 +149,18 @@ impl McpClient {
                         }
                     );
                 }
+            }
+            // Closing stdout means the server can no longer answer pending
+            // requests. Drop their senders so callers fail immediately
+            // instead of waiting for the request timeout.
+            pending_clone.lock().await.clear();
+        });
+
+        let stderr_name = name.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                crate::dbg_log!("[mcp:{stderr_name}] {line}");
             }
         });
 
@@ -286,8 +301,13 @@ pub async fn start_server_by_name(name: &str) -> Result<(), String> {
         }
         shutdown_server(name).await;
 
-        let client =
-            McpClient::start(srv_config.name.clone(), srv_config.command, srv_config.args).await?;
+        let client = McpClient::start(
+            srv_config.name.clone(),
+            srv_config.command,
+            srv_config.args,
+            srv_config.env,
+        )
+        .await?;
         if let Ok(mut reg) = get_mcp_registry().lock() {
             reg.insert(name.to_string(), client);
         }
@@ -415,6 +435,7 @@ mod tests {
             "mock_server".to_string(),
             "sh".to_string(),
             vec!["-c".to_string(), script.to_string()],
+            HashMap::new(),
         )
         .await;
 
@@ -427,5 +448,44 @@ mod tests {
         assert_eq!(tools[0].get("name").unwrap().as_str().unwrap(), "test_tool");
 
         client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_mcp_client_passes_configured_environment() {
+        let script = "test \"$MCP_TEST_ENV\" = forwarded || exit 3; read line; echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"}}}'; read line; read line; echo '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[]}}'";
+        let mut env = HashMap::new();
+        env.insert("MCP_TEST_ENV".to_string(), "forwarded".to_string());
+
+        let client = McpClient::start(
+            "env_server".to_string(),
+            "sh".to_string(),
+            vec!["-c".to_string(), script.to_string()],
+            env,
+        )
+        .await;
+
+        assert!(client.is_ok());
+        client.unwrap().shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_mcp_client_reports_server_exit_without_waiting_for_request_timeout() {
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            McpClient::start(
+                "exited_server".to_string(),
+                "sh".to_string(),
+                vec!["-c".to_string(), "exit 0".to_string()],
+                HashMap::new(),
+            ),
+        )
+        .await
+        .expect("server exit should be observed promptly");
+
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("an exited MCP server cannot complete startup"),
+        };
+        assert!(error.contains("Server closed connection"));
     }
 }
