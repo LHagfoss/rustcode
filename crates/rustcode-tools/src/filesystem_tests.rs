@@ -1,5 +1,43 @@
 use super::*;
 
+#[test]
+fn view_file_allows_env_example_and_ordinary_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_example = dir.path().join(".env.example");
+    let ordinary = dir.path().join("settings.txt");
+    std::fs::write(&env_example, "EXAMPLE_VALUE=placeholder\n").expect("write");
+    std::fs::write(&ordinary, "ordinary content\n").expect("write");
+
+    let env_example_output = view_file_tool(&serde_json::json!({
+        "path": env_example.to_string_lossy(),
+    }))
+    .expect(".env.example should be readable");
+    assert!(env_example_output.contains("EXAMPLE_VALUE=placeholder"));
+
+    let ordinary_output = view_file_tool(&serde_json::json!({
+        "path": ordinary.to_string_lossy(),
+    }))
+    .expect("ordinary files should be readable");
+    assert!(ordinary_output.contains("ordinary content"));
+}
+
+#[test]
+fn view_file_denies_secret_bearing_dotenv_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for file_name in [".env", ".env.local"] {
+        let path = dir.path().join(file_name);
+        std::fs::write(&path, "SECRET_VALUE=must_not_be_returned\n").expect("write");
+
+        let error = view_file_tool(&serde_json::json!({
+            "path": path.to_string_lossy(),
+        }))
+        .expect_err("secret-bearing dotenv files must be blocked");
+        assert!(error.contains("secret-bearing dotenv files are blocked"));
+        assert!(error.contains("configured environment or MCP tools"));
+        assert!(!error.contains("must_not_be_returned"));
+    }
+}
+
 // Regression: session 1785594233488. A read of exactly lines 1-1 ended with
 // "content truncated (use end_line or content_offset to read more)", so the
 // model believed it had missed something and re-read the same file four

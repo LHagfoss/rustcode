@@ -117,6 +117,19 @@ fn resolve(path: &str) -> PathBuf {
     resolve_tool_path(path)
 }
 
+const SECRET_DOTENV_READ_ERROR: &str = "native file reads of secret-bearing dotenv files are blocked; use configured environment or MCP tools instead";
+
+fn is_secret_dotenv_path(path: &std::path::Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    file_name == ".env"
+        || file_name
+            .strip_prefix(".env.")
+            .is_some_and(|suffix| suffix != "example")
+}
+
 pub fn delete_file(args: &Value) -> Result<String, String> {
     let path = args
         .get("path")
@@ -226,6 +239,9 @@ pub(super) fn view_file_output(args: &Value) -> Result<ViewFileOutput, String> {
         .and_then(|p| p.as_str())
         .ok_or("missing 'path' argument")?;
     let resolved_path = resolve(path);
+    if is_secret_dotenv_path(&resolved_path) {
+        return Err(format!("cannot read '{path}': {SECRET_DOTENV_READ_ERROR}"));
+    }
     if resolved_path.is_dir() {
         return super::search::list_directory_output(args).map(|output| ViewFileOutput {
             content: output.content,
