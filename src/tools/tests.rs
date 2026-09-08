@@ -288,6 +288,74 @@ fn provider_schema_removes_unsupported_json_schema_metadata_and_bounds() {
 }
 
 #[test]
+fn provider_schema_recursively_normalizes_union_type_arrays() {
+    fn contains_type_array(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.get("type").is_some_and(serde_json::Value::is_array)
+                    || object.values().any(contains_type_array)
+            }
+            serde_json::Value::Array(values) => values.iter().any(contains_type_array),
+            _ => false,
+        }
+    }
+
+    let canonical = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "folder": {
+                "type": ["string", "null"],
+                "format": "uri",
+                "minLength": 1
+            },
+            "attachments": {
+                "type": ["array", "null"],
+                "items": {
+                    "type": ["string", "null"],
+                    "enum": ["inline", null]
+                },
+                "minItems": 1
+            },
+            "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": ["integer", "null"],
+                    "minimum": 0
+                }
+            }
+        }
+    });
+    let original = canonical.clone();
+
+    let compatible = provider_compatible_schema(canonical.clone());
+
+    assert_eq!(canonical, original, "canonical schema must not be mutated");
+    assert!(contains_type_array(&canonical));
+    assert!(!contains_type_array(&compatible));
+    assert_eq!(
+        compatible["properties"]["folder"]["anyOf"],
+        serde_json::json!([
+            {"type": "string", "format": "uri", "minLength": 1},
+            {"type": "null"}
+        ])
+    );
+    assert_eq!(
+        compatible["properties"]["attachments"]["anyOf"][0]["items"]["anyOf"],
+        serde_json::json!([
+            {"type": "string", "enum": ["inline", null]},
+            {"type": "null"}
+        ])
+    );
+    assert_eq!(
+        compatible["properties"]["metadata"]["additionalProperties"]["anyOf"],
+        serde_json::json!([
+            {"type": "integer", "minimum": 0},
+            {"type": "null"}
+        ])
+    );
+}
+
+#[test]
 fn mcp_schema_selection_omits_irrelevant_tools_but_keeps_relevant_and_used() {
     let mcp = vec![
         (

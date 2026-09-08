@@ -643,6 +643,25 @@ pub(super) fn provider_compatible_schema(mut schema: Value) -> Value {
             for value in object.values_mut() {
                 *value = provider_compatible_schema(value.take());
             }
+            if object.get("type").is_some_and(Value::is_array) {
+                let Some(Value::Array(types)) = object.remove("type") else {
+                    unreachable!("type was checked as an array");
+                };
+                let branches = types
+                    .into_iter()
+                    .map(|schema_type| {
+                        let mut branch = if schema_type == "null" {
+                            serde_json::Map::new()
+                        } else {
+                            object.clone()
+                        };
+                        branch.insert("type".into(), schema_type);
+                        Value::Object(branch)
+                    })
+                    .collect();
+                object.clear();
+                object.insert("anyOf".into(), Value::Array(branches));
+            }
         }
         Value::Array(values) => {
             for value in values {
