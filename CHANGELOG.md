@@ -1,3 +1,9 @@
+## [v0.51.21](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.21) - 2026-09-08
+
+### Fixes
+- Normalize nullable and union MCP schemas for provider-compatible tool definitions.
+- Validate `anyOf` and `oneOf` arguments at runtime, including nullable fields and numeric bounds.
+- Treat progressive non-overlapping file reads as new inspection evidence while retaining exact-read loop protection.
 ## [v0.51.20](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.20) - 2026-09-08
 
 ### Fixes
