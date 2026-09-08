@@ -3,6 +3,7 @@ use crate::tools::{ToolCall, resolve_tool_calls};
 
 pub const MAX_CONTEXT_FRAGMENT_CHARS: usize = 16 * 1024;
 pub const MAX_CONTEXT_TAIL_CHARS: usize = 48 * 1024;
+const MAX_TOOL_CONTINUITY_CHARS: usize = 512;
 
 /// Provider-independent history representation. Persisted `ChatMessage`
 /// values remain backward-compatible, while requests are normalized through
@@ -315,7 +316,7 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
             let prose = super::text::strip_tool_call_syntax(&message.content);
             let prose = prose.trim();
             let content = if prose.is_empty() {
-                serde_json::Value::Null
+                serde_json::Value::String(tool_continuity_note(message))
             } else {
                 serde_json::Value::String(prose.to_string())
             };
@@ -356,6 +357,32 @@ fn structured_message(message: &ChatMessage) -> Option<serde_json::Value> {
     }
 }
 
+/// Keep a compact action breadcrumb when an assistant tool turn contained only
+/// private reasoning. The structured call remains the source of truth for its
+/// arguments; this note only makes the attempted action and resume intent
+/// explicit without replaying the reasoning itself.
+fn tool_continuity_note(message: &ChatMessage) -> String {
+    let mut names = String::new();
+    for call in &message.tool_calls {
+        if !names.is_empty() {
+            names.push_str(", ");
+        }
+        names.push('`');
+        names.push_str(&call.name);
+        names.push('`');
+    }
+    let mut note = format!(
+        "[Continuity: attempted {names}; use the tool result to continue the pending task without repeating this call unless needed.]"
+    );
+    if note.len() > MAX_TOOL_CONTINUITY_CHARS {
+        const SUFFIX: &str = "...; continue from the tool result.]";
+        let keep = MAX_TOOL_CONTINUITY_CHARS.saturating_sub(SUFFIX.len());
+        note.truncate(note.floor_char_boundary(keep));
+        note.push_str(SUFFIX);
+    }
+    note
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,7 +410,12 @@ mod tests {
         assert_eq!(msgs[1]["role"], "user");
         // The assistant message carries the call itself, not prose about it.
         assert_eq!(msgs[2]["role"], "assistant");
-        assert!(msgs[2]["content"].is_null());
+        assert!(
+            msgs[2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("attempted `grep`")
+        );
         assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_abc");
         assert_eq!(msgs[2]["tool_calls"][0]["function"]["name"], "grep");
         assert_eq!(
@@ -425,6 +457,56 @@ mod tests {
         // The call travels structurally, so its text form is not repeated.
         assert!(!content.contains("```tool"), "got: {content}");
         assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_1");
+    }
+
+    #[test]
+    fn think_only_tool_turns_get_safe_cross_round_continuity() {
+        let history = vec![
+            ChatMessage::new("user", "fix the parser"),
+            ChatMessage::new(
+                "assistant",
+                "<think>I found the bug. After this read I must edit the parser and test it.</think>",
+            )
+            .with_tool_calls(vec![crate::app::ToolCallRef {
+                id: "call_read".to_string(),
+                name: "view_file".to_string(),
+                arguments: r#"{"path":"src/parser.rs"}"#.to_string(),
+            }]),
+            ChatMessage::new("tool", "view_file: parser source")
+                .answering(Some("call_read".to_string())),
+        ];
+
+        let msgs = to_messages(&history, "sys");
+        let content = msgs[2]["content"].as_str().expect("continuity note");
+        assert!(content.contains("attempted `view_file`"), "got: {content}");
+        assert!(
+            content.contains("continue the pending task"),
+            "got: {content}"
+        );
+        assert!(!content.contains("I found the bug"), "got: {content}");
+        assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_read");
+        assert_eq!(msgs[3]["tool_call_id"], "call_read");
+    }
+
+    #[test]
+    fn think_only_tool_continuity_is_bounded_on_utf8_boundaries() {
+        let history = vec![
+            ChatMessage::new("user", "continue"),
+            ChatMessage::new("assistant", "<think>private plan</think>").with_tool_calls(vec![
+                crate::app::ToolCallRef {
+                    id: "call_large".to_string(),
+                    name: format!("inspect_{}", "🦀".repeat(MAX_TOOL_CONTINUITY_CHARS)),
+                    arguments: "{}".to_string(),
+                },
+            ]),
+            ChatMessage::new("tool", "inspect: done").answering(Some("call_large".to_string())),
+        ];
+
+        let msgs = to_messages(&history, "sys");
+        let content = msgs[2]["content"].as_str().expect("continuity note");
+        assert!(content.len() <= MAX_TOOL_CONTINUITY_CHARS);
+        assert!(content.ends_with("continue from the tool result.]"));
+        assert_eq!(msgs[2]["tool_calls"][0]["id"], "call_large");
     }
 
     #[test]

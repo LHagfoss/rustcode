@@ -2542,7 +2542,7 @@ fn loop_abort_allows_bounded_recoveries_before_forced_final() {
 }
 
 #[test]
-fn repeated_read_only_inspection_keeps_tools_available_until_round_limit() {
+fn repeated_read_only_inspection_has_a_larger_but_finite_recovery_budget() {
     let call = crate::tools::ToolCall {
         name: "view_file".to_string(),
         arguments: serde_json::json!({
@@ -2556,35 +2556,25 @@ fn repeated_read_only_inspection_keeps_tools_available_until_round_limit() {
     let read_only_batch = loop_detect::is_read_only_call(&call.name, &call.arguments);
     assert!(read_only_batch);
     let mut detector = loop_detect::LoopDetector::new(6);
-    let mut ctx = TurnContext::with_max_tool_rounds(8);
-
-    for round in 0..6 {
-        let status = detector.check_tool(&call.name, &exact, &category);
-        if round >= 2 {
-            assert!(
-                matches!(
-                    status,
-                    loop_detect::LoopStatus::Warning(_) | loop_detect::LoopStatus::Abort(_)
-                ),
-                "repeated inspection should produce an advisory status"
-            );
-            assert_eq!(
-                loop_recovery_action_for(ctx.recovery.loop_recovery_attempts, read_only_batch),
-                LoopRecoveryAction::Recover,
-                "inspection recovery must not force a final response"
-            );
-        }
-        ctx.recovery.loop_recovery_attempts = ctx.recovery.loop_recovery_attempts.saturating_add(1);
-        ctx.budget.tool_rounds += 1;
+    for _ in 0..6 {
+        let _ = detector.check_tool(&call.name, &exact, &category);
     }
 
-    assert!(!ctx.recovery.force_final);
-    assert!(turn_budget_exceeded(&ctx).is_none());
-    ctx.budget.tool_rounds = ctx.budget.max_tool_rounds;
-    assert!(matches!(
-        turn_budget_exceeded(&ctx),
-        Some(TurnBudgetLimit::ToolRounds(_))
-    ));
+    assert!(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS > MAX_LOOP_RECOVERY_ROUNDS);
+    assert_eq!(
+        loop_recovery_action_for(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS - 1, read_only_batch),
+        LoopRecoveryAction::Recover,
+        "a detected read loop gets one more chance than a mutating loop"
+    );
+    assert_eq!(
+        loop_recovery_action_for(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS, read_only_batch),
+        LoopRecoveryAction::ForceFinal,
+        "detector resets must not make read-only recovery unbounded"
+    );
+    assert_eq!(
+        loop_recovery_action_for(u8::MAX, read_only_batch),
+        LoopRecoveryAction::ForceFinal
+    );
 }
 
 #[test]
@@ -4950,9 +4940,7 @@ fn test_local_model_profile_completion_reserve_defaults() {
 }
 
 #[test]
-fn test_reasoning_loop_recovery_keeps_tools_available() {
-    // Reasoning repetition is advisory; the ordinary tool-round budget is the
-    // terminal safety limit.
+fn test_reasoning_loop_recovery_is_bounded() {
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
@@ -4968,6 +4956,10 @@ fn test_reasoning_loop_recovery_keeps_tools_available() {
     assert_eq!(
         reasoning_loop_recovery_action(3),
         LoopRecoveryAction::Recover
+    );
+    assert_eq!(
+        reasoning_loop_recovery_action(MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS),
+        LoopRecoveryAction::ForceFinal
     );
 }
 
@@ -5278,9 +5270,7 @@ fn test_adversarial_5_loop_fires_recovery_succeeds_with_edit_resets_state() {
 }
 
 #[test]
-fn test_adversarial_6_reasoning_recovery_keeps_tools_available() {
-    // Scenario 6: Loop detector fires, recovery loops again -> advisories keep
-    // the loop operational while the normal round budget prevents runaway.
+fn test_adversarial_6_reasoning_recovery_eventually_forces_final() {
     assert_eq!(
         reasoning_loop_recovery_action(0),
         LoopRecoveryAction::Recover
@@ -5299,7 +5289,7 @@ fn test_adversarial_6_reasoning_recovery_keeps_tools_available() {
     );
     assert_eq!(
         reasoning_loop_recovery_action(u8::MAX),
-        LoopRecoveryAction::Recover
+        LoopRecoveryAction::ForceFinal
     );
     assert!(REASONING_LOOP_RECOVERY_PROMPT.contains("exactly one mutating tool call"));
 }

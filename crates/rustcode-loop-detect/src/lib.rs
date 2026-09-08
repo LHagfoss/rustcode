@@ -206,39 +206,44 @@ pub fn read_target(name: &str, args: &Value) -> Option<(String, usize, Option<us
     }
     let command = args.get("command")?.as_str()?;
     let tokens = shell_tokens(command);
-    let command_index = tokens.iter().position(|token| {
-        matches!(
-            token.rsplit('/').next(),
-            Some("cat" | "sed" | "awk" | "nl" | "wc" | "od")
-        )
-    })?;
-    let bin = tokens[command_index].rsplit('/').next()?;
-    let segment_end = tokens[command_index + 1..]
-        .iter()
-        .position(|token| is_shell_operator(token))
-        .map_or(tokens.len(), |offset| command_index + 1 + offset);
-    let path = tokens
-        .get(command_index + 1..segment_end)?
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, token)| {
-            !token.is_empty()
-                && !token.starts_with('-')
-                && !token.contains('=')
-                && !token.contains('>')
+    let (command_index, cwd) = match tokens.as_slice() {
+        [cd, cwd, separator, ..] if cd == "cd" && separator == "&&" => (3, Some(cwd.as_str())),
+        _ => (0, None),
+    };
+    let remaining = tokens.get(command_index..)?;
+    if remaining.is_empty()
+        || remaining.iter().any(|token| {
+            matches!(token.as_str(), "||" | ";" | "&")
+                || token.starts_with('>')
+                || token.starts_with("2>")
         })
-        .map(|(_, token)| token)?;
-    let segment = &tokens[command_index..segment_end];
+    {
+        return None;
+    }
+    let commands: Vec<&[String]> = remaining.split(|token| token == "&&").collect();
+    if commands
+        .iter()
+        .any(|command| !is_read_only_shell_command(command))
+    {
+        return None;
+    }
+    let first = commands[0].split(|token| token == "|").next()?;
+    let bin = first[0].rsplit('/').next()?;
+    let path = if matches!(bin, "python" | "python3") {
+        parse_python_read(first)?
+    } else {
+        shell_read_path(first)?
+    };
     let (start, end) = match bin {
-        "sed" => segment[1..]
+        "sed" => first[1..]
             .iter()
             .find_map(|token| parse_sed_range(token))
             .unwrap_or((1, None)),
-        "awk" => parse_awk_range(&segment.join(" ")).unwrap_or((1, None)),
+        "awk" => parse_awk_range(&first.join(" ")).unwrap_or((1, None)),
+        "head" => (1, parse_line_count(first)),
         _ => (1, None),
     };
-    Some((normalize_shell_read_path(&tokens, path), start, end))
+    Some((normalize_shell_read_path(cwd, &path), start, end))
 }
 
 /// Return a canonical identity for a native or shell read. Keep an omitted
@@ -263,13 +268,29 @@ pub fn read_returns_content(name: &str, args: &Value) -> bool {
     shell_tokens(command)
         .iter()
         .find_map(|token| token.rsplit('/').next())
-        .is_some_and(|bin| matches!(bin, "cat" | "sed" | "awk" | "nl"))
+        .is_some_and(|bin| {
+            matches!(bin, "cat" | "head" | "tail" | "sed" | "awk" | "nl" | "xxd")
+                || matches!(bin, "python" | "python3") && read_target(name, args).is_some()
+        })
 }
 
-fn is_shell_operator(token: &str) -> bool {
-    matches!(token, "|" | "||" | "&&" | ";" | "&")
-        || token.starts_with('>')
-        || token.starts_with("2>")
+fn is_read_only_shell_command(command: &[String]) -> bool {
+    let stages: Vec<&[String]> = command.split(|token| token == "|").collect();
+    stages.iter().enumerate().all(|(index, stage)| {
+        let Some(bin) = stage.first().and_then(|token| token.rsplit('/').next()) else {
+            return false;
+        };
+        if matches!(bin, "python" | "python3") {
+            return index == 0 && stages.len() == 1 && parse_python_read(stage).is_some();
+        }
+        matches!(
+            bin,
+            "cat" | "head" | "tail" | "sed" | "awk" | "nl" | "wc" | "od" | "xxd" | "file"
+        ) && (index == 0 && shell_read_path(stage).is_some()
+            || index > 0
+                && matches!(bin, "head" | "tail" | "sed" | "awk" | "nl")
+                && shell_read_path(stage).is_none())
+    })
 }
 
 fn normalize_read_path(path: &str) -> String {
@@ -315,21 +336,85 @@ fn shell_tokens(command: &str) -> Vec<String> {
     tokens
 }
 
-fn normalize_shell_read_path(tokens: &[String], path: &str) -> String {
+fn normalize_shell_read_path(cwd: Option<&str>, path: &str) -> String {
     let mut path = normalize_read_path(path);
     // `cd /project && cat src/x` and `cat /project/src/x` are the same
     // inspection. Relative `cd` prefixes are retained too: they are stable
     // within the command and avoid treating `cd src && cat config.ts` as an
     // unrelated root-level read.
     if !Path::new(&path).is_absolute()
-        && tokens.first().is_some_and(|token| token == "cd")
-        && let Some(cwd) = tokens.get(1)
+        && let Some(cwd) = cwd
         && !cwd.is_empty()
     {
         path = Path::new(cwd).join(path).to_string_lossy().into_owned();
         path = normalize_read_path(&path);
     }
     path
+}
+
+fn shell_read_path(stage: &[String]) -> Option<String> {
+    let bin = stage.first()?.rsplit('/').next()?;
+    let mut skip_value = false;
+    let positional: Vec<&String> = stage[1..]
+        .iter()
+        .filter(|token| {
+            if skip_value {
+                skip_value = false;
+                return false;
+            }
+            if (matches!(bin, "head" | "tail") && matches!(token.as_str(), "-n" | "--lines"))
+                || (bin == "od" && matches!(token.as_str(), "-t" | "--format"))
+                || (bin == "xxd" && matches!(token.as_str(), "-c" | "-g" | "-l" | "-s"))
+            {
+                skip_value = true;
+                return false;
+            }
+            !token.starts_with('-')
+                && !token.contains('=')
+                && parse_sed_range(token).is_none()
+                && !token.starts_with("NR")
+        })
+        .collect();
+    (positional.len() == 1).then(|| positional[0].clone())
+}
+
+fn parse_line_count(stage: &[String]) -> Option<usize> {
+    stage.iter().skip(1).find_map(|token| {
+        token
+            .strip_prefix('-')
+            .filter(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+            .or_else(|| token.parse::<usize>().ok().map(|_| token.as_str()))
+            .and_then(|digits| digits.parse().ok())
+    })
+}
+
+fn parse_python_read(stage: &[String]) -> Option<String> {
+    if stage.len() != 3 || stage[1] != "-c" {
+        return None;
+    }
+    let code = stage[2].trim();
+    if code.contains(';') || code.contains('\n') || code.contains('\r') {
+        return None;
+    }
+    for (prefix, suffix) in [
+        ("print(open(", ").read())"),
+        ("open(", ").read()"),
+        ("print(Path(", ").read_text())"),
+        ("Path(", ").read_text()"),
+        ("print(Path(", ").read_bytes())"),
+        ("Path(", ").read_bytes()"),
+    ] {
+        if let Some(inner) = code
+            .strip_prefix(prefix)
+            .and_then(|s| s.strip_suffix(suffix))
+        {
+            let path = inner.trim().trim_matches(|c| c == '\'' || c == '"');
+            if !path.is_empty() && !path.contains(['(', ')', ',', ' ']) {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn parse_sed_range(token: &str) -> Option<(usize, Option<usize>)> {
