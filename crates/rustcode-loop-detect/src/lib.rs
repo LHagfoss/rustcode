@@ -881,6 +881,67 @@ struct HashTracker {
     count: usize,
 }
 
+/// Tracks consecutive reads of the same region, independent of whether the
+/// caller used a native tool or an equivalent shell command.
+#[derive(Default)]
+struct ReadRangeTracker {
+    last: Option<(String, usize, Option<usize>)>,
+    count: usize,
+}
+
+impl ReadRangeTracker {
+    fn record(&mut self, target: &(String, usize, Option<usize>)) -> usize {
+        if self
+            .last
+            .as_ref()
+            .is_some_and(|previous| substantially_overlaps(previous, target))
+        {
+            self.count += 1;
+        } else {
+            self.count = 1;
+        }
+        self.last = Some(target.clone());
+        self.count
+    }
+}
+
+fn substantially_overlaps(
+    left: &(String, usize, Option<usize>),
+    right: &(String, usize, Option<usize>),
+) -> bool {
+    if left.0 != right.0 {
+        return false;
+    }
+    // An omitted end means the read continues through EOF. Model it as an
+    // open-ended range so `cat file` and `head -n 80 file` still overlap,
+    // while a later progressive page remains disjoint from an earlier page.
+    let left_end = left.2.unwrap_or(usize::MAX);
+    let right_end = right.2.unwrap_or(usize::MAX);
+    let overlap_start = left.1.max(right.1);
+    let overlap_end = left_end.min(right_end);
+    if overlap_start > overlap_end {
+        return false;
+    }
+    let overlap = overlap_end.saturating_sub(overlap_start).saturating_add(1);
+    let shorter = left_end
+        .saturating_sub(left.1)
+        .saturating_add(1)
+        .min(right_end.saturating_sub(right.1).saturating_add(1));
+    overlap.saturating_mul(2) >= shorter
+}
+
+fn read_target_from_exact(name: &str, exact: &str) -> Option<(String, usize, Option<usize>)> {
+    let args = exact.strip_prefix(name)?.strip_prefix(':')?;
+    read_target(name, &serde_json::from_str(args).ok()?)
+}
+
+fn range_category(target: &(String, usize, Option<usize>)) -> String {
+    let end = target
+        .2
+        .map_or_else(|| "full".to_string(), |end| end.to_string());
+    format!("read:{}:{}-{end}", target.0, target.1)
+}
+
 impl HashTracker {
     fn record(&mut self, value: &str) -> usize {
         let mut h = DefaultHasher::new();
@@ -954,7 +1015,8 @@ pub struct LoopDetector {
     failed_category: ConsecutiveTracker,
     output: HashTracker,
     frequency: FrequencyTracker,
-    cross_read_category: Option<String>,
+    read_ranges: ReadRangeTracker,
+    cross_read_target: Option<(String, usize, Option<usize>)>,
     cross_read_methods: HashSet<String>,
     warn: usize,
     abort: usize,
@@ -971,7 +1033,8 @@ impl LoopDetector {
             failed_category: ConsecutiveTracker::default(),
             output: HashTracker::default(),
             frequency: FrequencyTracker::new(abort * 2),
-            cross_read_category: None,
+            read_ranges: ReadRangeTracker::default(),
+            cross_read_target: None,
             cross_read_methods: HashSet::new(),
             warn: abort.div_ceil(2),
             abort,
@@ -996,12 +1059,34 @@ impl LoopDetector {
     /// aborting and disabling tools — unless they spin to 3× the abort
     /// threshold, which is a real hang rather than legitimate re-reading.
     pub fn check_tool(&mut self, name: &str, exact: &str, category: &str) -> LoopStatus {
-        let status = self.check(exact, category);
-        if category.starts_with("read:") {
-            if self.cross_read_category.as_deref() != Some(category) {
-                self.cross_read_category = Some(category.to_string());
+        let read_target = category
+            .starts_with("read:")
+            .then(|| read_target_from_exact(name, exact))
+            .flatten();
+        let status = if let Some(target) = read_target.as_ref() {
+            let exact_count = self.exact.record(exact);
+            if exact_count >= 3 {
+                LoopStatus::Abort(exact_count)
+            } else {
+                let range_category = range_category(target);
+                let n = exact_count
+                    .max(self.category.record(&range_category))
+                    .max(self.frequency.record(&range_category))
+                    .max(self.read_ranges.record(target));
+                self.classify(n)
+            }
+        } else {
+            self.check(exact, category)
+        };
+        if let Some(target) = read_target {
+            if !self
+                .cross_read_target
+                .as_ref()
+                .is_some_and(|previous| substantially_overlaps(previous, &target))
+            {
                 self.cross_read_methods.clear();
             }
+            self.cross_read_target = Some(target);
             self.cross_read_methods.insert(read_method(name, exact));
             // Do not abort before the result is available. The result handler
             // may have authoritative write/range evidence that can ground a
@@ -1011,7 +1096,7 @@ impl LoopDetector {
                 return LoopStatus::Warning(self.cross_read_methods.len());
             }
         } else {
-            self.cross_read_category = None;
+            self.cross_read_target = None;
             self.cross_read_methods.clear();
         }
         if is_read_only_category(name, category)
@@ -1049,7 +1134,8 @@ impl LoopDetector {
         self.failed_category = ConsecutiveTracker::default();
         self.output = HashTracker::default();
         self.frequency = FrequencyTracker::new(self.abort * 2);
-        self.cross_read_category = None;
+        self.read_ranges = ReadRangeTracker::default();
+        self.cross_read_target = None;
         self.cross_read_methods.clear();
     }
 
