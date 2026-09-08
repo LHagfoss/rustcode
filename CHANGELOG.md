@@ -1,3 +1,9 @@
+## [v0.51.18](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.18) - 2026-09-08
+
+### Fixes
+- Preserve provider request prefixes across tool rounds to improve KV-cache reuse and reduce repeated context prefill.
+- Add safe detached server/watcher execution and prevent nested shell background jobs from hanging RustCode output pipes.
+- Keep detached processes tracked, killable, and cleaned up with their session.
 ## [v0.51.17](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.17) - 2026-09-08
 
 ### Fixes
