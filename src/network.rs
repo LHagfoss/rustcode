@@ -18,8 +18,8 @@ pub(crate) use helpers::{classify_tool_msg, count_tokens, parse_sse_line};
 #[path = "network/messages.rs"]
 pub(crate) mod messages;
 pub(crate) use messages::{
-    attach_request_context_tail, inject_bootstrap_action_nudge, inject_system_reminder,
-    trim_msgs_to_budget,
+    RequestPrefixCache, attach_request_context_tail, inject_bootstrap_action_nudge,
+    inject_system_reminder, trim_msgs_to_budget,
 };
 
 #[path = "network/text.rs"]
@@ -857,6 +857,25 @@ pub(crate) async fn prepare_turn_request_with_checkpoint(
     cancel_token: &tokio_util::sync::CancellationToken,
     checkpoint: ContextCheckpoint,
 ) -> Result<Vec<serde_json::Value>, String> {
+    prepare_turn_request_with_checkpoint_and_prefix_cache(
+        client,
+        state,
+        tool_rounds,
+        cancel_token,
+        checkpoint,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
+    client: &reqwest::Client,
+    state: &Arc<Mutex<AppState>>,
+    tool_rounds: usize,
+    cancel_token: &tokio_util::sync::CancellationToken,
+    checkpoint: ContextCheckpoint,
+    mut prefix_cache: Option<&mut RequestPrefixCache>,
+) -> Result<Vec<serde_json::Value>, String> {
     // Try AI-driven compaction if history is long enough.
     //
     // The summarizer is a network round-trip, so the AppState mutex must NOT be
@@ -1183,12 +1202,20 @@ pub(crate) async fn prepare_turn_request_with_checkpoint(
         dynamic_context.push_str("\n\n");
     }
     dynamic_context.push_str(&volatile_block);
-    let mut msgs = history::to_messages(&history_snapshot, system_prompt.clone());
+    let rendered_history = history::to_messages(&history_snapshot, system_prompt.clone());
 
-    // Attach turn-varying context to the tail so the static system prefix
-    // and historical conversation remain cache-stable. Done before budget
-    // trimming so its size counts toward the budget.
-    attach_request_context_tail(&mut msgs, &dynamic_context);
+    // Preserve the complete previous request before appending newly rendered
+    // assistant/tool messages. A fresh runtime snapshot remains at the tail.
+    // The checkpoint is per-turn and automatically falls back after compaction
+    // or any other rewrite of the provider-rendered history.
+    let mut msgs = prefix_cache
+        .as_deref()
+        .map(|cache| cache.compose(&rendered_history, &dynamic_context))
+        .unwrap_or_else(|| {
+            let mut messages = rendered_history.clone();
+            attach_request_context_tail(&mut messages, &dynamic_context);
+            messages
+        });
 
     let (native_tool_schemas, context_budget) = {
         let mut s = state.lock().await;
@@ -1256,6 +1283,14 @@ pub(crate) async fn prepare_turn_request_with_checkpoint(
                     dropped
                 ),
             ));
+        }
+    }
+
+    if let Some(cache) = prefix_cache.as_deref_mut() {
+        if dropped == 0 {
+            cache.record(rendered_history, &msgs);
+        } else {
+            cache.clear();
         }
     }
 
