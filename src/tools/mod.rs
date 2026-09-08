@@ -454,6 +454,40 @@ fn validate_value_against_schema(
     path: &str,
     string_integers: bool,
 ) -> Result<(), String> {
+    for keyword in ["anyOf", "oneOf"] {
+        let Some(branches) = schema.get(keyword).and_then(Value::as_array) else {
+            continue;
+        };
+        let results = branches
+            .iter()
+            .map(|branch| validate_value_against_schema(value, branch, path, string_integers))
+            .collect::<Vec<_>>();
+        let matching = results.iter().filter(|result| result.is_ok()).count();
+        let valid = match keyword {
+            "anyOf" => matching > 0,
+            "oneOf" => matching == 1,
+            _ => unreachable!(),
+        };
+        if !valid {
+            if matching > 1 {
+                return Err(format!(
+                    "{path} must match exactly one oneOf branch, but matched {matching}"
+                ));
+            }
+            let failures = results
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, result)| {
+                    result
+                        .err()
+                        .map(|error| format!("branch {}: {error}", index + 1))
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(format!("{path} does not match {keyword} ({failures})"));
+        }
+    }
+
     // JSON Schema permits either a single type string or an array of types.
     // schemars emits the latter for optional MCP fields such as
     // `{"type":["integer","null"]}`. Treat the array as a union instead of
@@ -461,28 +495,58 @@ fn validate_value_against_schema(
     let expected_types: Vec<&str> = match schema.get("type") {
         Some(Value::String(expected)) => vec![expected.as_str()],
         Some(Value::Array(expected)) => expected.iter().filter_map(Value::as_str).collect(),
+        _ if schema.get("anyOf").is_some() || schema.get("oneOf").is_some() => Vec::new(),
         _ => vec!["object"],
     };
-    let type_matches = expected_types.iter().any(|expected| match *expected {
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        "string" => value.is_string(),
-        "boolean" => value.is_boolean(),
-        "null" => value.is_null(),
-        // Built-in handlers read line numbers through parse_json_number, which
-        // also accepts string-encoded integers from lenient providers. MCP
-        // tools receive arguments verbatim with no such coercion, so the
-        // leniency is scoped to built-ins only.
-        "integer" => {
-            value.as_i64().is_some()
-                || value.as_u64().is_some()
-                || (string_integers && value.as_str().is_some_and(|s| s.parse::<u64>().is_ok()))
-        }
-        "number" => value.is_number(),
-        _ => true,
-    });
+    let type_matches = expected_types.is_empty()
+        || expected_types.iter().any(|expected| match *expected {
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "string" => value.is_string(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            // Built-in handlers read line numbers through parse_json_number, which
+            // also accepts string-encoded integers from lenient providers. MCP
+            // tools receive arguments verbatim with no such coercion, so the
+            // leniency is scoped to built-ins only.
+            "integer" => {
+                value.as_i64().is_some()
+                    || value.as_u64().is_some()
+                    || (string_integers && value.as_str().is_some_and(|s| s.parse::<u64>().is_ok()))
+            }
+            "number" => value.is_number(),
+            _ => true,
+        });
     if !type_matches {
         return Err(format!("{path} must be {}", expected_types.join(" or ")));
+    }
+
+    let numeric_value = value.as_f64().or_else(|| {
+        string_integers
+            .then(|| value.as_str()?.parse::<f64>().ok())
+            .flatten()
+    });
+    if let Some(actual) = numeric_value {
+        if let Some(bound) = schema.get("minimum").and_then(Value::as_f64)
+            && actual < bound
+        {
+            return Err(format!("{path} must be >= {bound}"));
+        }
+        if let Some(bound) = schema.get("maximum").and_then(Value::as_f64)
+            && actual > bound
+        {
+            return Err(format!("{path} must be <= {bound}"));
+        }
+        if let Some(bound) = schema.get("exclusiveMinimum").and_then(Value::as_f64)
+            && actual <= bound
+        {
+            return Err(format!("{path} must be > {bound}"));
+        }
+        if let Some(bound) = schema.get("exclusiveMaximum").and_then(Value::as_f64)
+            && actual >= bound
+        {
+            return Err(format!("{path} must be < {bound}"));
+        }
     }
 
     if let Some(object) = value.as_object() {

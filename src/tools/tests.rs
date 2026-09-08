@@ -1790,6 +1790,84 @@ fn validation_accepts_json_schema_union_types() {
 }
 
 #[test]
+fn validation_accepts_nullable_strings_expressed_with_any_of() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "folder": {
+                "anyOf": [{"type": "string"}, {"type": "null"}]
+            }
+        }
+    });
+
+    for value in [serde_json::json!("inbox"), serde_json::Value::Null] {
+        assert!(
+            validate_value_against_schema(
+                &serde_json::json!({"folder": value}),
+                &schema,
+                "$",
+                false
+            )
+            .is_ok()
+        );
+    }
+
+    let error =
+        validate_value_against_schema(&serde_json::json!({"folder": 42}), &schema, "$", false)
+            .expect_err("numbers must not satisfy a nullable string schema");
+    assert!(error.contains("$.folder does not match anyOf"));
+    assert!(error.contains("branch 1: $.folder must be string"));
+    assert!(error.contains("branch 2: $.folder must be null"));
+}
+
+#[test]
+fn validation_enforces_one_of_branch_count_and_reports_invalid_values() {
+    let nullable_string = serde_json::json!({
+        "oneOf": [{"type": "string"}, {"type": "null"}]
+    });
+    assert!(
+        validate_value_against_schema(&serde_json::json!("inbox"), &nullable_string, "$", false)
+            .is_ok()
+    );
+    assert!(
+        validate_value_against_schema(&serde_json::Value::Null, &nullable_string, "$", false)
+            .is_ok()
+    );
+
+    let error =
+        validate_value_against_schema(&serde_json::json!(false), &nullable_string, "$", false)
+            .expect_err("booleans must not satisfy a nullable string schema");
+    assert!(error.contains("$ does not match oneOf"));
+    assert!(error.contains("branch 1: $ must be string"));
+    assert!(error.contains("branch 2: $ must be null"));
+
+    let overlapping = serde_json::json!({
+        "oneOf": [{"type": "string"}, {"type": ["string", "null"]}]
+    });
+    assert_eq!(
+        validate_value_against_schema(&serde_json::json!("inbox"), &overlapping, "$", false)
+            .unwrap_err(),
+        "$ must match exactly one oneOf branch, but matched 2"
+    );
+
+    let constrained_number = serde_json::json!({
+        "oneOf": [
+            {"type": "integer", "maximum": 0},
+            {"type": "integer", "minimum": 1}
+        ]
+    });
+    assert!(
+        validate_value_against_schema(&serde_json::json!(2), &constrained_number, "$", false)
+            .is_ok()
+    );
+    let error =
+        validate_value_against_schema(&serde_json::json!(0.5), &constrained_number, "$", false)
+            .expect_err("a non-integer must fail both constrained integer branches");
+    assert!(error.contains("branch 1: $ must be integer"));
+    assert!(error.contains("branch 2: $ must be integer"));
+}
+
+#[test]
 fn validation_rejects_unknown_duplicate_and_mixed_calls() {
     let valid = ToolCall {
         name: "grep".to_string(),
