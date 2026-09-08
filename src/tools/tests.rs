@@ -224,6 +224,23 @@ fn native_tools_schema_covers_builtins_and_agent_tools() {
 }
 
 #[test]
+fn run_command_schema_distinguishes_waited_background_from_detached_servers() {
+    let run_command = native_tools_schema(false)
+        .into_iter()
+        .find(|tool| tool["function"]["name"] == "run_command")
+        .expect("run_command is advertised");
+    let function = &run_command["function"];
+    let properties = &function["parameters"]["properties"];
+    assert_eq!(properties["background"]["default"], false);
+    assert_eq!(properties["detached"]["default"], false);
+    assert!(
+        function["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("detached=true"))
+    );
+}
+
+#[test]
 fn native_tool_schema_variants_are_stable_across_reuse() {
     assert_eq!(
         native_tools_schema(false),

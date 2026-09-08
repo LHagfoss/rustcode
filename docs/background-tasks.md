@@ -25,6 +25,13 @@ Short discovery commands such as simple file or environment inspection may be
 kept in the foreground even when `background` is requested. Background mode is
 primarily for long-running or mutating commands.
 
+For a development server or watcher that should not pause the model turn, use
+`detached: true` (with or without `background: true`). RustCode returns a
+completed start result with the task ID, discards server output, and keeps the
+process group tracked for `manage_task` and session cleanup. A command with a
+standalone shell `&` and `background: true` is treated the same way; do not add
+`&` when using `detached: true`.
+
 ## Waiting and task management
 
 Completion notifications are automatic. Do not repeatedly call `manage_task`

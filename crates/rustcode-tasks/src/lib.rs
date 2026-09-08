@@ -361,6 +361,9 @@ struct Inner {
     /// A consumer can therefore perform a final non-blocking drain after a
     /// quiescent check without racing an already-removed task's event.
     publication: Mutex<()>,
+    /// Wakes callers waiting for a background process to publish its PID or
+    /// reach a terminal state.
+    start_wakeup: std::sync::Condvar,
     next_id: AtomicU64,
 }
 
@@ -408,6 +411,7 @@ impl TaskManager {
                 subscribers: Mutex::new(Vec::new()),
                 terminal_ids: Mutex::new(TerminalIds::default()),
                 publication: Mutex::new(()),
+                start_wakeup: std::sync::Condvar::new(),
                 next_id: AtomicU64::new(1),
             }),
             terminator,
@@ -468,6 +472,36 @@ impl TaskManager {
         start_barrier: TaskStartBarrier,
     ) -> Result<TaskHandle, String> {
         self.spawn_with_task_id(id.into(), spec, Some(start_barrier))
+    }
+
+    /// Wait until the task's child PID has been published, or until the task
+    /// reaches a terminal state. This is useful for a sequential tool batch:
+    /// a command that follows a background start should not race the worker
+    /// thread before it has even spawned the process.
+    pub fn wait_until_started(&self, id: impl AsRef<str>, timeout: std::time::Duration) {
+        let id = TaskId::new(id.as_ref());
+        let deadline = Instant::now() + timeout;
+        let mut tasks = self.inner.tasks.lock().expect("task state mutex poisoned");
+        loop {
+            let still_starting = tasks.get(&id).is_some_and(|task| {
+                matches!(task.state, TaskState::Starting | TaskState::CancelRequested)
+            });
+            if !still_starting {
+                return;
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return;
+            };
+            let (guard, timed_out) = self
+                .inner
+                .start_wakeup
+                .wait_timeout(tasks, remaining)
+                .expect("task state mutex poisoned");
+            tasks = guard;
+            if timed_out.timed_out() {
+                return;
+            }
+        }
     }
 
     fn spawn_with_task_id(
@@ -707,6 +741,7 @@ impl TaskManager {
                 }
             }
         };
+        self.inner.start_wakeup.notify_all();
         if let Some(event) = started_event {
             self.publish(event);
         }
@@ -822,6 +857,7 @@ impl TaskManager {
             };
             (event, barrier)
         };
+        self.inner.start_wakeup.notify_all();
         self.publish_after_barrier(event, barrier);
     }
 
@@ -987,6 +1023,29 @@ mod tests {
 
         barrier.release();
         assert!(matches!(events.recv().unwrap(), TaskEvent::Finished { .. }));
+    }
+
+    #[test]
+    fn waiting_for_start_does_not_change_completion_event_semantics() {
+        let manager = TaskManager::new(FakeTerminator::succeeding());
+        let events = manager.subscribe();
+        let task = manager
+            .spawn_with_id(
+                "start-wait-completion",
+                TaskSpec::new("session", test_request("printf done")),
+            )
+            .unwrap();
+
+        manager.wait_until_started(task.id(), Duration::from_secs(2));
+        assert!(matches!(
+            events.recv().unwrap(),
+            TaskEvent::Started { id, .. } if id == *task.id()
+        ));
+        assert!(matches!(
+            events.recv().unwrap(),
+            TaskEvent::Finished { id, output: Ok(_), .. } if id == *task.id()
+        ));
+        assert!(manager.list("session").is_empty());
     }
 
     #[test]
