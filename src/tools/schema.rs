@@ -704,6 +704,106 @@ fn tool_name_was_used(name: &str, messages: &[Value]) -> bool {
     })
 }
 
+fn user_message_mentions_name(messages: &[Value], name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    messages.iter().any(|message| {
+        if message.get("role").and_then(Value::as_str) != Some("user") {
+            return false;
+        }
+        let content = message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let mut offset = 0;
+        while let Some(found) = content[offset..].find(&name) {
+            let start = offset + found;
+            let end = start + name.len();
+            let before_is_name_char = content[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            let after_is_name_char = content[end..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            if !before_is_name_char && !after_is_name_char {
+                return true;
+            }
+            offset = end;
+        }
+        false
+    })
+}
+
+fn canonical_mcp_server(name: &str) -> Option<&str> {
+    name.strip_prefix("mcp__")?
+        .split_once("__")
+        .map(|(server, _)| server)
+}
+
+/// Find MCP schemas named by the user, including every tool from a named MCP
+/// server. This intentionally reads user messages only: assistant/tool output
+/// can describe a tool without being an instruction to make its whole server
+/// sticky.
+fn explicitly_requested_mcp_tool_names(
+    tools: &[(String, String, Value)],
+    messages: &[Value],
+) -> std::collections::HashSet<String> {
+    let mut requested = std::collections::HashSet::new();
+    for (name, _, _) in tools {
+        if user_message_mentions_name(messages, name)
+            || canonical_mcp_server(name)
+                .is_some_and(|server| user_message_mentions_name(messages, server))
+        {
+            requested.insert(name.clone());
+        }
+    }
+
+    // Unique MCP tool names are intentionally sent without a server prefix.
+    // Recover their server here so an explicit server name still pins them.
+    if let Ok(registry) = crate::mcp::get_mcp_registry().lock() {
+        let mut clients = registry.values().cloned().collect::<Vec<_>>();
+        clients.sort_by(|left, right| left.name.cmp(&right.name));
+        for client in &clients {
+            let server_requested = user_message_mentions_name(messages, &client.name)
+                || user_message_mentions_name(
+                    messages,
+                    &client
+                        .name
+                        .chars()
+                        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                        .collect::<String>(),
+                );
+            if !server_requested {
+                continue;
+            }
+            let Ok(client_tools) = client.get_tools() else {
+                continue;
+            };
+            for tool in client_tools {
+                let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let provider_name =
+                    mcp_canonical_name_for_clients(&client.name, raw_name, &clients);
+                if tools.iter().any(|(name, _, _)| name == &provider_name)
+                    || tools.iter().any(|(name, _, _)| name == raw_name)
+                {
+                    requested.insert(
+                        tools
+                            .iter()
+                            .find(|(name, _, _)| name == &provider_name || name == raw_name)
+                            .map(|(name, _, _)| name.clone())
+                            .unwrap_or(provider_name),
+                    );
+                }
+            }
+        }
+    }
+    requested
+}
+
 fn mcp_tool_relevance(
     name: &str,
     description: &str,
@@ -759,10 +859,14 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
     let terms = context_terms(messages);
+    let explicitly_requested = explicitly_requested_mcp_tool_names(tools, messages);
+    let mut requested = Vec::new();
     let mut previous = Vec::new();
     let mut relevant = Vec::new();
     for (index, (name, description, schema)) in tools.iter().enumerate() {
-        if tool_name_was_used(name, messages) {
+        if explicitly_requested.contains(name) {
+            requested.push(index);
+        } else if tool_name_was_used(name, messages) {
             previous.push(index);
         } else {
             let score = mcp_tool_relevance(name, description, schema, &terms);
@@ -775,6 +879,7 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
             }
         }
     }
+    requested.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
     previous.sort_by(|left, right| tools[*left].0.cmp(&tools[*right].0));
     relevant.sort_by(|(left_index, left_score), (right_index, right_score)| {
         right_score
@@ -782,19 +887,28 @@ pub(super) fn select_mcp_tools_for_context_in_phase(
             .then_with(|| tools[*left_index].0.cmp(&tools[*right_index].0))
     });
 
-    let mut selected = previous
+    let mut selected = requested
         .iter()
         .copied()
         .take(MAX_MCP_NATIVE_SCHEMAS)
         .collect::<Vec<_>>();
-    let previously_used_count = selected.len();
+    selected.extend(
+        previous
+            .iter()
+            .copied()
+            .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(selected.len())),
+    );
+    let previously_used_count = selected.len().saturating_sub(requested.len());
     selected.extend(
         relevant
             .iter()
             .map(|(index, _)| *index)
             .take(MAX_MCP_NATIVE_SCHEMAS.saturating_sub(selected.len())),
     );
-    let relevant_count = selected.len().saturating_sub(previously_used_count);
+    let relevant_count = selected
+        .iter()
+        .filter(|index| !requested.contains(index) && !previous.contains(index))
+        .count();
     let mut fallback_count = 0;
     if selected.is_empty() && phase == ToolSchemaPhase::Established {
         for preferred in MCP_DISCOVERY_CORE {
@@ -849,24 +963,48 @@ pub(super) fn select_mcp_tools_for_context_with_sticky_in_phase(
     sticky_names: &[String],
     phase: ToolSchemaPhase,
 ) -> (Vec<usize>, McpSchemaSelectionStats) {
-    let (mut selected, mut stats) = select_mcp_tools_for_context_in_phase(tools, messages, phase);
+    let (selected, mut stats) = select_mcp_tools_for_context_in_phase(tools, messages, phase);
     if sticky_names.is_empty() {
         return (selected, stats);
     }
 
+    let explicitly_requested = explicitly_requested_mcp_tool_names(tools, messages);
+    let mut pinned_indices = explicitly_requested
+        .iter()
+        .filter_map(|name| tools.iter().position(|(tool_name, _, _)| tool_name == name))
+        .collect::<Vec<_>>();
+    pinned_indices.sort_unstable();
+    let sticky_indices = sticky_names
+        .iter()
+        .filter_map(|name| tools.iter().position(|(tool_name, _, _)| tool_name == name))
+        .collect::<Vec<_>>();
     let mut selected_indices = std::collections::HashSet::with_capacity(selected.len());
-    selected_indices.extend(selected.iter().copied());
-    for name in sticky_names {
-        if selected.len() >= MAX_MCP_NATIVE_SCHEMAS {
+    let mut prioritized = Vec::with_capacity(selected.len());
+    for index in pinned_indices {
+        if selected_indices.insert(index) {
+            prioritized.push(index);
+        }
+        if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
             break;
         }
-        let Some(index) = tools.iter().position(|(tool_name, _, _)| tool_name == name) else {
-            continue;
-        };
+    }
+    for index in sticky_indices {
         if selected_indices.insert(index) {
-            selected.push(index);
+            prioritized.push(index);
+        }
+        if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
+            break;
         }
     }
+    for index in selected {
+        if prioritized.len() >= MAX_MCP_NATIVE_SCHEMAS {
+            break;
+        }
+        if selected_indices.insert(index) {
+            prioritized.push(index);
+        }
+    }
+    let mut selected = prioritized;
     selected.sort_unstable();
     stats.selected = selected.len();
     stats.omitted = tools.len().saturating_sub(selected.len());

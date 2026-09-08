@@ -572,6 +572,8 @@ struct PromptCacheKey {
 /// changes when the protocol, agent mode, or MCP tool set changes. This caches
 /// it and rebuilds lazily only when [`PromptCacheKey`] moves. Native schemas are
 /// selected per request from the current conversation and explicit schema policy.
+/// MCP names selected during a request remain sticky so explicitly requested
+/// schemas survive later tool rounds of the same session.
 #[derive(Default)]
 pub struct PromptCache {
     key: Option<PromptCacheKey>,
@@ -580,6 +582,10 @@ pub struct PromptCache {
     mcp_selection_generation: u64,
     mcp_selection_policy: Option<crate::tools::ToolSchemaPolicy>,
     mcp_selection_session_id: Option<String>,
+    mcp_selection_user_count: Option<usize>,
+    /// The last request's MCP menu. The schema selector prioritizes this list,
+    /// which keeps explicit user-requested MCP tools available across rounds
+    /// even when a later round has a full relevance-ranked menu.
     mcp_selected_names: Vec<String>,
 }
 
@@ -632,15 +638,25 @@ impl PromptCache {
         crate::tools::McpSchemaSelectionStats,
     ) {
         let generation = crate::mcp::mcp_generation();
+        let user_message_count = messages
+            .iter()
+            .filter(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("user")
+            })
+            .count();
         if self.mcp_selection_generation != generation
             || self.mcp_selection_policy != Some(policy)
             || self.mcp_selection_session_id.as_deref() != Some(session_id)
+            || self
+                .mcp_selection_user_count
+                .is_some_and(|previous| user_message_count > previous)
         {
             self.mcp_selected_names.clear();
             self.mcp_selection_generation = generation;
             self.mcp_selection_policy = Some(policy);
             self.mcp_selection_session_id = Some(session_id.to_string());
         }
+        self.mcp_selection_user_count = Some(user_message_count);
 
         let result = crate::tools::native_tools_schema_for_context_with_sticky_at(
             policy,

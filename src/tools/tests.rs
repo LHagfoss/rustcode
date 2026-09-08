@@ -443,6 +443,97 @@ fn mcp_schema_selection_retains_sticky_tools_and_adds_newly_relevant_tools() {
 }
 
 #[test]
+fn explicitly_named_mcp_server_tools_are_pinned_across_a_wrong_tool_round() {
+    let distractor_terms = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda";
+    let mut mcp = (0..16)
+        .map(|index| {
+            (
+                format!("mcp__other_server__tool_{index:02}"),
+                distractor_terms.to_string(),
+                serde_json::json!({"type":"object","properties":{}}),
+            )
+        })
+        .collect::<Vec<_>>();
+    mcp.extend([
+        (
+            "mcp__requested_server__alpha".to_string(),
+            "Unrelated tool".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+        (
+            "mcp__requested_server__beta".to_string(),
+            "Unrelated tool".to_string(),
+            serde_json::json!({"type":"object","properties":{}}),
+        ),
+    ]);
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Use MCP server requested_server for alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
+    })];
+
+    let (first, first_stats) = select_mcp_tools_for_context(&mcp, &messages);
+    assert!(first_stats.selected <= MAX_MCP_NATIVE_SCHEMAS);
+    assert!(first.contains(&16));
+    assert!(first.contains(&17));
+
+    let follow_up = [
+        messages[0].clone(),
+        serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [{"function":{"name":"grep"}}]
+        }),
+        serde_json::json!({"role":"tool","content":"grep completed"}),
+    ];
+    let (second, second_stats) =
+        select_mcp_tools_for_context_with_sticky(&mcp, &follow_up, &first_stats.selected_names);
+    assert!(second_stats.selected <= MAX_MCP_NATIVE_SCHEMAS);
+    assert!(second.contains(&16));
+    assert!(second.contains(&17));
+
+    let old_turn_menu = mcp[..MAX_MCP_NATIVE_SCHEMAS]
+        .iter()
+        .map(|(name, _, _)| name.clone())
+        .collect::<Vec<_>>();
+    let (new_turn, new_turn_stats) =
+        select_mcp_tools_for_context_with_sticky(&mcp, &messages, &old_turn_menu);
+    assert!(new_turn_stats.selected <= MAX_MCP_NATIVE_SCHEMAS);
+    assert!(new_turn.contains(&16));
+    assert!(new_turn.contains(&17));
+}
+
+#[test]
+fn explicitly_named_mcp_tool_is_pinned_before_relevance_selection() {
+    let distractor_terms = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda";
+    let mut mcp = (0..16)
+        .map(|index| {
+            (
+                format!("mcp__other_server__tool_{index:02}"),
+                distractor_terms.to_string(),
+                serde_json::json!({"type":"object","properties":{}}),
+            )
+        })
+        .collect::<Vec<_>>();
+    mcp.push((
+        "mcp__requested_server__send_email".to_string(),
+        "Unrelated tool".to_string(),
+        serde_json::json!({"type":"object","properties":{}}),
+    ));
+    let messages = vec![serde_json::json!({
+        "role": "user",
+        "content": "Call mcp__requested_server__send_email"
+    })];
+
+    let (selected, stats) = select_mcp_tools_for_context(&mcp, &messages);
+    assert_eq!(selected.len(), MAX_MCP_NATIVE_SCHEMAS);
+    assert!(selected.contains(&16));
+    assert!(
+        stats
+            .selected_names
+            .contains(&"mcp__requested_server__send_email".to_string())
+    );
+}
+
+#[test]
 fn native_tools_schema_requires_explicit_delegation() {
     let disabled = native_tools_schema(false);
     let enabled = native_tools_schema(true);
