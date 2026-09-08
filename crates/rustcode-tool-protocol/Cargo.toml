@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-tool-protocol"
-version = "0.51.19"
+version = "0.51.20"
 edition = "2024"
 
 [dependencies]

@@ -1,3 +1,9 @@
+## [v0.51.20](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.20) - 2026-09-08
+
+### Fixes
+- Keep volatile runtime context at the end of each provider request so tool rounds preserve a stable cacheable prefix.
+- Preserve a compact continuity breadcrumb across think-only tool turns.
+- Detect semantically equivalent native and shell file rereads and recover bounded read-only loops earlier.
 ## [v0.51.19](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.19) - 2026-09-08
 
 ### Fixes
