@@ -755,36 +755,21 @@ mod tests {
         let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
         let session_a = manager.subscribe_session("root-session-a");
         let session_b = manager.subscribe_session("root-session-b");
+        let hold_open = if cfg!(target_os = "windows") {
+            "ping -n 2 127.0.0.1 > nul"
+        } else {
+            "sleep 1"
+        };
         let first = manager
             .spawn_with_id(
                 "root-session-task-a",
-                rustcode_tasks::TaskSpec::new(
-                    "root-session-a",
-                    task_request(
-                        if cfg!(target_os = "windows") {
-                            "echo a"
-                        } else {
-                            "printf a"
-                        },
-                        None,
-                    ),
-                ),
+                rustcode_tasks::TaskSpec::new("root-session-a", task_request(hold_open, None)),
             )
             .unwrap();
         let second = manager
             .spawn_with_id(
                 "root-session-task-b",
-                rustcode_tasks::TaskSpec::new(
-                    "root-session-b",
-                    task_request(
-                        if cfg!(target_os = "windows") {
-                            "echo b"
-                        } else {
-                            "printf b"
-                        },
-                        None,
-                    ),
-                ),
+                rustcode_tasks::TaskSpec::new("root-session-b", task_request(hold_open, None)),
             )
             .unwrap();
 
