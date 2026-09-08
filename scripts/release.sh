@@ -342,9 +342,12 @@ validate() {
         info "Resume mode: skipping greater-than check (bump may already be applied)."
     fi
 
-    # 2. Tag does not already exist (local and remote).
-    if git -C "$REPO_ROOT" tag --list "v$VERSION" | grep -q "^v$VERSION$" || \
-       git -C "$REPO_ROOT" ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+    # 2. Tag does not already exist (local and remote). A tag is expected when
+    # resuming at or after this phase, so it must not block the resume.
+    if ! at_or_after_phase tag && {
+        git -C "$REPO_ROOT" tag --list "v$VERSION" | grep -q "^v$VERSION$" || \
+        git -C "$REPO_ROOT" ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1;
+    }; then
         die "Tag v$VERSION already exists. Delete it or choose a different version."
     fi
 
@@ -1221,8 +1224,50 @@ run_tests() {
     fi
     FROM_PHASE="$saved_from_phase"
 
-    # Test 10: Release file scope lists real files only.
-    info "Test 10: Release file scope"
+    # Test 10: Existing tags reject fresh releases but allow resumes at or
+    # after the tag phase.
+    info "Test 10: Existing tag validation on resume"
+    local existing_tag existing_version
+    existing_tag="$(git -C "$REPO_ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)"
+    if [[ -z "$existing_tag" ]]; then
+        error "  ✗ No existing release tag available for validation test"
+        failed=$((failed + 1))
+    else
+        existing_version="${existing_tag#v}"
+        if (
+            VERSION="$existing_version"
+            get_current_version() { echo "0.0.0"; }
+            run() { :; }
+            git() {
+                if [[ "$*" == "-C $REPO_ROOT status --porcelain" ]]; then
+                    return 0
+                fi
+                if [[ "$*" == "-C $REPO_ROOT branch --show-current" ]]; then
+                    printf '%s\n' main
+                    return 0
+                fi
+                command git "$@"
+            }
+
+            FROM_PHASE=""
+            if (validate >/dev/null 2>&1); then
+                exit 1
+            fi
+
+            for phase in tag build release distribution; do
+                FROM_PHASE="$phase"
+                validate >/dev/null 2>&1 || exit 1
+            done
+        ); then
+            info "  ✓ Existing tags reject fresh releases and allow tag+ resumes"
+        else
+            error "  ✗ Existing tag validation regression"
+            failed=$((failed + 1))
+        fi
+    fi
+
+    # Test 11: Release file scope lists real files only.
+    info "Test 11: Release file scope"
     local scope scope_missing=0 scope_count=0 scope_file
     scope="$(release_files)"
     while IFS= read -r scope_file; do
