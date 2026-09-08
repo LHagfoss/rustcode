@@ -183,6 +183,7 @@ fn run_command_schema() -> Value {
             "command": { "type": "string" }, "cwd": { "type": "string" },
             "timeout_ms": { "type": "integer", "minimum": 1 },
             "background": { "type": "boolean", "default": false },
+            "detached": { "type": "boolean", "default": false },
             "env": { "type": "object", "additionalProperties": { "type": "string" } }
         }, "required": ["command"]
     })
@@ -190,8 +191,8 @@ fn run_command_schema() -> Value {
 
 pub const RUN_COMMAND: Tool = Tool {
     name: "run_command",
-    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
-    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool to run asynchronously in background (default false)"}"#,
+    description: "Run one command through the platform shell and return stdout/stderr and the exit code. Pipelines propagate failure from every stage. Supports normal shell syntax, an optional working directory, environment overrides, timeout (default 120s), and background execution. Use background=true for a blocking job when the model should pause until its completion notification. Use detached=true for a long-lived server or watcher: RustCode returns a completed start result with a task ID immediately, discards its output, and keeps the process group tracked for manage_task kill and session cleanup. A background command containing a shell-level '&' is treated as detached automatically so nested background processes cannot hold RustCode's output pipes open. Do not add '&' when using detached=true. Prefer `view_file` for pure file reads such as cat/sed/head/tail/awk and the native `grep` search tool for searching file contents; harmless inspection shells remain available when shell semantics are useful. Shell search is still available for advanced ripgrep flags, counts, or file-list modes. For external jobs, start the provider's blocking watch command once in the background; completion notifications arrive automatically, so never poll. Interactive sudo requiring a password is disabled.",
+    arguments: r#"{"command": "full shell command string", "cwd": "optional working directory", "timeout_ms": "optional timeout in ms", "background": "optional bool for asynchronous execution that pauses until completion (default false)", "detached": "optional bool for a long-lived server/watcher; returns a completed start result with task ID and keeps it killable (default false)"}"#,
     handler: run_command,
     requires_confirmation: true,
     schema: run_command_schema,
@@ -220,6 +221,77 @@ pub const MANAGE_TASK: Tool = Tool {
 };
 
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
+
+/// Return whether a command contains an unquoted shell background operator.
+/// This deliberately recognizes only a standalone `&`; `&&`, redirections,
+/// and quoted/escaped ampersands are not background jobs.
+#[cfg(not(target_os = "windows"))]
+fn has_shell_background_operator(command: &str) -> bool {
+    let bytes = command.as_bytes();
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escaped = false;
+
+    for (index, &byte) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' && !single_quote {
+            escaped = true;
+            continue;
+        }
+        if byte == b'\'' && !double_quote {
+            single_quote = !single_quote;
+            continue;
+        }
+        if byte == b'"' && !single_quote {
+            double_quote = !double_quote;
+            continue;
+        }
+        if byte != b'&' || single_quote || double_quote {
+            continue;
+        }
+
+        let previous = index.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+        let next = bytes.get(index + 1).copied();
+        let is_and = previous == Some(b'&') || next == Some(b'&');
+        let is_redirection = matches!(previous, Some(b'>') | Some(b'<'))
+            || matches!(next, Some(b'>') | Some(b'<') | Some(b'0'..=b'9'));
+        if !is_and && !is_redirection {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn has_shell_background_operator(_command: &str) -> bool {
+    // `cmd.exe` uses `&` as a command separator rather than as a portable
+    // background operator. Detached callers should use detached=true without
+    // adding shell syntax.
+    false
+}
+
+/// Keep a detached shell alive for its background children while ensuring no
+/// child inherits RustCode's output pipes. The shell remains the process-group
+/// leader, so the task manager can still terminate the complete group.
+#[cfg(not(target_os = "windows"))]
+fn detached_shell_command(command: &str, has_background_operator: bool) -> String {
+    if has_background_operator {
+        format!("{{ {command}; wait; }} </dev/null >/dev/null 2>&1")
+    } else {
+        format!("{{ {command}; }} </dev/null >/dev/null 2>&1")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn detached_shell_command(command: &str, _has_background_operator: bool) -> String {
+    // Keep cmd.exe alive for the process-tree terminator when a caller uses
+    // an explicit detached mode. The model-facing contract does not require
+    // Windows callers to embed `&`.
+    format!("({command}) <nul >nul 2>&1")
+}
 
 pub fn run_command(args: &Value) -> Result<String, String> {
     run_command_output(args).map(|output| output.content)
@@ -359,19 +431,30 @@ fn run_command_output_inner(
         }
     }
 
+    let background_requested = args
+        .get("background")
+        .and_then(parse_json_bool)
+        .unwrap_or(false);
+    let detached_requested = args
+        .get("detached")
+        .and_then(parse_json_bool)
+        .unwrap_or(false);
+    let has_background_operator = has_shell_background_operator(command_str);
+    let detached = detached_requested || (background_requested && has_background_operator);
+    let run_in_bg = (background_requested || detached_requested)
+        && (detached || !is_short_discovery_command(command_str));
     let command_request = rustcode_command::CommandRequest {
-        command: command_str.to_owned(),
+        command: if detached {
+            detached_shell_command(command_str, has_background_operator)
+        } else {
+            command_str.to_owned()
+        },
         cwd: resolved_cwd.clone(),
         env: command_env,
         timeout: Duration::from_millis(timeout_ms.max(1)),
         process_group: true,
     };
 
-    let run_in_bg = args
-        .get("background")
-        .and_then(parse_json_bool)
-        .unwrap_or(false)
-        && !is_short_discovery_command(command_str);
     if run_in_bg {
         let session_id = get_active_session_id().unwrap_or_default();
         let cmd_str = command_str.to_string();
@@ -385,7 +468,10 @@ fn run_command_output_inner(
         );
 
         let task_manager = background_task_manager();
-        let task_spec = TaskSpec::new(SessionId::new(session_id.clone()), command_request);
+        let mut task_spec = TaskSpec::new(SessionId::new(session_id.clone()), command_request);
+        // Keep the user-visible task identity useful even when the detached
+        // request uses an internal shell wrapper for pipe/process safety.
+        task_spec.command = cmd_str.clone();
         let task_spec = call_id
             .map(|call_id| task_spec.clone().with_call_id(call_id))
             .unwrap_or(task_spec);
@@ -403,6 +489,30 @@ fn run_command_output_inner(
                 release_background_start(call_id);
             }
             return Err(format!("failed to start background task: {error}"));
+        }
+
+        // Sequential tool batches execute the next call after this function
+        // returns. Wait only for the child PID publication, not completion, so
+        // a follow-up request can observe a process that really exists.
+        task_manager.wait_until_started(&task_id, Duration::from_secs(5));
+
+        if detached {
+            return Ok(super::ToolExecutionOutput {
+                content: format!(
+                    "Detached task started. Task ID: {task_id}. Status: Running. Command: {cmd_str}. Output is discarded; use manage_task kill to stop it."
+                ),
+                success: true,
+                pending: false,
+                command: Some(cmd_str),
+                // This is a completed *start* result, not the server's exit
+                // result; the eventual task event carries that separately.
+                exit_code: None,
+                truncated: false,
+                completeness: rustcode_core::ToolResultCompleteness::Complete,
+                replayed: false,
+                error_kind: None,
+                retryable: false,
+            });
         }
 
         return Ok(super::ToolExecutionOutput {
@@ -602,9 +712,10 @@ mod tests {
     use super::terminate_background_pid;
     use super::{
         cancel_result_message, command_confirmation_preview, command_confirmation_scope,
-        command_requires_confirmation, has_interactive_sudo, manage_task_tool,
-        reject_broad_git_stage, run_command, run_command_output, run_command_output_cancellable,
-        run_command_output_with_progress, task_event_to_tool_output,
+        command_requires_confirmation, has_interactive_sudo, has_shell_background_operator,
+        manage_task_tool, reject_broad_git_stage, run_command, run_command_output,
+        run_command_output_cancellable, run_command_output_with_progress,
+        task_event_to_tool_output,
     };
 
     #[cfg(unix)]
@@ -644,36 +755,21 @@ mod tests {
         let manager = rustcode_tasks::TaskManager::new(std::sync::Arc::new(|_| true));
         let session_a = manager.subscribe_session("root-session-a");
         let session_b = manager.subscribe_session("root-session-b");
+        let hold_open = if cfg!(target_os = "windows") {
+            "ping -n 2 127.0.0.1 > nul"
+        } else {
+            "sleep 1"
+        };
         let first = manager
             .spawn_with_id(
                 "root-session-task-a",
-                rustcode_tasks::TaskSpec::new(
-                    "root-session-a",
-                    task_request(
-                        if cfg!(target_os = "windows") {
-                            "echo a"
-                        } else {
-                            "printf a"
-                        },
-                        None,
-                    ),
-                ),
+                rustcode_tasks::TaskSpec::new("root-session-a", task_request(hold_open, None)),
             )
             .unwrap();
         let second = manager
             .spawn_with_id(
                 "root-session-task-b",
-                rustcode_tasks::TaskSpec::new(
-                    "root-session-b",
-                    task_request(
-                        if cfg!(target_os = "windows") {
-                            "echo b"
-                        } else {
-                            "printf b"
-                        },
-                        None,
-                    ),
-                ),
+                rustcode_tasks::TaskSpec::new("root-session-b", task_request(hold_open, None)),
             )
             .unwrap();
 
@@ -966,6 +1062,89 @@ mod tests {
             output.content
         );
         assert!(output.content.contains(command), "{}", output.content);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_background_operator_detection_ignores_quotes_redirections_and_and() {
+        assert!(has_shell_background_operator(
+            "python3 -m http.server 8080 &"
+        ));
+        assert!(has_shell_background_operator("server & echo ready"));
+        for command in [
+            "printf '&'",
+            "printf \"&\"",
+            "printf escaped\\&",
+            "printf one && printf two",
+            "printf out 2>&1",
+            "printf out &>file",
+        ] {
+            assert!(
+                !has_shell_background_operator(command),
+                "not a background operator: {command}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_server_start_is_completed_but_remains_tracked_and_killable() {
+        let session_id = format!(
+            "detached-server-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        super::super::set_active_session_id(Some(session_id.clone()));
+        let output = run_command_output(&serde_json::json!({
+            "command": "sleep 30",
+            "background": true,
+            "detached": true,
+        }))
+        .expect("detached server should start");
+        let snapshots = super::super::background_task_snapshots(&session_id);
+        let stop = super::super::stop_background_tasks(&session_id);
+        super::super::set_active_session_id(None);
+
+        assert!(output.success);
+        assert!(!output.pending);
+        assert_eq!(output.exit_code, None);
+        assert!(output.content.contains("Detached task started"));
+        assert!(output.content.contains("Task ID:"));
+        assert_eq!(snapshots.len(), 1, "detached task was not retained");
+        assert!(
+            snapshots[0].child_pid.is_some(),
+            "detached task never started"
+        );
+        assert_eq!(stop.stopped, 1, "detached task was not terminated");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_background_command_is_auto_detached_and_killable() {
+        let session_id = format!(
+            "nested-background-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        super::super::set_active_session_id(Some(session_id.clone()));
+        let output = run_command_output(&serde_json::json!({
+            "command": "sleep 30 &",
+            "background": true,
+        }))
+        .expect("nested background command should start");
+        let snapshots = super::super::background_task_snapshots(&session_id);
+        let stop = super::super::stop_background_tasks(&session_id);
+        super::super::set_active_session_id(None);
+
+        assert!(output.success);
+        assert!(!output.pending);
+        assert!(output.content.contains("Detached task started"));
+        assert_eq!(snapshots.len(), 1, "nested task was not retained");
+        assert_eq!(stop.stopped, 1, "nested task was not terminated");
     }
 
     #[test]
