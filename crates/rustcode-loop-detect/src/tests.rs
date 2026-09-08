@@ -221,6 +221,79 @@ fn equivalent_native_and_shell_reads_warn_before_result_grounded_recovery() {
 }
 
 #[test]
+fn adjacent_native_read_ranges_in_one_bucket_are_progress() {
+    let mut detector = LoopDetector::new(4);
+    for (start, end) in [(1, 50), (51, 100), (101, 150), (151, 200)] {
+        let (exact, category) = signatures(
+            "view_file",
+            &json!({"path": "src/app.js", "start_line": start, "end_line": end}),
+        );
+        assert_eq!(
+            detector.check_tool("view_file", &exact, &category),
+            LoopStatus::Ok
+        );
+    }
+}
+
+#[test]
+fn substantially_overlapping_native_read_ranges_warn() {
+    let mut detector = LoopDetector::new(4);
+    let mut last = LoopStatus::Ok;
+    for (start, end) in [(1, 100), (40, 120), (50, 130)] {
+        let (exact, category) = signatures(
+            "view_file",
+            &json!({"path": "src/app.js", "start_line": start, "end_line": end}),
+        );
+        last = detector.check_tool("view_file", &exact, &category);
+    }
+    assert_eq!(last, LoopStatus::Warning(3));
+}
+
+#[test]
+fn exact_native_read_repeats_are_detected() {
+    let mut detector = LoopDetector::new(6);
+    let (exact, category) = signatures(
+        "view_file",
+        &json!({"path": "src/app.js", "start_line": 51, "end_line": 100}),
+    );
+    assert_eq!(
+        detector.check_tool("view_file", &exact, &category),
+        LoopStatus::Ok
+    );
+    assert_eq!(
+        detector.check_tool("view_file", &exact, &category),
+        LoopStatus::Ok
+    );
+    assert_eq!(
+        detector.check_tool("view_file", &exact, &category),
+        LoopStatus::Warning(3)
+    );
+}
+
+#[test]
+fn equivalent_native_and_shell_ranges_are_detected() {
+    let mut detector = LoopDetector::new(4);
+    let calls = [
+        (
+            "view_file",
+            json!({"path": "src/app.js", "start_line": 51, "end_line": 100}),
+        ),
+        (
+            "run_command",
+            json!({"command": "sed -n '51,100p' src/app.js"}),
+        ),
+    ];
+    let statuses: Vec<_> = calls
+        .into_iter()
+        .map(|(name, args)| {
+            let (exact, category) = signatures(name, &args);
+            detector.check_tool(name, &exact, &category)
+        })
+        .collect();
+    assert_eq!(statuses, [LoopStatus::Ok, LoopStatus::Warning(2)]);
+}
+
+#[test]
 fn cross_tool_incomplete_inspection_cycle_is_detected_but_progressive_ranges_are_safe() {
     let mut detector = ReasoningLoopDetector::default();
     let target = "read:src/config.ts:1:full";
