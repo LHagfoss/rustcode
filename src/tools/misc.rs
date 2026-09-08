@@ -42,6 +42,25 @@ pub const GET_TIME: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+fn list_mcp_tools_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    })
+}
+
+pub const LIST_MCP_TOOLS: Tool = Tool {
+    name: "list_mcp_tools",
+    description: "Use this first for MCP discovery questions: list registered MCP servers and their live tool names and descriptions from the in-process registry only; never read source files or secrets.",
+    arguments: r#"{}"#,
+    handler: list_mcp_tools,
+    requires_confirmation: false,
+    schema: list_mcp_tools_schema,
+    capabilities: &[ToolCapability::SessionState],
+    safety: ToolSafety::ReadOnly,
+};
+
 fn subagent_id_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -277,6 +296,57 @@ pub fn get_time(_args: &Value) -> Result<String, String> {
     Ok(chrono::Local::now()
         .format("%A %Y-%m-%d %H:%M:%S")
         .to_string())
+}
+
+pub fn list_mcp_tools(args: &Value) -> Result<String, String> {
+    if !args.is_object() {
+        return Err("arguments must be a JSON object".to_string());
+    }
+
+    let mut clients = {
+        let registry = crate::mcp::get_mcp_registry()
+            .lock()
+            .map_err(|error| format!("MCP registry unavailable: {error}"))?;
+        registry.values().cloned().collect::<Vec<_>>()
+    };
+    clients.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let servers = clients
+        .into_iter()
+        .map(|client| {
+            let mut tools = client
+                .get_tools()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|tool| {
+                    let name = tool.get("name").and_then(Value::as_str)?;
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(serde_json::json!({
+                        "name": name,
+                        "description": tool
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                    }))
+                })
+                .collect::<Vec<_>>();
+            tools.sort_by(|a, b| {
+                a.get("name")
+                    .and_then(Value::as_str)
+                    .cmp(&b.get("name").and_then(Value::as_str))
+            });
+
+            serde_json::json!({
+                "name": client.name,
+                "tools": tools
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::to_string_pretty(&serde_json::json!({ "servers": servers }))
+        .map_err(|error| format!("failed to serialize MCP inventory: {error}"))
 }
 
 pub fn complete_task_tool(args: &Value) -> Result<String, String> {
@@ -617,7 +687,65 @@ pub fn forget_memory(args: &Value) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::search_web_async;
+    use super::{LIST_MCP_TOOLS, list_mcp_tools, search_web_async};
+
+    #[test]
+    fn mcp_inventory_has_a_strict_empty_argument_schema() {
+        let schema = (LIST_MCP_TOOLS.schema)();
+        assert_eq!(
+            schema.get("type").and_then(|value| value.as_str()),
+            Some("object")
+        );
+        assert_eq!(
+            schema
+                .get("properties")
+                .and_then(|value| value.as_object())
+                .map(|value| value.len()),
+            Some(0)
+        );
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(LIST_MCP_TOOLS.safety, super::ToolSafety::ReadOnly);
+        assert!(!LIST_MCP_TOOLS.requires_confirmation);
+    }
+
+    #[test]
+    fn mcp_inventory_returns_only_registry_metadata() {
+        let result = list_mcp_tools(&serde_json::json!({})).expect("inventory should succeed");
+        let inventory: serde_json::Value =
+            serde_json::from_str(&result).expect("inventory should be JSON");
+        let servers = inventory
+            .get("servers")
+            .and_then(serde_json::Value::as_array)
+            .expect("inventory should contain a server array");
+        for server in servers {
+            assert!(
+                server
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            );
+            for tool in server
+                .get("tools")
+                .and_then(serde_json::Value::as_array)
+                .expect("server should contain a tool array")
+            {
+                assert!(
+                    tool.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some()
+                );
+                assert!(
+                    tool.get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some()
+                );
+                assert_eq!(tool.as_object().map(|value| value.len()), Some(2));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn async_search_web_requires_query() {

@@ -810,6 +810,7 @@ pub fn allowed_in_plan_mode(name: &str) -> bool {
 pub const TOOLS: &[Tool] = &[
     misc::ASK_QUESTION,
     misc::GET_TIME,
+    misc::LIST_MCP_TOOLS,
     misc::WAIT_AGENT,
     misc::CANCEL_AGENT,
     search::GREP,
