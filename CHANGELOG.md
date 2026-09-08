@@ -1,3 +1,9 @@
+## [v0.51.17](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.17) - 2026-09-08
+
+### Fixes
+- Added a native `list_mcp_tools` inventory for reliable MCP discovery.
+- Kept explicitly requested MCP server and tool schemas available across tool rounds.
+- Prevented native file reads of dotenv secret files while allowing safe example files.
 ## [v0.51.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.16) - 2026-09-08
 
 ### Fixes
