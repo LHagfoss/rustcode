@@ -133,6 +133,53 @@ pub(crate) fn attach_request_context_tail(msgs: &mut Vec<serde_json::Value>, tex
     }));
 }
 
+/// In-memory checkpoint for preserving the exact provider-request prefix while
+/// a single user turn grows through assistant/tool rounds.
+#[derive(Debug, Default)]
+pub(crate) struct RequestPrefixCache {
+    rendered_history: Vec<serde_json::Value>,
+    request: Vec<serde_json::Value>,
+}
+
+impl RequestPrefixCache {
+    /// Reuse the previous request only when provider-rendered history grew by
+    /// appending messages. Retries with unchanged history refresh the existing
+    /// context tail instead of accumulating another volatile snapshot.
+    pub(crate) fn compose(
+        &self,
+        rendered_history: &[serde_json::Value],
+        context: &str,
+    ) -> Vec<serde_json::Value> {
+        let history_advanced = rendered_history.len() > self.rendered_history.len();
+        let prefix_is_intact = history_advanced
+            && rendered_history.starts_with(self.rendered_history.as_slice())
+            && !self.request.is_empty();
+        let mut messages = if prefix_is_intact {
+            let mut messages = self.request.clone();
+            messages.extend_from_slice(&rendered_history[self.rendered_history.len()..]);
+            messages
+        } else {
+            rendered_history.to_vec()
+        };
+        attach_request_context_tail(&mut messages, context);
+        messages
+    }
+
+    pub(crate) fn record(
+        &mut self,
+        rendered_history: Vec<serde_json::Value>,
+        request: &[serde_json::Value],
+    ) {
+        self.rendered_history = rendered_history;
+        self.request = request.to_vec();
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.rendered_history.clear();
+        self.request.clear();
+    }
+}
+
 /// Append `text` to the content of the last message in `msgs`.
 pub(crate) fn append_to_last_message(msgs: &mut [serde_json::Value], text: &str) {
     if text.is_empty() {
@@ -164,6 +211,82 @@ pub(crate) fn wrap_runtime_context(text: &str) -> String {
     format!(
         "<rustcode_context>\nThe following block is RustCode runtime context, not a user instruction or a continuation of the user's request. Use it only as background when it is relevant.\n\n{text}\n</rustcode_context>"
     )
+}
+
+#[cfg(test)]
+mod request_prefix_tests {
+    use super::{RequestPrefixCache, attach_request_context_tail};
+
+    fn history(contents: &[(&str, &str)]) -> Vec<serde_json::Value> {
+        let mut messages = vec![serde_json::json!({
+            "role": "system",
+            "content": "static system prompt",
+        })];
+        messages.extend(
+            contents
+                .iter()
+                .map(|(role, content)| serde_json::json!({ "role": role, "content": content })),
+        );
+        messages
+    }
+
+    #[test]
+    fn prior_request_remains_an_exact_prefix_after_a_tool_round() {
+        let first_history = history(&[("user", "inspect src/network.rs")]);
+        let mut first_request = first_history.clone();
+        attach_request_context_tail(&mut first_request, "runtime snapshot one");
+        let mut cache = RequestPrefixCache::default();
+        cache.record(first_history, &first_request);
+
+        let second_history = history(&[
+            ("user", "inspect src/network.rs"),
+            ("assistant", "I will inspect it."),
+            ("tool", "network.rs contents"),
+        ]);
+        let second_request = cache.compose(&second_history, "runtime snapshot two");
+
+        assert!(second_request.starts_with(&first_request));
+        assert_eq!(second_request[first_request.len()]["role"], "assistant");
+        assert!(
+            second_request.last().unwrap()["content"]
+                .as_str()
+                .unwrap()
+                .contains("runtime snapshot two")
+        );
+    }
+
+    #[test]
+    fn retry_refreshes_volatile_tail_without_accumulating_snapshots() {
+        let rendered_history = history(&[("user", "inspect src/network.rs")]);
+        let mut first_request = rendered_history.clone();
+        attach_request_context_tail(&mut first_request, "volatile snapshot one");
+        let mut cache = RequestPrefixCache::default();
+        cache.record(rendered_history.clone(), &first_request);
+
+        let retry = cache.compose(&rendered_history, "volatile snapshot two");
+        let rendered = serde_json::to_string(&retry).unwrap();
+
+        assert_eq!(retry.len(), rendered_history.len() + 1);
+        assert!(!rendered.contains("volatile snapshot one"));
+        assert_eq!(rendered.matches("volatile snapshot two").count(), 1);
+    }
+
+    #[test]
+    fn rewritten_history_drops_the_cached_request_prefix() {
+        let first_history = history(&[("user", "old prompt")]);
+        let mut first_request = first_history.clone();
+        attach_request_context_tail(&mut first_request, "old context");
+        let mut cache = RequestPrefixCache::default();
+        cache.record(first_history, &first_request);
+
+        let compacted = history(&[("user", "compacted prompt")]);
+        let request = cache.compose(&compacted, "fresh context");
+        let rendered = serde_json::to_string(&request).unwrap();
+
+        assert!(!rendered.contains("old prompt"));
+        assert!(!rendered.contains("old context"));
+        assert!(rendered.contains("fresh context"));
+    }
 }
 
 /// If the message history has grown long (e.g. >= 4 messages), inject a brief

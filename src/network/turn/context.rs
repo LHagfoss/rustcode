@@ -1,4 +1,5 @@
 use crate::app::TokenUsage;
+use crate::network::messages::RequestPrefixCache;
 use crate::network::{ContextCheckpoint, events, lifecycle, loop_detect, verification};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ pub struct TurnContext {
     pub response: ResponseState,
     pub metrics: MetricsState,
     pub lifecycle: LifecycleState,
+    pub(crate) request_prefix_cache: RequestPrefixCache,
 }
 
 pub struct BudgetState {
@@ -171,6 +173,7 @@ impl TurnContext {
                 user_wait_duration: Duration::ZERO,
                 stop_reason: None,
             },
+            request_prefix_cache: RequestPrefixCache::default(),
         }
     }
 
