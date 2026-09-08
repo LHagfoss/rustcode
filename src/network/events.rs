@@ -32,6 +32,7 @@ impl ToolResult {
             changed_paths: self.metadata.changed_paths.clone(),
             output: self.content.clone(),
             truncated: self.metadata.truncated,
+            payload_truncated: self.metadata.payload_truncated,
             completeness: self.metadata.completeness,
             full_output_artifact: self.metadata.full_output_artifact.clone(),
             replayed: self.metadata.replayed,
@@ -51,6 +52,8 @@ pub(crate) struct ToolResultMetadata {
     pub exit_code: Option<i32>,
     pub changed_paths: Vec<String>,
     pub truncated: bool,
+    /// Request-level clipping, independent of source/read completeness.
+    pub payload_truncated: bool,
     pub completeness: ToolResultCompleteness,
     pub full_output_artifact: Option<String>,
     pub replayed: bool,

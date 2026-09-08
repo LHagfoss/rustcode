@@ -23,6 +23,7 @@ pub struct ToolResultEnvelope {
     pub changed_paths: Vec<String>,
     pub output: String,
     pub truncated: bool,
+    pub payload_truncated: bool,
     pub completeness: ToolResultCompleteness,
     pub full_output_artifact: Option<String>,
     pub replayed: bool,

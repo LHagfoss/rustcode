@@ -708,14 +708,32 @@ pub(crate) async fn execute_tool_batch(
                 }
             }
 
+            // Compact replay is safe only when the bounded body itself is
+            // retained. A notice about an earlier failure, truncated read, or
+            // over-threshold body is not evidence when history trimming may
+            // have removed that body, so execute those reads again.
+            let cached_repeat = if is_repeat {
+                let s = state_clone.lock().await;
+                s.recent_read_outputs
+                    .get(&tool_signature(&name_clone, &args_clone))
+                    .cloned()
+                    .filter(|previous| {
+                        previous.success
+                            && !previous.truncated
+                            && previous.replayable_content.is_some()
+                            && matches!(
+                                previous.completeness,
+                                rustcode_core::ToolResultCompleteness::Complete
+                                    | rustcode_core::ToolResultCompleteness::UserLimited
+                            )
+                    })
+            } else {
+                None
+            };
+            is_repeat = cached_repeat.is_some();
+
             let (execution, diff_opt, user_wait) = if is_repeat {
-                let cached = {
-                    let s = state_clone.lock().await;
-                    s.recent_read_outputs
-                        .get(&tool_signature(&name_clone, &args_clone))
-                        .cloned()
-                };
-                let tuple = match cached {
+                let tuple = match cached_repeat {
                     Some(previous) => {
                         let mut content = compact_replayed_read_result(
                             &name_clone,
@@ -744,14 +762,7 @@ pub(crate) async fn execute_tool_batch(
                             None,
                         )
                     }
-                    None => (
-                        crate::tools::ToolExecutionOutput {
-                            content: compact_replayed_read_result(&name_clone, &args_clone, None),
-                            replayed: true,
-                            ..crate::tools::ToolExecutionOutput::success(String::new())
-                        },
-                        None,
-                    ),
+                    None => unreachable!("repeat requires a replayable cached body"),
                 };
                 (tuple.0, tuple.1, std::time::Duration::ZERO)
             } else if name_clone == "ask_question" {

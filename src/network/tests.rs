@@ -167,6 +167,12 @@ fn final_truncation_recomputes_mid_file_inspection_ranges() {
     let inspection = result.metadata.inspection.expect("inspection metadata");
 
     assert!(result.metadata.truncated);
+    assert!(result.metadata.payload_truncated);
+    assert_eq!(
+        result.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::Complete,
+        "transport clipping must not overwrite source completeness"
+    );
     assert!(!inspection.complete);
     assert!(
         inspection
@@ -211,6 +217,11 @@ fn final_truncation_recomputes_mid_line_range_and_survives_replay() {
         .clone();
 
     assert!(result.metadata.truncated);
+    assert!(result.metadata.payload_truncated);
+    assert_eq!(
+        result.metadata.completeness,
+        rustcode_core::ToolResultCompleteness::Complete
+    );
     assert!(!inspection.complete);
     assert!(
         inspection.returned_range.is_none(),
@@ -3669,7 +3680,7 @@ async fn control_plane_tool_does_not_stall_while_reading_workspace_root() {
 }
 
 #[tokio::test]
-async fn repeated_failed_read_preserves_structured_failure() {
+async fn repeated_failed_read_reexecutes_and_preserves_structured_failure() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
     let missing = dir.path().join("missing").to_string_lossy().to_string();
@@ -3680,17 +3691,13 @@ async fn repeated_failed_read_preserves_structured_failure() {
 
     assert!(!first.metadata.success, "got: {}", first.content);
     assert!(!repeated.metadata.success, "got: {}", repeated.content);
-    assert!(repeated.metadata.replayed);
-    assert!(
-        !repeated.content.contains(&first.content),
-        "replay unexpectedly repeated the original failure: {}",
-        repeated.content
-    );
-    assert!(repeated.content.contains("Unchanged read replay"));
+    assert!(!repeated.metadata.replayed);
+    assert_eq!(repeated.metadata.error_kind, first.metadata.error_kind);
+    assert!(!repeated.content.contains("Unchanged read replay"));
 }
 
 #[tokio::test]
-async fn repeated_truncated_read_preserves_structured_truncation() {
+async fn repeated_truncated_read_reexecutes_with_structured_truncation() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("large.txt");
@@ -3703,17 +3710,13 @@ async fn repeated_truncated_read_preserves_structured_truncation() {
     let repeated = run_one_tool_with_state(&state, call).await;
 
     assert!(first.metadata.truncated, "got: {}", first.content);
-    assert!(repeated.metadata.replayed);
+    assert!(!repeated.metadata.replayed);
     assert!(
         repeated.metadata.truncated,
         "replay lost structured truncation: {}",
         repeated.content
     );
-    assert!(
-        !repeated.content.contains(&first.content),
-        "replay unexpectedly repeated the original truncated output"
-    );
-    assert!(repeated.content.contains("Unchanged read replay"));
+    assert!(!repeated.content.contains("Unchanged read replay"));
     assert!(repeated.content.contains("[tool_result_incomplete:"));
     assert_eq!(repeated.metadata.completeness, first.metadata.completeness);
 }
@@ -3815,7 +3818,7 @@ async fn repeated_unchanged_large_cached_view_file_stays_bounded() {
 }
 
 #[tokio::test]
-async fn repeated_over_limit_failed_read_preserves_structured_failure() {
+async fn repeated_over_limit_failed_read_reexecutes() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let invalid_pattern = "(".repeat(REPLAYABLE_READ_LIMIT + 1);
     let call = test_tool_call("grep", serde_json::json!({"pattern": invalid_pattern}));
@@ -3828,13 +3831,12 @@ async fn repeated_over_limit_failed_read_preserves_structured_failure() {
     assert!(!repeated.metadata.success, "got: {}", repeated.content);
     assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
     assert_eq!(repeated.metadata.truncated, first.metadata.truncated);
-    assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
-    assert!(repeated.content.contains("Unchanged read replay"));
-    assert!(!repeated.content.contains(&first.content));
+    assert!(!repeated.metadata.replayed);
+    assert!(!repeated.content.contains("Unchanged read replay"));
 }
 
 #[tokio::test]
-async fn repeated_over_limit_truncated_read_preserves_metadata_and_recovery_artifact() {
+async fn repeated_over_limit_truncated_read_reexecutes_with_recovery_artifact() {
     let state = Arc::new(Mutex::new(AppState::new()));
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("large.txt");
@@ -3864,14 +3866,9 @@ async fn repeated_over_limit_truncated_read_preserves_metadata_and_recovery_arti
         repeated.content
     );
     assert_eq!(repeated.metadata.exit_code, first.metadata.exit_code);
-    assert_eq!(
-        repeated.metadata.full_output_artifact.as_deref(),
-        Some(artifact)
-    );
-    assert!(repeated.content.len() <= REPLAYABLE_READ_LIMIT);
-    assert!(repeated.content.contains("Unchanged read replay"));
-    assert!(repeated.content.contains(artifact));
-    assert!(!repeated.content.contains(&first.content));
+    assert!(!repeated.metadata.replayed);
+    assert!(repeated.metadata.full_output_artifact.is_some());
+    assert!(!repeated.content.contains("Unchanged read replay"));
 }
 
 #[tokio::test]
@@ -4743,6 +4740,7 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         error_kind: Some("command_failed".to_string()),
         changed_paths: vec!["src/parser/legacy.rs".to_string()],
         truncated: false,
+        payload_truncated: false,
         completeness: rustcode_core::ToolResultCompleteness::Complete,
         full_output_artifact: None,
         replayed: false,

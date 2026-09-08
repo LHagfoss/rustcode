@@ -263,19 +263,9 @@ pub(crate) fn tool_result_from_execution(
     execution: crate::tools::ToolExecutionOutput,
     diff: Option<String>,
 ) -> ToolResult {
-    // The execution layer owns completeness. Preserve the more specific
-    // filesystem classification and only strengthen a legacy/ambiguous
-    // `truncated` bit; never inspect human-facing output text here.
-    let completeness = if execution.truncated {
-        match execution.completeness {
-            ToolResultCompleteness::Complete | ToolResultCompleteness::UserLimited => {
-                ToolResultCompleteness::ByteTruncated
-            }
-            completeness => completeness,
-        }
-    } else {
-        execution.completeness
-    };
+    // The execution layer owns source/read completeness. Request-level
+    // bounding is recorded independently during finalization below.
+    let completeness = execution.completeness;
     let changed_paths = if is_mutating_tool(tool_name) && execution.success {
         args.get("path")
             .or_else(|| args.get("output_path"))
@@ -300,6 +290,7 @@ pub(crate) fn tool_result_from_execution(
             exit_code: execution.exit_code,
             changed_paths,
             truncated: execution.truncated,
+            payload_truncated: false,
             completeness,
             full_output_artifact: None,
             replayed: execution.replayed,
@@ -335,7 +326,7 @@ pub(crate) fn finalize_tool_result_for_prefix(
     result.content = bounded.content;
     if bounded.truncated {
         result.metadata.truncated = true;
-        result.metadata.completeness = ToolResultCompleteness::ByteTruncated;
+        result.metadata.payload_truncated = true;
         if result.metadata.full_output_artifact.is_none() {
             result.metadata.full_output_artifact = bounded.full_output_artifact;
         }
@@ -356,7 +347,11 @@ pub(crate) fn finalize_tool_result_for_prefix(
 /// The typed field is authoritative, while this compact marker makes the same
 /// fact unambiguous in providers that reason primarily from result text.
 fn normalize_incomplete_metadata(result: &mut ToolResult) {
+    // Preserve compatibility for old records, where `truncated=true` was the
+    // only signal. New request-level clipping sets `payload_truncated`, so it
+    // must not overwrite the source/read classification.
     let completeness = if result.metadata.truncated
+        && !result.metadata.payload_truncated
         && result.metadata.completeness == ToolResultCompleteness::Complete
     {
         ToolResultCompleteness::ByteTruncated
@@ -364,15 +359,21 @@ fn normalize_incomplete_metadata(result: &mut ToolResult) {
         result.metadata.completeness
     };
     result.metadata.completeness = completeness;
-    if matches!(
-        completeness,
-        ToolResultCompleteness::LineTruncated | ToolResultCompleteness::ByteTruncated
-    ) {
+    if result.metadata.payload_truncated
+        || matches!(
+            completeness,
+            ToolResultCompleteness::LineTruncated | ToolResultCompleteness::ByteTruncated
+        )
+    {
         result.metadata.truncated = true;
         if !result.content.contains(INCOMPLETE_TOOL_RESULT_MARKER) {
             result.content.push_str(&format!(
                 "\n\n{INCOMPLETE_TOOL_RESULT_MARKER} completeness={}; content is partial and must not be treated as complete.]",
-                completeness.as_str()
+                if result.metadata.payload_truncated {
+                    "payload_truncated"
+                } else {
+                    completeness.as_str()
+                }
             ));
         }
     }
@@ -421,6 +422,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
             exit_code: envelope.exit_code,
             changed_paths: envelope.changed_paths,
             truncated: envelope.truncated,
+            payload_truncated: envelope.payload_truncated,
             completeness: envelope.completeness,
             full_output_artifact: envelope.full_output_artifact,
             error_kind: envelope.error_kind.map(|kind| kind.as_str().to_string()),
