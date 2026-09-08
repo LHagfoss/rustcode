@@ -1,3 +1,8 @@
+## [v0.51.16](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.16) - 2026-09-08
+
+### Fixes
+- Group MCP and custom tool activity under the generic Running label while preserving invocation details.
+- Qualify MCP tool names in activity displays for clearer tool attribution.
 ## [v0.51.15](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.15) - 2026-09-07
 
 ### Fixes
