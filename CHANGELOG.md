@@ -1,3 +1,11 @@
+## [v0.51.19](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.19) - 2026-09-08
+
+### Fixes
+Preserve source/read completeness independently from model-payload truncation.
+
+Safely re-execute failed, truncated, and unreplayable repeated reads instead of returning metadata-only evidence.
+
+Bound runtime-context deltas and reduce duplicate context accumulation across tool rounds.
 ## [v0.51.18](https://github.com/LHagfoss/rustcode/releases/tag/v0.51.18) - 2026-09-08
 
 ### Fixes
