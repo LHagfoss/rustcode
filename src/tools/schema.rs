@@ -212,6 +212,42 @@ pub(super) fn mcp_raw_name_is_unique(name: &str, clients: &[Arc<crate::mcp::McpC
         == 1
 }
 
+fn mcp_display_name_from_canonical(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("mcp__")?;
+    let (server, tool) = rest.split_once("__")?;
+    if server.is_empty() || tool.is_empty() {
+        return None;
+    }
+    Some(format!("{server}.{tool}"))
+}
+
+/// Resolve an MCP provider-facing name to the server-qualified label shown in
+/// the transcript. Unique raw names need the live registry to recover their
+/// server; canonical names remain displayable after a server disconnects.
+pub(crate) fn mcp_tool_display_name(name: &str) -> Option<String> {
+    if let Ok(registry) = crate::mcp::get_mcp_registry().lock() {
+        let mut clients = registry.values().cloned().collect::<Vec<_>>();
+        clients.sort_by(|a, b| a.name.cmp(&b.name));
+        for client in &clients {
+            let Ok(tools) = client.get_tools() else {
+                continue;
+            };
+            for tool in tools {
+                let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let canonical = mcp_canonical_name_for_clients(&client.name, raw_name, &clients);
+                if name == canonical
+                    || (name == raw_name && mcp_raw_name_is_unique(raw_name, &clients))
+                {
+                    return Some(format!("{}.{}", client.name, raw_name));
+                }
+            }
+        }
+    }
+    mcp_display_name_from_canonical(name)
+}
+
 pub(super) fn collect_mcp_tools() -> Vec<(String, String, Value)> {
     let mut discovered = Vec::new();
     let mut clients_for_names = Vec::new();
