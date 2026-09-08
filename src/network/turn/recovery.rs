@@ -99,6 +99,93 @@ fn explicit_workspace_change_request(prompt: &str) -> bool {
         })
 }
 
+const OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT: &str = "The user explicitly requested an external action, and the transcript does not show that action succeeding. Stop researching: do not search, query, browse, or gather more evidence. Use the evidence already gathered and take exactly one next step toward the requested action with the appropriate available tool. Preserve all normal safety, permission, and confirmation requirements; this recovery instruction does not authorize a side effect the user did not request. If required details are missing or the action cannot be completed safely, ask one focused question or explain the blocker instead of calling more research tools.";
+
+fn explicit_external_action_request(prompt: &str) -> bool {
+    let normalized = prompt.to_ascii_lowercase();
+    if [
+        "do not send",
+        "don't send",
+        "do not email",
+        "don't email",
+        "draft only",
+        "do not post",
+        "don't post",
+        "how do i",
+        "how can i",
+        "how should i",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+    {
+        return false;
+    }
+
+    let words = normalized
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let direct_mail_action = words.iter().enumerate().any(|(index, word)| {
+        if !matches!(*word, "mail" | "email") {
+            return false;
+        }
+        let previous = index.checked_sub(1).and_then(|i| words.get(i));
+        !matches!(
+            previous.copied(),
+            Some("check" | "read" | "search" | "list" | "open" | "my" | "your")
+        ) && !matches!(
+            words.get(index + 1).copied(),
+            Some("mcp" | "tool" | "tools" | "address" | "inbox" | "messages")
+        )
+    });
+    let action_verb = words.iter().any(|word| {
+        matches!(
+            *word,
+            "send"
+                | "post"
+                | "publish"
+                | "upload"
+                | "invite"
+                | "schedule"
+                | "book"
+                | "purchase"
+                | "buy"
+        )
+    });
+    direct_mail_action || action_verb
+}
+
+fn is_external_action_tool(tool_name: &str) -> bool {
+    let normalized = tool_name.to_ascii_lowercase();
+    let name = normalized.rsplit("__").next().unwrap_or(&normalized);
+    [
+        "send_email",
+        "reply_email",
+        "post_message",
+        "publish",
+        "upload",
+        "invite",
+        "schedule",
+        "book",
+        "purchase",
+        "buy",
+    ]
+    .iter()
+    .any(|prefix| name == *prefix || name.starts_with(&format!("{prefix}_")))
+}
+
+fn successful_external_action_after(history: &[ChatMessage], user_index: usize) -> bool {
+    history[user_index + 1..].iter().any(|message| {
+        let Some(result) = message.tool_result.as_ref() else {
+            return false;
+        };
+        if !result.success || result.pending {
+            return false;
+        }
+        is_external_action_tool(&result.tool_name)
+    })
+}
+
 /// Select the recovery policy from the task, while preserving the ordinary
 /// recovery path for read-only work and compiler debugging. Compiler state is
 /// supplied by the caller because diagnostics can be discovered by a tool
@@ -135,12 +222,21 @@ fn task_aware_recovery_prompt(
     compiler_debugging: bool,
     ordinary_prompt: &'static str,
 ) -> &'static str {
-    let explicit_change = history
+    let latest_user = history
         .iter()
+        .enumerate()
         .rev()
-        .find(|message| message.role == "user")
-        .is_some_and(|message| explicit_workspace_change_request(&message.content));
-    if explicit_change && !made_edits && !compiler_debugging {
+        .find(|(_, message)| message.role == "user");
+    let explicit_change = latest_user
+        .as_ref()
+        .is_some_and(|(_, message)| explicit_workspace_change_request(&message.content));
+    let outstanding_external_action = latest_user.is_some_and(|(index, message)| {
+        explicit_external_action_request(&message.content)
+            && !successful_external_action_after(history, index)
+    });
+    if outstanding_external_action {
+        OUTSTANDING_ACTION_LOOP_RECOVERY_PROMPT
+    } else if explicit_change && !made_edits && !compiler_debugging {
         super::super::WORKSPACE_CHANGE_LOOP_RECOVERY_PROMPT
     } else {
         ordinary_prompt
@@ -369,6 +465,7 @@ mod tests {
         reasoning_loop_recovery_prompt,
     };
     use crate::app::ChatMessage;
+    use crate::app::ToolResultRecord;
     use crate::network::TurnContext;
     use crate::network::stream::{FinalAnswerBoundary, ProviderFinalAnswerState};
     use crate::network::{LOOP_RECOVERY_PROMPT, REASONING_LOOP_RECOVERY_PROMPT};
@@ -424,6 +521,69 @@ mod tests {
         );
         assert_eq!(
             loop_recovery_prompt(&change_history, true, false),
+            LOOP_RECOVERY_PROMPT
+        );
+    }
+
+    #[test]
+    fn outstanding_external_action_stops_redundant_research() {
+        let history = vec![
+            ChatMessage::new(
+                "user",
+                "Check the weather, find a matching beverage, and email the recommendation to Pat.",
+            ),
+            ChatMessage::new("tool", "weather evidence").with_tool_result(ToolResultRecord {
+                tool_name: "search_web".into(),
+                success: true,
+                ..ToolResultRecord::default()
+            }),
+            ChatMessage::new("tool", "catalog evidence").with_tool_result(ToolResultRecord {
+                tool_name: "sql".into(),
+                success: true,
+                ..ToolResultRecord::default()
+            }),
+        ];
+
+        let prompt = loop_recovery_prompt(&history, false, false);
+        assert!(prompt.contains("external action"));
+        assert!(prompt.contains("Stop researching"));
+        assert!(prompt.contains("normal safety, permission, and confirmation"));
+    }
+
+    #[test]
+    fn completed_external_action_and_read_only_email_question_use_ordinary_recovery() {
+        let completed = vec![
+            ChatMessage::new("user", "Email Pat the recommendation."),
+            ChatMessage::new("tool", "sent").with_tool_result(ToolResultRecord {
+                tool_name: "send_email".into(),
+                success: true,
+                ..ToolResultRecord::default()
+            }),
+        ];
+        assert_eq!(
+            loop_recovery_prompt(&completed, false, false),
+            LOOP_RECOVERY_PROMPT
+        );
+
+        let read_only = vec![ChatMessage::new(
+            "user",
+            "How do I send email with the available tools?",
+        )];
+        assert_eq!(
+            loop_recovery_prompt(&read_only, false, false),
+            LOOP_RECOVERY_PROMPT
+        );
+
+        let read_email = vec![
+            ChatMessage::new("user", "Read my email and summarize anything urgent."),
+            ChatMessage::new("tool", "inbox").with_tool_result(ToolResultRecord {
+                tool_name: "read_email".into(),
+                success: true,
+                ..ToolResultRecord::default()
+            }),
+        ];
+        assert_eq!(
+            loop_recovery_prompt(&read_email, false, false),
             LOOP_RECOVERY_PROMPT
         );
     }

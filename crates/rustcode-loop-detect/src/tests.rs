@@ -415,6 +415,77 @@ fn wc_and_od_share_the_file_read_family_with_native_tools() {
 }
 
 #[test]
+fn voxel_style_read_commands_share_a_semantic_file_category() {
+    let path = "/tmp/voxel/src/renderer.rs";
+    let calls = [
+        format!("cat {path}"),
+        format!("head -n 80 {path}"),
+        format!("tail -80 {path}"),
+        format!("xxd {path}"),
+        format!("wc -l -c {path}"),
+        format!("file {path}"),
+        format!("python3 -c \"print(open('{path}').read())\""),
+        format!("python -c \"Path('{path}').read_text()\""),
+    ];
+    for command in &calls {
+        assert_eq!(
+            signatures("run_command", &json!({"command": command})).1,
+            "read:/tmp/voxel/src/renderer.rs#0"
+        );
+    }
+    let mut detector = LoopDetector::new(8);
+    let (exact, category) = signatures("view_file", &json!({"path": path}));
+    let mut statuses = vec![detector.check_tool("view_file", &exact, &category)];
+    statuses.extend(calls[..2].iter().map(|command| {
+        let (exact, category) = signatures("run_command", &json!({"command": command}));
+        detector.check_tool("run_command", &exact, &category)
+    }));
+    assert_eq!(statuses.last(), Some(&LoopStatus::Warning(3)));
+}
+
+#[test]
+fn explicit_read_ranges_remain_distinct_evidence() {
+    let head = json!({"command": "head -n 40 src/renderer.rs"});
+    let early = json!({"command": "sed -n '1,40p' src/renderer.rs"});
+    let later = json!({"command": "sed -n '401,440p' src/renderer.rs"});
+    assert_eq!(
+        inspection_target("run_command", &head),
+        inspection_target("run_command", &early)
+    );
+    assert_ne!(
+        inspection_target("run_command", &early),
+        inspection_target("run_command", &later)
+    );
+    assert_ne!(
+        signatures("run_command", &early).1,
+        signatures("run_command", &later).1
+    );
+}
+
+#[test]
+fn shell_read_classification_rejects_side_effects_and_arbitrary_scripts() {
+    for command in [
+        "sed -i 's/old/new/' src/lib.rs",
+        "cat src/lib.rs > /tmp/copy",
+        "rm src/lib.rs; cat src/lib.rs",
+        "cargo test && cat src/lib.rs",
+        "curl https://example.com/src.rs | head",
+        "python3 -c \"open('src/lib.rs', 'w').write('changed')\"",
+        "python3 scripts/inspect.py src/lib.rs",
+    ] {
+        let args = json!({"command": command});
+        assert!(
+            read_target("run_command", &args).is_none(),
+            "classified {command}"
+        );
+        assert!(
+            !is_read_only_call("run_command", &args),
+            "classified {command}"
+        );
+    }
+}
+
+#[test]
 fn shell_read_target_stops_at_pipeline_and_command_boundaries() {
     let (_, piped) = signatures(
         "run_command",

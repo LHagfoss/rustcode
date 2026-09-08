@@ -139,10 +139,14 @@ pub(crate) const WORKSPACE_CHANGE_LOOP_RECOVERY_PROMPT: &str = "The user explici
 pub(crate) const REASONING_LOOP_RECOVERY_PROMPT: &str = "[Your reasoning became repetitive without making progress. This is an advisory recovery message; tools remain enabled. Do not restate the requirements. If the user requested workspace changes, emit exactly one mutating tool call now using what you already learned. Otherwise, give the direct final answer.]";
 
 /// Bounded recovery nudges before the harness asks for a final text answer for
-/// a mutating or otherwise unsafe loop. Read-only and reasoning repetition
-/// use the normal tool-round budget instead, so an advisory cannot lock out a
-/// legitimate edit or investigation.
+/// a mutating or otherwise unsafe loop.
 pub(crate) const MAX_LOOP_RECOVERY_ROUNDS: u8 = 3;
+
+/// Read-only work gets one extra recovery because a changed query or broader
+/// inspection can legitimately uncover new evidence. This is still finite:
+/// resetting the detectors after a recovery must not reset the turn-wide
+/// recovery budget and permit an endless search/read cycle.
+pub(crate) const MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS: u8 = 4;
 
 /// Safety budgets for a single agent turn. These are deliberately generous —
 /// the goal is to catch a runaway session (the benchmark that motivated this
@@ -321,21 +325,27 @@ pub(crate) fn loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
     }
 }
 
-/// Read-only repetition is not by itself unsafe. Keep tools available and let
-/// the ordinary per-turn round budget provide the hard stop.
+/// Healthy reads never reach this policy; it is consulted only after loop or
+/// stagnation detection aborts a batch. Give detected read-only/reasoning
+/// loops a slightly more permissive, but still deterministic, recovery budget.
 pub(crate) fn loop_recovery_action_for(
     attempts: u8,
     read_only_or_reasoning: bool,
 ) -> LoopRecoveryAction {
-    if read_only_or_reasoning {
+    let max_attempts = if read_only_or_reasoning {
+        MAX_READ_ONLY_LOOP_RECOVERY_ROUNDS
+    } else {
+        MAX_LOOP_RECOVERY_ROUNDS
+    };
+    if attempts < max_attempts {
         LoopRecoveryAction::Recover
     } else {
-        loop_recovery_action(attempts)
+        LoopRecoveryAction::ForceFinal
     }
 }
 
-pub(crate) fn reasoning_loop_recovery_action(_attempts: u8) -> LoopRecoveryAction {
-    loop_recovery_action_for(0, true)
+pub(crate) fn reasoning_loop_recovery_action(attempts: u8) -> LoopRecoveryAction {
+    loop_recovery_action_for(attempts, true)
 }
 
 /// Keep at most one loop warning in the current user turn. Tool results land
