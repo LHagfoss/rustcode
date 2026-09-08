@@ -1209,7 +1209,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
     // The checkpoint is per-turn and automatically falls back after compaction
     // or any other rewrite of the provider-rendered history.
     let mut msgs = prefix_cache
-        .as_deref()
+        .as_deref_mut()
         .map(|cache| cache.compose(&rendered_history, &dynamic_context))
         .unwrap_or_else(|| {
             let mut messages = rendered_history.clone();
@@ -1288,7 +1288,7 @@ pub(crate) async fn prepare_turn_request_with_checkpoint_and_prefix_cache(
 
     if let Some(cache) = prefix_cache.as_deref_mut() {
         if dropped == 0 {
-            cache.record(rendered_history, &msgs);
+            cache.record(rendered_history, &msgs, &dynamic_context);
         } else {
             cache.clear();
         }

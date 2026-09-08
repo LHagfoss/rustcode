@@ -22,7 +22,7 @@ pub struct TokenUsage {
     pub cached_tokens: Option<u32>,
 }
 
-/// Completeness of the output delivered to the model for one tool result.
+/// Completeness of the source/read result produced by one tool execution.
 ///
 /// This is deliberately separate from the presentation used by the terminal:
 /// a collapsed UI row must never make a complete result look truncated (or
@@ -37,7 +37,7 @@ pub enum ToolResultCompleteness {
     UserLimited,
     /// The read window omitted content because of the line safety cap.
     LineTruncated,
-    /// Output was bounded by a byte/line payload limit after execution.
+    /// Legacy or execution-layer output was bounded before request assembly.
     ByteTruncated,
 }
 
@@ -190,8 +190,14 @@ pub struct ToolResultRecord {
     pub exit_code: Option<i32>,
     pub changed_paths: Vec<String>,
     pub truncated: bool,
-    /// Machine-readable completeness of the model-facing output. Older
-    /// sessions omit this field and deserialize as `complete`.
+    /// True when request assembly clipped the model-facing payload after the
+    /// tool had already classified the source/read result. Kept separate from
+    /// `completeness` so a complete filesystem read remains complete.
+    #[serde(default)]
+    pub payload_truncated: bool,
+    /// Machine-readable source/read completeness. Request assembly clipping is
+    /// recorded independently in `payload_truncated`. Older sessions omit this
+    /// field and deserialize as `complete`.
     #[serde(default)]
     pub completeness: ToolResultCompleteness,
     pub full_output_artifact: Option<String>,

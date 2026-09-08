@@ -139,6 +139,19 @@ pub(crate) fn attach_request_context_tail(msgs: &mut Vec<serde_json::Value>, tex
 pub(crate) struct RequestPrefixCache {
     rendered_history: Vec<serde_json::Value>,
     request: Vec<serde_json::Value>,
+    context: String,
+    context_updates: u8,
+}
+
+const MAX_CONTEXT_DELTAS: u8 = 3;
+
+fn context_delta(previous: &str, current: &str) -> String {
+    let previous = previous.lines().collect::<std::collections::HashSet<_>>();
+    current
+        .lines()
+        .filter(|line| !previous.contains(line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl RequestPrefixCache {
@@ -146,14 +159,15 @@ impl RequestPrefixCache {
     /// appending messages. Retries with unchanged history refresh the existing
     /// context tail instead of accumulating another volatile snapshot.
     pub(crate) fn compose(
-        &self,
+        &mut self,
         rendered_history: &[serde_json::Value],
         context: &str,
     ) -> Vec<serde_json::Value> {
         let history_advanced = rendered_history.len() > self.rendered_history.len();
         let prefix_is_intact = history_advanced
             && rendered_history.starts_with(self.rendered_history.as_slice())
-            && !self.request.is_empty();
+            && !self.request.is_empty()
+            && self.context_updates < MAX_CONTEXT_DELTAS;
         let mut messages = if prefix_is_intact {
             let mut messages = self.request.clone();
             messages.extend_from_slice(&rendered_history[self.rendered_history.len()..]);
@@ -161,7 +175,16 @@ impl RequestPrefixCache {
         } else {
             rendered_history.to_vec()
         };
-        attach_request_context_tail(&mut messages, context);
+        if prefix_is_intact {
+            let delta = context_delta(&self.context, context);
+            if !delta.is_empty() {
+                attach_request_context_tail(&mut messages, &delta);
+                self.context_updates = self.context_updates.saturating_add(1);
+            }
+        } else {
+            attach_request_context_tail(&mut messages, context);
+            self.context_updates = 0;
+        }
         messages
     }
 
@@ -169,14 +192,18 @@ impl RequestPrefixCache {
         &mut self,
         rendered_history: Vec<serde_json::Value>,
         request: &[serde_json::Value],
+        context: &str,
     ) {
         self.rendered_history = rendered_history;
         self.request = request.to_vec();
+        self.context = context.to_string();
     }
 
     pub(crate) fn clear(&mut self) {
         self.rendered_history.clear();
         self.request.clear();
+        self.context.clear();
+        self.context_updates = 0;
     }
 }
 
@@ -215,7 +242,7 @@ pub(crate) fn wrap_runtime_context(text: &str) -> String {
 
 #[cfg(test)]
 mod request_prefix_tests {
-    use super::{RequestPrefixCache, attach_request_context_tail};
+    use super::{MAX_CONTEXT_DELTAS, RequestPrefixCache, attach_request_context_tail};
 
     fn history(contents: &[(&str, &str)]) -> Vec<serde_json::Value> {
         let mut messages = vec![serde_json::json!({
@@ -236,7 +263,7 @@ mod request_prefix_tests {
         let mut first_request = first_history.clone();
         attach_request_context_tail(&mut first_request, "runtime snapshot one");
         let mut cache = RequestPrefixCache::default();
-        cache.record(first_history, &first_request);
+        cache.record(first_history, &first_request, "runtime snapshot one");
 
         let second_history = history(&[
             ("user", "inspect src/network.rs"),
@@ -261,7 +288,11 @@ mod request_prefix_tests {
         let mut first_request = rendered_history.clone();
         attach_request_context_tail(&mut first_request, "volatile snapshot one");
         let mut cache = RequestPrefixCache::default();
-        cache.record(rendered_history.clone(), &first_request);
+        cache.record(
+            rendered_history.clone(),
+            &first_request,
+            "volatile snapshot one",
+        );
 
         let retry = cache.compose(&rendered_history, "volatile snapshot two");
         let rendered = serde_json::to_string(&retry).unwrap();
@@ -277,7 +308,7 @@ mod request_prefix_tests {
         let mut first_request = first_history.clone();
         attach_request_context_tail(&mut first_request, "old context");
         let mut cache = RequestPrefixCache::default();
-        cache.record(first_history, &first_request);
+        cache.record(first_history, &first_request, "old context");
 
         let compacted = history(&[("user", "compacted prompt")]);
         let request = cache.compose(&compacted, "fresh context");
@@ -286,6 +317,49 @@ mod request_prefix_tests {
         assert!(!rendered.contains("old prompt"));
         assert!(!rendered.contains("old context"));
         assert!(rendered.contains("fresh context"));
+    }
+
+    #[test]
+    fn unchanged_runtime_context_is_not_appended_each_tool_round() {
+        let first_history = history(&[("user", "inspect")]);
+        let mut request = first_history.clone();
+        attach_request_context_tail(&mut request, "same runtime snapshot");
+        let mut cache = RequestPrefixCache::default();
+        cache.record(first_history, &request, "same runtime snapshot");
+
+        for round in 1..=3 {
+            let mut next_history = cache.rendered_history.clone();
+            next_history.push(
+                serde_json::json!({"role": "assistant", "content": format!("round {round}")}),
+            );
+            next_history.push(serde_json::json!({"role": "tool", "content": "result"}));
+            request = cache.compose(&next_history, "same runtime snapshot");
+            cache.record(next_history, &request, "same runtime snapshot");
+        }
+
+        let rendered = serde_json::to_string(&request).unwrap();
+        assert_eq!(rendered.matches("same runtime snapshot").count(), 1);
+    }
+
+    #[test]
+    fn changing_runtime_context_is_periodically_rebased_and_bounded() {
+        let mut rendered_history = history(&[("user", "inspect")]);
+        let mut request = rendered_history.clone();
+        attach_request_context_tail(&mut request, "stable\nusage: 0");
+        let mut cache = RequestPrefixCache::default();
+        cache.record(rendered_history.clone(), &request, "stable\nusage: 0");
+
+        for round in 1..=8 {
+            rendered_history.push(serde_json::json!({"role": "assistant", "content": round}));
+            let context = format!("stable\nusage: {round}");
+            request = cache.compose(&rendered_history, &context);
+            cache.record(rendered_history.clone(), &request, &context);
+        }
+
+        let rendered = serde_json::to_string(&request).unwrap();
+        assert_eq!(rendered.matches("stable").count(), 1);
+        assert!(rendered.matches("usage:").count() <= usize::from(MAX_CONTEXT_DELTAS) + 1);
+        assert!(rendered.contains("usage: 8"));
     }
 }
 
