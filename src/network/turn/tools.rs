@@ -923,13 +923,20 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                     ));
                 }
                 let benign_shell_failure = benign_shell_wrapper_failure(call, &metadata, &content);
-                let failure_fingerprint = (!metadata.success && !benign_shell_failure).then(|| {
-                    loop_detect::stable_hash(&format!(
-                        "{name}:{}:{}",
-                        metadata.exit_code.unwrap_or_default(),
-                        loop_detect::stagnation_key(&content)
-                    ))
-                });
+                let semantic_failure = (!benign_shell_failure)
+                    .then(|| loop_detect::semantic_failure_class(&content))
+                    .flatten();
+                let failure_fingerprint = semantic_failure
+                    .map(|class| loop_detect::stable_hash(&format!("semantic_failure:{class}")))
+                    .or_else(|| {
+                        (!metadata.success && !benign_shell_failure).then(|| {
+                            loop_detect::stable_hash(&format!(
+                                "{name}:{}:{}",
+                                metadata.exit_code.unwrap_or_default(),
+                                loop_detect::stagnation_key(&content)
+                            ))
+                        })
+                    });
                 let assessment = ctx
                     .progress
                     .ledger
@@ -945,7 +952,7 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         verification: verification_command,
                         read_only: loop_detect::is_read_only(&name),
                         replayed: metadata.replayed,
-                        success: metadata.success,
+                        success: metadata.success && semantic_failure.is_none(),
                     });
                 let target_file = call.and_then(|c| {
                     c.arguments
@@ -984,7 +991,8 @@ pub(crate) async fn handle_tool_response<P: policy::TurnPolicy + 'static>(
                         "reason": assessment.reason.label(),
                         "streak": assessment.streak,
                         "replayed": metadata.replayed,
-                        "success": metadata.success,
+                        "success": metadata.success && semantic_failure.is_none(),
+                        "failure_class": semantic_failure,
                     }),
                 );
                 if assessment.meaningful {

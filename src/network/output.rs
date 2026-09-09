@@ -1,10 +1,32 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs::OpenOptions, io::Write};
 
+use regex::Regex;
+
 const MAX_TOOL_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_TOOL_OUTPUT_LINES: usize = 1000;
 pub(crate) const INCOMPLETE_TOOL_RESULT_MARKER: &str = "[tool_result_incomplete:";
 static NEXT_ARTIFACT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static SENSITIVE_ASSIGNMENT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)(\b(?:api[_ -]?key|access[_ -]?token|authorization|password|secret|token|cookie)\b\s*[:=]\s*)(["']?)[^\s"'`]+(["']?)"#,
+    )
+    .expect("sensitive output regex")
+});
+static AUTH_HEADER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)(\bauthorization\s*:\s*)(?:bearer\s+)?\S+")
+        .expect("authorization header regex")
+});
+
+/// Remove common credential assignments before output is persisted or shown
+/// to the model. This intentionally leaves ordinary token counts and prose
+/// untouched while covering shell assignments, JSON fields, and headers.
+pub(crate) fn sanitize_tool_output(result: &str) -> String {
+    let redacted = AUTH_HEADER.replace_all(result, "$1[REDACTED]");
+    SENSITIVE_ASSIGNMENT
+        .replace_all(&redacted, "$1$2[REDACTED]$3")
+        .into_owned()
+}
 
 pub(crate) struct BoundedToolOutput {
     pub(crate) content: String,
@@ -29,6 +51,7 @@ pub(crate) fn truncate_tool_output_for_message(
     result: String,
     message_prefix: &str,
 ) -> BoundedToolOutput {
+    let result = sanitize_tool_output(&result);
     let max_bytes = MAX_TOOL_OUTPUT_BYTES.saturating_sub(message_prefix.len());
     // Leave room for the bounded-output explanation and its machine-readable
     // incomplete marker in the final model-visible message.
@@ -138,6 +161,31 @@ mod tests {
     fn small_output_passes_through_unchanged() {
         let small = "line one\nline two\n".to_string();
         assert_eq!(truncate_tool_output("view_file", small.clone()), small);
+    }
+
+    #[test]
+    fn credential_assignments_are_redacted_before_model_output_and_artifacts() {
+        let content = r#"TOKEN="eyJhbGciOi..."
+api_key: sk-secret-value
+Authorization: Bearer bearer-secret
+token usage: 1234
+"#;
+        let out = truncate_tool_output("run_command", content.to_string());
+
+        assert!(!out.contains("eyJhbGciOi"));
+        assert!(!out.contains("sk-secret-value"));
+        assert!(!out.contains("bearer-secret"));
+        assert!(out.contains("token usage: 1234"));
+
+        let oversized = format!("TOKEN=long-lived-secret\n{}", "x".repeat(60_000));
+        let bounded = truncate_tool_output("run_command", oversized);
+        let marker = "Full output saved to: ";
+        let path = bounded
+            .split_once(marker)
+            .and_then(|(_, rest)| rest.lines().next())
+            .expect("bounded output must name its artifact");
+        let artifact = std::fs::read_to_string(path).expect("artifact must be readable");
+        assert!(!artifact.contains("long-lived-secret"));
     }
 
     #[test]

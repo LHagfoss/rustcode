@@ -832,6 +832,27 @@ fn stagnation_key_leaves_real_output_untouched() {
     assert_eq!(stagnation_key(out), out);
 }
 
+#[test]
+fn semantic_failure_classes_collapse_equivalent_command_failures() {
+    assert_eq!(
+        semantic_failure_class("401 Unauthorized from gitlab.com"),
+        Some("authentication")
+    );
+    assert_eq!(
+        semantic_failure_class("ERROR Unknown flag: --state"),
+        Some("invalid_command_usage")
+    );
+    assert_eq!(
+        semantic_failure_class("Fatal: not a git repository"),
+        Some("wrong_working_directory")
+    );
+    assert_eq!(
+        semantic_failure_class(r#"{"message":"API resource not found"}"#),
+        Some("resource_not_found")
+    );
+    assert_eq!(semantic_failure_class("ordinary command output"), None);
+}
+
 fn observation(output: &str, state: Option<&str>, failure: Option<&str>) -> ProgressObservation {
     ProgressObservation {
         action: "test".to_string(),
@@ -930,6 +951,32 @@ fn different_successful_actions_with_identical_output_are_progress() {
     let mut second = first.clone();
     second.action = "different-action".to_string();
     assert!(ledger.observe(&second).meaningful);
+}
+
+#[test]
+fn semantically_equivalent_failures_become_no_progress_despite_new_commands() {
+    let mut ledger = ProgressLedger::default();
+    for (index, action) in ["glab mr list", "glab mr view", "curl /api/mrs"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut failed = observation("different error detail", None, Some("authentication"));
+        failed.action = action.to_string();
+        failed.output_fingerprint = stable_hash(&format!("error detail {index}"));
+        failed.failure_fingerprint = Some(stable_hash("semantic_failure:authentication"));
+        failed.success = false;
+        let assessment = ledger.observe(&failed);
+        if index == 0 {
+            assert!(assessment.meaningful);
+        } else {
+            assert_eq!(assessment.reason, ProgressReason::RepeatedFailure);
+            assert!(!assessment.meaningful);
+        }
+    }
+    assert_eq!(
+        ledger.no_progress_streak(),
+        ProgressLedger::RECOVERY_STREAK - 1
+    );
 }
 
 #[test]

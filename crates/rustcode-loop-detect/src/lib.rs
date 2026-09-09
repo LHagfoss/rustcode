@@ -501,6 +501,35 @@ pub fn stagnation_key(output: &str) -> &str {
     }
 }
 
+/// Collapse command failures that are semantically the same even when the
+/// model changes the command, flag spelling, or endpoint between attempts.
+/// Successful reads and ordinary domain-specific output are deliberately not
+/// classified here; only stable harness/actionable failures should consume
+/// the no-progress budget.
+pub fn semantic_failure_class(output: &str) -> Option<&'static str> {
+    let lower = output.to_ascii_lowercase();
+    if lower.contains("401 unauthorized")
+        || lower.contains("unauthenticated")
+        || lower.contains("no token found")
+        || lower.contains("authentication failed")
+        || lower.contains("authentication error")
+    {
+        Some("authentication")
+    } else if lower.contains("unknown flag")
+        || lower.contains("unknown option")
+        || lower.contains("unrecognized option")
+        || lower.contains("invalid option")
+    {
+        Some("invalid_command_usage")
+    } else if lower.contains("not a git repository") {
+        Some("wrong_working_directory")
+    } else if lower.contains("api resource not found") {
+        Some("resource_not_found")
+    } else {
+        None
+    }
+}
+
 /// Compact evidence from one tool result. The ledger deliberately receives
 /// fingerprints and booleans, never the full result, so loop diagnostics do
 /// not become a second transcript or leak source text into operational logs.
